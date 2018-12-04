@@ -1,0 +1,868 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>IDataView Type System &#8212; Custom Extensions to ML.net 0.8.0 documentation</title>
+    <link rel="stylesheet" href="../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/font-awesome@4.5.0/css/font-awesome.min.css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../_static/jquery.js"></script>
+    <script type="text/javascript" src="../_static/underscore.js"></script>
+    <script type="text/javascript" src="../_static/doctools.js"></script>
+    <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/@jupyter-widgets/html-manager@^0.14.0/dist/embed-amd.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="IDV File Format" href="idvfileformat.html" />
+    <link rel="prev" title="IDataView Implementation" href="idataviewimplementation.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="idataview-type-system">
+<span id="idataview-type-system"></span><h1><code class="docutils literal notranslate"><span class="pre">IDataView</span></code> Type System<a class="headerlink" href="#idataview-type-system" title="Permalink to this headline">¶</a></h1>
+<div class="section" id="overview">
+<span id="overview"></span><h2>Overview<a class="headerlink" href="#overview" title="Permalink to this headline">¶</a></h2>
+<p>The <em>IDataView system</em> consists of a set of interfaces and classes that
+provide efficient, compositional transformation of and cursoring through
+schematized data, as required by many machine-learning and data analysis
+applications. It is designed to gracefully and efficiently handle both
+extremely high dimensional data and very large data sets. It does not directly
+address distributed data, but is suitable for single node processing of data
+partitions belonging to larger distributed data sets.</p>
+<p>While <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> is one interface in this system, colloquially, the term
+IDataView is frequently used to refer to the entire system. In this document,
+the specific interface is written using fixed pitch font as <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>.</p>
+<p>IDataView is the data pipeline machinery for ML.NET. The ML.NET codebase has
+an extensive library of IDataView related components (loaders, transforms,
+savers, trainers, predictors, etc.). More are being worked on.</p>
+<p>The name IDataView was inspired from the database world, where the term table
+typically indicates a mutable body of data, while a view is the result of a
+query on one or more tables or views, and is generally immutable. Note that
+both tables and views are schematized, being organized into typed columns and
+rows conforming to the column types. Views differ from tables in several ways:</p>
+<ul class="simple">
+<li>Views are immutable; tables are mutable.</li>
+<li>Views are composable – new views can be formed by applying transformations
+(queries) to other views. Forming a new table from an existing table
+involves copying data, making them decoupled—the new table is not linked to
+the original table in any way.</li>
+<li>Views are virtual; tables are fully realized/persisted.</li>
+</ul>
+<p>Note that immutability and compositionality are critical enablers of
+technologies that require reasoning over transformation, like query
+optimization and remoting. Immutability is also key for concurrency and thread
+safety.</p>
+<p>This document includes a very brief introduction to some of the basic concepts
+of IDataView, but then focuses primarily on the IDataView type system.</p>
+<p>Why does IDataView need a special type system? The .NET type system is not
+well suited to machine-learning and data analysis needs. For example, while
+one could argue that <code class="docutils literal notranslate"><span class="pre">typeof(double[])</span></code> indicates a vector of double values,
+it explicitly does not include the dimensionality of the vector/array.
+Similarly, there is no good way to indicate a subset of an integer type, for
+example integers from 1 to 100, as a .NET type. In short, there is no
+reasonable way to encode complete range and dimensionality information in a
+<code class="docutils literal notranslate"><span class="pre">System.Type</span></code>.</p>
+<p>In addition, a well-defined type system, including complete specification of
+standard data types and conversions, enables separately authored components to
+seamlessly work together without surprises.</p>
+<div class="section" id="basic-concepts">
+<span id="basic-concepts"></span><h3>Basic Concepts<a class="headerlink" href="#basic-concepts" title="Permalink to this headline">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">IDataView</span></code>, in the narrow sense, is an interface implemented by many
+components. At a high level, it is analogous to the .Net interface
+<code class="docutils literal notranslate"><span class="pre">IEnumerable&lt;T&gt;</span></code>, with some very significant differences.</p>
+<p>While <code class="docutils literal notranslate"><span class="pre">IEnumerable&lt;T&gt;</span></code> is a sequence of objects of type <code class="docutils literal notranslate"><span class="pre">T</span></code>, <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> is a
+sequence of rows. An <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> object has an associated <code class="docutils literal notranslate"><span class="pre">ISchema</span></code> object
+that defines the <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>’s columns, including their names, types, indices,
+and associated metadata. Each row of the <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> has a value for each
+column defined by the schema.</p>
+<p>Just as <code class="docutils literal notranslate"><span class="pre">IEnumerable&lt;T&gt;</span></code> has an associated enumerator interface, namely
+<code class="docutils literal notranslate"><span class="pre">IEnumerator&lt;T&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> has an associated cursor interface, namely
+<code class="docutils literal notranslate"><span class="pre">IRowCursor</span></code>. In the enumerable world, an enumerator object implements a
+Current property that returns the current value of the iteration as an object
+of type <code class="docutils literal notranslate"><span class="pre">T</span></code>. In the IDataView world, an <code class="docutils literal notranslate"><span class="pre">IRowCursor</span></code> object encapsulates the
+current row of the iteration. There is no separate object that represents the
+current row. Instead, the cursor implements methods that provide the values of
+the current row, when requested. Additionally, the methods that serve up
+values do not require memory allocation on each invocation, but use sharable
+buffers. This scheme significantly reduces the memory allocations needed to
+cursor through data.</p>
+<p>Both <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> and <code class="docutils literal notranslate"><span class="pre">IEnumerable&lt;T&gt;</span></code> present a read-only view on data, in the
+sense that a sequence presented by each is not directly mutable.
+“Modifications” to the sequence are accomplished by additional operators or
+transforms applied to the sequence, so do not modify any underlying data. For
+example, to normalize a numeric column in an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> object, a
+normalization transform is applied to the sequence to form a new <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>
+object representing the composition. In the new view, the normalized values
+are contained in a new column. Often, the new column has the same name as the
+original source column and “replaces” the source column in the new view.
+Columns that are not involved in the transformation are simply “passed
+through” from the source <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> to the new one.</p>
+<p>Detailed specifications of the <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>, <code class="docutils literal notranslate"><span class="pre">ISchema</span></code>, and <code class="docutils literal notranslate"><span class="pre">IRowCursor</span></code>
+interfaces are in other documents.</p>
+</div>
+<div class="section" id="column-types">
+<span id="column-types"></span><h3>Column Types<a class="headerlink" href="#column-types" title="Permalink to this headline">¶</a></h3>
+<p>Each column in an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> has an associated column type. The collection of
+column types is open, in the sense that new code can introduce new column
+types without requiring modification of all <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> related components.
+While introducing new types is possible, we expect it will also be relatively
+rare.</p>
+<p>All column type implementations derive from the abstract class <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>.
+Primitive column types are those whose implementation derives from the
+abstract class <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code>, which derives from <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>.</p>
+</div>
+<div class="section" id="representation-type">
+<span id="representation-type"></span><h3>Representation Type<a class="headerlink" href="#representation-type" title="Permalink to this headline">¶</a></h3>
+<p>A column type has an associated .Net type, known as its representation type or
+raw type.</p>
+<p>Note that a column type often contains much more information than the
+associated .Net representation type. Moreover, many distinct column types can
+use the same representation type. Consequently, code should not assume that a
+particular .Net type implies a particular column type.</p>
+</div>
+<div class="section" id="standard-column-types">
+<span id="standard-column-types"></span><h3>Standard Column Types<a class="headerlink" href="#standard-column-types" title="Permalink to this headline">¶</a></h3>
+<p>There is a set of predefined standard column types, divided into standard
+primitive types and vector types. Note that there can be types that are
+neither primitive nor vector types. These types are not standard types and may
+require extra care when handling them. For example, a <code class="docutils literal notranslate"><span class="pre">PictureType</span></code> value
+might require disposing when it is no longer needed.</p>
+<p>Standard primitive types include the text type, the boolean type, numeric
+types, and key types. Numeric types are further split into floating-point
+types, signed integer types, and unsigned integer types.</p>
+<p>A vector type has an associated item type that must be a primitive type, but
+need not be a standard primitive type. Note that vector types are not
+primitive types, so vectors of vectors are not supported. Note also that
+vectors are homogeneous—all elements are of the same type. In addition to its
+item type, a vector type contains dimensionality information. At the basic
+level, this dimensionality information indicates the length of the vector
+type. A length of zero means that the vector type is variable length, that is,
+different values may have different lengths. Additional detail of vector types
+is in a subsequent section. Vector types are instances of the sealed class
+<code class="docutils literal notranslate"><span class="pre">VectorType</span></code>, which derives from <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>.</p>
+<p>This document uses convenient shorthand for standard types:</p>
+<ul class="simple">
+<li><code class="docutils literal notranslate"><span class="pre">TX</span></code>: text</li>
+<li><code class="docutils literal notranslate"><span class="pre">BL</span></code>: boolean</li>
+<li><code class="docutils literal notranslate"><span class="pre">R4</span></code>, <code class="docutils literal notranslate"><span class="pre">R8</span></code>: single and double precision floating-point</li>
+<li><code class="docutils literal notranslate"><span class="pre">I1</span></code>, <code class="docutils literal notranslate"><span class="pre">I2</span></code>, <code class="docutils literal notranslate"><span class="pre">I4</span></code>, <code class="docutils literal notranslate"><span class="pre">I8</span></code>: signed integer types with the indicated number of
+bytes</li>
+<li><code class="docutils literal notranslate"><span class="pre">U1</span></code>, <code class="docutils literal notranslate"><span class="pre">U2</span></code>, <code class="docutils literal notranslate"><span class="pre">U4</span></code>, <code class="docutils literal notranslate"><span class="pre">U8</span></code>: unsigned integer types with the indicated number of
+bytes</li>
+<li><code class="docutils literal notranslate"><span class="pre">UG</span></code>: unsigned type with 16-bytes, typically used as a unique ID</li>
+<li><code class="docutils literal notranslate"><span class="pre">TS</span></code>: timespan, a period of time</li>
+<li><code class="docutils literal notranslate"><span class="pre">DT</span></code>: datetime, a date and time but no timezone</li>
+<li><code class="docutils literal notranslate"><span class="pre">DZ</span></code>: datetime zone, a date and time with a timezone</li>
+<li><code class="docutils literal notranslate"><span class="pre">U4[100-199]</span></code>: A key type based on <code class="docutils literal notranslate"><span class="pre">U4</span></code> representing legal values from 100
+to 199, inclusive</li>
+<li><code class="docutils literal notranslate"><span class="pre">V&lt;R4,3,2&gt;</span></code>: A vector type with item type <code class="docutils literal notranslate"><span class="pre">R4</span></code> and dimensionality
+information [3,2]</li>
+</ul>
+<p>See the sections on the specific types for more detail.</p>
+<p>The IDataView system includes many standard conversions between standard
+primitive types. A later section contains a full specification of these
+conversions.</p>
+</div>
+<div class="section" id="default-value">
+<span id="default-value"></span><h3>Default Value<a class="headerlink" href="#default-value" title="Permalink to this headline">¶</a></h3>
+<p>Each column type has an associated default value corresponding to the default
+value of its representation type, as defined by the .Net (C# and CLR)
+specifications.</p>
+<p>The standard conversions map source default values to destination default
+values. For example, the standard conversion from <code class="docutils literal notranslate"><span class="pre">TX</span></code> to <code class="docutils literal notranslate"><span class="pre">R8</span></code> maps the empty
+text value to the value zero. Note that the empty text value is distinct from
+the missing text value, as discussed next.</p>
+</div>
+<div class="section" id="missing-value">
+<span id="missing-value"></span><h3>Missing Value<a class="headerlink" href="#missing-value" title="Permalink to this headline">¶</a></h3>
+<p>Most of the standard primitive types support the notion of a missing value. In
+particular, the text type, floating-point types, signed integer types, and key
+types all have an internal representation of missing. We follow R’s lead and
+denote such values as <code class="docutils literal notranslate"><span class="pre">NA</span></code>.</p>
+<p>Unlike R, the standard primitive types do not distinguish between missing and
+invalid. For example, in floating-point arithmetic, computing zero divided by
+zero, or infinity minus infinity, produces an invalid value known as a <code class="docutils literal notranslate"><span class="pre">NaN</span></code>
+(for Not-a-Number). R uses a specific <code class="docutils literal notranslate"><span class="pre">NaN</span></code> value to represent its <code class="docutils literal notranslate"><span class="pre">NA</span></code> value,
+with all other <code class="docutils literal notranslate"><span class="pre">NaN</span></code> values indicating invalid. The IDataView standard
+floating-point types do not distinguish between the various <code class="docutils literal notranslate"><span class="pre">NaN</span></code> values,
+treating them all as missing/invalid.</p>
+<p>A standard conversion from a source type with <code class="docutils literal notranslate"><span class="pre">NA</span></code> to a destination type with
+<code class="docutils literal notranslate"><span class="pre">NA</span></code> maps <code class="docutils literal notranslate"><span class="pre">NA</span></code> to <code class="docutils literal notranslate"><span class="pre">NA</span></code>. A standard conversion from a source type with <code class="docutils literal notranslate"><span class="pre">NA</span></code> to
+a destination type without <code class="docutils literal notranslate"><span class="pre">NA</span></code> maps <code class="docutils literal notranslate"><span class="pre">NA</span></code> to the default value of the
+destination type. For example, converting a text <code class="docutils literal notranslate"><span class="pre">NA</span></code> value to <code class="docutils literal notranslate"><span class="pre">R4</span></code> produces a
+<code class="docutils literal notranslate"><span class="pre">NaN</span></code>, but converting a text <code class="docutils literal notranslate"><span class="pre">NA</span></code> to <code class="docutils literal notranslate"><span class="pre">U4</span></code> results in zero. Note that this
+specification does not address diagnostic user messages, so, in certain
+environments, the latter situation may generate a warning to the user.</p>
+<p>Note that a vector type does not support a representation of missing, but may
+contain <code class="docutils literal notranslate"><span class="pre">NA</span></code> values of its item type. Generally, there is no standard
+mechanism faster than O(N) for determining whether a vector with N items
+contains any missing values.</p>
+<p>For further details on missing value representations, see the sections
+detailing the particular standard primitive types.</p>
+</div>
+<div class="section" id="vector-representations">
+<span id="vector-representations"></span><h3>Vector Representations<a class="headerlink" href="#vector-representations" title="Permalink to this headline">¶</a></h3>
+<p>Values of a vector type may be represented either sparsely or densely. A
+vector type does not mandate denseness or sparsity, nor does it imply that one
+is favored over the other. A sparse representation is semantically equivalent
+to a dense representation having the suppressed entries filled in with the
+<em>default</em> value of the item type. Note that the values of the suppressed
+entries are emphatically <em>not</em> the missing/<code class="docutils literal notranslate"><span class="pre">NA</span></code> value of the item type, unless
+the missing and default values are identical, as they are for key types.</p>
+</div>
+<div class="section" id="metadata">
+<span id="metadata"></span><h3>Metadata<a class="headerlink" href="#metadata" title="Permalink to this headline">¶</a></h3>
+<p>A column in an <code class="docutils literal notranslate"><span class="pre">ISchema</span></code> can have additional column-wide information, known as
+metadata. For each string value, known as a metadata kind, a column may have a
+value associated with that metadata kind. The value also has an associated
+type, which is a compatible column type.</p>
+<p>For example:</p>
+<ul class="simple">
+<li>A column may indicate that it is normalized, by providing a <code class="docutils literal notranslate"><span class="pre">BL</span></code> valued
+piece of metadata named <code class="docutils literal notranslate"><span class="pre">IsNormalized</span></code>.</li>
+<li>A column whose type is <code class="docutils literal notranslate"><span class="pre">V&lt;R4,17&gt;</span></code>, meaning a vector of length 17 whose items
+are single-precision floating-point values, might have <code class="docutils literal notranslate"><span class="pre">SlotNames</span></code> metadata
+of type <code class="docutils literal notranslate"><span class="pre">V&lt;TX,17&gt;</span></code>, meaning a vector of length 17 whose items are text.</li>
+<li>A column produced by a scorer may have several pieces of associated
+metadata, indicating the “scoring column group id” that it belongs to, what
+kind of scorer produced the column (for example, binary classification), and the
+precise semantics of the column (for example, predicted label, raw score,
+probability).</li>
+</ul>
+<p>The <code class="docutils literal notranslate"><span class="pre">ISchema</span></code> interface, including the metadata API, is fully specified in
+another document.</p>
+</div>
+</div>
+<div class="section" id="text-type">
+<span id="text-type"></span><h2>Text Type<a class="headerlink" href="#text-type" title="Permalink to this headline">¶</a></h2>
+<p>The text type, denoted by the shorthand <code class="docutils literal notranslate"><span class="pre">TX</span></code>, represents text values. The
+<code class="docutils literal notranslate"><span class="pre">TextType</span></code> class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and has a single instance,
+exposed as <code class="docutils literal notranslate"><span class="pre">TextType.Instance</span></code>. The representation type of <code class="docutils literal notranslate"><span class="pre">TX</span></code> is an
+immutable struct known as <code class="docutils literal notranslate"><span class="pre">DvText</span></code>. A <code class="docutils literal notranslate"><span class="pre">DvText</span></code> value represents a sequence of
+characters whose length is contained in its <code class="docutils literal notranslate"><span class="pre">Length</span></code> field. The missing/<code class="docutils literal notranslate"><span class="pre">NA</span></code>
+value has a <code class="docutils literal notranslate"><span class="pre">Length</span></code> of -1, while all other values have a non-negative
+<code class="docutils literal notranslate"><span class="pre">Length</span></code>. The default value has a <code class="docutils literal notranslate"><span class="pre">Length</span></code> of zero and represents an empty
+sequence of characters.</p>
+<p>In text processing transformations, it is very common to split text into
+pieces. A key advantage of using <code class="docutils literal notranslate"><span class="pre">DvText</span></code> instead of <code class="docutils literal notranslate"><span class="pre">System.String</span></code> for text
+values is that these splits require no memory allocation—the derived <code class="docutils literal notranslate"><span class="pre">DvText</span></code>
+references the same underlying <code class="docutils literal notranslate"><span class="pre">System.String</span></code> as the original <code class="docutils literal notranslate"><span class="pre">DvText</span></code> does.
+Another reason that <code class="docutils literal notranslate"><span class="pre">System.String</span></code> is not ideal for text is that we want the
+default value to be empty and not <code class="docutils literal notranslate"><span class="pre">NA</span></code>. For <code class="docutils literal notranslate"><span class="pre">System.String</span></code>, the default value
+is null, which would be a more natural representation for <code class="docutils literal notranslate"><span class="pre">NA</span></code> than for empty
+text. By using a custom struct wrapper around a portion (or span) of a
+<code class="docutils literal notranslate"><span class="pre">System.String</span></code>, we address both the memory efficiency and default value
+problems.</p>
+</div>
+<div class="section" id="boolean-type">
+<span id="boolean-type"></span><h2>Boolean Type<a class="headerlink" href="#boolean-type" title="Permalink to this headline">¶</a></h2>
+<p>The standard boolean type, denoted by the shorthand <code class="docutils literal notranslate"><span class="pre">BL</span></code>, represents
+true/false values. The <code class="docutils literal notranslate"><span class="pre">BooleanType</span></code> class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and
+has a single instance, exposed as <code class="docutils literal notranslate"><span class="pre">BooleanType.Instance</span></code>. The representation
+type of <code class="docutils literal notranslate"><span class="pre">BL</span></code> is the <code class="docutils literal notranslate"><span class="pre">DvBool</span></code> enumeration type, logically stored as <code class="docutils literal notranslate"><span class="pre">sbyte</span></code>:</p>
+<p><code class="docutils literal notranslate"><span class="pre">DvBool</span></code> | <code class="docutils literal notranslate"><span class="pre">sbyte</span></code> Value
+——–:|:————-
+<code class="docutils literal notranslate"><span class="pre">NA</span></code>     | -128
+<code class="docutils literal notranslate"><span class="pre">False</span></code>  | 0
+<code class="docutils literal notranslate"><span class="pre">True</span></code>   | 1</p>
+<p>The default value of <code class="docutils literal notranslate"><span class="pre">BL</span></code> is <code class="docutils literal notranslate"><span class="pre">DvBool.False</span></code> and the <code class="docutils literal notranslate"><span class="pre">NA</span></code> value of <code class="docutils literal notranslate"><span class="pre">BL</span></code> is
+<code class="docutils literal notranslate"><span class="pre">DvBool.NA</span></code>. Note that the underlying type of the <code class="docutils literal notranslate"><span class="pre">DvBool</span></code> <code class="docutils literal notranslate"><span class="pre">enum</span></code> is signed
+byte and the default and <code class="docutils literal notranslate"><span class="pre">NA</span></code> values of <code class="docutils literal notranslate"><span class="pre">BL</span></code> align with the default and <code class="docutils literal notranslate"><span class="pre">NA</span></code>
+values of <code class="docutils literal notranslate"><span class="pre">I1</span></code>.</p>
+<p>There is a standard conversion from <code class="docutils literal notranslate"><span class="pre">TX</span></code> to <code class="docutils literal notranslate"><span class="pre">BL</span></code>. There are standard
+conversions from <code class="docutils literal notranslate"><span class="pre">BL</span></code> to all signed integer and floating point numeric types,
+with <code class="docutils literal notranslate"><span class="pre">DvBool.False</span></code> mapping to zero, <code class="docutils literal notranslate"><span class="pre">DvBool.True</span></code> mapping to one, and
+<code class="docutils literal notranslate"><span class="pre">DvBool.NA</span></code> mapping to <code class="docutils literal notranslate"><span class="pre">NA</span></code>.</p>
+</div>
+<div class="section" id="number-types">
+<span id="number-types"></span><h2>Number Types<a class="headerlink" href="#number-types" title="Permalink to this headline">¶</a></h2>
+<p>The standard number types are all instances of the sealed class NumberType,
+which is derived from PrimitiveType. There are two standard floating-point
+types, four standard signed integer types, and four standard unsigned integer
+types. Each of these is represented by a single instance of NumberType and
+there are static properties of NumberType to access each instance. For
+example, to test whether a variable type represents <code class="docutils literal notranslate"><span class="pre">I4</span></code>, use the C# code
+<code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">NumberType.I4</span></code>.</p>
+<p>Floating-point arithmetic has a well-deserved reputation for being
+troublesome. This is primarily because it is imprecise, in the sense that the
+result of most operations must be rounded to the nearest representable value.
+This rounding means, among other side effects, that floating-point addition
+and multiplication are not associate, nor satisfy the distributive property.</p>
+<p>However, in many ways, floating-point arithmetic is the best-suited system for
+arithmetic computation. For example, the IEEE 754 specification mandates
+precise graceful overflow behavior—as results grow, they lose resolution in
+the least significant digits, and eventually overflow to a special infinite
+value. In contrast, when integer arithmetic overflows, the result is a non-
+sense value. Trapping and handling integer overflow is expensive, both in
+runtime and development costs.</p>
+<p>The IDataView system supports integer numeric types mostly for data
+interchange convenience, but we strongly discourage performing arithmetic on
+those values without first converting to floating-point.</p>
+<div class="section" id="floating-point-types">
+<span id="floating-point-types"></span><h3>Floating-point Types<a class="headerlink" href="#floating-point-types" title="Permalink to this headline">¶</a></h3>
+<p>The floating-point types, <code class="docutils literal notranslate"><span class="pre">R4</span></code> and <code class="docutils literal notranslate"><span class="pre">R8</span></code>, have representation types
+<code class="docutils literal notranslate"><span class="pre">System.Single</span></code> and <code class="docutils literal notranslate"><span class="pre">System.Double</span></code>. Their default values are zero. Any <code class="docutils literal notranslate"><span class="pre">NaN</span></code>
+is considered an <code class="docutils literal notranslate"><span class="pre">NA</span></code> value, with the specific <code class="docutils literal notranslate"><span class="pre">Single.NaN</span></code> and <code class="docutils literal notranslate"><span class="pre">Double.NaN</span></code>
+values being the canonical <code class="docutils literal notranslate"><span class="pre">NA</span></code> values.</p>
+<p>There are standard conversions from each floating-point type to the other
+floating-point type. There are also standard conversions from text to each
+floating-point type and from each integer type to each floating-point type.</p>
+</div>
+<div class="section" id="signed-integer-types">
+<span id="signed-integer-types"></span><h3>Signed Integer Types<a class="headerlink" href="#signed-integer-types" title="Permalink to this headline">¶</a></h3>
+<p>The signed integer types, <code class="docutils literal notranslate"><span class="pre">I1</span></code>, <code class="docutils literal notranslate"><span class="pre">I2</span></code>, <code class="docutils literal notranslate"><span class="pre">I4</span></code>, and <code class="docutils literal notranslate"><span class="pre">I8</span></code>, have representation
+types Sytem.SByte, <code class="docutils literal notranslate"><span class="pre">System.Int16</span></code>, <code class="docutils literal notranslate"><span class="pre">System.Int32</span></code>, and <code class="docutils literal notranslate"><span class="pre">System.Int64</span></code>. The
+default value of each of these is zero. Each of these has a non-zero value
+that is its own additive inverse, namely <code class="docutils literal notranslate"><span class="pre">(-2)^^{8n-1}</span></code>, where <code class="docutils literal notranslate"><span class="pre">n</span></code> is the
+number of bytes in the representation type. This is the minimum value of each
+of these types. We follow R’s lead and use these values as the <code class="docutils literal notranslate"><span class="pre">NA</span></code> values.</p>
+<p>There are standard conversions from each signed integer type to every other
+signed integer type. There are also standard conversions from text to each
+signed integer type and from each signed integer type to each floating-point
+type.</p>
+<p>Note that we have not defined standard conversions from floating-point types
+to signed integer types.</p>
+</div>
+<div class="section" id="unsigned-integer-types">
+<span id="unsigned-integer-types"></span><h3>Unsigned Integer Types<a class="headerlink" href="#unsigned-integer-types" title="Permalink to this headline">¶</a></h3>
+<p>The unsigned integer types, <code class="docutils literal notranslate"><span class="pre">U1</span></code>, <code class="docutils literal notranslate"><span class="pre">U2</span></code>, <code class="docutils literal notranslate"><span class="pre">U4</span></code>, and <code class="docutils literal notranslate"><span class="pre">U8</span></code>, have representation
+types Sytem.Byte, <code class="docutils literal notranslate"><span class="pre">System.UInt16</span></code>, <code class="docutils literal notranslate"><span class="pre">System.UInt32</span></code>, and <code class="docutils literal notranslate"><span class="pre">System.UInt64</span></code>,
+respectively. The default value of each of these is zero. These types do not
+have an <code class="docutils literal notranslate"><span class="pre">NA</span></code> value.</p>
+<p>There are standard conversions from each unsigned integer type to every other
+unsigned integer type. There are also standard conversions from text to each
+unsigned integer type and from each unsigned integer type to each floating-
+point type.</p>
+<p>Note that we have not defined standard conversions from floating-point types
+to unsigned integer types, or between signed integer types and unsigned
+integer types.</p>
+</div>
+</div>
+<div class="section" id="key-types">
+<span id="key-types"></span><h2>Key Types<a class="headerlink" href="#key-types" title="Permalink to this headline">¶</a></h2>
+<p>Key types are used for data that is represented numerically, but where the
+order and/or magnitude of the values is not semantically meaningful. For
+example, hash values, social security numbers, and the index of a term in a
+dictionary are all best modeled with a key type.</p>
+<p>The representation type of a key type, also called its underlying type, must
+be one of the standard four .Net unsigned integer types. The <code class="docutils literal notranslate"><span class="pre">NA</span></code> and default
+values of a key type are the same value, namely the representational value
+zero.</p>
+<p>Key types are instances of the sealed class <code class="docutils literal notranslate"><span class="pre">KeyType</span></code>, which derives from
+<code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code>.</p>
+<p>In addition to its underlying type, a key type specifies:</p>
+<ul class="simple">
+<li>A count value, between <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">int.MaxValue</span></code>, inclusive</li>
+<li>A “minimum” value, between <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">ulong.MaxValue</span></code>, inclusive</li>
+<li>A Boolean value indicating whether the values of the key type are contiguous</li>
+</ul>
+<p>Regardless of the minimum and count values, the representational value zero
+always means <code class="docutils literal notranslate"><span class="pre">NA</span></code> and the representational value one is always the first valid
+value of the key type.</p>
+<p>Notes:</p>
+<ul class="simple">
+<li>The <code class="docutils literal notranslate"><span class="pre">Count</span></code> property returns the count of the key type. This is of type
+<code class="docutils literal notranslate"><span class="pre">int</span></code>, but is required to be non-negative. When <code class="docutils literal notranslate"><span class="pre">Count</span></code> is zero, the key
+type has no known or useful maximum value. Otherwise, the legal
+representation values are from one up to and including <code class="docutils literal notranslate"><span class="pre">Count</span></code>. The <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+is required to be representable in the underlying type, so, for example, the
+<code class="docutils literal notranslate"><span class="pre">Count</span></code> value of a key type based on <code class="docutils literal notranslate"><span class="pre">System.Byte</span></code> must not exceed <code class="docutils literal notranslate"><span class="pre">255</span></code>. As
+an example of the usefulness of the <code class="docutils literal notranslate"><span class="pre">Count</span></code> property, consider the
+<code class="docutils literal notranslate"><span class="pre">KeyToVector</span></code> transform implemented as part of ML.NET. It maps from a key
+type value to an indicator vector. The length of the vector is the <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+of the key type, which is required to be positive. For a key value of <code class="docutils literal notranslate"><span class="pre">k</span></code>,
+with <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">≤</span> <span class="pre">k</span> <span class="pre">≤</span> <span class="pre">Count</span></code>, the resulting vector has a value of one in the
+(<code class="docutils literal notranslate"><span class="pre">k-1</span></code>)th slot, and zero in all other slots. An <code class="docutils literal notranslate"><span class="pre">NA</span></code> value (with
+representation zero) is mapped to the all- zero vector of length <code class="docutils literal notranslate"><span class="pre">Count</span></code>.</li>
+<li>For a key type with positive <code class="docutils literal notranslate"><span class="pre">Count</span></code>, a representation value should be
+between <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">Count</span></code>, inclusive, with <code class="docutils literal notranslate"><span class="pre">0</span></code> meaning <code class="docutils literal notranslate"><span class="pre">NA</span></code>. When processing
+values from an untrusted source, it is best to guard against values bigger
+than <code class="docutils literal notranslate"><span class="pre">Count</span></code> and treat such values as equivalent to <code class="docutils literal notranslate"><span class="pre">NA</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">Min</span></code> property returns the minimum semantic value of the key type. This
+is used exclusively for transforming from a representation value, where the
+valid values start at one, to user facing values, which might start at any
+non-negative value. The most common values for <code class="docutils literal notranslate"><span class="pre">Min</span></code> are zero and one.</li>
+<li>The boolean <code class="docutils literal notranslate"><span class="pre">Contiguous</span></code> property indicates whether values of the key type
+are generally contiguous in the sense that a complete sampling of
+representation values of the key type would cover most, if not all, values
+from one up to their max. A <code class="docutils literal notranslate"><span class="pre">true</span></code> value indicates that using an array to
+implement a map from the key type values is a reasonable choice. When
+<code class="docutils literal notranslate"><span class="pre">false</span></code>, it is likely more prudent to use a hash table.</li>
+<li>A key type can be non-<code class="docutils literal notranslate"><span class="pre">Contiguous</span></code> only if <code class="docutils literal notranslate"><span class="pre">Count</span></code> is zero. The converse
+however is not true. A key type that is contiguous but has <code class="docutils literal notranslate"><span class="pre">Count</span></code> equal to
+zero is one where there is a reasonably small maximum, but that maximum is
+unknown. In this case, an array might be a good choice for a map from the
+key type.</li>
+<li>The shorthand for a key type with representation type <code class="docutils literal notranslate"><span class="pre">U1</span></code>, and semantic
+values from <code class="docutils literal notranslate"><span class="pre">1000</span></code> to <code class="docutils literal notranslate"><span class="pre">1099</span></code>, inclusive, is <code class="docutils literal notranslate"><span class="pre">U1[1000-1099]</span></code>. Note that the
+<code class="docutils literal notranslate"><span class="pre">Min</span></code> value of this key type is outside the range of the underlying type,
+<code class="docutils literal notranslate"><span class="pre">System.Byte</span></code>, but the <code class="docutils literal notranslate"><span class="pre">Count</span></code> value is only <code class="docutils literal notranslate"><span class="pre">100</span></code>, which is representable
+in a <code class="docutils literal notranslate"><span class="pre">System.Byte</span></code>. Recall that the representation values always start at 1
+and extend up to <code class="docutils literal notranslate"><span class="pre">Count</span></code>, in this case <code class="docutils literal notranslate"><span class="pre">100</span></code>.</li>
+<li>For a key type with representation type <code class="docutils literal notranslate"><span class="pre">System.UInt32</span></code> and semantic values
+starting at <code class="docutils literal notranslate"><span class="pre">1000</span></code>, with no known maximum, the shorthand is <code class="docutils literal notranslate"><span class="pre">U4[1000-*]</span></code>.</li>
+</ul>
+<p>There are standard conversions from text to each key type. This conversion
+parses the text as a standard non-negative integer value and honors the <code class="docutils literal notranslate"><span class="pre">Min</span></code>
+and <code class="docutils literal notranslate"><span class="pre">Count</span></code> values of the key type. If a parsed numeric value falls outside
+the range indicated by <code class="docutils literal notranslate"><span class="pre">Min</span></code> and <code class="docutils literal notranslate"><span class="pre">Count</span></code>, or if the text is not parsable as a
+non-negative integer, the result is <code class="docutils literal notranslate"><span class="pre">NA</span></code>.</p>
+<p>There are standard conversions from one key type to another, provided:</p>
+<ul class="simple">
+<li>The source and destination key types have the same <code class="docutils literal notranslate"><span class="pre">Min</span></code> and <code class="docutils literal notranslate"><span class="pre">Count</span></code> values.</li>
+<li>Either the number of bytes in the destination’s underlying type is greater
+than the number of bytes in the source’s underlying type, or the <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+value is positive. In the latter case, the <code class="docutils literal notranslate"><span class="pre">Count</span></code> is necessarily less than
+2k, where k is the number of bits in the destination type’s underlying type.
+For example, <code class="docutils literal notranslate"><span class="pre">U1[1-*]</span></code> can be converted to <code class="docutils literal notranslate"><span class="pre">U2[1-*]</span></code>, but <code class="docutils literal notranslate"><span class="pre">U2[1-*]</span></code> cannot
+be converted to <code class="docutils literal notranslate"><span class="pre">U1[1-*]</span></code>. Also, <code class="docutils literal notranslate"><span class="pre">U1[1-100]</span></code> and <code class="docutils literal notranslate"><span class="pre">U2[1-100]</span></code> can be
+converted in both directions.</li>
+</ul>
+</div>
+<div class="section" id="vector-types">
+<span id="vector-types"></span><h2>Vector Types<a class="headerlink" href="#vector-types" title="Permalink to this headline">¶</a></h2>
+<div class="section" id="introduction">
+<span id="introduction"></span><h3>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h3>
+<p>Vector types are one of the key innovations of the IDataView system and are
+critical for high dimensional machine-learning applications.</p>
+<p>For example, when processing text, it is common to hash all or parts of the
+text and encode the resulting hash values, first as a key type, then as
+indicator or bag vectors using the <code class="docutils literal notranslate"><span class="pre">KeyToVector</span></code> transform. Using a <code class="docutils literal notranslate"><span class="pre">k</span></code>-bit
+hash produces a key type with <code class="docutils literal notranslate"><span class="pre">Count</span></code> equal to <code class="docutils literal notranslate"><span class="pre">2^^k</span></code>, and vectors of the same
+length. It is common to use <code class="docutils literal notranslate"><span class="pre">20</span></code> or more hash bits, producing vectors of
+length a million or more. The vectors are typically very sparse. In systems
+that do not support vector-valued columns, each of these million or more
+values is placed in a separate (sparse) column, leading to a massive explosion
+of the column space. Most tabular systems are not designed to scale to
+millions of columns, and the user experience also suffers when displaying such
+data. Moreover, since the vectors are very sparse, placing each value in its
+own column means that, when a row is being processed, each of those sparse
+columns must be queried or scanned for its current value. Effectively the
+sparse matrix of values has been needlessly transposed. This is very
+inefficient when there are just a few (often one) non-zero entries among the
+column values. Vector types solve these issues.</p>
+<p>A vector type is an instance of the sealed <code class="docutils literal notranslate"><span class="pre">VectorType</span></code> class, which derives
+from <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>. The vector type contains its <code class="docutils literal notranslate"><span class="pre">ItemType</span></code>, which must be a
+<code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code>, and its dimensionality information. The dimensionality
+information consists of one or more non-negative integer values. The
+<code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> is the product of the dimensions. A dimension value of zero means
+that the true value of that dimension can vary from value to value.</p>
+<p>For example, tokenizing a text by splitting it into multiple terms generates a
+vector of text of varying/unknown length. The result type shorthand is
+<code class="docutils literal notranslate"><span class="pre">V&lt;TX,*&gt;</span></code>. Hashing this using <code class="docutils literal notranslate"><span class="pre">6</span></code> bits then produces the vector type
+<code class="docutils literal notranslate"><span class="pre">V&lt;U4[0-63],*&gt;</span></code>. Applying the <code class="docutils literal notranslate"><span class="pre">KeyToVector</span></code> transform then produces the vector
+type <code class="docutils literal notranslate"><span class="pre">V&lt;R4,*,64&gt;</span></code>. Each of these vector types has a <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> of zero,
+indicating that the total number of slots varies, but the latter still has
+potentially useful dimensionality information: the vector slots are
+partitioned into an unknown number of runs of consecutive slots each of length
+<code class="docutils literal notranslate"><span class="pre">64</span></code>.</p>
+<p>As another example, consider an image data set. The data starts with a <code class="docutils literal notranslate"><span class="pre">TX</span></code>
+column containing URLs for images. Applying an <code class="docutils literal notranslate"><span class="pre">ImageLoader</span></code> transform
+generates a column of a custom (non-standard) type, <code class="docutils literal notranslate"><span class="pre">Picture&lt;*,*,4&gt;</span></code>, where
+the asterisks indicate that the picture dimensions are unknown. The last
+dimension of <code class="docutils literal notranslate"><span class="pre">4</span></code> indicates that there are four channels in each pixel: the
+three color components, plus the alpha channel. Applying an <code class="docutils literal notranslate"><span class="pre">ImageResizer</span></code>
+transform scales and crops the images to a specified size, for example,
+<code class="docutils literal notranslate"><span class="pre">100x100</span></code>, producing a type of <code class="docutils literal notranslate"><span class="pre">Picture&lt;100,100,4&gt;</span></code>. Finally, applying a
+<code class="docutils literal notranslate"><span class="pre">ImagePixelExtractor</span></code> transform (and specifying that the alpha channel should
+be dropped), produces the vector type <code class="docutils literal notranslate"><span class="pre">V&lt;R4,3,100,100&gt;</span></code>. In this example, the
+<code class="docutils literal notranslate"><span class="pre">ImagePixelExtractor</span></code> re-organized the color information into separate planes,
+and divided each pixel value by 256 to get pixel values between zero and one.</p>
+</div>
+<div class="section" id="equivalence">
+<span id="equivalence"></span><h3>Equivalence<a class="headerlink" href="#equivalence" title="Permalink to this headline">¶</a></h3>
+<p>Note that two vector types are equivalent when they have equivalent item types
+and have identical dimensionality information. To test for compatibility,
+instead of equivalence, in the sense that the total <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> should be the
+same, use the <code class="docutils literal notranslate"><span class="pre">SameSizeAndItem</span></code> method instead of the Equals method (see the
+<code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> code below).</p>
+</div>
+<div class="section" id="representation-type">
+<span id="id1"></span><h3>Representation Type<a class="headerlink" href="#representation-type" title="Permalink to this headline">¶</a></h3>
+<p>The representation type of a vector type is the struct <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code>, where <code class="docutils literal notranslate"><span class="pre">T</span></code>
+is the representation type of the item type. For example, the representation
+type of <code class="docutils literal notranslate"><span class="pre">V&lt;R8,10&gt;</span></code> is <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;double&gt;</span></code>. When the vector type’s <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code>
+is positive, each value of the type will have length equal to the
+<code class="docutils literal notranslate"><span class="pre">VectorSize</span></code>.</p>
+<p>The struct <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code>, sketched below, provides both dense and sparse
+representations and encourages cooperative buffer sharing. A complete
+discussion of <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> and associated coding idioms is in another
+document.</p>
+<p>Notes:</p>
+<ul class="simple">
+<li><code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> contains four public readonly fields: <code class="docutils literal notranslate"><span class="pre">Length</span></code>, <code class="docutils literal notranslate"><span class="pre">Count</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Values</span></code>, and <code class="docutils literal notranslate"><span class="pre">Indices</span></code>.</li>
+<li><code class="docutils literal notranslate"><span class="pre">Length</span></code> is the logical length of the vector, and must be non-negative.</li>
+<li><code class="docutils literal notranslate"><span class="pre">Count</span></code> is the number of items explicitly represented in the vector. <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+is non-negative and less than or equal to Length.</li>
+<li>When <code class="docutils literal notranslate"><span class="pre">Count</span></code> is equal to Length, the vector is dense. Otherwise, the vector
+is sparse.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">Values</span></code> array contains the explicitly represented item values. The
+length of the <code class="docutils literal notranslate"><span class="pre">Values</span></code> array is at least <code class="docutils literal notranslate"><span class="pre">Count</span></code>, but not necessarily equal
+to <code class="docutils literal notranslate"><span class="pre">Count</span></code>. Only the first <code class="docutils literal notranslate"><span class="pre">Count</span></code> items in <code class="docutils literal notranslate"><span class="pre">Values</span></code> are part of the vector;
+any remaining items are garbage and should be ignored. Note that when
+<code class="docutils literal notranslate"><span class="pre">Count</span></code> is zero, <code class="docutils literal notranslate"><span class="pre">Values</span></code> may be null.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">Indices</span></code> array is only relevant when the vector is sparse. In the
+sparse case, <code class="docutils literal notranslate"><span class="pre">Indices</span></code> is parallel to <code class="docutils literal notranslate"><span class="pre">Values</span></code>, only the first <code class="docutils literal notranslate"><span class="pre">Count</span></code> items
+are meaningful, the indices must be non-negative and less than <code class="docutils literal notranslate"><span class="pre">Length</span></code>, and
+the indices must be strictly increasing. Note that when <code class="docutils literal notranslate"><span class="pre">Count</span></code> is zero,
+<code class="docutils literal notranslate"><span class="pre">Indices</span></code> may be null. In the dense case, <code class="docutils literal notranslate"><span class="pre">Indices</span></code> is not meaningful and
+may or may not be null.</li>
+<li>It is very common for the arrays in a <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> to be larger than needed
+for their current value. A special case of this is when a dense <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code>
+has a non-null <code class="docutils literal notranslate"><span class="pre">Indices</span></code> array. The extra items in the arrays are not
+meaningful and should be ignored. Allowing these buffers to be larger than
+currently needed reduces the need to reallocate buffers for different
+values. For example, when cursoring through a vector valued column with
+<code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> of 100, client code could pre-allocate values and indices
+arrays and seed a <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> with those arrays. When fetching values, the
+client code passes the <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> by reference. The called code can re-use
+those arrays, filling them with the current values.</li>
+<li>Generally, vectors should use a sparse representation only when the number
+of non-default items is at most half the value of Length. However, this
+guideline is not a mandate.</li>
+</ul>
+<p>See the full <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> technical specification for additional details on
+<code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code>, including complete discussion of programming idioms, and
+information on helper classes for building and manipulating vectors.</p>
+</div>
+</div>
+<div class="section" id="standard-conversions">
+<span id="standard-conversions"></span><h2>Standard Conversions<a class="headerlink" href="#standard-conversions" title="Permalink to this headline">¶</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> system includes the definition and implementation of many
+standard conversions. Standard conversions are required to map source default
+values to destination default values. When both the source type and
+destination type have an <code class="docutils literal notranslate"><span class="pre">NA</span></code> value, the conversion must map <code class="docutils literal notranslate"><span class="pre">NA</span></code> to <code class="docutils literal notranslate"><span class="pre">NA</span></code>.
+When the source type has an <code class="docutils literal notranslate"><span class="pre">NA</span></code> value, but the destination type does not, the
+conversion must map <code class="docutils literal notranslate"><span class="pre">NA</span></code> to the default value of the destination type.</p>
+<p>Most standard conversions are implemented by the singleton class <code class="docutils literal notranslate"><span class="pre">Conversions</span></code>
+in the namespace <code class="docutils literal notranslate"><span class="pre">Microsoft.MachineLearning.Data.Conversion</span></code>. The standard
+conversions are exposed by the <code class="docutils literal notranslate"><span class="pre">ConvertTransform</span></code>.</p>
+<div class="section" id="from-text">
+<span id="from-text"></span><h3>From Text<a class="headerlink" href="#from-text" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from <code class="docutils literal notranslate"><span class="pre">TX</span></code> to the standard primitive types,
+<code class="docutils literal notranslate"><span class="pre">R4</span></code>, <code class="docutils literal notranslate"><span class="pre">R8</span></code>, <code class="docutils literal notranslate"><span class="pre">I1</span></code>, <code class="docutils literal notranslate"><span class="pre">I2</span></code>, <code class="docutils literal notranslate"><span class="pre">I4</span></code>, <code class="docutils literal notranslate"><span class="pre">I8</span></code>, <code class="docutils literal notranslate"><span class="pre">U1</span></code>, <code class="docutils literal notranslate"><span class="pre">U2</span></code>, <code class="docutils literal notranslate"><span class="pre">U4</span></code>, <code class="docutils literal notranslate"><span class="pre">U8</span></code>, and <code class="docutils literal notranslate"><span class="pre">BL</span></code>. For non-
+empty, non-missing <code class="docutils literal notranslate"><span class="pre">TX</span></code> values, these conversions use standard parsing of
+floating-point and integer values. For <code class="docutils literal notranslate"><span class="pre">BL</span></code>, the mapping is case insensitive,
+maps text values <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">true,</span> <span class="pre">yes,</span> <span class="pre">t,</span> <span class="pre">y,</span> <span class="pre">1,</span> <span class="pre">+1,</span> <span class="pre">+</span> <span class="pre">}</span></code> to <code class="docutils literal notranslate"><span class="pre">DvBool.True</span></code>, and maps
+the values <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">false,</span> <span class="pre">no,</span> <span class="pre">f,</span> <span class="pre">n,</span> <span class="pre">0,</span> <span class="pre">-1,</span> <span class="pre">-</span> <span class="pre">}</span></code> to <code class="docutils literal notranslate"><span class="pre">DvBool.False</span></code>.</p>
+<p>If parsing fails, the result is the <code class="docutils literal notranslate"><span class="pre">NA</span></code> value for floating-point, signed
+integer types, and boolean, and zero for unsigned integer types. Note that
+overflow of an integer type is considered failure of parsing, so produces an
+<code class="docutils literal notranslate"><span class="pre">NA</span></code> (or zero for unsigned). These conversions map missing/<code class="docutils literal notranslate"><span class="pre">NA</span></code> text to <code class="docutils literal notranslate"><span class="pre">NA</span></code>,
+for floating-point and signed integer types, and to zero for unsigned integer
+types.</p>
+<p>These conversions are required to map empty text (the default value of <code class="docutils literal notranslate"><span class="pre">TX</span></code>)
+to the default value of the destination, which is zero for all numeric types
+and DvBool.False for <code class="docutils literal notranslate"><span class="pre">BL</span></code>. This may seem unfortunate at first glance, but
+leads to some nice invariants. For example, when loading a text file with
+sparse row specifications, it’s desirable for the result to be the same
+whether the row is first processed entirely as <code class="docutils literal notranslate"><span class="pre">TX</span></code> values, then parsed, or
+processed directly into numeric values, that is, parsing as the row is
+processed. In the latter case, it is simple to map implicit items (suppressed
+due to sparsity) to zero. In the former case, these items are first mapped to
+the empty text value. To get the same result, we need empty text to map to
+zero.</p>
+</div>
+<div class="section" id="floating-point">
+<span id="floating-point"></span><h3>Floating Point<a class="headerlink" href="#floating-point" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from <code class="docutils literal notranslate"><span class="pre">R4</span></code> to <code class="docutils literal notranslate"><span class="pre">R8</span></code> and from <code class="docutils literal notranslate"><span class="pre">R8</span></code> to <code class="docutils literal notranslate"><span class="pre">R4</span></code>. These
+are the standard IEEE 754 conversions (using unbiased round-to-nearest in the
+case of <code class="docutils literal notranslate"><span class="pre">R8</span></code> to <code class="docutils literal notranslate"><span class="pre">R4</span></code>).</p>
+</div>
+<div class="section" id="signed-integer">
+<span id="signed-integer"></span><h3>Signed Integer<a class="headerlink" href="#signed-integer" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from each signed integer type to each other
+signed integer type. These conversions map <code class="docutils literal notranslate"><span class="pre">NA</span></code> to <code class="docutils literal notranslate"><span class="pre">NA</span></code>, map any other numeric
+value that fits in the destination type to the corresponding value, and maps
+any numeric value that does not fit in the destination type to <code class="docutils literal notranslate"><span class="pre">NA</span></code>. For
+example, when mapping from <code class="docutils literal notranslate"><span class="pre">I1</span></code> to <code class="docutils literal notranslate"><span class="pre">I2</span></code>, the source <code class="docutils literal notranslate"><span class="pre">NA</span></code> value, namely 0x80,
+is mapped to the destination <code class="docutils literal notranslate"><span class="pre">NA</span></code> value, namely 0x8000, and all other numeric
+values are mapped as expected. When mapping from <code class="docutils literal notranslate"><span class="pre">I2</span></code> to <code class="docutils literal notranslate"><span class="pre">I1</span></code>, any value that
+is too large in magnitude to fit in <code class="docutils literal notranslate"><span class="pre">I1</span></code>, such as 312, is mapped to <code class="docutils literal notranslate"><span class="pre">NA</span></code>,
+namely 0x80.</p>
+</div>
+<div class="section" id="signed-integer-to-floating-point">
+<span id="signed-integer-to-floating-point"></span><h3>Signed Integer to Floating Point<a class="headerlink" href="#signed-integer-to-floating-point" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from each signed integer type to each floating-
+point type. These conversions map <code class="docutils literal notranslate"><span class="pre">NA</span></code> to <code class="docutils literal notranslate"><span class="pre">NA</span></code>, and map all other values
+according to the IEEE 754 specification using unbiased round-to-nearest.</p>
+</div>
+<div class="section" id="unsigned-integer">
+<span id="unsigned-integer"></span><h3>Unsigned Integer<a class="headerlink" href="#unsigned-integer" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from each unsigned integer type to each other
+unsigned integer type. These conversions map any numeric value that fits in
+the destination type to the corresponding value, and maps any numeric value
+that does not fit in the destination type to zero. For example, when mapping
+from <code class="docutils literal notranslate"><span class="pre">U2</span></code> to <code class="docutils literal notranslate"><span class="pre">U1</span></code>, any value that is too large in magnitude to fit in <code class="docutils literal notranslate"><span class="pre">U1</span></code>,
+such as 312, is mapped to zero.</p>
+</div>
+<div class="section" id="unsigned-integer-to-floating-point">
+<span id="unsigned-integer-to-floating-point"></span><h3>Unsigned Integer to Floating Point<a class="headerlink" href="#unsigned-integer-to-floating-point" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from each unsigned integer type to each
+floating-point type. These conversions map all values according to the IEEE
+754 specification using unbiased round-to-nearest.</p>
+</div>
+<div class="section" id="key-types">
+<span id="id2"></span><h3>Key Types<a class="headerlink" href="#key-types" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from one key type to another, provided:</p>
+<ul class="simple">
+<li>The source and destination key types have the same <code class="docutils literal notranslate"><span class="pre">Min</span></code> and <code class="docutils literal notranslate"><span class="pre">Count</span></code> values.</li>
+<li>Either the number of bytes in the destination’s underlying type is greater
+than the number of bytes in the source’s underlying type, or the <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+value is positive. In the latter case, the <code class="docutils literal notranslate"><span class="pre">Count</span></code> is necessarily less than
+<code class="docutils literal notranslate"><span class="pre">2^^k</span></code>, where <code class="docutils literal notranslate"><span class="pre">k</span></code> is the number of bits in the destination type’s underlying
+type. For example, <code class="docutils literal notranslate"><span class="pre">U1[1-*]</span></code> can be converted to <code class="docutils literal notranslate"><span class="pre">U2[1-*]</span></code>, but <code class="docutils literal notranslate"><span class="pre">U2[1-*]</span></code>
+cannot be converted to <code class="docutils literal notranslate"><span class="pre">U1[1-*]</span></code>. Also, <code class="docutils literal notranslate"><span class="pre">U1[1-100]</span></code> and <code class="docutils literal notranslate"><span class="pre">U2[1-100]</span></code> can be
+converted in both directions.</li>
+</ul>
+<p>The conversion maps source representation values to the corresponding
+destination representation values. There are no special cases, because of the
+requirements above.</p>
+</div>
+<div class="section" id="boolean-to-numeric">
+<span id="boolean-to-numeric"></span><h3>Boolean to Numeric<a class="headerlink" href="#boolean-to-numeric" title="Permalink to this headline">¶</a></h3>
+<p>There are standard conversions from <code class="docutils literal notranslate"><span class="pre">BL</span></code> to each of the signed integer and
+floating point numeric. These map <code class="docutils literal notranslate"><span class="pre">DvBool.True</span></code> to one, <code class="docutils literal notranslate"><span class="pre">DvBool.False</span></code> to
+zero, and <code class="docutils literal notranslate"><span class="pre">DvBool.NA</span></code> to the numeric type’s <code class="docutils literal notranslate"><span class="pre">NA</span></code> value.</p>
+</div>
+</div>
+<div class="section" id="type-classes">
+<span id="type-classes"></span><h2>Type Classes<a class="headerlink" href="#type-classes" title="Permalink to this headline">¶</a></h2>
+<p>This chapter contains information on the C# classes used to represent column
+types. Since the IDataView type system is extensible this list describes only
+the core data types.</p>
+<div class="section" id="columntype-abstract-class">
+<span id="columntype-abstract-class"></span><h3><code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> Abstract Class<a class="headerlink" href="#columntype-abstract-class" title="Permalink to this headline">¶</a></h3>
+<p>The IDataView system includes the abstract class <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>. This is the
+base class for all column types. <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> has several convenience
+properties that simplify testing for common patterns. For example, the
+<code class="docutils literal notranslate"><span class="pre">IsVector</span></code> property indicates whether the <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> is an instance of
+<code class="docutils literal notranslate"><span class="pre">VectorType</span></code>.</p>
+<p>In the following notes, the symbol <code class="docutils literal notranslate"><span class="pre">type</span></code> is a variable of type <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code>.</p>
+<ul class="simple">
+<li>The <code class="docutils literal notranslate"><span class="pre">type.RawType</span></code> property indicates the representation type of the column
+type. Its use should generally be restricted to constructing generic type
+and method instantiations. In particular, testing whether <code class="docutils literal notranslate"><span class="pre">type.RawType</span> <span class="pre">==</span> <span class="pre">typeof(int)</span></code> is not sufficient to test for the standard <code class="docutils literal notranslate"><span class="pre">U4</span></code> type. The
+proper test is <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">NumberType.I4</span></code>, since there is a single universal
+instance of the <code class="docutils literal notranslate"><span class="pre">I4</span></code> type.</li>
+<li>Certain .Net types have a corresponding <code class="docutils literal notranslate"><span class="pre">DataKind</span></code> <code class="docutils literal notranslate"><span class="pre">enum</span></code> value. The value
+of the <code class="docutils literal notranslate"><span class="pre">type.RawKind</span></code> property is consistent with <code class="docutils literal notranslate"><span class="pre">type.RawType</span></code>. For .Net
+types that do not have a corresponding <code class="docutils literal notranslate"><span class="pre">DataKind</span></code> value, the <code class="docutils literal notranslate"><span class="pre">type.RawKind</span></code>
+property returns zero. The <code class="docutils literal notranslate"><span class="pre">type.RawKind</span></code> property is particularly useful
+when switching over raw type possibilities, but only after testing for the
+broader kind of the type (key type, numeric type, etc.).</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.IsVector</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">VectorType</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.IsNumber</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">NumberType</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.IsText</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">TextType</span></code>. There is a
+single instance of the <code class="docutils literal notranslate"><span class="pre">TextType</span></code>, so this is also equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">TextType.Instance</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.IsBool</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">BoolType</span></code>. There is a
+single instance of the <code class="docutils literal notranslate"><span class="pre">BoolType</span></code>, so this is also equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">BoolType.Instance</span></code>.</li>
+<li>Type <code class="docutils literal notranslate"><span class="pre">type.IsKey</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">KeyType</span></code>.</li>
+<li>If <code class="docutils literal notranslate"><span class="pre">type</span></code> is a key type, then <code class="docutils literal notranslate"><span class="pre">type.KeyCount</span></code> is the same as
+<code class="docutils literal notranslate"><span class="pre">((KeyType)type).Count</span></code>. If <code class="docutils literal notranslate"><span class="pre">type</span></code> is not a key type, then <code class="docutils literal notranslate"><span class="pre">type.KeyCount</span></code>
+is zero. Note that a key type can have a <code class="docutils literal notranslate"><span class="pre">Count</span></code> value of zero, indicating
+that the count is unknown, so <code class="docutils literal notranslate"><span class="pre">type.KeyCount</span></code> being zero does not imply that
+<code class="docutils literal notranslate"><span class="pre">type</span></code> is not a key type. In summary, <code class="docutils literal notranslate"><span class="pre">type.KeyCount</span></code> is equivalent to:
+<code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">is</span> <span class="pre">KeyType</span> <span class="pre">?</span> <span class="pre">((KeyType)type).Count</span> <span class="pre">:</span> <span class="pre">0</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.ItemType</span></code> property is the item type of the vector type, if <code class="docutils literal notranslate"><span class="pre">type</span></code>
+is a vector type, and is the same as <code class="docutils literal notranslate"><span class="pre">type</span></code> otherwise. For example, to test
+for a type that is either <code class="docutils literal notranslate"><span class="pre">TX</span></code> or a vector of <code class="docutils literal notranslate"><span class="pre">TX</span></code>, one can use
+<code class="docutils literal notranslate"><span class="pre">type.ItemType.IsText</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.IsKnownSizeVector</span></code> property is equivalent to <code class="docutils literal notranslate"><span class="pre">type.VectorSize</span> <span class="pre">&gt;</span> <span class="pre">0</span></code>.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.VectorSize</span></code> property is zero if either <code class="docutils literal notranslate"><span class="pre">type</span></code> is not a vector type
+or if <code class="docutils literal notranslate"><span class="pre">type</span></code> is a vector type of unknown/variable length. Otherwise, it is
+the length of vectors belonging to the type.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">type.ValueCount</span></code> property is one if <code class="docutils literal notranslate"><span class="pre">type</span></code> is not a vector type and the
+same as <code class="docutils literal notranslate"><span class="pre">type.VectorSize</span></code> if <code class="docutils literal notranslate"><span class="pre">type</span></code> is a vector type.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">Equals</span></code> method returns whether the types are semantically equivalent.
+Note that for vector types, this requires the dimensionality information to
+be identical.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">SameSizeAndItemType</span></code> method is the same as <code class="docutils literal notranslate"><span class="pre">Equals</span></code> for non-vector
+types. For vector types, it returns true iff the two types have the same
+item type and have the same <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> values. For example, for the two
+vector types <code class="docutils literal notranslate"><span class="pre">V&lt;R4,3,2&gt;</span></code> and <code class="docutils literal notranslate"><span class="pre">V&lt;R4,6&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">Equals</span></code> returns false but
+<code class="docutils literal notranslate"><span class="pre">SameSizeAndItemType</span></code> returns true.</li>
+</ul>
+</div>
+<div class="section" id="primitivetype-abstract-class">
+<span id="primitivetype-abstract-class"></span><h3><code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> Abstract Class<a class="headerlink" href="#primitivetype-abstract-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> abstract class derives from <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> and is the base
+class of all primitive type implementations.</p>
+</div>
+<div class="section" id="texttype-sealed-class">
+<span id="texttype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">TextType</span></code> Sealed Class<a class="headerlink" href="#texttype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">TextType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and is a singleton-
+class for the standard text type. The instance is exposed by the static
+<code class="docutils literal notranslate"><span class="pre">TextType.Instance</span></code> property.</p>
+</div>
+<div class="section" id="booleantype-sealed-class">
+<span id="booleantype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">BooleanType</span></code> Sealed Class<a class="headerlink" href="#booleantype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">BooleanType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and is a
+singleton-class for the standard boolean type. The instance is exposed by the
+static <code class="docutils literal notranslate"><span class="pre">BooleanType.Instance</span></code> property.</p>
+</div>
+<div class="section" id="numbertype-sealed-class">
+<span id="numbertype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">NumberType</span></code> Sealed Class<a class="headerlink" href="#numbertype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">NumberType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and exposes single
+instances of each of the standard numeric types, <code class="docutils literal notranslate"><span class="pre">R4</span></code>, <code class="docutils literal notranslate"><span class="pre">R8</span></code>, <code class="docutils literal notranslate"><span class="pre">I1</span></code>, <code class="docutils literal notranslate"><span class="pre">I2</span></code>, <code class="docutils literal notranslate"><span class="pre">I4</span></code>,
+<code class="docutils literal notranslate"><span class="pre">I8</span></code>, <code class="docutils literal notranslate"><span class="pre">U1</span></code>, <code class="docutils literal notranslate"><span class="pre">U2</span></code>, <code class="docutils literal notranslate"><span class="pre">U4</span></code>, <code class="docutils literal notranslate"><span class="pre">U8</span></code>, and <code class="docutils literal notranslate"><span class="pre">UG</span></code>.</p>
+</div>
+<div class="section" id="datetimetype-sealed-class">
+<span id="datetimetype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">DateTimeType</span></code> Sealed Class<a class="headerlink" href="#datetimetype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">DateTimeType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and is a
+singleton-class for the standard datetime type. The instance is exposed by the
+static <code class="docutils literal notranslate"><span class="pre">DateTimeType.Instance</span></code> property.</p>
+</div>
+<div class="section" id="datetimezonetype-sealed-class">
+<span id="datetimezonetype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">DateTimeZoneType</span></code> Sealed Class<a class="headerlink" href="#datetimezonetype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">DateTimeZoneType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and is a
+singleton-class for the standard datetime timezone type. The instance is
+exposed by the static <code class="docutils literal notranslate"><span class="pre">DateTimeType.Instance</span></code> property.</p>
+</div>
+<div class="section" id="timespantype-sealed-class">
+<span id="timespantype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">TimeSpanType</span></code> Sealed Class<a class="headerlink" href="#timespantype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">TimeSpanType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and is a
+singleton-class for the standard datetime timezone type. The instance is
+exposed by the static <code class="docutils literal notranslate"><span class="pre">TimeSpanType.Instance</span></code> property.</p>
+</div>
+<div class="section" id="keytype-sealed-class">
+<span id="keytype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">KeyType</span></code> Sealed Class<a class="headerlink" href="#keytype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">KeyType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">PrimitiveType</span></code> and instances
+represent key types.</p>
+<p>Notes:</p>
+<ul class="simple">
+<li>Two key types are considered equal iff their kind, min, count, and
+contiguous values are the same.</li>
+<li>The static <code class="docutils literal notranslate"><span class="pre">IsValidDataKind</span></code> method returns true iff kind is <code class="docutils literal notranslate"><span class="pre">U1</span></code>, <code class="docutils literal notranslate"><span class="pre">U2</span></code>,
+<code class="docutils literal notranslate"><span class="pre">U4</span></code>, or <code class="docutils literal notranslate"><span class="pre">U8</span></code>. These are the only valid underlying data kinds for key types.</li>
+<li>The inherited <code class="docutils literal notranslate"><span class="pre">KeyCount</span></code> property returns the same value as the <code class="docutils literal notranslate"><span class="pre">Count</span></code>
+property.</li>
+</ul>
+</div>
+<div class="section" id="vectortype-sealed-class">
+<span id="vectortype-sealed-class"></span><h3><code class="docutils literal notranslate"><span class="pre">VectorType</span></code> Sealed Class<a class="headerlink" href="#vectortype-sealed-class" title="Permalink to this headline">¶</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">VectorType</span></code> sealed class derives from <code class="docutils literal notranslate"><span class="pre">ColumnType</span></code> and instances
+represent vector types. The item type is specified as the first parameter to
+each constructor and the dimension information is inferred from the additional
+parameters.</p>
+<ul class="simple">
+<li>The <code class="docutils literal notranslate"><span class="pre">DimCount</span></code> property indicates the number of dimensions and the <code class="docutils literal notranslate"><span class="pre">GetDim</span></code>
+method returns a particular dimension value. All dimension values are non-
+negative integers. A dimension value of zero indicates unknown (or variable)
+in that dimension.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> property returns the product of the dimensions.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">IsSubtypeOf(VectorType</span> <span class="pre">other)</span></code> method returns true if this is a subtype
+of <code class="docutils literal notranslate"><span class="pre">other</span></code>, in the sense that they have the same item type, and either have
+the same <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code> or <code class="docutils literal notranslate"><span class="pre">other.VectorSize</span></code> is zero.</li>
+<li>The inherited <code class="docutils literal notranslate"><span class="pre">Equals</span></code> method returns true if the two types have the same
+item type and the same dimension information.</li>
+<li>The inherited <code class="docutils literal notranslate"><span class="pre">SameSizeAndItemType(ColumnType</span> <span class="pre">other)</span></code> method returns true if
+<code class="docutils literal notranslate"><span class="pre">other</span></code> is a vector type with the same item type and the same <code class="docutils literal notranslate"><span class="pre">VectorSize</span></code>
+value.</li>
+</ul>
+</div>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+            <p class="logo"><a href="../index.html">
+              <img class="logo" src="../_static/project_ico.png" alt="Logo"/>
+            </a></p>
+<h1 class="logo"><a href="../index.html">Custom Extensions to ML.net</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dataframe.html">DataFrames in C#</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../commandline.html">Command Line</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/index.html">ML.net Components</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../machinelearning_docs.html">ML.net details</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html">ML.net details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="changes.html">ML.net releases details</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../concepts.html">Scikit.ML details</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apicsharpdoc.html">CSharp API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../aonnx.html">ML.net and ONNX</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../incompatibilities.html">ML.net customization</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="../machinelearning_docs.html">ML.net details</a><ul>
+  <li><a href="index.html">ML.net details</a><ul>
+      <li>Previous: <a href="idataviewimplementation.html" title="previous chapter"><code class="docutils literal notranslate"><span class="pre">IDataView</span></code> Implementation</a></li>
+      <li>Next: <a href="idvfileformat.html" title="next chapter">IDV File Format</a></li>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2018.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="../_sources/mlnetdocs/idataviewtypesystem.md.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

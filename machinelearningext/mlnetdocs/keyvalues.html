@@ -1,0 +1,257 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Key Values &#8212; Custom Extensions to ML.net 0.8.0 documentation</title>
+    <link rel="stylesheet" href="../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/font-awesome@4.5.0/css/font-awesome.min.css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../_static/jquery.js"></script>
+    <script type="text/javascript" src="../_static/underscore.js"></script>
+    <script type="text/javascript" src="../_static/doctools.js"></script>
+    <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/@jupyter-widgets/html-manager@^0.14.0/dist/embed-amd.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="ML.NET Cookbook" href="mlnetcookbook.html" />
+    <link rel="prev" title="IDV File Format" href="idvfileformat.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="key-values">
+<span id="key-values"></span><h1>Key Values<a class="headerlink" href="#key-values" title="Permalink to this headline">¶</a></h1>
+<p>Most commonly, key-values are used to encode items where it is convenient or
+efficient to represent values using numbers, but you want to maintain the
+logical “idea” that these numbers are keys indexing some underlying, implicit
+set of values, in a way more explicit than simply mapping to a number would
+allow you to do.</p>
+<p>A more formal description of key values and types is
+<a class="reference external" href="IDataViewTypeSystem.md#key-types">here</a>. <em>This</em> document’s motivation is less
+to describe what key types and values are, and more to instead describe why
+key types are necessary and helpful things to have. Necessarily, this document,
+is more anecdotal in its descriptions to motivate its content.</p>
+<p>Let’s take a few examples of transforms that produce keys:</p>
+<ul class="simple">
+<li>The <code class="docutils literal notranslate"><span class="pre">TermTransform</span></code> forms a dictionary of unique observed values to a key.
+The key type’s count indicates the number of items in the set, and through
+the <code class="docutils literal notranslate"><span class="pre">KeyValue</span></code> metadata “remembers” what each key is representing.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">HashTransform</span></code> performs a hash of input values, and produces a key
+value with count equal to the range of the hash function, which, if a b bit
+hash was used, will produce a 2ᵇ hash.</li>
+<li>The <code class="docutils literal notranslate"><span class="pre">CharTokenizeTransform</span></code> will take input strings and produce key values
+representing the characters observed in the string.</li>
+</ul>
+<div class="section" id="keys-as-intermediate-values">
+<span id="keys-as-intermediate-values"></span><h2>Keys as Intermediate Values<a class="headerlink" href="#keys-as-intermediate-values" title="Permalink to this headline">¶</a></h2>
+<p>Explicitly invoking transforms that produce key values, and using those key
+values, is sometimes helpful. However, given that most trainers expect the
+feature vector to be a vector of floating point values and <em>not</em> keys, in
+typical usage the majority of usages of keys is as some sort of intermediate
+value on the way to that final feature vector. (Unless, say, doing something
+like preparing labels for a multiclass learner.)</p>
+<p>So why not go directly to the feature vector, and forget this key stuff?
+Actually, to take text as the canonical example, we used to. However, by
+structuring the transforms from, say, text to key to vector, rather than text
+to vector <em>directly</em>, we are able to simplify a lot of code on the
+implementation side, which is both less for us to maintain, and also for users
+gives consistency in behavior.</p>
+<p>So for example, the <code class="docutils literal notranslate"><span class="pre">CharTokenize</span></code> above might appear to be a strange choice:
+<em>why</em> represent characters as keys? The reason is that the ngram transform is
+written to ingest keys, not text, and so we can use the same transform for
+both the n-gram featurization of words, as well as n-char grams.</p>
+<p>Now, much of this complexity is hidden from the user: most users will just use
+the <code class="docutils literal notranslate"><span class="pre">text</span></code> transform, select some options for n-grams, and chargrams, and not
+be aware of these internal invisible keys. Similarly, use the categorical or
+categorical hash transforms, without knowing that internally it is just the
+term or hash transform followed by a <code class="docutils literal notranslate"><span class="pre">KeyToVector</span></code> transform. But, keys are
+still there, and it would be impossible to really understand ML.NET’s
+featurization pipeline without understanding keys. Any user that wants to
+understand how, say, the text transform resulted in a particular featurization
+will have to inspect the key values to get that understanding.</p>
+</div>
+<div class="section" id="keys-are-not-numbers">
+<span id="keys-are-not-numbers"></span><h2>Keys are not Numbers<a class="headerlink" href="#keys-are-not-numbers" title="Permalink to this headline">¶</a></h2>
+<p>As an actual CLR data type, key values are stored as some form of unsigned
+integer (most commonly <code class="docutils literal notranslate"><span class="pre">uint</span></code>). The most common confusion that arises from
+this is to ascribe too much importance to the fact that it is a <code class="docutils literal notranslate"><span class="pre">uint</span></code>, and
+think these are somehow just numbers. This is incorrect.</p>
+<p>For keys, the concept of order and difference has no inherent, real meaning as
+it does for numbers, or at least, the meaning is different and highly domain
+dependent. Consider a numeric <code class="docutils literal notranslate"><span class="pre">U4</span></code> type, with values <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>, and <code class="docutils literal notranslate"><span class="pre">2</span></code>. The
+difference between <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">1</span></code> is <code class="docutils literal notranslate"><span class="pre">1</span></code>, and the difference between <code class="docutils literal notranslate"><span class="pre">1</span></code> and <code class="docutils literal notranslate"><span class="pre">2</span></code>
+is <code class="docutils literal notranslate"><span class="pre">1</span></code>, because they’re numbers. Very well: now consider that you train a term
+transform over the input tokens <code class="docutils literal notranslate"><span class="pre">apple</span></code>, <code class="docutils literal notranslate"><span class="pre">pear</span></code>, and <code class="docutils literal notranslate"><span class="pre">orange</span></code>: this will also
+map to the keys logically represented as the numbers <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>, and <code class="docutils literal notranslate"><span class="pre">2</span></code>
+respectively. Yet for a key, is the difference between keys <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>?
+No, the difference is <code class="docutils literal notranslate"><span class="pre">0</span></code> maps to <code class="docutils literal notranslate"><span class="pre">apple</span></code> and <code class="docutils literal notranslate"><span class="pre">1</span></code> to <code class="docutils literal notranslate"><span class="pre">pear</span></code>. Also order
+doesn’t mean one key is somehow “larger,” it just means we saw one before
+another – or something else, if sorting by value happened to be selected.</p>
+<p>Also: ML.NET’s vectors can be sparse. Implicit entries in a sparse vector are
+assumed to have the <code class="docutils literal notranslate"><span class="pre">default</span></code> value for that type – that is, implicit values
+for numeric types will be zero. But what would be the implicit default value
+for a key value be? Take the <code class="docutils literal notranslate"><span class="pre">apple</span></code>, <code class="docutils literal notranslate"><span class="pre">pear</span></code>, and <code class="docutils literal notranslate"><span class="pre">orange</span></code> example above – it
+would inappropriate for the default value to be <code class="docutils literal notranslate"><span class="pre">0</span></code>, because that means the
+result is <code class="docutils literal notranslate"><span class="pre">apple</span></code>, would be appropriate. The only really appropriate “default”
+choice is that the value is unknown, that is, missing.</p>
+<p>An implication of this is that there is a distinction between the logical
+value of a key-value, and the actual physical value of the value in the
+underlying type. This will be covered more later.</p>
+</div>
+<div class="section" id="as-an-enumeration-of-a-set-keyvalues-metadata">
+<span id="as-an-enumeration-of-a-set-keyvalues-metadata"></span><h2>As an Enumeration of a Set: <code class="docutils literal notranslate"><span class="pre">KeyValues</span></code> Metadata<a class="headerlink" href="#as-an-enumeration-of-a-set-keyvalues-metadata" title="Permalink to this headline">¶</a></h2>
+<p>While keys can be used for many purposes, they are often used to enumerate
+items from some underlying set. In order to map keys back to this original
+set, many transform producing key values will also produce <code class="docutils literal notranslate"><span class="pre">KeyValues</span></code>
+metadata associated with that output column.</p>
+<p>Valid <code class="docutils literal notranslate"><span class="pre">KeyValues</span></code> metadata is a vector of length equal to the count of the
+type of the column. This can be of varying types: it is often text, but does
+not need to be. For example, a <code class="docutils literal notranslate"><span class="pre">term</span></code> applied to a column would have
+<code class="docutils literal notranslate"><span class="pre">KeyValue</span></code> metadata of item type equal to the item type of the input data.</p>
+<p>How this metadata is used downstream depends on the purposes of who is
+consuming it, but common uses are: in multiclass classification, for
+determining the human readable class names, or if used in featurization,
+determining the names of the features.</p>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">KeyValues</span></code> data is optional, and sometimes is not even sensible.
+For example, if we consider a clustering algorithm, the prediction of the
+cluster of an example would. So for example, if there were five clusters, then
+the prediction would indicate the cluster by <code class="docutils literal notranslate"><span class="pre">U4&lt;0-4&gt;</span></code>. Yet, these clusters
+were found by the algorithm itself, and they have no natural descriptions.</p>
+</div>
+<div class="section" id="actual-implementation">
+<span id="actual-implementation"></span><h2>Actual Implementation<a class="headerlink" href="#actual-implementation" title="Permalink to this headline">¶</a></h2>
+<p>This may be of use only to writers or extenders of ML.NET, or users of our
+API. How key values are presented <em>logically</em> to users of ML.NET, is distinct
+from how they are actually stored <em>physically</em> in actual memory, both in
+ML.NET source and through the API. For key values:</p>
+<ul class="simple">
+<li>All key values are stored in unsigned integers.</li>
+<li>The missing key values is always stored as <code class="docutils literal notranslate"><span class="pre">0</span></code>. See the note above about the
+default value, to see why this must be so.</li>
+<li>Valid non-missing key values are stored from <code class="docutils literal notranslate"><span class="pre">1</span></code>, onwards, irrespective of
+whatever we claim in the key type that minimum value is.</li>
+</ul>
+<p>So when, in the prior example, the term transform would map <code class="docutils literal notranslate"><span class="pre">apple</span></code>, <code class="docutils literal notranslate"><span class="pre">pear</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">orange</span></code> seemingly to <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>, and <code class="docutils literal notranslate"><span class="pre">2</span></code>, values of <code class="docutils literal notranslate"><span class="pre">U4&lt;0-2&gt;</span></code>, in reality,
+if you were to fire up the debugger you would see that they were stored with
+<code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">2</span></code>, and <code class="docutils literal notranslate"><span class="pre">3</span></code>, with unrecognized values being mapped to the “default”
+missing value of <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
+<p>Nevertheless, we almost never talk about this, no more than we would talk
+about our “strings” really being implemented as string slices: this is purely
+an implementation detail, relevant only to people working with key values at
+the source level. To a regular non-API user of ML.NET, key values appear
+<em>externally</em> to be simply values, just as strings appear to be simply strings,
+and so forth.</p>
+<p>There is another implication: a hypothetical type <code class="docutils literal notranslate"><span class="pre">U1&lt;4000-4002&gt;</span></code> is actually
+a sensible type in this scheme. The <code class="docutils literal notranslate"><span class="pre">U1</span></code> indicates that is stored in one byte,
+which would on first glance seem to conflict with values like <code class="docutils literal notranslate"><span class="pre">4000</span></code>, but
+remember that the first valid key-value is stored as <code class="docutils literal notranslate"><span class="pre">1</span></code>, and we’ve identified
+the valid range as spanning the three values 4000 through 4002. That is,
+<code class="docutils literal notranslate"><span class="pre">4000</span></code> would be represented physically as <code class="docutils literal notranslate"><span class="pre">1</span></code>.</p>
+<p>The reality cannot be seen by any conventional means I am aware of, save for
+viewing ML.NET’s workings in the debugger or using the API and inspecting
+these raw values yourself: that <code class="docutils literal notranslate"><span class="pre">4000</span></code> you would see is really stored as the
+<code class="docutils literal notranslate"><span class="pre">byte</span></code> <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">4001</span></code> as <code class="docutils literal notranslate"><span class="pre">2</span></code>, <code class="docutils literal notranslate"><span class="pre">4002</span></code> as <code class="docutils literal notranslate"><span class="pre">3</span></code>, and a missing value stored as <code class="docutils literal notranslate"><span class="pre">0</span></code>.</p>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+            <p class="logo"><a href="../index.html">
+              <img class="logo" src="../_static/project_ico.png" alt="Logo"/>
+            </a></p>
+<h1 class="logo"><a href="../index.html">Custom Extensions to ML.net</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dataframe.html">DataFrames in C#</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../commandline.html">Command Line</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/index.html">ML.net Components</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../machinelearning_docs.html">ML.net details</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html">ML.net details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="changes.html">ML.net releases details</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../concepts.html">Scikit.ML details</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apicsharpdoc.html">CSharp API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../aonnx.html">ML.net and ONNX</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../incompatibilities.html">ML.net customization</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="../machinelearning_docs.html">ML.net details</a><ul>
+  <li><a href="index.html">ML.net details</a><ul>
+      <li>Previous: <a href="idvfileformat.html" title="previous chapter">IDV File Format</a></li>
+      <li>Next: <a href="mlnetcookbook.html" title="next chapter">ML.NET Cookbook</a></li>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2018.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="../_sources/mlnetdocs/keyvalues.md.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,344 @@
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    <title>Schema comprehension in ML.NET &#8212; Custom Extensions to ML.net 0.8.0 documentation</title>
+    <link rel="stylesheet" href="../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/font-awesome@4.5.0/css/font-awesome.min.css" />
+    <script type="text/javascript" id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script type="text/javascript" src="../_static/jquery.js"></script>
+    <script type="text/javascript" src="../_static/underscore.js"></script>
+    <script type="text/javascript" src="../_static/doctools.js"></script>
+    <script async="async" type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.1/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/@jupyter-widgets/html-manager@^0.14.0/dist/embed-amd.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="VBuffer Care and Feeding" href="vbuffercarefeeding.html" />
+    <link rel="prev" title="ML.NET high-level concepts" href="mlnethighlevelconcepts.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="schema-comprehension-in-ml-net">
+<span id="schema-comprehension-in-ml-net"></span><h1>Schema comprehension in ML.NET<a class="headerlink" href="#schema-comprehension-in-ml-net" title="Permalink to this headline">¶</a></h1>
+<p>This document describes in detail the under-the-hood mechanism that ML.NET uses to automate the creation of <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> schema, with the goal to make it as convenient to the end user as possible, while not incurring extra computational costs.</p>
+<p>For a better understanding of <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> principles and type system please refer to:</p>
+<ul class="simple">
+<li><a class="reference external" href="IDataViewDesignPrinciples.md">IDataView Design Principles</a></li>
+<li><a class="reference external" href="IDataViewTypeSystem.md">IDataView Type System</a></li>
+</ul>
+<div class="section" id="introduction">
+<span id="introduction"></span><h2>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h2>
+<p>Every dataset in ML.NET is represented as an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>, which is, for the purposes of this document, a collection of rows that share the same columns. The set of columns, their names, types and other metadata is known as the <em>schema</em> of the <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>, and it’s represented as an <code class="docutils literal notranslate"><span class="pre">ISchema</span></code> object.</p>
+<p>In this document, we will be using the terms <em>data view</em> and <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> interchangeably, same for <em>schema</em> and <code class="docutils literal notranslate"><span class="pre">ISchema</span></code>.</p>
+<p>Before any new data enters ML.NET, the user needs to somehow define how the schema of the data will look like.
+To do this, the following questions need to be answered:</p>
+<ul class="simple">
+<li>What are the column names?</li>
+<li>What are their types?</li>
+<li>What other metadata is associated with the columns?</li>
+</ul>
+<p>These items above are very similar to the definition of fields in a C# class: names and types of columns correspond to names and types of fields, and metadata can correspond to field attributes.
+Because of this similarity, ML.NET offers a common convenient mechanism for creating a schema: it is done via defining a C# class.</p>
+<p>For example, the below class definition can be used to define a data view with 5 float columns:</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="k">public</span> <span class="k">class</span> <span class="nc">IrisData</span>
+<span class="p">{</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">Label</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">SepalLength</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">SepalWidth</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">PetalLength</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">PetalWidth</span><span class="p">;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+<div class="section" id="using-schema-comprehension-to-make-a-data-view-and-to-read-a-data-view">
+<span id="using-schema-comprehension-to-make-a-data-view-and-to-read-a-data-view"></span><h2>Using schema comprehension to make a data view and to read a data view<a class="headerlink" href="#using-schema-comprehension-to-make-a-data-view-and-to-read-a-data-view" title="Permalink to this headline">¶</a></h2>
+<p>The first obvious benefit of schema comprehension is that we can now create <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>s out of in-memory enumerables of user-defined ‘data types’, without having to define the schema.
+It works in the other direction too: you can take an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code>, and read it as an <code class="docutils literal notranslate"><span class="pre">IEnumerable</span></code> of user-defined ‘data type’ (which will fail if the user-provided schema does not match the real schema).</p>
+<p>Let’s see how we can create a new <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> out of an in-memory array, run some operations on it, and then read it back into the array.</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="k">public</span> <span class="k">class</span> <span class="nc">IrisData</span>
+<span class="p">{</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">Label</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">SepalLength</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">SepalWidth</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">PetalLength</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">PetalWidth</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">public</span> <span class="k">class</span> <span class="nc">IrisVectorData</span>
+<span class="p">{</span>
+    <span class="k">public</span> <span class="kt">float</span> <span class="n">Label</span><span class="p">;</span>
+    <span class="k">public</span> <span class="kt">float</span><span class="p">[]</span> <span class="n">Features</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">static</span> <span class="k">void</span> <span class="nf">Main</span><span class="p">(</span><span class="kt">string</span><span class="p">[]</span> <span class="n">args</span><span class="p">)</span>
+<span class="p">{</span>
+    <span class="c1">// Here&#39;s a data array that we want to work on.</span>
+    <span class="kt">var</span> <span class="n">dataArray</span> <span class="p">=</span> <span class="k">new</span><span class="p">[]</span> <span class="p">{</span>
+        <span class="k">new</span> <span class="n">IrisData</span><span class="p">{</span><span class="n">Label</span><span class="p">=</span><span class="m">1</span><span class="p">,</span> <span class="n">PetalLength</span><span class="p">=</span><span class="m">1</span><span class="p">,</span> <span class="n">SepalLength</span><span class="p">=</span><span class="m">1</span><span class="p">,</span> <span class="n">PetalWidth</span><span class="p">=</span><span class="m">1</span><span class="p">,</span> <span class="n">SepalWidth</span><span class="p">=</span><span class="m">1</span><span class="p">},</span>
+        <span class="k">new</span> <span class="n">IrisData</span><span class="p">{</span><span class="n">Label</span><span class="p">=</span><span class="m">0</span><span class="p">,</span> <span class="n">PetalLength</span><span class="p">=</span><span class="m">2</span><span class="p">,</span> <span class="n">SepalLength</span><span class="p">=</span><span class="m">2</span><span class="p">,</span> <span class="n">PetalWidth</span><span class="p">=</span><span class="m">2</span><span class="p">,</span> <span class="n">SepalWidth</span><span class="p">=</span><span class="m">2</span><span class="p">}</span>
+    <span class="p">};</span>
+
+    <span class="c1">// Create the ML.NET environment.</span>
+    <span class="kt">var</span> <span class="n">env</span> <span class="p">=</span> <span class="k">new</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">ML</span><span class="p">.</span><span class="n">Runtime</span><span class="p">.</span><span class="n">Data</span><span class="p">.</span><span class="n">TlcEnvironment</span><span class="p">();</span>
+
+    <span class="c1">// Create the data view.</span>
+    <span class="c1">// This method will use the definition of IrisData to understand what columns there are in the </span>
+    <span class="c1">// data view.</span>
+    <span class="kt">var</span> <span class="n">dv</span> <span class="p">=</span> <span class="n">env</span><span class="p">.</span><span class="n">CreateDataView</span><span class="p">&lt;</span><span class="n">IrisData</span><span class="p">&gt;(</span><span class="n">dataArray</span><span class="p">);</span>
+
+    <span class="c1">// Now let&#39;s do something to the data view. For example, concatenate all four non-label columns</span>
+    <span class="c1">// into &#39;Features&#39; column.</span>
+    <span class="n">dv</span> <span class="p">=</span> <span class="k">new</span> <span class="n">Microsoft</span><span class="p">.</span><span class="n">ML</span><span class="p">.</span><span class="n">Runtime</span><span class="p">.</span><span class="n">Data</span><span class="p">.</span><span class="n">ConcatTransform</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">dv</span><span class="p">,</span> <span class="s">&quot;Features&quot;</span><span class="p">,</span> 
+        <span class="s">&quot;SepalLength&quot;</span><span class="p">,</span> <span class="s">&quot;SepalWidth&quot;</span><span class="p">,</span> <span class="s">&quot;PetalLength&quot;</span><span class="p">,</span> <span class="s">&quot;PetalWidth&quot;</span><span class="p">);</span>
+
+    <span class="c1">// Read the data into an another array, this time we read the &#39;Features&#39; and &#39;Label&#39; columns</span>
+    <span class="c1">// of the data, and ignore the rest.</span>
+    <span class="c1">// This method will use the definition of IrisVectorData to understand which columns and of which types</span>
+    <span class="c1">// are expected to be present in the input data.</span>
+    <span class="kt">var</span> <span class="n">arr</span> <span class="p">=</span> <span class="n">dv</span><span class="p">.</span><span class="n">AsEnumerable</span><span class="p">&lt;</span><span class="n">IrisVectorData</span><span class="p">&gt;(</span><span class="n">env</span><span class="p">,</span> <span class="n">reuseRowObject</span><span class="p">:</span> <span class="k">false</span><span class="p">)</span>
+        <span class="p">.</span><span class="n">ToArray</span><span class="p">();</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>After this code runs, <code class="docutils literal notranslate"><span class="pre">arr</span></code> will contain two <code class="docutils literal notranslate"><span class="pre">IrisVectorData</span></code> objects, each having <code class="docutils literal notranslate"><span class="pre">Features</span></code> filled with the actual values of the features (the 4 concatenated columns).</p>
+<div class="section" id="streaming-data-views">
+<span id="streaming-data-views"></span><h3>Streaming data views<a class="headerlink" href="#streaming-data-views" title="Permalink to this headline">¶</a></h3>
+<p>What if the original data doesn’t support seeking, like if it’s some form of <code class="docutils literal notranslate"><span class="pre">IEnumerable&lt;IrisData&gt;</span></code> instead of <code class="docutils literal notranslate"><span class="pre">IList&lt;IrisData&gt;</span></code>? Well, we can simply use another helper function:</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="kt">var</span> <span class="n">streamingDv</span> <span class="p">=</span> <span class="n">env</span><span class="p">.</span><span class="n">CreateStreamingDataView</span><span class="p">&lt;</span><span class="n">IrisData</span><span class="p">&gt;(</span><span class="n">dataEnumerable</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The only subtle difference is, the resulting <code class="docutils literal notranslate"><span class="pre">streamingDv</span></code> will not support shuffling (a property that’s useful to some ML application).</p>
+</div>
+<div class="section" id="ascursorable-and-reuserowobject-parameter">
+<span id="ascursorable-and-reuserowobject-parameter"></span><h3>AsCursorable and reuseRowObject parameter<a class="headerlink" href="#ascursorable-and-reuserowobject-parameter" title="Permalink to this headline">¶</a></h3>
+<p>When you read a data view as <code class="docutils literal notranslate"><span class="pre">AsEnumerable&lt;OutType&gt;</span></code>, ML.NET will create and populate an object per row. If you do not need multiple row objects to exist in memory (for example, you are writing them to disk one by one, as you scan through the <code class="docutils literal notranslate"><span class="pre">IEnumerable</span></code>), you may want to set <code class="docutils literal notranslate"><span class="pre">reuseRowObject</span></code> to <code class="docutils literal notranslate"><span class="pre">true</span></code>. This will make ML.NET create <em>only one row object for the entire data view</em> when you enumerate it, and just re-populate the values every time.</p>
+<p>Obviously, in the example above this would lead to incorrect behavior, as the <code class="docutils literal notranslate"><span class="pre">arr</span></code> variable will hold two copies of the same <code class="docutils literal notranslate"><span class="pre">IrisVectorData</span></code> object. Please consider carefully whether you want to reuse the row object, because it is more efficient, but can lead to hard to find issues.</p>
+<p>Sometimes, we don’t even want to <em>populate</em> the row object per row. For example, we only want to see every 100th row of the data, so there’s no need to populate the remaining 99% row objects. In this case, you can use <code class="docutils literal notranslate"><span class="pre">AsCursorable&lt;OutType&gt;</span></code> method:</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="kt">var</span> <span class="n">cursorable</span> <span class="p">=</span> <span class="n">dv</span><span class="p">.</span><span class="n">AsCursorable</span><span class="p">&lt;</span><span class="n">IrisVectorData</span><span class="p">&gt;(</span><span class="n">env</span><span class="p">);</span>
+<span class="c1">// You can create as many simultaneous cursors as you like, they are independent.</span>
+<span class="k">using</span> <span class="p">(</span><span class="kt">var</span> <span class="n">cursor</span> <span class="p">=</span> <span class="n">cursorable</span><span class="p">.</span><span class="n">GetCursor</span><span class="p">())</span>
+<span class="p">{</span>
+    <span class="c1">// We are now in charge of creating the row object.</span>
+    <span class="kt">var</span> <span class="n">myRow</span> <span class="p">=</span> <span class="k">new</span> <span class="n">IrisVectorData</span><span class="p">();</span>
+    <span class="k">while</span> <span class="p">(</span><span class="n">cursor</span><span class="p">.</span><span class="n">MoveNext</span><span class="p">())</span>
+    <span class="p">{</span>
+        <span class="k">if</span> <span class="p">(</span><span class="n">cursor</span><span class="p">.</span><span class="n">Position</span> <span class="p">%</span> <span class="m">100</span> <span class="p">==</span> <span class="m">99</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="c1">// Populate the values of the row object.</span>
+            <span class="n">cursor</span><span class="p">.</span><span class="n">FillValues</span><span class="p">(</span><span class="n">myRow</span><span class="p">);</span>
+            <span class="c1">// Do something to the row.</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Please note that <strong>cursors are not thread-safe</strong>: they have mutable state inside, and they are meant to be used by one thread. If you want to read the data in parallel, use multiple cursors.</p>
+</div>
+</div>
+<div class="section" id="predictionengine-and-predictormodel">
+<span id="predictionengine-and-predictormodel"></span><h2>PredictionEngine and PredictorModel<a class="headerlink" href="#predictionengine-and-predictormodel" title="Permalink to this headline">¶</a></h2>
+<p>ML.NET’s <code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code> is attempting to turn a sequence of data transforms (maybe capped by a predictor, but not necessarily) into a ‘black box’ that takes strongly typed inputs and returns strongly typed outputs. The name is a little misleading: the <code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code> object doesn’t require a predictor to be present in the pipeline, it can be just a sequence of transforms like in the below example:</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="kt">var</span> <span class="n">engine</span> <span class="p">=</span> <span class="n">env</span><span class="p">.</span><span class="n">CreatePredictionEngine</span><span class="p">&lt;</span><span class="n">IrisData</span><span class="p">,</span> <span class="n">IrisVectorData</span><span class="p">&gt;(</span><span class="n">dv</span><span class="p">);</span>
+<span class="kt">var</span> <span class="n">output</span> <span class="p">=</span> <span class="n">engine</span><span class="p">.</span><span class="n">Predict</span><span class="p">(</span><span class="k">new</span> <span class="n">IrisData</span> <span class="p">{</span> <span class="n">Label</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">PetalLength</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">SepalLength</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">PetalWidth</span> <span class="p">=</span> <span class="m">1</span><span class="p">,</span> <span class="n">SepalWidth</span> <span class="p">=</span> <span class="m">1</span> <span class="p">});</span>
+</pre></div>
+</div>
+<p>It is important to note that the <code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code> actually <em>validates</em> that the ‘pipeline’ conforms to the input and output schema requirements when it is created.</p>
+<p>The same can be said about the <code class="docutils literal notranslate"><span class="pre">PredictorModel&lt;InputType,</span> <span class="pre">OutputType&gt;</span></code>. This is a somewhat more restricted version of <code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code> that is created by <code class="docutils literal notranslate"><span class="pre">LearningPipeline.Train</span></code>.</p>
+<p>Please note that <strong><code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code> and <code class="docutils literal notranslate"><span class="pre">PredictorModel</span></code> are not thread-safe</strong>: they hold an internal cursor object, and therefore cannot be used in a re-entrant fashion.
+If you ever see the error message that says: <code class="docutils literal notranslate"><span class="pre">An</span> <span class="pre">attempt</span> <span class="pre">was</span> <span class="pre">made</span> <span class="pre">to</span> <span class="pre">keep</span> <span class="pre">iterating</span> <span class="pre">after</span> <span class="pre">the</span> <span class="pre">pipe</span> <span class="pre">has</span> <span class="pre">been</span> <span class="pre">reset</span></code>, it most likely means that ML.NET has detected a race condition on the <code class="docutils literal notranslate"><span class="pre">PredictionEngine</span></code>.</p>
+</div>
+<div class="section" id="type-system-mapping">
+<span id="type-system-mapping"></span><h2>Type system mapping<a class="headerlink" href="#type-system-mapping" title="Permalink to this headline">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">IDataView</span></code> <a class="reference external" href="IDataViewTypeSystem.md">type system</a> differs slightly from the C# type system, so a 1-1 mapping between column types and C# types is not always feasible.
+Below are the most notable examples of the differences:</p>
+<ul class="simple">
+<li><code class="docutils literal notranslate"><span class="pre">IDataView</span></code> vector columns often have a fixed (and known) size. The C# array type best corresponds to a ‘variable size’ vector: the one that can have different number of slots on every row. You can use <code class="docutils literal notranslate"><span class="pre">[VectorType(N)]</span></code> attribute to an array field to specify that the column is a vector of fixed size N. This is often necessary: most ML components don’t work with variable-size vectors, they require fixed-size ones.</li>
+<li><code class="docutils literal notranslate"><span class="pre">IDataView</span></code>’s <a class="reference external" href="IDataViewTypeSystem.md#key-types">key types</a>  don’t have a natural underlying C# type either. To declare a key-type column, you need to make your field an <code class="docutils literal notranslate"><span class="pre">uint</span></code>, and decorate it with <code class="docutils literal notranslate"><span class="pre">[KeyType]</span></code> to denote that the field is a key, and not a regular unsigned integer.</li>
+</ul>
+<div class="section" id="full-list-of-type-mappings">
+<span id="full-list-of-type-mappings"></span><h3>Full list of type mappings<a class="headerlink" href="#full-list-of-type-mappings" title="Permalink to this headline">¶</a></h3>
+<p>The below table illustrates what C# types are mapped to what <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> types:</p>
+<p>| <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> type | C# type     |  C# type with extra conversion |
+| —————- | ———– | —————————— |
+| <code class="docutils literal notranslate"><span class="pre">I1</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvInt1</span></code>    | <code class="docutils literal notranslate"><span class="pre">sbyte</span></code>, <code class="docutils literal notranslate"><span class="pre">sbyte?</span></code>              |
+| <code class="docutils literal notranslate"><span class="pre">I2</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvInt2</span></code>    | <code class="docutils literal notranslate"><span class="pre">short</span></code>, <code class="docutils literal notranslate"><span class="pre">short?</span></code>              |
+| <code class="docutils literal notranslate"><span class="pre">I4</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvInt4</span></code>    | <code class="docutils literal notranslate"><span class="pre">int</span></code>, <code class="docutils literal notranslate"><span class="pre">int?</span></code>                  |
+| <code class="docutils literal notranslate"><span class="pre">I8</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvInt8</span></code>    | <code class="docutils literal notranslate"><span class="pre">long</span></code>, <code class="docutils literal notranslate"><span class="pre">long?</span></code>                |
+| <code class="docutils literal notranslate"><span class="pre">U1</span></code>             | <code class="docutils literal notranslate"><span class="pre">byte</span></code>      | <code class="docutils literal notranslate"><span class="pre">byte?</span></code>                        |
+| <code class="docutils literal notranslate"><span class="pre">U2</span></code>             | <code class="docutils literal notranslate"><span class="pre">ushort</span></code>    | <code class="docutils literal notranslate"><span class="pre">ushort?</span></code>                      |
+| <code class="docutils literal notranslate"><span class="pre">U4</span></code>             | <code class="docutils literal notranslate"><span class="pre">uint</span></code>      | <code class="docutils literal notranslate"><span class="pre">uint?</span></code>                        |
+| <code class="docutils literal notranslate"><span class="pre">U8</span></code>             | <code class="docutils literal notranslate"><span class="pre">ulong</span></code>     | <code class="docutils literal notranslate"><span class="pre">ulong?</span></code>                       |
+| <code class="docutils literal notranslate"><span class="pre">UG</span></code>             | <code class="docutils literal notranslate"><span class="pre">UInt128</span></code>   |                                |
+| <code class="docutils literal notranslate"><span class="pre">R4</span></code>             | <code class="docutils literal notranslate"><span class="pre">float</span></code>     | <code class="docutils literal notranslate"><span class="pre">float?</span></code>                       |
+| <code class="docutils literal notranslate"><span class="pre">R8</span></code>             | <code class="docutils literal notranslate"><span class="pre">double</span></code>    | <code class="docutils literal notranslate"><span class="pre">double?</span></code>                      |
+| <code class="docutils literal notranslate"><span class="pre">TX</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvText</span></code>, <code class="docutils literal notranslate"><span class="pre">string</span></code> |                         |
+| <code class="docutils literal notranslate"><span class="pre">BL</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvBool</span></code>           | <code class="docutils literal notranslate"><span class="pre">bool</span></code>, <code class="docutils literal notranslate"><span class="pre">bool?</span></code>         |
+| <code class="docutils literal notranslate"><span class="pre">TS</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvTimeSpan</span></code>       |                         |
+| <code class="docutils literal notranslate"><span class="pre">DT</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvDateTime</span></code>       |                         |
+| <code class="docutils literal notranslate"><span class="pre">DZ</span></code>             | <code class="docutils literal notranslate"><span class="pre">DvDateTimeZone</span></code>   |                         |
+| Variable-size vector | <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code>   | <code class="docutils literal notranslate"><span class="pre">T[]</span></code>, and the vector is always dense |
+| Fixed-size vector    | <code class="docutils literal notranslate"><span class="pre">VBuffer&lt;T&gt;</span></code> with <code class="docutils literal notranslate"><span class="pre">[VectorType(N)]</span></code> | <code class="docutils literal notranslate"><span class="pre">T[]</span></code> with <code class="docutils literal notranslate"><span class="pre">VectorType(N)</span></code>, and the vector is always dense |
+| Key type             | <code class="docutils literal notranslate"><span class="pre">uint</span></code> with <code class="docutils literal notranslate"><span class="pre">[KeyType]</span></code>             |                                                            |</p>
+</div>
+<div class="section" id="additional-attributes-to-affect-type-mapping">
+<span id="additional-attributes-to-affect-type-mapping"></span><h3>Additional attributes to affect type mapping<a class="headerlink" href="#additional-attributes-to-affect-type-mapping" title="Permalink to this headline">¶</a></h3>
+<p>There are two more attributes that can affect the way ML.NET conducts schema comprehension:</p>
+<ul class="simple">
+<li><code class="docutils literal notranslate"><span class="pre">[ColumnName]</span></code> lets you choose a different name for the <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> column. By default it is the same as field name.<ul>
+<li>This is a way to create or read back an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> column with a name containing ‘invalid’ characters (like whitespace).</li>
+</ul>
+</li>
+<li><code class="docutils literal notranslate"><span class="pre">[NoColumn]</span></code> is an attribute that denotes that the below field should not be mapped to a column.</li>
+</ul>
+</div>
+<div class="section" id="using-schemadefinition-for-run-time-type-mapping-hints">
+<span id="using-schemadefinition-for-run-time-type-mapping-hints"></span><h3>Using SchemaDefinition for run-time type mapping hints<a class="headerlink" href="#using-schemadefinition-for-run-time-type-mapping-hints" title="Permalink to this headline">¶</a></h3>
+<p>As you can see from the table and notes above, certain <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> types can only be denoted with an additional field attribute. If the type parameters are not known at compile time (like the size of the fixed-size vector), this is tricky.</p>
+<p>You can use a <code class="docutils literal notranslate"><span class="pre">SchemaDefinition</span></code> object to re-map a type to an <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> schema programmatically. It gives you the same powers as the attributes, but at runtime.
+Please see the below example.</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="c1">// Vector size is only known at runtime.</span>
+<span class="kt">int</span> <span class="n">numberOfFeatures</span> <span class="p">=</span> <span class="m">4</span><span class="p">;</span>
+
+<span class="c1">// Create the default schema definition.</span>
+<span class="kt">var</span> <span class="n">schemaDef</span> <span class="p">=</span> <span class="n">SchemaDefinition</span><span class="p">.</span><span class="n">Create</span><span class="p">(</span><span class="k">typeof</span><span class="p">(</span><span class="n">IrisVectorData</span><span class="p">));</span>
+
+<span class="c1">// Specify the right vector size.</span>
+<span class="n">schemaDef</span><span class="p">[</span><span class="s">&quot;Features&quot;</span><span class="p">].</span><span class="n">ColumnType</span> <span class="p">=</span> <span class="k">new</span> <span class="n">VectorType</span><span class="p">(</span><span class="n">NumberType</span><span class="p">.</span><span class="n">R4</span><span class="p">,</span> <span class="n">numberOfFeatures</span><span class="p">);</span>
+
+<span class="c1">// Create a data view.</span>
+<span class="kt">var</span> <span class="n">dataView</span> <span class="p">=</span> <span class="n">env</span><span class="p">.</span><span class="n">CreateDataView</span><span class="p">&lt;</span><span class="n">IrisVectorData</span><span class="p">&gt;(</span><span class="n">arr</span><span class="p">,</span> <span class="n">schemaDef</span><span class="p">);</span>
+
+<span class="c1">// Create a prediction engine. You can add custom input and output schema definitions there.</span>
+<span class="kt">var</span> <span class="n">predictionEngine</span> <span class="p">=</span> <span class="n">env</span><span class="p">.</span><span class="n">CreatePredictionEngine</span><span class="p">&lt;</span><span class="n">IrisData</span><span class="p">,</span> <span class="n">IrisVectorData</span><span class="p">&gt;(</span><span class="n">dv</span><span class="p">,</span> <span class="n">outputSchemaDefinition</span><span class="p">:</span> <span class="n">schemaDef</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>In addition to the above, you can use <code class="docutils literal notranslate"><span class="pre">SchemaDefinition</span></code> to add per-column metadata:</p>
+<div class="highlight-C# notranslate"><div class="highlight"><pre><span></span><span class="c1">// Add column metadata.</span>
+<span class="n">schemaDef</span><span class="p">[</span><span class="s">&quot;Label&quot;</span><span class="p">].</span><span class="n">AddMetadata</span><span class="p">(</span><span class="n">MetadataUtils</span><span class="p">.</span><span class="n">Kinds</span><span class="p">.</span><span class="n">HasMissingValues</span><span class="p">,</span> <span class="k">false</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
+</div>
+<div class="section" id="limitations">
+<span id="limitations"></span><h2>Limitations<a class="headerlink" href="#limitations" title="Permalink to this headline">¶</a></h2>
+<p>Certain things are not possible to do at all using the schema comprehensions, but are possible via the native <code class="docutils literal notranslate"><span class="pre">IDataView</span></code> programmatic interface.
+It was our design decision to not allow these scenarios, thus simplifying the other, more common scenarios.</p>
+<p>Here is the list of things that are only possible via the low-level interface:</p>
+<ul class="simple">
+<li>Creating or reading a data view, where even column <em>types</em> are not known at compile time (so you cannot create a C# class to define the schema)<ul>
+<li>This can happen if you write a general-purpose machine learning tool that can ingest different kinds of datasets.</li>
+</ul>
+</li>
+<li>Reading a subset of columns that differs from one row to another: the cursor always populates the entire row object.</li>
+<li>Reading column metadata from the data view.</li>
+<li>Accessing the ‘hidden’ data view columns by index.<ul>
+<li>Hidden columns are those that have the same name as other columns and a smaller index. They are not accessible by name.</li>
+</ul>
+</li>
+<li>Creating ‘cursor sets’: this is a feature that lets you iterate over data in multiple parallel threads by splitting the data between multiple ‘sibling’ cursors.</li>
+</ul>
+</div>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+            <p class="logo"><a href="../index.html">
+              <img class="logo" src="../_static/project_ico.png" alt="Logo"/>
+            </a></p>
+<h1 class="logo"><a href="../index.html">Custom Extensions to ML.net</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../dataframe.html">DataFrames in C#</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../commandline.html">Command Line</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../components/index.html">ML.net Components</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../machinelearning_docs.html">ML.net details</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="index.html">ML.net details</a></li>
+<li class="toctree-l2"><a class="reference internal" href="changes.html">ML.net releases details</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../concepts.html">Scikit.ML details</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../apicsharpdoc.html">CSharp API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../aonnx.html">ML.net and ONNX</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../incompatibilities.html">ML.net customization</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="../machinelearning_docs.html">ML.net details</a><ul>
+  <li><a href="index.html">ML.net details</a><ul>
+      <li>Previous: <a href="mlnethighlevelconcepts.html" title="previous chapter">ML.NET high-level concepts</a></li>
+      <li>Next: <a href="vbuffercarefeeding.html" title="next chapter"><code class="docutils literal notranslate"><span class="pre">VBuffer</span></code> Care and Feeding</a></li>
+  </ul></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3>Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    </div>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2018.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 1.8.1</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="../_sources/mlnetdocs/schemacomprehension.md.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>
