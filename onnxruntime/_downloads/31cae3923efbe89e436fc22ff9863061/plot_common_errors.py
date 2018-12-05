@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-.. _l-example-common-error:
+.. _l-example-simple-usage:
 
 Common errors with onnxruntime
 ==============================
