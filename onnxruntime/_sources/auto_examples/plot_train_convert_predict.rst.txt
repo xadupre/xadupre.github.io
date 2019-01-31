@@ -82,16 +82,16 @@ and we show the confusion matrix.
 
  .. code-block:: none
 
-    [[17  0  0]
-     [ 0  7  4]
-     [ 0  0 10]]
+    [[11  0  0]
+     [ 0 13  2]
+     [ 0  0 12]]
 
 
 Conversion to ONNX format
 +++++++++++++++++++++++++
 
 We use module 
-`onnxmltools <https://github.com/onnx/onnxmltools>`_
+`sklearn-onnx <https://github.com/onnx/sklearn-onnx>`_
 to convert the model into ONNX format.
 
 
@@ -99,13 +99,13 @@ to convert the model into ONNX format.
 .. code-block:: python
 
 
-    from onnxmltools import convert_sklearn
-    from onnxmltools.utils import save_model
-    from onnxmltools.convert.common.data_types import FloatTensorType
+    from skl2onnx import convert_sklearn
+    from skl2onnx.common.data_types import FloatTensorType
 
     initial_type = [('float_input', FloatTensorType([1, 4]))]
     onx = convert_sklearn(clr, initial_types=initial_type)
-    save_model(onx, "logreg_iris.onnx")
+    with open("logreg_iris.onnx", "wb") as f:
+        f.write(onx.SerializeToString())
 
 
 
@@ -138,7 +138,7 @@ its input and output.
  .. code-block:: none
 
     input name='float_input' and shape=[1, 4]
-    output name='label' and shape=[1]
+    output name='output_label' and shape=[1]
 
 
 We compute the predictions.
@@ -165,8 +165,8 @@ We compute the predictions.
 
  .. code-block:: none
 
-    [[17  0  0]
-     [ 0  7  0]
+    [[11  0  0]
+     [ 0 13  0]
      [ 0  0 14]]
 
 
@@ -198,9 +198,9 @@ scikit-learn.
 
  .. code-block:: none
 
-    [[7.40891513e-04 2.98137427e-01 7.01121682e-01]
-     [1.67347797e-03 1.51879818e-01 8.46446705e-01]
-     [4.62575982e-04 2.56223115e-01 7.43314309e-01]]
+    [[1.10177535e-03 3.36326360e-01 6.62571865e-01]
+     [4.37330631e-03 5.66461880e-01 4.29164814e-01]
+     [9.15994127e-01 8.39576680e-02 4.82048865e-05]]
 
 
 And then with ONNX Runtime.
@@ -227,9 +227,9 @@ The probabilies appear to be
 
  .. code-block:: none
 
-    [{0: 0.0007408456294797361, 1: 0.2981374263763428, 2: 0.7011218070983887},
-     {0: 0.0016735013341531157, 1: 0.15187981724739075, 2: 0.846446692943573},
-     {0: 0.00046258745715022087, 1: 0.2562231719493866, 2: 0.7433142066001892}]
+    [{0: 0.0011017987271770835, 1: 0.3363264799118042, 2: 0.6625717282295227},
+     {0: 0.00437332084402442, 1: 0.5664617419242859, 2: 0.42916497588157654},
+     {0: 0.9159941673278809, 1: 0.08395767211914062, 2: 4.8209625674644485e-05}]
 
 
 Let's benchmark.
@@ -265,9 +265,9 @@ Let's benchmark.
  .. code-block:: none
 
     Execution time for clr.predict
-    Average 3.22e-05 min=3.02e-05 max=4.58e-05
+    Average 8.15e-05 min=3.44e-05 max=0.000134
     Execution time for ONNX Runtime
-    Average 5.41e-05 min=4.02e-05 max=0.000126
+    Average 8.05e-05 min=6.41e-05 max=9.81e-05
 
 
 Let's benchmark a scenario similar to what a webservice
@@ -307,9 +307,9 @@ as opposed to a batch of prediction.
  .. code-block:: none
 
     Execution time for clr.predict
-    Average 0.00324 min=0.00297 max=0.00436
+    Average 0.00347 min=0.00294 max=0.00575
     Execution time for sess_predict
-    Average 0.00271 min=0.0024 max=0.00379
+    Average 0.00203 min=0.00195 max=0.00232
 
 
 Let's do the same for the probabilities.
@@ -339,9 +339,9 @@ Let's do the same for the probabilities.
  .. code-block:: none
 
     Execution time for predict_proba
-    Average 0.00521 min=0.00476 max=0.00592
+    Average 0.00471 min=0.00452 max=0.005
     Execution time for sess_predict_proba
-    Average 0.0025 min=0.00237 max=0.00266
+    Average 0.00207 min=0.00199 max=0.00221
 
 
 This second comparison is better as 
@@ -365,7 +365,8 @@ We first train and save a model in ONNX format.
 
     initial_type = [('float_input', FloatTensorType([1, 4]))]
     onx = convert_sklearn(rf, initial_types=initial_type)
-    save_model(onx, "rf_iris.onnx")
+    with open("rf_iris.onnx", "wb") as f:
+        f.write(onx.SerializeToString())
 
 
 
@@ -402,9 +403,9 @@ We compare.
  .. code-block:: none
 
     Execution time for predict_proba
-    Average 0.0671 min=0.06 max=0.102
+    Average 0.0592 min=0.0583 max=0.0618
     Execution time for sess_predict_proba
-    Average 0.00233 min=0.00223 max=0.00263
+    Average 0.00214 min=0.00204 max=0.00227
 
 
 Let's see with different number of trees.
@@ -422,7 +423,8 @@ Let's see with different number of trees.
         rf.fit(X_train, y_train)
         initial_type = [('float_input', FloatTensorType([1, 4]))]
         onx = convert_sklearn(rf, initial_types=initial_type)
-        save_model(onx, "rf_iris_%d.onnx" % n_trees)
+        with open("rf_iris_%d.onnx" % n_trees, "wb") as f:
+            f.write(onx.SerializeToString())
         sess = rt.InferenceSession("rf_iris_%d.onnx" % n_trees)
         def sess_predict_proba_loop(x):
             return sess.run([prob_name], {input_name: x.astype(numpy.float32)})[0]
@@ -453,38 +455,38 @@ Let's see with different number of trees.
  .. code-block:: none
 
     5
-    Average 0.0378 min=0.0372 max=0.039
-    Average 0.00247 min=0.00217 max=0.00337
+    Average 0.0402 min=0.0363 max=0.0531
+    Average 0.00212 min=0.00191 max=0.00232
     10
-    Average 0.0603 min=0.0594 max=0.0619
-    Average 0.00258 min=0.00233 max=0.00297
+    Average 0.0586 min=0.0583 max=0.0589
+    Average 0.00214 min=0.00205 max=0.00227
     15
-    Average 0.0825 min=0.0811 max=0.0838
-    Average 0.00256 min=0.00237 max=0.00273
+    Average 0.0807 min=0.0798 max=0.0813
+    Average 0.00233 min=0.00207 max=0.00289
     20
-    Average 0.109 min=0.104 max=0.116
-    Average 0.00243 min=0.00237 max=0.00251
+    Average 0.103 min=0.101 max=0.108
+    Average 0.00225 min=0.0022 max=0.0023
     25
-    Average 0.135 min=0.126 max=0.151
-    Average 0.00321 min=0.00241 max=0.00405
+    Average 0.124 min=0.123 max=0.125
+    Average 0.0023 min=0.00215 max=0.00243
     30
-    Average 0.151 min=0.147 max=0.162
-    Average 0.00287 min=0.00253 max=0.00331
+    Average 0.147 min=0.144 max=0.149
+    Average 0.0024 min=0.00233 max=0.00246
     35
-    Average 0.17 min=0.167 max=0.172
-    Average 0.00271 min=0.00266 max=0.00276
+    Average 0.168 min=0.166 max=0.17
+    Average 0.00247 min=0.00236 max=0.00254
     40
-    Average 0.214 min=0.201 max=0.24
-    Average 0.00371 min=0.00328 max=0.00453
+    Average 0.188 min=0.188 max=0.189
+    Average 0.00249 min=0.00239 max=0.0026
     45
-    Average 0.232 min=0.219 max=0.262
-    Average 0.00311 min=0.00271 max=0.0041
+    Average 0.213 min=0.208 max=0.224
+    Average 0.0026 min=0.00251 max=0.00268
     50
-    Average 0.266 min=0.239 max=0.285
-    Average 0.00306 min=0.00281 max=0.00326
+    Average 0.232 min=0.229 max=0.235
+    Average 0.00259 min=0.00251 max=0.0027
 
 
-**Total running time of the script:** ( 0 minutes  54.679 seconds)
+**Total running time of the script:** ( 0 minutes  50.860 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_train_convert_predict.py:
