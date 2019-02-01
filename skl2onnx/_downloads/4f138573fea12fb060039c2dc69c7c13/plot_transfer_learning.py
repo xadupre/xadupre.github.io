@@ -7,6 +7,13 @@
 Transfer learning with ONNX
 ===========================
 
+`Transfer learning <https://en.wikipedia.org/wiki/Transfer_learning>`_
+is usually useful to adapt a deep learning model to some
+new problem for which the number of images is not enough
+to train a deep learning model. The proposed solution
+implies the use of class *OnnxTransformer* which wraps
+*OnnxRuntime* into a *scikit-learn* transformer
+easily pluggable into a pipeline.
 
 .. contents::
     :local:
