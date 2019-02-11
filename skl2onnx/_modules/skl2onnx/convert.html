@@ -7,7 +7,7 @@
 
   <title>skl2onnx.convert</title>
 
-  <link rel="stylesheet" href="../../_static/sphinx-modern-theme.css" type="text/css"/>
+  <link rel="stylesheet" href="../../_static/sphinx-modern-theme-modified.css" type="text/css"/>
   <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
   <link rel="stylesheet" href="../../_static/gallery.css" type="text/css" />
 </head>
@@ -42,7 +42,10 @@
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../api_summary.html">API Summary</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../api_summary.html#converters">Converters</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../api_summary.html#registered-functions">Registered functions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../api_summary.html#parsers">Parsers</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../api_summary.html#utils">Utils</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../api_summary.html#concepts">Concepts</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../auto_examples/index.html">Gallery of examples</a><ul>
@@ -59,8 +62,9 @@
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="../../supported.html">Supported Models</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../pipeline.html">Convert pipeline</a><ul>
+<li class="toctree-l1"><a class="reference internal" href="../../pipeline.html">Convert a pipeline</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="../../pipeline.html#convert-complex-pipelines">Convert complex pipelines</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../pipeline.html#parser-shape-calculator-converter">Parser, shape calculator, converter</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../pipeline.html#new-converters-in-a-pipeline">New converters in a pipeline</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../pipeline.html#titanic-example">Titanic example</a></li>
 </ul>
@@ -80,7 +84,7 @@
 <span class="kn">from</span> <span class="nn">uuid</span> <span class="k">import</span> <span class="n">uuid4</span>
 <span class="kn">from</span> <span class="nn">.proto</span> <span class="k">import</span> <span class="n">get_opset_number_from_onnx</span>
 <span class="kn">from</span> <span class="nn">.common._topology</span> <span class="k">import</span> <span class="n">convert_topology</span>
-<span class="kn">from</span> <span class="nn">._parse</span> <span class="k">import</span> <span class="n">parse_sklearn</span>
+<span class="kn">from</span> <span class="nn">._parse</span> <span class="k">import</span> <span class="n">parse_sklearn_model</span>
 
 <span class="c1"># Invoke the registration of all our converters and shape calculators.</span>
 <span class="kn">from</span> <span class="nn">.</span> <span class="k">import</span> <span class="n">shape_calculators</span>
@@ -89,7 +93,8 @@
 
 <div class="viewcode-block" id="convert_sklearn"><a class="viewcode-back" href="../../api_summary.html#skl2onnx.convert_sklearn">[docs]</a><span class="k">def</span> <span class="nf">convert_sklearn</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">initial_types</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">doc_string</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span>
                     <span class="n">target_opset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">custom_conversion_functions</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                    <span class="n">custom_shape_calculators</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+                    <span class="n">custom_shape_calculators</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                    <span class="n">custom_parsers</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
     <span class="sd">&#39;&#39;&#39;</span>
 <span class="sd">    This function produces an equivalent ONNX model of the given scikit-learn model.</span>
 <span class="sd">    The supported converters is returned by function</span>
@@ -107,11 +112,13 @@
 <span class="sd">    :param name: The name of the graph (type: GraphProto) in the produced ONNX model (type: ModelProto)</span>
 <span class="sd">    :param doc_string: A string attached onto the produced ONNX model</span>
 <span class="sd">    :param target_opset: number, for example, 7 for ONNX 1.2, and 8 for ONNX 1.3.</span>
-<span class="sd">    :param targeted_onnx: A string (for example, &#39;1.1.2&#39; and &#39;1.2&#39;) used to specify </span>
-<span class="sd">        the targeted ONNX version of the produced model. If ONNXMLTools cannot find </span>
-<span class="sd">        a compatible ONNX python package, an error may be thrown.</span>
-<span class="sd">    :param custom_conversion_functions: a dictionary for specifying the user customized conversion function</span>
+<span class="sd">    :param custom_conversion_functions: a dictionary for specifying the user customized conversion function,</span>
+<span class="sd">        it takes precedence over registered converters</span>
 <span class="sd">    :param custom_shape_calculators: a dictionary for specifying the user customized shape calculator</span>
+<span class="sd">        it takes precedence over registered shape calculators.</span>
+<span class="sd">    :param custom_parsers: parsers determines which outputs is expected for which particular task,</span>
+<span class="sd">        default parsers are defined for classifiers, regressors, pipeline but they can be rewritten,</span>
+<span class="sd">        *custom_parsers* is a dictionary ``{ type: fct_parser(scope, model, inputs, custom_parsers=None) }``</span>
 <span class="sd">    :return: An ONNX model (type: ModelProto) which is equivalent to the input scikit-learn model</span>
 
 <span class="sd">    Example of initial_types:</span>
@@ -143,7 +150,9 @@
 
     <span class="n">target_opset</span> <span class="o">=</span> <span class="n">target_opset</span> <span class="k">if</span> <span class="n">target_opset</span> <span class="k">else</span> <span class="n">get_opset_number_from_onnx</span><span class="p">()</span>
     <span class="c1"># Parse scikit-learn model as our internal data structure (i.e., Topology)</span>
-    <span class="n">topology</span> <span class="o">=</span> <span class="n">parse_sklearn</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">initial_types</span><span class="p">,</span> <span class="n">target_opset</span><span class="p">,</span> <span class="n">custom_conversion_functions</span><span class="p">,</span> <span class="n">custom_shape_calculators</span><span class="p">)</span>
+    <span class="n">topology</span> <span class="o">=</span> <span class="n">parse_sklearn_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">initial_types</span><span class="p">,</span> <span class="n">target_opset</span><span class="p">,</span>
+                                   <span class="n">custom_conversion_functions</span><span class="p">,</span> <span class="n">custom_shape_calculators</span><span class="p">,</span>
+                                   <span class="n">custom_parsers</span><span class="p">)</span>
 
     <span class="c1"># Infer variable shapes</span>
     <span class="n">topology</span><span class="o">.</span><span class="n">compile</span><span class="p">()</span>
