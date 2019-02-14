@@ -1,23 +1,21 @@
 .. note::
     :class: sphx-glr-download-link-note
 
-    Click :ref:`here <sphx_glr_download_auto_examples_plot_complex_pipeline.py>` to download the full example code
+    Click :ref:`here <sphx_glr_download_auto_examples_plot_intermediate_outputs.py>` to download the full example code
 .. rst-class:: sphx-glr-example-title
 
-.. _sphx_glr_auto_examples_plot_complex_pipeline.py:
+.. _sphx_glr_auto_examples_plot_intermediate_outputs.py:
 
 
-.. _example-complex-pipeline:
+Walk through intermediate outputs
+=================================
 
-Convert a pipeline with ColumnTransformer
-=========================================
-
-*scikit-learn* recently shipped
-`ColumnTransformer <https://scikit-learn.org/stable/modules/generated/sklearn.compose.ColumnTransformer.html>`_
-which lets the user define complex pipeline where each
-column may be preprocessed with a different transformer.
-*sklearn-onnx* still works in this case as shown in Section
-:ref:`l-complex-pipeline`.
+We reuse the example :ref:`example-complex-pipeline` and
+walk through intermediates outputs. It is very likely a converted
+model gives different outputs or fails due to a custom
+converter which is not correctly implemented.
+One option is to look into the output of every node of the
+ONNX graph.
 
 
 .. contents::
@@ -216,39 +214,6 @@ Convert the pipeline into ONNX
     Variable(raw_name='pclass', onnx_name='pclass', type=Int64TensorType(shape=[1, 1]))
 
 
-Predictions are more efficient if the graph is small.
-That's why the converter checks that there is no unused input.
-They need to be removed from the graph inputs.
-
-
-
-.. code-block:: python
-
-
-    to_drop = {'parch', 'sibsp', 'cabin', 'ticket', 'name', 'body', 'home.dest', 'boat'}
-    inputs = convert_dataframe_schema(X_train, to_drop)
-    try:
-        model_onnx = convert_sklearn(clf, 'pipeline_titanic', inputs)
-    except Exception as e:
-        print(e)
-
-
-
-
-
-.. rst-class:: sphx-glr-script-out
-
- Out:
-
- .. code-block:: none
-
-    Columns must have the same type.
-    Inputs:
-    Variable(raw_name='embarked', onnx_name='embarked', type=StringTensorType(shape=[1, 1]))
-    Variable(raw_name='sex', onnx_name='sex', type=StringTensorType(shape=[1, 1]))
-    Variable(raw_name='pclass', onnx_name='pclass', type=Int64TensorType(shape=[1, 1]))
-
-
 *scikit-learn* does implicit conversions when it can.
 *sklearn-onnx* does not. The ONNX version of *OneHotEncoder*
 must be applied on columns of the same type.
@@ -260,6 +225,7 @@ must be applied on columns of the same type.
 
     X_train['pclass'] = X_train['pclass'].astype(str)
     X_test['pclass'] = X_test['pclass'].astype(str)
+    to_drop = {'parch', 'sibsp', 'cabin', 'ticket', 'name', 'body', 'home.dest', 'boat'}
     inputs = convert_dataframe_schema(X_train, to_drop)
 
     model_onnx = convert_sklearn(clf, 'pipeline_titanic', inputs)
@@ -300,8 +266,8 @@ Let's start with *scikit-learn*.
 
  .. code-block:: none
 
-    predict [1 0 1 0 0]
-    predict_proba [[0.35598511 0.64401489]]
+    predict [0 1 0 1 0]
+    predict_proba [[0.77794078 0.22205922]]
 
 
 Predictions with onnxruntime.
@@ -350,22 +316,140 @@ We are ready to run *onnxruntime*.
 
 
 
+
 .. rst-class:: sphx-glr-script-out
 
  Out:
 
  .. code-block:: none
 
-    predict [1 0 1 0 0]
-    predict_proba [{0: 0.3559851050376892, 1: 0.6440148949623108}]
+    predict [0 1 0 1 0]
+    predict_proba [{0: 0.7779407501220703, 1: 0.2220592498779297}]
 
 
-.. _l-plot-complex-pipeline-graph:
+Compute intermediate outputs
+++++++++++++++++++++++++++++
 
-Display the ONNX graph
-++++++++++++++++++++++
+Unfortunately, there is actually no way to ask 
+*onnxruntime* to retrieve the output of intermediate nodes.
+We need to modifies the *ONNX* before it is given to *onnxruntime*.
+Let's see first the list of intermediate output.
 
-Finally, let's see the graph converted with *sklearn-onnx*.
+
+
+.. code-block:: python
+
+
+    from skl2onnx.helpers.onnx_helper import enumerate_model_node_outputs, load_onnx_model
+    model_onnx = load_onnx_model("pipeline_titanic.onnx")
+    for out in enumerate_model_node_outputs(model_onnx):
+        print(out)
+    
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    merged_columns
+    variable
+    variable1
+    merged_columns1
+    ext_feature_from_merged_columns1_at_0
+    encoded_feature_at_0
+    ext_feature_from_merged_columns1_at_1
+    encoded_feature_at_1
+    ext_feature_from_merged_columns1_at_2
+    encoded_feature_at_2
+    variable2
+    transformed_column
+    label
+    probability_tensor
+    probabilities
+    output_label
+    output_probability
+
+
+Not that easy to tell which one is what as the *ONNX*
+has more operators than the original *scikit-learn* pipelines.
+The graph at :ref:`l-plot-complex-pipeline-graph`
+helps up to find the outputs of both numerical
+and textual pipeline: *variable1*, *variable2*.
+Let's look into the numerical pipeline first.
+
+
+
+.. code-block:: python
+
+
+    from skl2onnx.helpers.onnx_helper import select_model_inputs_outputs, save_onnx_model
+    num_onnx = select_model_inputs_outputs(model_onnx, 'variable1')
+    save_onnx_model(num_onnx, "pipeline_titanic_numerical.onnx")
+
+
+
+
+
+
+
+Let's compute the numerical features.
+
+
+
+.. code-block:: python
+
+
+    sess = rt.InferenceSession("pipeline_titanic_numerical.onnx")
+    numX = sess.run(None, inputs)
+    print("numerical features", numX[0][:1])
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    numerical features [[-0.28282744 -0.5008437 ]]
+
+
+We do the same for the textual features.
+
+
+
+.. code-block:: python
+
+
+    text_onnx = select_model_inputs_outputs(model_onnx, 'variable2')
+    save_onnx_model(text_onnx, "pipeline_titanic_textual.onnx")
+    sess = rt.InferenceSession("pipeline_titanic_textual.onnx")
+    numT = sess.run(None, inputs)
+    print("textual features", numT[0][:1])
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    textual features [[0. 0. 1. 0. 0. 1. 0. 0. 0.]]
+
+
+Display the sub-ONNX graph
+++++++++++++++++++++++++++
+
+Finally, let's see both subgraphs. First, numerical pipeline.
 
 
 
@@ -373,16 +457,16 @@ Finally, let's see the graph converted with *sklearn-onnx*.
 
 
     from onnx.tools.net_drawer import GetPydotGraph, GetOpNodeProducer
-    pydot_graph = GetPydotGraph(model_onnx.graph, name=model_onnx.graph.name, rankdir="TB",
+    pydot_graph = GetPydotGraph(num_onnx.graph, name=num_onnx.graph.name, rankdir="TB",
                                 node_producer=GetOpNodeProducer("docstring", color="yellow",
                                                                 fillcolor="yellow", style="filled"))
-    pydot_graph.write_dot("pipeline_titanic.dot")
+    pydot_graph.write_dot("pipeline_titanic_num.dot")
 
     import os
-    os.system('dot -O -Gdpi=300 -Tpng pipeline_titanic.dot')
+    os.system('dot -O -Gdpi=300 -Tpng pipeline_titanic_num.dot')
 
     import matplotlib.pyplot as plt
-    image = plt.imread("pipeline_titanic.dot.png")
+    image = plt.imread("pipeline_titanic_num.dot.png")
     fig, ax = plt.subplots(figsize=(40, 20))
     ax.imshow(image)
     ax.axis('off')
@@ -390,7 +474,37 @@ Finally, let's see the graph converted with *sklearn-onnx*.
 
 
 
-.. image:: /auto_examples/images/sphx_glr_plot_complex_pipeline_001.png
+.. image:: /auto_examples/images/sphx_glr_plot_intermediate_outputs_001.png
+    :class: sphx-glr-single-img
+
+
+
+
+Then textual pipeline.
+
+
+
+.. code-block:: python
+
+
+    pydot_graph = GetPydotGraph(text_onnx.graph, name=text_onnx.graph.name, rankdir="TB",
+                                node_producer=GetOpNodeProducer("docstring", color="yellow",
+                                                                fillcolor="yellow", style="filled"))
+    pydot_graph.write_dot("pipeline_titanic_text.dot")
+
+    import os
+    os.system('dot -O -Gdpi=300 -Tpng pipeline_titanic_text.dot')
+
+    import matplotlib.pyplot as plt
+    image = plt.imread("pipeline_titanic_text.dot.png")
+    fig, ax = plt.subplots(figsize=(40, 20))
+    ax.imshow(image)
+    ax.axis('off')
+
+
+
+
+.. image:: /auto_examples/images/sphx_glr_plot_intermediate_outputs_002.png
     :class: sphx-glr-single-img
 
 
@@ -427,10 +541,10 @@ Finally, let's see the graph converted with *sklearn-onnx*.
     skl2onnx:  1.4.2
 
 
-**Total running time of the script:** ( 0 minutes  6.627 seconds)
+**Total running time of the script:** ( 0 minutes  3.423 seconds)
 
 
-.. _sphx_glr_download_auto_examples_plot_complex_pipeline.py:
+.. _sphx_glr_download_auto_examples_plot_intermediate_outputs.py:
 
 
 .. only :: html
@@ -442,13 +556,13 @@ Finally, let's see the graph converted with *sklearn-onnx*.
 
   .. container:: sphx-glr-download
 
-     :download:`Download Python source code: plot_complex_pipeline.py <plot_complex_pipeline.py>`
+     :download:`Download Python source code: plot_intermediate_outputs.py <plot_intermediate_outputs.py>`
 
 
 
   .. container:: sphx-glr-download
 
-     :download:`Download Jupyter notebook: plot_complex_pipeline.ipynb <plot_complex_pipeline.ipynb>`
+     :download:`Download Jupyter notebook: plot_intermediate_outputs.ipynb <plot_intermediate_outputs.ipynb>`
 
 
 .. only:: html
