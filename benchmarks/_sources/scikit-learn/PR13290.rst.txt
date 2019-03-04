@@ -1,0 +1,298 @@
+
+.. _l-PR13290:
+
+PR13290 - Faster Polynomial Features
+====================================
+
+.. index:: polynomial features, scikit-learn
+
+.. contents::
+    :local:
+
+Intuition
++++++++++
+
+The current implementation of :epkg:`PolynomialFeatures`
+(0.20.2) uses a code based on combinations as follows:
+
+::
+
+    def combinations(iterable, r):
+        # combinations('ABCD', 2) --> AB AC AD BC BD CD
+        # combinations(range(4), 3) --> 012 013 023 123
+        pool = tuple(iterable)
+        n = len(pool)
+        if r > n:
+            return
+        indices = list(range(r))
+        yield tuple(pool[i] for i in indices)
+        while True:
+            for i in reversed(range(r)):
+                if indices[i] != i + n - r:
+                    break
+            else:
+                return
+            indices[i] += 1
+            for j in range(i+1, r):
+                indices[j] = indices[j-1] + 1
+            yield tuple(pool[i] for i in indices)
+
+The current code for method *transform* uses independently computes
+every feature:
+
+::
+
+    XP = np.empty((n_samples, self.n_output_features_), dtype=X.dtype)
+    for i, comb in enumerate(combinations):
+        XP[:, i] = X[:, comb].prod(1)
+
+But it is possible to leverage broadcasting to reduce
+the number of multiplication to do:
+
+::
+
+    def multiply(A, B, out):
+        return numpy.multiply(A, B, out)
+
+    XP[:, 0] = 1
+    pos = 1
+    n = X.shape[1]
+    for d in range(0, self.poly_degree):
+        if d == 0:
+            XP[:, pos:pos + n] = X
+            index = list(range(pos, pos + n))
+            pos += n
+            index.append(pos)
+        else:
+            new_index = []
+            end = index[-1]
+            for i in range(0, n):
+                a = index[i]
+                new_index.append(pos)
+                new_pos = pos + end - a
+                multiply(XP[:, a:end], X[:, i:i + 1], XP[:, pos:new_pos])
+                pos = new_pos
+
+            new_index.append(pos)
+            index = new_index
+
+Code
+++++
+
+`PR13290 <https://github.com/scikit-learn/scikit-learn/pull/13290>`_:
+implements faster polynomial features for dense matrices.
+
+Graphs
+++++++
+
+.. plot::
+
+    import matplotlib.pyplot as plt
+    import pandas
+    name = "../../scikit-learn/results/bench_polynomial_features.csv"
+    df = pandas.read_csv(name)
+    plt.close('all')
+
+    nrows = len(set(df.degree))
+    fig, ax = plt.subplots(nrows, 4, figsize=(nrows * 4, 12))
+    pos = 0
+
+    for di, degree in enumerate(sorted(set(df.degree))):
+        pos = 0
+        for order in sorted(set(df.order)):
+            for interaction_only in sorted(set(df.interaction_only)):
+                a = ax[di, pos]
+                if di == ax.shape[0] - 1:
+                    a.set_xlabel("N observations", fontsize='x-small')
+                if pos == 0:
+                    a.set_ylabel("Time (s) degree={}".format(degree),
+                                 fontsize='x-small')
+
+                for color, nfeat in zip('brgyc', sorted(set(df.nfeat))):
+                    subset = df[(df.degree == degree) & (df.nfeat == nfeat) &
+                                (df.interaction_only == interaction_only) &
+                                (df.order == order)]
+                    if subset.shape[0] == 0:
+                        continue
+                    subset = subset.sort_values("n")
+                    label = "nf={} l=0.20.2".format(nfeat)
+                    subset.plot(x="n", y="time_0_20_2", label=label, ax=a,
+                                logx=True, logy=True, c=color, style='--')
+                    label = "nf={} l=now".format(nfeat)
+                    subset.plot(x="n", y="time_current", label=label, ax=a,
+                                logx=True, logy=True, c=color)
+
+                a.legend(loc=0, fontsize='x-small')
+                if di == 0:
+                    a.set_title("order={} interaction_only={}".format(
+                        order, interaction_only), fontsize='x-small')
+                pos += 1
+
+    plt.suptitle("Benchmark for PolynomialFeatures")
+    plt.show()
+
+.. plot::
+
+    import matplotlib.pyplot as plt
+    import pandas
+    name = "../../scikit-learn/results/bench_polynomial_features.csv"
+    df = pandas.read_csv(name)
+    df['speedup'] = df['time_0_20_2'] / df['time_current']
+    plt.close('all')
+    fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(10, 4))
+    for color, degree in zip('rgby', sorted(set(df.degree))):
+        subdf = df[df.degree == degree]
+        subdf.plot(x="time_0_20_2", y="speedup", logx=True, logy=True,
+                   kind="scatter", ax=ax, label="d=%d" % degree,
+                   c=color)
+    ax.set_xlabel("Time(s) of 0.20.2\n.")
+    ax.set_ylabel("Speed up compare to 0.20.2")
+    ax.set_title("Acceleration / original time")
+    ax.plot([df.time_0_20_2.min(), df.time_0_20_2.max()], [2, 2],
+            "--", c="black", label="2x")
+    ax.legend()
+    plt.show()
+
+And when ``degree == 2`` which is the most common case.
+Each color is a different number of features or a different
+number of observations.
+
+.. plot::
+
+    import matplotlib.pyplot as plt
+    import pandas
+    name = "../../scikit-learn/results/bench_polynomial_features.csv"
+    df = pandas.read_csv(name)
+    df = df[df.degree == 2].copy()
+    df['speedup'] = df['time_0_20_2'] / df['time_current']
+    plt.close('all')
+    fig, ax = plt.subplots(nrows=1, ncols=2, figsize=(12, 4))
+
+    for color, nf in zip('rgby', sorted(set(df.nfeat))):
+        subdf = df[df.nfeat == nf]
+        subdf.plot(x="time_0_20_2", y="speedup", logx=True, logy=True,
+                   kind="scatter", ax=ax[0], label="nf=%d" % nf,
+                   c=color)
+    ax[0].set_xlabel("Time(s) of 0.20.2\n.")
+    ax[0].set_ylabel("Speed up compared to 0.20.2")
+    ax[0].set_title("Acceleration / original time\ndegree == 2")
+    ax[0].plot([df.time_0_20_2.min(), df.time_0_20_2.max()], [2, 2],
+               "--", c="black", label="2x")
+    ax[0].plot([df.time_0_20_2.min(), df.time_0_20_2.max()], [1, 1],
+               "-", c="black", label="1x")
+    ax[0].legend()
+
+    for color, n in zip('rgbycm', sorted(set(df.n))):
+        subdf = df[df.n == n]
+        subdf.plot(x="time_0_20_2", y="speedup", logx=True, logy=True,
+                   kind="scatter", ax=ax[1], label="nobs=%d" % n,
+                   c=color)
+    ax[1].set_xlabel("Time(s) of 0.20.2\n.")
+    ax[1].set_ylabel("Speed up compared to 0.20.2")
+    ax[1].set_title("Acceleration / original time\ndegree == 2")
+    ax[1].plot([df.time_0_20_2.min(), df.time_0_20_2.max()], [2, 2],
+               "--", c="black", label="2x")
+    ax[1].plot([df.time_0_20_2.min(), df.time_0_20_2.max()], [1, 1],
+               "-", c="black", label="1x")
+    ax[1].legend()
+    plt.show()
+
+The new implementation is always better.
+
+Raw results
++++++++++++
+
+:download:`bench_polynomial_features.csv <../../scikit-learn/results/bench_polynomial_features.csv>`
+
+.. runpython::
+    :rst:
+    :warningout: RuntimeWarning
+    :showcode:
+
+    from pyquickhelper.pandashelper import df2rst
+    import pandas
+    name = os.path.join(__WD__, "../../scikit-learn/results/bench_polynomial_features.csv")
+    df = pandas.read_csv(name)
+    df['speedup'] = df['time_0_20_2'] / df['time_current']
+    print(df2rst(df, number_format=4))
+
+Benchmark code
+++++++++++++++
+
+.. literalinclude:: ../../scikit-learn/bench_plot_polynomial_features.py
+    :language: python
+
+Alternatives
+++++++++++++
+
+Transpose if order=='C' and size < 10e7
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:download:`bench_polynomial_features.csv <../../scikit-learn/results/bench_polynomial_features_transpose.csv>`
+
+.. image:: ../../scikit-learn/results/bench_polynomial_features_transpose.png
+    :width: 800
+
+Never transpose
+^^^^^^^^^^^^^^^
+
+:download:`bench_polynomial_features_notranspose.csv <../../scikit-learn/results/bench_polynomial_features_notranspose.csv>`
+
+.. image:: ../../scikit-learn/results/bench_polynomial_features_notranspose.png
+    :width: 800
+
+Number of output features
++++++++++++++++++++++++++
+
+The following code use a linear regression to find out
+the relationship between the number of output features and
+the number of features.
+
+.. runpython::
+    :showcode:
+    :warningout: RuntimeWarning
+
+    import pandas
+    from sklearn.linear_model import LinearRegression
+
+    name = os.path.join(__WD__, "../../scikit-learn/results/bench_polynomial_features.csv")
+    df = pandas.read_csv(name)
+    df.columns = "degree interaction_only n f order of time_0_20_2 time_current".split()
+
+    degrees = list(sorted(set(df.degree)))
+    ionlys = list(sorted(set(df.interaction_only)))
+    orders = list(sorted(set(df.order)))
+    data = []
+    for d in degrees:
+        for io in ionlys:
+            for o in orders:
+                subset = df[(df.degree == d) & (df.interaction_only == io) & (df.order == o)].copy()
+                subset = subset.drop(["degree", "interaction_only", "order"], axis=1).copy()
+                X = subset[["f"]].copy()
+                X['bias'] = 1.
+                X['f'] = X['f']
+                X['f^2'] = X["f"] * X['f']
+                X['f^3'] = X["f^2"] * X['f']
+                X['f^4'] = X["f^2"] * X['f^2']
+
+                X = X.copy()
+                y = (subset['of']).copy()
+                reg = LinearRegression(fit_intercept=False)
+                reg.fit(X, y)
+
+                # number of output features
+                names = ["cst"] + list(X.columns)
+                coefs = [reg.intercept_] + list(reg.coef_)
+                score = reg.score(X, y)
+                form = {'degree': d, 'ionly': io, 'order': o, 'score': score}
+                for n, c in zip(names, coefs):
+                    if abs(c) > 1e-4:
+                        form[n] = c
+
+                # formula
+                print(form)
+
+It is not easy to guess the cost of an algorithm with
+this kind of method as the different of scales between
+features is quite high. It is numerically difficult
+to have precise coefficients.
