@@ -1,0 +1,955 @@
+.. note::
+    :class: sphx-glr-download-link-note
+
+    Click :ref:`here <sphx_glr_download_auto_examples_plot_intermediate_outputs.py>` to download the full example code
+.. rst-class:: sphx-glr-example-title
+
+.. _sphx_glr_auto_examples_plot_intermediate_outputs.py:
+
+
+Walk through intermediate outputs
+=================================
+
+We reuse the example :ref:`example-complex-pipeline` and
+walk through intermediates outputs. It is very likely a converted
+model gives different outputs or fails due to a custom
+converter which is not correctly implemented.
+One option is to look into the output of every node of the
+ONNX graph.
+
+.. contents::
+    :local:
+
+Create and train a complex pipeline
++++++++++++++++++++++++++++++++++++
+
+We reuse the pipeline implemented in example
+`Column Transformer with Mixed Types
+<https://scikit-learn.org/stable/auto_examples/compose/plot_column_transformer_mixed_types.html#sphx-glr-auto-examples-compose-plot-column-transformer-mixed-types-py>`_.
+There is one change because
+`ONNX-ML Imputer <https://github.com/onnx/onnx/blob/master/docs/Operators-ml.md#ai.onnx.ml.Imputer>`_
+does not handle string type. This cannot be part of the final ONNX pipeline
+and must be removed. Look for comment starting with ``---`` below.
+
+.. code-block:: default
+
+    import numpy as np
+    import pandas as pd
+    from sklearn.compose import ColumnTransformer
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler, OneHotEncoder
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.model_selection import train_test_split
+
+    titanic_url = ('https://raw.githubusercontent.com/amueller/'
+                   'scipy-2017-sklearn/091d371/notebooks/datasets/titanic3.csv')
+    data = pd.read_csv(titanic_url)
+    X = data.drop('survived', axis=1)
+    y = data['survived']
+
+    # SimpleImputer on string is not available for string in ONNX-ML specifications.
+    # So we do it beforehand.
+    for cat in ['embarked', 'sex', 'pclass']:
+        X[cat].fillna('missing', inplace=True)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+    numeric_features = ['age', 'fare']
+    numeric_transformer = Pipeline(steps=[
+        ('imputer', SimpleImputer(strategy='median')),
+        ('scaler', StandardScaler())])
+
+    categorical_features = ['embarked', 'sex', 'pclass']
+    categorical_transformer = Pipeline(steps=[
+        # --- SimpleImputer is not available for strings in ONNX-ML specifications. 
+        # ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+        ('onehot', OneHotEncoder(handle_unknown='ignore'))])
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', numeric_transformer, numeric_features),
+            ('cat', categorical_transformer, categorical_features),
+            ])
+
+    clf = Pipeline(steps=[('preprocessor', preprocessor),
+                          ('classifier', LogisticRegression(solver='lbfgs'))])
+
+    clf.fit(X_train, y_train)
+
+
+
+
+
+
+
+Define the inputs of the ONNX graph
++++++++++++++++++++++++++++++++++++
+
+*sklearn-onnx* does not know the features used to train the model
+but it needs to know which feature has which name.
+We simply reuse the dataframe column definition.
+
+
+.. code-block:: default
+
+    print(X_train.dtypes)
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    pclass         int64
+    name          object
+    sex           object
+    age          float64
+    sibsp          int64
+    parch          int64
+    ticket        object
+    fare         float64
+    cabin         object
+    embarked      object
+    boat          object
+    body         float64
+    home.dest     object
+    dtype: object
+
+
+After conversion.
+
+
+.. code-block:: default
+
+    from skl2onnx.common.data_types import FloatTensorType, StringTensorType, Int64TensorType
+
+    def convert_dataframe_schema(df, drop=None):
+        inputs = []
+        for k, v in zip(df.columns, df.dtypes):
+            if drop is not None and k in drop:
+                continue
+            if v == 'int64':
+                t = Int64TensorType([1, 1])
+            elif v == 'float64':
+                t = FloatTensorType([1, 1])
+            else:
+                t = StringTensorType([1, 1])
+            inputs.append((k, t))
+        return inputs
+    
+    inputs = convert_dataframe_schema(X_train)
+
+    import pprint
+    pprint.pprint(inputs)
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    [('pclass', Int64TensorType(shape=[1, 1])),
+     ('name', StringTensorType(shape=[1, 1])),
+     ('sex', StringTensorType(shape=[1, 1])),
+     ('age', FloatTensorType(shape=[1, 1])),
+     ('sibsp', Int64TensorType(shape=[1, 1])),
+     ('parch', Int64TensorType(shape=[1, 1])),
+     ('ticket', StringTensorType(shape=[1, 1])),
+     ('fare', FloatTensorType(shape=[1, 1])),
+     ('cabin', StringTensorType(shape=[1, 1])),
+     ('embarked', StringTensorType(shape=[1, 1])),
+     ('boat', StringTensorType(shape=[1, 1])),
+     ('body', FloatTensorType(shape=[1, 1])),
+     ('home.dest', StringTensorType(shape=[1, 1]))]
+
+
+Merging single column into vectors is not 
+the most efficient way to compute the prediction.
+It could be done before converting the pipeline into a graph.
+
+Convert the pipeline into ONNX
+++++++++++++++++++++++++++++++
+
+
+.. code-block:: default
+
+
+    from skl2onnx import convert_sklearn
+    try:
+        model_onnx = convert_sklearn(clf, 'pipeline_titanic', inputs)
+    except Exception as e:
+        print(e)
+    
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    Columns must have the same type.
+    Inputs:
+    Variable(raw_name='embarked', onnx_name='embarked', type=StringTensorType(shape=[1, 1]))
+    Variable(raw_name='sex', onnx_name='sex', type=StringTensorType(shape=[1, 1]))
+    Variable(raw_name='pclass', onnx_name='pclass', type=Int64TensorType(shape=[1, 1]))
+
+
+*scikit-learn* does implicit conversions when it can.
+*sklearn-onnx* does not. The ONNX version of *OneHotEncoder*
+must be applied on columns of the same type.
+
+
+.. code-block:: default
+
+
+    X_train['pclass'] = X_train['pclass'].astype(str)
+    X_test['pclass'] = X_test['pclass'].astype(str)
+    to_drop = {'parch', 'sibsp', 'cabin', 'ticket', 'name', 'body', 'home.dest', 'boat'}
+    inputs = convert_dataframe_schema(X_train, to_drop)
+
+    model_onnx = convert_sklearn(clf, 'pipeline_titanic', inputs)
+
+
+    # And save.
+    with open("pipeline_titanic.onnx", "wb") as f:
+        f.write(model_onnx.SerializeToString())
+
+
+
+
+
+
+
+Compare the predictions
++++++++++++++++++++++++
+
+Final step, we need to ensure the converted model
+produces the same predictions, labels and probabilities.
+Let's start with *scikit-learn*.
+
+
+.. code-block:: default
+
+
+    print("predict", clf.predict(X_test[:5]))
+    print("predict_proba", clf.predict_proba(X_test[:1]))
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    predict [0 0 0 0 1]
+    predict_proba [[0.75974097 0.24025903]]
+
+
+Predictions with onnxruntime.
+We need to remove the dropped columns and to change
+the double vectors into float vectors as *onnxruntime*
+does not support double floats.
+*onnxruntime* does not accept *dataframe*.
+inputs must be given as a list of dictionary.
+Last detail, every column was described  not really as a vector
+but as a matrix of one column which explains the last line
+with the *reshape*.
+
+
+.. code-block:: default
+
+
+    X_test2 = X_test.drop(to_drop, axis=1)
+    inputs = {c: X_test2[c].values for c in X_test2.columns}
+    for c in numeric_features:
+        inputs[c] = inputs[c].astype(np.float32)
+    for k in inputs:
+        inputs[k] = inputs[k].reshape((inputs[k].shape[0], 1))
+    
+
+
+
+
+
+
+We are ready to run *onnxruntime*.
+
+
+.. code-block:: default
+
+
+    import onnxruntime as rt
+    import numpy
+    sess = rt.InferenceSession("pipeline_titanic.onnx")
+    pred_onx = sess.run(None, inputs)
+    print("predict", pred_onx[0][:5])
+    print("predict_proba", pred_onx[1][:1])
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    predict [0 0 0 0 1]
+    predict_proba [{0: 0.7597410082817078, 1: 0.24025899171829224}]
+
+
+Compute intermediate outputs
+++++++++++++++++++++++++++++
+
+Unfortunately, there is actually no way to ask 
+*onnxruntime* to retrieve the output of intermediate nodes.
+We need to modifies the *ONNX* before it is given to *onnxruntime*.
+Let's see first the list of intermediate output.
+
+
+.. code-block:: default
+
+
+    from skl2onnx.helpers.onnx_helper import enumerate_model_node_outputs, load_onnx_model
+    model_onnx = load_onnx_model("pipeline_titanic.onnx")
+    for out in enumerate_model_node_outputs(model_onnx):
+        print(out)
+    
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    merged_columns
+    variable
+    variable1
+    merged_columns1
+    ext_feature_from_merged_columns1_at_0
+    encoded_feature_at_0
+    ext_feature_from_merged_columns1_at_1
+    encoded_feature_at_1
+    ext_feature_from_merged_columns1_at_2
+    encoded_feature_at_2
+    variable2
+    transformed_column
+    label
+    probability_tensor
+    probabilities
+    output_label
+    output_probability
+
+
+Not that easy to tell which one is what as the *ONNX*
+has more operators than the original *scikit-learn* pipelines.
+The graph at :ref:`l-plot-complex-pipeline-graph`
+helps up to find the outputs of both numerical
+and textual pipeline: *variable1*, *variable2*.
+Let's look into the numerical pipeline first.
+
+
+.. code-block:: default
+
+
+    from skl2onnx.helpers.onnx_helper import select_model_inputs_outputs, save_onnx_model
+    num_onnx = select_model_inputs_outputs(model_onnx, 'variable1')
+    save_onnx_model(num_onnx, "pipeline_titanic_numerical.onnx")
+
+
+
+
+
+
+
+Let's compute the numerical features.
+
+
+.. code-block:: default
+
+
+    sess = rt.InferenceSession("pipeline_titanic_numerical.onnx")
+    numX = sess.run(None, inputs)
+    print("numerical features", numX[0][:1])
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    numerical features [[-0.427838   -0.38210964]]
+
+
+We do the same for the textual features.
+
+
+.. code-block:: default
+
+
+    print(model_onnx)
+    text_onnx = select_model_inputs_outputs(model_onnx, 'variable2')
+    save_onnx_model(text_onnx, "pipeline_titanic_textual.onnx")
+    sess = rt.InferenceSession("pipeline_titanic_textual.onnx")
+    numT = sess.run(None, inputs)
+    print("textual features", numT[0][:1])
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    ir_version: 4
+    producer_name: "skl2onnx"
+    producer_version: "1.4.5"
+    domain: "ai.onnx"
+    model_version: 0
+    doc_string: ""
+    graph {
+      node {
+        input: "age"
+        input: "fare"
+        output: "merged_columns"
+        name: "Concat"
+        op_type: "Concat"
+        attribute {
+          name: "axis"
+          i: 1
+          type: INT
+        }
+        domain: ""
+      }
+      node {
+        input: "merged_columns"
+        output: "variable"
+        name: "Imputer"
+        op_type: "Imputer"
+        attribute {
+          name: "imputed_value_floats"
+          floats: 28.0
+          floats: 14.5
+          type: FLOATS
+        }
+        attribute {
+          name: "replaced_value_float"
+          f: nan
+          type: FLOAT
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "variable"
+        output: "variable1"
+        name: "Scaler"
+        op_type: "Scaler"
+        attribute {
+          name: "offset"
+          floats: 29.55889892578125
+          floats: 33.89639663696289
+          type: FLOATS
+        }
+        attribute {
+          name: "scale"
+          floats: 0.07696451991796494
+          floats: 0.018734173849225044
+          type: FLOATS
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "embarked"
+        input: "sex"
+        input: "pclass"
+        output: "merged_columns1"
+        name: "Concat1"
+        op_type: "Concat"
+        attribute {
+          name: "axis"
+          i: 1
+          type: INT
+        }
+        domain: ""
+      }
+      node {
+        input: "merged_columns1"
+        input: "target_index"
+        output: "ext_feature_from_merged_columns1_at_0"
+        name: "ArrayFeatureExtractor"
+        op_type: "ArrayFeatureExtractor"
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "ext_feature_from_merged_columns1_at_0"
+        output: "encoded_feature_at_0"
+        name: "OneHotEncoder"
+        op_type: "OneHotEncoder"
+        attribute {
+          name: "cats_strings"
+          strings: "C"
+          strings: "Q"
+          strings: "S"
+          strings: "missing"
+          type: STRINGS
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "merged_columns1"
+        input: "target_index1"
+        output: "ext_feature_from_merged_columns1_at_1"
+        name: "ArrayFeatureExtractor1"
+        op_type: "ArrayFeatureExtractor"
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "ext_feature_from_merged_columns1_at_1"
+        output: "encoded_feature_at_1"
+        name: "OneHotEncoder1"
+        op_type: "OneHotEncoder"
+        attribute {
+          name: "cats_strings"
+          strings: "female"
+          strings: "male"
+          type: STRINGS
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "merged_columns1"
+        input: "target_index2"
+        output: "ext_feature_from_merged_columns1_at_2"
+        name: "ArrayFeatureExtractor2"
+        op_type: "ArrayFeatureExtractor"
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "ext_feature_from_merged_columns1_at_2"
+        output: "encoded_feature_at_2"
+        name: "OneHotEncoder2"
+        op_type: "OneHotEncoder"
+        attribute {
+          name: "cats_int64s"
+          ints: 1
+          ints: 2
+          ints: 3
+          type: INTS
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "encoded_feature_at_0"
+        input: "encoded_feature_at_1"
+        input: "encoded_feature_at_2"
+        output: "variable2"
+        name: "FeatureVectorizer"
+        op_type: "FeatureVectorizer"
+        attribute {
+          name: "inputdimensions"
+          ints: 4
+          ints: 2
+          ints: 3
+          type: INTS
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "variable1"
+        input: "variable2"
+        output: "transformed_column"
+        name: "Concat2"
+        op_type: "Concat"
+        attribute {
+          name: "axis"
+          i: 1
+          type: INT
+        }
+        domain: ""
+      }
+      node {
+        input: "transformed_column"
+        output: "label"
+        output: "probability_tensor"
+        name: "LinearClassifier"
+        op_type: "LinearClassifier"
+        attribute {
+          name: "classlabels_ints"
+          ints: 0
+          ints: 1
+          type: INTS
+        }
+        attribute {
+          name: "coefficients"
+          floats: 0.5194721221923828
+          floats: -0.0065208543092012405
+          floats: -0.36602696776390076
+          floats: 0.1706770956516266
+          floats: 0.4018545150756836
+          floats: -0.2064743936061859
+          floats: -1.2070186138153076
+          floats: 1.2070488929748535
+          floats: -0.988024115562439
+          floats: -0.006599320098757744
+          floats: 0.9946537017822266
+          floats: -0.5194721221923828
+          floats: 0.0065208543092012405
+          floats: 0.36602696776390076
+          floats: -0.1706770956516266
+          floats: -0.4018545150756836
+          floats: 0.2064743936061859
+          floats: 1.2070186138153076
+          floats: -1.2070488929748535
+          floats: 0.988024115562439
+          floats: 0.006599320098757744
+          floats: -0.9946537017822266
+          type: FLOATS
+        }
+        attribute {
+          name: "intercepts"
+          floats: -0.2378852218389511
+          floats: 0.2378852218389511
+          type: FLOATS
+        }
+        attribute {
+          name: "multi_class"
+          i: 1
+          type: INT
+        }
+        attribute {
+          name: "post_transform"
+          s: "LOGISTIC"
+          type: STRING
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "probability_tensor"
+        output: "probabilities"
+        name: "Normalizer"
+        op_type: "Normalizer"
+        attribute {
+          name: "norm"
+          s: "L1"
+          type: STRING
+        }
+        domain: "ai.onnx.ml"
+      }
+      node {
+        input: "label"
+        output: "output_label"
+        name: "Cast"
+        op_type: "Cast"
+        attribute {
+          name: "to"
+          i: 7
+          type: INT
+        }
+        domain: ""
+      }
+      node {
+        input: "probabilities"
+        output: "output_probability"
+        name: "ZipMap"
+        op_type: "ZipMap"
+        attribute {
+          name: "classlabels_int64s"
+          ints: 0
+          ints: 1
+          type: INTS
+        }
+        domain: "ai.onnx.ml"
+      }
+      name: "pipeline_titanic"
+      initializer {
+        dims: 1
+        data_type: 7
+        int64_data: 0
+        name: "target_index"
+      }
+      initializer {
+        dims: 1
+        data_type: 7
+        int64_data: 1
+        name: "target_index1"
+      }
+      initializer {
+        dims: 1
+        data_type: 7
+        int64_data: 2
+        name: "target_index2"
+      }
+      input {
+        name: "pclass"
+        type {
+          tensor_type {
+            elem_type: 8
+            shape {
+              dim {
+                dim_value: 1
+              }
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      input {
+        name: "sex"
+        type {
+          tensor_type {
+            elem_type: 8
+            shape {
+              dim {
+                dim_value: 1
+              }
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      input {
+        name: "age"
+        type {
+          tensor_type {
+            elem_type: 1
+            shape {
+              dim {
+                dim_value: 1
+              }
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      input {
+        name: "fare"
+        type {
+          tensor_type {
+            elem_type: 1
+            shape {
+              dim {
+                dim_value: 1
+              }
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      input {
+        name: "embarked"
+        type {
+          tensor_type {
+            elem_type: 8
+            shape {
+              dim {
+                dim_value: 1
+              }
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      output {
+        name: "output_label"
+        type {
+          tensor_type {
+            elem_type: 7
+            shape {
+              dim {
+                dim_value: 1
+              }
+            }
+          }
+        }
+      }
+      output {
+        name: "output_probability"
+        type {
+          sequence_type {
+            elem_type {
+              map_type {
+                key_type: 7
+                value_type {
+                  tensor_type {
+                    elem_type: 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    opset_import {
+      domain: "ai.onnx.ml"
+      version: 1
+    }
+    opset_import {
+      domain: ""
+      version: 9
+    }
+
+    textual features [[0. 0. 1. 0. 0. 1. 0. 0. 0.]]
+
+
+Display the sub-ONNX graph
+++++++++++++++++++++++++++
+
+Finally, let's see both subgraphs. First, numerical pipeline.
+
+
+.. code-block:: default
+
+
+    from onnx.tools.net_drawer import GetPydotGraph, GetOpNodeProducer
+    pydot_graph = GetPydotGraph(num_onnx.graph, name=num_onnx.graph.name, rankdir="TB",
+                                node_producer=GetOpNodeProducer("docstring", color="yellow",
+                                                                fillcolor="yellow", style="filled"))
+    pydot_graph.write_dot("pipeline_titanic_num.dot")
+
+    import os
+    os.system('dot -O -Gdpi=300 -Tpng pipeline_titanic_num.dot')
+
+    import matplotlib.pyplot as plt
+    image = plt.imread("pipeline_titanic_num.dot.png")
+    fig, ax = plt.subplots(figsize=(40, 20))
+    ax.imshow(image)
+    ax.axis('off')
+
+
+
+
+.. image:: /auto_examples/images/sphx_glr_plot_intermediate_outputs_001.png
+    :class: sphx-glr-single-img
+
+
+
+
+Then textual pipeline.
+
+
+.. code-block:: default
+
+
+    pydot_graph = GetPydotGraph(text_onnx.graph, name=text_onnx.graph.name, rankdir="TB",
+                                node_producer=GetOpNodeProducer("docstring", color="yellow",
+                                                                fillcolor="yellow", style="filled"))
+    pydot_graph.write_dot("pipeline_titanic_text.dot")
+
+    import os
+    os.system('dot -O -Gdpi=300 -Tpng pipeline_titanic_text.dot')
+
+    import matplotlib.pyplot as plt
+    image = plt.imread("pipeline_titanic_text.dot.png")
+    fig, ax = plt.subplots(figsize=(40, 20))
+    ax.imshow(image)
+    ax.axis('off')
+
+
+
+
+.. image:: /auto_examples/images/sphx_glr_plot_intermediate_outputs_002.png
+    :class: sphx-glr-single-img
+
+
+
+
+**Versions used for this example**
+
+
+.. code-block:: default
+
+
+    import numpy, sklearn
+    print("numpy:", numpy.__version__)
+    print("scikit-learn:", sklearn.__version__)
+    import onnx, onnxruntime, skl2onnx, onnxmltools, lightgbm
+    print("onnx: ", onnx.__version__)
+    print("onnxruntime: ", onnxruntime.__version__)
+    print("skl2onnx: ", skl2onnx.__version__)
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ Out:
+
+ .. code-block:: none
+
+    numpy: 1.16.2
+    scikit-learn: 0.21.dev0
+    onnx:  1.4.1
+    onnxruntime:  0.3.0
+    skl2onnx:  1.4.5
+
+
+
+.. rst-class:: sphx-glr-timing
+
+   **Total running time of the script:** ( 0 minutes  5.263 seconds)
+
+
+.. _sphx_glr_download_auto_examples_plot_intermediate_outputs.py:
+
+
+.. only :: html
+
+ .. container:: sphx-glr-footer
+    :class: sphx-glr-footer-example
+
+
+
+  .. container:: sphx-glr-download
+
+     :download:`Download Python source code: plot_intermediate_outputs.py <plot_intermediate_outputs.py>`
+
+
+
+  .. container:: sphx-glr-download
+
+     :download:`Download Jupyter notebook: plot_intermediate_outputs.ipynb <plot_intermediate_outputs.ipynb>`
+
+
+.. only:: html
+
+ .. rst-class:: sphx-glr-signature
+
+    `Gallery generated by Sphinx-Gallery <https://sphinx-gallery.readthedocs.io>`_
