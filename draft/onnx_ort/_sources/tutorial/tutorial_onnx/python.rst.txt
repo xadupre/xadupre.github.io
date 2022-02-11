@@ -21,7 +21,7 @@ in machine learning described by the following expression
 variables :math:`Y = f(X, A, B)` decomposed into
 `y = Add(MatMul(X, A), B))`. That what's we need to represent
 with ONNX operators. The first thing is to implement a function
-with :ref:`ONNX operators <l-onnx-operators>`.
+with :epkg:`ONNX operators`.
 ONNX is strongly typed. Shape and type must be defined for both
 input and output of the function. That said, we need four functions
 to build the graph among the :ref:`l-onnx-make-function`:
