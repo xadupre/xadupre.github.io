@@ -39,7 +39,7 @@ Input, Output, Node, Initializer, Attributes
 ++++++++++++++++++++++++++++++++++++++++++++
 
 Building an ONNX graph means implementing a function
-with the ONNX language or more precisely the :ref:`l-onnx-operators`.
+with the ONNX language or more precisely the :epkg:`ONNX operators`.
 A linear regression would be written this way.
 The following lines do not follow python syntax.
 It is just a kind of pseudo code to illustrate the model.
@@ -61,7 +61,7 @@ And *x*, *a*, *c* are the **inputs**, *axc* is the **output**.
 Inputs and outputs are changing at each inference.
 *MatMul* and *Add* are the **nodes**. They also have inputs and outputs.
 A node has also a type, one of the operators in
-:ref:`l-onnx-operators`. This graph was built with the example
+:epkg:`ONNX operators`. This graph was built with the example
 in Section :ref:`l-onnx-linear-regression-onnx-api`.
 
 The graph could also have an **initializer**. When an input
@@ -138,7 +138,7 @@ into the model itself.
 List of available operators and domains
 +++++++++++++++++++++++++++++++++++++++
 
-The main list is described here: :ref:`l-onnx-operators`.
+The main list is described here: :epkg:`ONNX operators`.
 It merges standard matrix operators (Add, Sub, MatMul, Transpose,
 Greater, IsNaN, Shape, Reshape...),
 reductions (ReduceSum, ReduceMin, ...)
@@ -155,7 +155,7 @@ A **domain** can be defined as a set of operators.
 A few operators in this list are dedicated to text but they hardly cover
 the needs. The main list is also missing tree based models very
 popular in standard machine learning.
-These are part of another domain **ai.onnx.ml** :ref:`l-onnx-operators-ml`,
+These are part of another domain **ai.onnx.ml** :epkg:`ONNX ML operators`,
 it includes tree bases models (TreeEnsmble Regressor, ...),
 preprocessing (OneHotEncoder, LabelEncoder, ...), SVM models
 (SVMRegressor, ...), imputer (Imputer).
@@ -234,7 +234,7 @@ What is an opset version?
 The opset is mapped to the version of the :epkg:`onnx` package.
 It is incremented every time the minor version increases.
 Every version brings updated or new operators.
-Pages :ref:`l-md-change-logs` keeps tracks of these changes.
+Pages :epkg:`ChangeLogs` keeps tracks of these changes.
 The current version is the following.
 
 .. runpython::
@@ -387,9 +387,9 @@ Second mechanism concatenates tensors into a sequence of tensors.
 Extensibility
 +++++++++++++
 
-ONNX defines a list of operators as the standard: :ref:`l-onnx-operators`.
+ONNX defines a list of operators as the standard: :epkg:`ONNX ML operators`.
 It extends this list with other operators specific to standard
-machine learning :ref:`l-onnx-operators-ml`. However it is very possible
+machine learning :epkg:`ONNX ML operators`. However it is very possible
 to define your own operators under this domain or a new one.
 :epkg:`onnxruntime` defines custom operators to improve inference
 performance: :epkg:`Contrib Operators`. Every node has a type, a name,

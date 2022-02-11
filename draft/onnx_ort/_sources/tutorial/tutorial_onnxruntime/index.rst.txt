@@ -15,5 +15,4 @@ available on many other platforms.
 
     ortvalue_doc
     inference
-    training_ort_api
     extensions
