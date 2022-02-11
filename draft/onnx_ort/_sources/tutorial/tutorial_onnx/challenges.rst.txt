@@ -9,7 +9,7 @@ A runtime must be chosen, one available on the platform
 the model is deployed. Discrepancies are checked
 and finally the latency is measured.
 The first step about the model conversion can be easy
-if there exist a converting library for this framework
+if there exists a converting library for this framework
 supporting all the pieces of the model. If it is not the
 case, the missing parts must be implemented in ONNX.
 That may be very time consuming.
@@ -67,7 +67,9 @@ does not have its own addition or multiplication, it relies
 on :epkg:`numpy` or :epkg:`scipy`. The user must implement
 its transformer or predictor with ONNX primitives, whether or
 not it was implemented with :epkg:`numpy`. Example
-:ref:`l-plot-custom-converter` shows what it looks like.
+`Implement a new converter
+<https://onnx.ai/sklearn-onnx/auto_tutorial/plot_icustom_converter.html>`_
+shows what it looks like.
 
 Opsets
 ======
@@ -114,7 +116,9 @@ ONNX does not have a similar function (see `Erf
 tf2onnx/onnx_opset/math.py#L414>`_.
 
 :epkg:`sklearn-onnx` defines two different API. The first one
-introduced in that example :ref:`j-plot-custom-syntax`
+introduced in that example
+`Two ways to implement a converter
+<https://onnx.ai/sklearn-onnx/auto_tutorial/plot_jcustom_syntax.html>`_
 follows a similar design that :epkg:`tf2onnx`.
 Following line are extracted from the converter of a linear
 classifier.
@@ -155,7 +159,9 @@ classifier.
 Operator as function
 ++++++++++++++++++++
 
-The second API shown in :ref:`l-plot-custom-converter`
+The second API shown in 
+`Implement a new converter
+<https://onnx.ai/sklearn-onnx/auto_tutorial/plot_icustom_converter.html>`_
 is more compact and defines
 every ONNX operator as composable functions.
 The syntax looks like this for `KMeans
@@ -229,8 +235,9 @@ machine learning use both float32 and float64. :epkg:`numpy`
 usually cast to the most generic type, float64. It has no significant
 impact when the prediction function is contiguous.
 When it is not, the right type must be used. Example
-:ref:`l-example-discrepencies-float-double` gives more
-insights on that topic.
+` Issues when switching to float
+<https://onnx.ai/sklearn-onnx/auto_tutorial/plot_ebegin_float_double.html>`_
+gives more insights on that topic.
 
 Parallelization changes the order of computation. It is usually
 not significant but it may explain some weird discrepancies.
@@ -256,7 +263,9 @@ Looking in which interval a feature falls into. That's easy to do
 with :epkg:`numpy` but not so easy to do efficiently with ONNX.
 The fastest way is to use a TreeEnsembleRegressor, a binary search,
 which outputs the interval index. That's what this example
-implements: :ref:`example-woe-transformer`.
+implements: 
+`Converter for WOE
+<https://onnx.ai/sklearn-onnx/auto_tutorial/plot_woe_transformer.html>`_.
 
 Contribute
 ++++++++++
