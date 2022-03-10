@@ -1,0 +1,1355 @@
+
+.. _onnxruntimetrainingnbrst:
+
+==============================================
+Stochastic Gradient Descent on simple function
+==============================================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <onnxruntime_training_nb.ipynb>`, :downloadlink:`html <onnxruntime_training_nb2html.html>`, :download:`PDF <onnxruntime_training_nb.pdf>`, :download:`python <onnxruntime_training_nb.py>`, :downloadlink:`slides <onnxruntime_training_nb.slides.html>`, :githublink:`GitHub|_doc/notebooks/onnxruntime_training_nb.ipynb|*`
+
+
+`onnxruntime-training <https://github.com/microsoft/onnxruntime>`__ is
+an extension onnxruntime or more precisely the same library compiled
+with different settings. It provides a way to compute a gradient of a
+function defined by an ONNX graph.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+A simple problem
+----------------
+
+Let’s choose a simple regression problem defined by
+:math:`z = -1 - 2x + 3y + \frac{1}{2}x^2 -\frac{1}{3} y^2 +\epsilon` and
+we try to approximate by a function
+:math:`f(x,y) = a + bx + cy + dx^2 + ey^2`. Every coefficient is
+determined from an optimization problem solved with a stochastic
+gradient descent.
+
+.. code:: ipython3
+
+    from typing import Any
+    import numpy
+    import mlprodict.npy.numpy_onnx_impl as npnx
+    from mlprodict.npy import onnxnumpy_default, NDArray
+    
+    
+    @onnxnumpy_default
+    def fct(x: NDArray[(None, 2), numpy.float32]) -> NDArray[(None, 1), numpy.float32]:
+        coef_x = numpy.array([[-2, 3]], dtype=numpy.float32) 
+        coef_x2 = numpy.array([[0.5, -0.33333]], dtype=numpy.float32)
+        bias = numpy.array([-1], dtype=numpy.float32)
+        poly = x * coef_x + x * x * coef_x2
+        y = poly[:, 0] + poly[:, 1] + bias
+        return y.reshape((-1, 1))
+    
+    
+    x = numpy.array([[0, 0], [1, 0], [0, 1], [1, 1], [2, 2]], dtype=numpy.float32)
+    fct(x)
+
+
+
+
+.. parsed-literal::
+    array([[-1.        ],
+           [-2.5       ],
+           [ 1.6666701 ],
+           [ 0.16667008],
+           [ 1.6666799 ]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    %onnxview fct.to_onnx()
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M8f6b27c914ca4a3a93cfaf1a2e26fcdf-cont"><div id="M8f6b27c914ca4a3a93cfaf1a2e26fcdf" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  size=7;\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  x [shape=box color=red label=\"x\nfloat((0, 2))\" fontsize=10];\n\n  y [shape=box color=green label=\"y\nfloat((0, 1))\" fontsize=10];\n\n  init [shape=box label=\"init\nfloat32((1, 2))\n[[ 0.5     -0.33333]]\" fontsize=10];\n  init_1 [shape=box label=\"init_1\nfloat32((1, 2))\n[[-2.  3.]]\" fontsize=10];\n  init_2 [shape=box label=\"init_2\nint64((1,))\n[1]\" fontsize=10];\n  init_3 [shape=box label=\"init_3\nint64((1,))\n[2]\" fontsize=10];\n  init_5 [shape=box label=\"init_5\nint64((1,))\n[0]\" fontsize=10];\n  init_b10 [shape=box label=\"init_b10\nfloat32((1,))\n[-1.]\" fontsize=10];\n  init_b11 [shape=box label=\"init_b11\nint64((2,))\n[-1  1]\" fontsize=10];\n\n  out_mul_0 [shape=box label=\"out_mul_0\" fontsize=10];\n  _mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul)\" fontsize=10];\n  x -> _mul;\n  x -> _mul;\n  _mul -> out_mul_0;\n\n  out_mul_0_1 [shape=box label=\"out_mul_0_1\" fontsize=10];\n  _mul_1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1)\" fontsize=10];\n  out_mul_0 -> _mul_1;\n  init -> _mul_1;\n  _mul_1 -> out_mul_0_1;\n\n  out_mul_0_2 [shape=box label=\"out_mul_0_2\" fontsize=10];\n  _mul_2 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_2)\" fontsize=10];\n  x -> _mul_2;\n  init_1 -> _mul_2;\n  _mul_2 -> out_mul_0_2;\n\n  out_add_0 [shape=box label=\"out_add_0\" fontsize=10];\n  _add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add)\" fontsize=10];\n  out_mul_0_2 -> _add;\n  out_mul_0_1 -> _add;\n  _add -> out_add_0;\n\n  out_sli_0 [shape=box label=\"out_sli_0\" fontsize=10];\n  _slice [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice)\" fontsize=10];\n  out_add_0 -> _slice;\n  init_2 -> _slice;\n  init_3 -> _slice;\n  init_2 -> _slice;\n  _slice -> out_sli_0;\n\n  out_sli_0_1 [shape=box label=\"out_sli_0_1\" fontsize=10];\n  _slice_1 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice_1)\" fontsize=10];\n  out_add_0 -> _slice_1;\n  init_5 -> _slice_1;\n  init_2 -> _slice_1;\n  init_2 -> _slice_1;\n  _slice_1 -> out_sli_0_1;\n\n  out_squ_0 [shape=box label=\"out_squ_0\" fontsize=10];\n  _squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze)\" fontsize=10];\n  out_sli_0 -> _squeeze;\n  init_2 -> _squeeze;\n  _squeeze -> out_squ_0;\n\n  out_squ_0_1 [shape=box label=\"out_squ_0_1\" fontsize=10];\n  _squeeze_1 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze_1)\" fontsize=10];\n  out_sli_0_1 -> _squeeze_1;\n  init_2 -> _squeeze_1;\n  _squeeze_1 -> out_squ_0_1;\n\n  out_add_0_1 [shape=box label=\"out_add_0_1\" fontsize=10];\n  _add_1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_1)\" fontsize=10];\n  out_squ_0_1 -> _add_1;\n  out_squ_0 -> _add_1;\n  _add_1 -> out_add_0_1;\n\n  out_add_0_2 [shape=box label=\"out_add_0_2\" fontsize=10];\n  _add_2 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_2)\" fontsize=10];\n  out_add_0_1 -> _add_2;\n  init_b10 -> _add_2;\n  _add_2 -> out_add_0_2;\n\n  _reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_reshape)\" fontsize=10];\n  out_add_0_2 -> _reshape;\n  init_b11 -> _reshape;\n  _reshape -> y;\n}");
+    document.getElementById('M8f6b27c914ca4a3a93cfaf1a2e26fcdf').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from mlprodict.plotting.text_plot import onnx_simple_text_plot
+    print(onnx_simple_text_plot(fct.to_onnx()))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    init: name='init' type=dtype('float32') shape=(0,) -- array([ 0.5    , -0.33333], dtype=float32)
+    init: name='init_1' type=dtype('float32') shape=(0,) -- array([-2.,  3.], dtype=float32)
+    init: name='init_2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='init_3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    init: name='init_5' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='init_b10' type=dtype('float32') shape=(0,) -- array([-1.], dtype=float32)
+    init: name='init_b11' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    Mul(x, x) -> out_mul_0
+      Mul(out_mul_0, init) -> out_mul_0_1
+    Mul(x, init_1) -> out_mul_0_2
+      Add(out_mul_0_2, out_mul_0_1) -> out_add_0
+        Slice(out_add_0, init_2, init_3, init_2) -> out_sli_0
+          Squeeze(out_sli_0, init_2) -> out_squ_0
+        Slice(out_add_0, init_5, init_2, init_2) -> out_sli_0_1
+          Squeeze(out_sli_0_1, init_2) -> out_squ_0_1
+            Add(out_squ_0_1, out_squ_0) -> out_add_0_1
+              Add(out_add_0_1, init_b10) -> out_add_0_2
+                Reshape(out_add_0_2, init_b11) -> y
+    output: name='y' type=dtype('float32') shape=(0, 1)
+
+
+Gradient : retropropagation
+---------------------------
+
+Let’s look into the gradient.
+
+.. code:: ipython3
+
+    from onnxcustom.training.grad_helper import onnx_derivative, DerivativeOptions
+    
+    onx = fct.to_onnx()
+    grad = onnx_derivative(onx)
+    %onnxview grad
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M35735c6ae970406aafb74b702b5795a4-cont"><div id="M35735c6ae970406aafb74b702b5795a4" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  size=7;\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  x [shape=box color=red label=\"x\nfloat((0, 2))\" fontsize=10];\n  init [shape=box color=red label=\"init\nfloat((1, 2))\" fontsize=10];\n  init_1 [shape=box color=red label=\"init_1\nfloat((1, 2))\" fontsize=10];\n  init_b10 [shape=box color=red label=\"init_b10\nfloat((1,))\" fontsize=10];\n  y_grad [shape=box color=red label=\"y_grad\nfloat((0, 1))\" fontsize=10];\n\n  x_grad [shape=box color=green label=\"x_grad\nfloat((0, 2))\" fontsize=10];\n  init_grad [shape=box color=green label=\"init_grad\nfloat((1, 2))\" fontsize=10];\n  init_1_grad [shape=box color=green label=\"init_1_grad\nfloat((1, 2))\" fontsize=10];\n  init_b10_grad [shape=box color=green label=\"init_b10_grad\nfloat((1,))\" fontsize=10];\n\n  init_5 [shape=box label=\"init_5\nint64((1,))\n[0]\" fontsize=10];\n  init_2 [shape=box label=\"init_2\nint64((1,))\n[1]\" fontsize=10];\n  init_3 [shape=box label=\"init_3\nint64((1,))\n[2]\" fontsize=10];\n\n  out_mul_0 [shape=box label=\"out_mul_0\" fontsize=10];\n  _mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul)\" fontsize=10];\n  x -> _mul;\n  x -> _mul;\n  _mul -> out_mul_0;\n\n  out_mul_0_1 [shape=box label=\"out_mul_0_1\" fontsize=10];\n  _mul_1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1)\" fontsize=10];\n  out_mul_0 -> _mul_1;\n  init -> _mul_1;\n  _mul_1 -> out_mul_0_1;\n\n  out_mul_0_2 [shape=box label=\"out_mul_0_2\" fontsize=10];\n  _mul_2 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_2)\" fontsize=10];\n  x -> _mul_2;\n  init_1 -> _mul_2;\n  _mul_2 -> out_mul_0_2;\n\n  out_add_0 [shape=box label=\"out_add_0\" fontsize=10];\n  _add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add)\" fontsize=10];\n  out_mul_0_2 -> _add;\n  out_mul_0_1 -> _add;\n  _add -> out_add_0;\n\n  out_sli_0 [shape=box label=\"out_sli_0\" fontsize=10];\n  _slice [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice)\" fontsize=10];\n  out_add_0 -> _slice;\n  init_2 -> _slice;\n  init_3 -> _slice;\n  init_2 -> _slice;\n  _slice -> out_sli_0;\n\n  out_squ_0 [shape=box label=\"out_squ_0\" fontsize=10];\n  _squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze)\" fontsize=10];\n  out_sli_0 -> _squeeze;\n  init_2 -> _squeeze;\n  _squeeze -> out_squ_0;\n\n  out_sli_0_1 [shape=box label=\"out_sli_0_1\" fontsize=10];\n  _slice_1 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice_1)\" fontsize=10];\n  out_add_0 -> _slice_1;\n  init_5 -> _slice_1;\n  init_2 -> _slice_1;\n  init_2 -> _slice_1;\n  _slice_1 -> out_sli_0_1;\n\n  out_squ_0_1 [shape=box label=\"out_squ_0_1\" fontsize=10];\n  _squeeze_1 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze_1)\" fontsize=10];\n  out_sli_0_1 -> _squeeze_1;\n  init_2 -> _squeeze_1;\n  _squeeze_1 -> out_squ_0_1;\n\n  out_add_0_1 [shape=box label=\"out_add_0_1\" fontsize=10];\n  _add_1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_1)\" fontsize=10];\n  out_squ_0_1 -> _add_1;\n  out_squ_0 -> _add_1;\n  _add_1 -> out_add_0_1;\n\n  out_add_0_2 [shape=box label=\"out_add_0_2\" fontsize=10];\n  _add_2 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_2)\" fontsize=10];\n  out_add_0_1 -> _add_2;\n  init_b10 -> _add_2;\n  _add_2 -> out_add_0_2;\n\n  _reshape_Grad_x_shape [shape=box label=\"_reshape_Grad_x_shape\" fontsize=10];\n  _reshape_Grad_Shape_0 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_reshape_Grad_Shape_0)\" fontsize=10];\n  out_add_0_2 -> _reshape_Grad_Shape_0;\n  _reshape_Grad_Shape_0 -> _reshape_Grad_x_shape;\n\n  out_add_0_2_grad [shape=box label=\"out_add_0_2_grad\" fontsize=10];\n  _reshape_Grad_Reshape_1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_reshape_Grad_Reshape_1)\nallowzero=0\" fontsize=10];\n  y_grad -> _reshape_Grad_Reshape_1;\n  _reshape_Grad_x_shape -> _reshape_Grad_Reshape_1;\n  _reshape_Grad_Reshape_1 -> out_add_0_2_grad;\n\n  _add_2_Grad_Shape_init_b10 [shape=box label=\"_add_2_Grad_Shape_init_b10\" fontsize=10];\n  _add_2_Grad_Shape_init_b10_rhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_2_Grad_Shape_init_b10_rhs)\" fontsize=10];\n  init_b10 -> _add_2_Grad_Shape_init_b10_rhs;\n  _add_2_Grad_Shape_init_b10_rhs -> _add_2_Grad_Shape_init_b10;\n\n  _add_2_Grad_Shape_out_add_0_1 [shape=box label=\"_add_2_Grad_Shape_out_add_0_1\" fontsize=10];\n  _add_2_Grad_Shape_out_add_0_1_lhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_2_Grad_Shape_out_add_0_1_lhs)\" fontsize=10];\n  out_add_0_1 -> _add_2_Grad_Shape_out_add_0_1_lhs;\n  _add_2_Grad_Shape_out_add_0_1_lhs -> _add_2_Grad_Shape_out_add_0_1;\n\n  _add_2_Grad_ReduceAxes_out_add_0_1 [shape=box label=\"_add_2_Grad_ReduceAxes_out_add_0_1\" fontsize=10];\n  _add_2_Grad_ReduceAxes_init_b10 [shape=box label=\"_add_2_Grad_ReduceAxes_init_b10\" fontsize=10];\n  _add_2_Grad_BroadcastGradientArgs_2 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(_add_2_Grad_BroadcastGradientArgs_2)\" fontsize=10];\n  _add_2_Grad_Shape_out_add_0_1 -> _add_2_Grad_BroadcastGradientArgs_2;\n  _add_2_Grad_Shape_init_b10 -> _add_2_Grad_BroadcastGradientArgs_2;\n  _add_2_Grad_BroadcastGradientArgs_2 -> _add_2_Grad_ReduceAxes_out_add_0_1;\n  _add_2_Grad_BroadcastGradientArgs_2 -> _add_2_Grad_ReduceAxes_init_b10;\n\n  _add_2_Grad_ReduceSum_out_add_0_2_grad_for_out_add_0_1 [shape=box label=\"_add_2_Grad_ReduceSum_out_add_0_2_grad_for_out_add_0_1\" fontsize=10];\n  _add_2_Grad_ReduceSum_3 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_2_Grad_ReduceSum_3)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_2_grad -> _add_2_Grad_ReduceSum_3;\n  _add_2_Grad_ReduceAxes_out_add_0_1 -> _add_2_Grad_ReduceSum_3;\n  _add_2_Grad_ReduceSum_3 -> _add_2_Grad_ReduceSum_out_add_0_2_grad_for_out_add_0_1;\n\n  out_add_0_1_grad [shape=box label=\"out_add_0_1_grad\" fontsize=10];\n  _add_2_Grad_Reshape_4 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_2_Grad_Reshape_4)\nallowzero=0\" fontsize=10];\n  _add_2_Grad_ReduceSum_out_add_0_2_grad_for_out_add_0_1 -> _add_2_Grad_Reshape_4;\n  _add_2_Grad_Shape_out_add_0_1 -> _add_2_Grad_Reshape_4;\n  _add_2_Grad_Reshape_4 -> out_add_0_1_grad;\n\n  _add_1_Grad_Shape_out_squ_0 [shape=box label=\"_add_1_Grad_Shape_out_squ_0\" fontsize=10];\n  _add_1_Grad_Shape_out_squ_0_rhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_1_Grad_Shape_out_squ_0_rhs)\" fontsize=10];\n  out_squ_0 -> _add_1_Grad_Shape_out_squ_0_rhs;\n  _add_1_Grad_Shape_out_squ_0_rhs -> _add_1_Grad_Shape_out_squ_0;\n\n  _add_1_Grad_Shape_out_squ_0_1 [shape=box label=\"_add_1_Grad_Shape_out_squ_0_1\" fontsize=10];\n  _add_1_Grad_Shape_out_squ_0_1_lhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_1_Grad_Shape_out_squ_0_1_lhs)\" fontsize=10];\n  out_squ_0_1 -> _add_1_Grad_Shape_out_squ_0_1_lhs;\n  _add_1_Grad_Shape_out_squ_0_1_lhs -> _add_1_Grad_Shape_out_squ_0_1;\n\n  _add_1_Grad_ReduceAxes_out_squ_0_1 [shape=box label=\"_add_1_Grad_ReduceAxes_out_squ_0_1\" fontsize=10];\n  _add_1_Grad_ReduceAxes_out_squ_0 [shape=box label=\"_add_1_Grad_ReduceAxes_out_squ_0\" fontsize=10];\n  _add_1_Grad_BroadcastGradientArgs_2 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(_add_1_Grad_BroadcastGradientArgs_2)\" fontsize=10];\n  _add_1_Grad_Shape_out_squ_0_1 -> _add_1_Grad_BroadcastGradientArgs_2;\n  _add_1_Grad_Shape_out_squ_0 -> _add_1_Grad_BroadcastGradientArgs_2;\n  _add_1_Grad_BroadcastGradientArgs_2 -> _add_1_Grad_ReduceAxes_out_squ_0_1;\n  _add_1_Grad_BroadcastGradientArgs_2 -> _add_1_Grad_ReduceAxes_out_squ_0;\n\n  _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0 [shape=box label=\"_add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0\" fontsize=10];\n  _add_1_Grad_ReduceSum_5 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_1_Grad_ReduceSum_5)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_1_grad -> _add_1_Grad_ReduceSum_5;\n  _add_1_Grad_ReduceAxes_out_squ_0 -> _add_1_Grad_ReduceSum_5;\n  _add_1_Grad_ReduceSum_5 -> _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0;\n\n  out_squ_0_grad [shape=box label=\"out_squ_0_grad\" fontsize=10];\n  _add_1_Grad_Reshape_6 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_1_Grad_Reshape_6)\nallowzero=0\" fontsize=10];\n  _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0 -> _add_1_Grad_Reshape_6;\n  _add_1_Grad_Shape_out_squ_0 -> _add_1_Grad_Reshape_6;\n  _add_1_Grad_Reshape_6 -> out_squ_0_grad;\n\n  out_sli_0_grad [shape=box label=\"out_sli_0_grad\" fontsize=10];\n  _squeeze_Grad_Unsqueeze_0 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(_squeeze_Grad_Unsqueeze_0)\" fontsize=10];\n  out_squ_0_grad -> _squeeze_Grad_Unsqueeze_0;\n  init_2 -> _squeeze_Grad_Unsqueeze_0;\n  _squeeze_Grad_Unsqueeze_0 -> out_sli_0_grad;\n\n  _slice_Grad_I0_shape [shape=box label=\"_slice_Grad_I0_shape\" fontsize=10];\n  _slice_Grad_Shape_0 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_slice_Grad_Shape_0)\" fontsize=10];\n  out_add_0 -> _slice_Grad_Shape_0;\n  _slice_Grad_Shape_0 -> _slice_Grad_I0_shape;\n\n  out_add_0_grad_1 [shape=box label=\"out_add_0_grad_1\" fontsize=10];\n  _slice_Grad_SliceGrad_1 [shape=box style=\"filled,rounded\" color=orange label=\"SliceGrad\n(_slice_Grad_SliceGrad_1)\" fontsize=10];\n  out_sli_0_grad -> _slice_Grad_SliceGrad_1;\n  _slice_Grad_I0_shape -> _slice_Grad_SliceGrad_1;\n  init_2 -> _slice_Grad_SliceGrad_1;\n  init_3 -> _slice_Grad_SliceGrad_1;\n  init_2 -> _slice_Grad_SliceGrad_1;\n  _slice_Grad_SliceGrad_1 -> out_add_0_grad_1;\n\n  _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0_1 [shape=box label=\"_add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0_1\" fontsize=10];\n  _add_1_Grad_ReduceSum_3 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_1_Grad_ReduceSum_3)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_1_grad -> _add_1_Grad_ReduceSum_3;\n  _add_1_Grad_ReduceAxes_out_squ_0_1 -> _add_1_Grad_ReduceSum_3;\n  _add_1_Grad_ReduceSum_3 -> _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0_1;\n\n  out_squ_0_1_grad [shape=box label=\"out_squ_0_1_grad\" fontsize=10];\n  _add_1_Grad_Reshape_4 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_1_Grad_Reshape_4)\nallowzero=0\" fontsize=10];\n  _add_1_Grad_ReduceSum_out_add_0_1_grad_for_out_squ_0_1 -> _add_1_Grad_Reshape_4;\n  _add_1_Grad_Shape_out_squ_0_1 -> _add_1_Grad_Reshape_4;\n  _add_1_Grad_Reshape_4 -> out_squ_0_1_grad;\n\n  out_sli_0_1_grad [shape=box label=\"out_sli_0_1_grad\" fontsize=10];\n  _squeeze_1_Grad_Unsqueeze_0 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(_squeeze_1_Grad_Unsqueeze_0)\" fontsize=10];\n  out_squ_0_1_grad -> _squeeze_1_Grad_Unsqueeze_0;\n  init_2 -> _squeeze_1_Grad_Unsqueeze_0;\n  _squeeze_1_Grad_Unsqueeze_0 -> out_sli_0_1_grad;\n\n  out_add_0_grad_0 [shape=box label=\"out_add_0_grad_0\" fontsize=10];\n  _slice_1_Grad_SliceGrad_1 [shape=box style=\"filled,rounded\" color=orange label=\"SliceGrad\n(_slice_1_Grad_SliceGrad_1)\" fontsize=10];\n  out_sli_0_1_grad -> _slice_1_Grad_SliceGrad_1;\n  _slice_Grad_I0_shape -> _slice_1_Grad_SliceGrad_1;\n  init_5 -> _slice_1_Grad_SliceGrad_1;\n  init_2 -> _slice_1_Grad_SliceGrad_1;\n  init_2 -> _slice_1_Grad_SliceGrad_1;\n  _slice_1_Grad_SliceGrad_1 -> out_add_0_grad_0;\n\n  out_add_0_grad [shape=box label=\"out_add_0_grad\" fontsize=10];\n  AccumulateGrad_out_add_0_grad [shape=box style=\"filled,rounded\" color=orange label=\"Sum\n(AccumulateGrad_out_add_0_grad)\" fontsize=10];\n  out_add_0_grad_0 -> AccumulateGrad_out_add_0_grad;\n  out_add_0_grad_1 -> AccumulateGrad_out_add_0_grad;\n  AccumulateGrad_out_add_0_grad -> out_add_0_grad;\n\n  _add_Grad_Shape_out_mul_0_1 [shape=box label=\"_add_Grad_Shape_out_mul_0_1\" fontsize=10];\n  _add_Grad_Shape_out_mul_0_1_rhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_Grad_Shape_out_mul_0_1_rhs)\" fontsize=10];\n  out_mul_0_1 -> _add_Grad_Shape_out_mul_0_1_rhs;\n  _add_Grad_Shape_out_mul_0_1_rhs -> _add_Grad_Shape_out_mul_0_1;\n\n  _add_Grad_Shape_out_mul_0_2 [shape=box label=\"_add_Grad_Shape_out_mul_0_2\" fontsize=10];\n  _add_Grad_Shape_out_mul_0_2_lhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_add_Grad_Shape_out_mul_0_2_lhs)\" fontsize=10];\n  out_mul_0_2 -> _add_Grad_Shape_out_mul_0_2_lhs;\n  _add_Grad_Shape_out_mul_0_2_lhs -> _add_Grad_Shape_out_mul_0_2;\n\n  _add_Grad_ReduceAxes_out_mul_0_2 [shape=box label=\"_add_Grad_ReduceAxes_out_mul_0_2\" fontsize=10];\n  _add_Grad_ReduceAxes_out_mul_0_1 [shape=box label=\"_add_Grad_ReduceAxes_out_mul_0_1\" fontsize=10];\n  _add_Grad_BroadcastGradientArgs_2 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(_add_Grad_BroadcastGradientArgs_2)\" fontsize=10];\n  _add_Grad_Shape_out_mul_0_2 -> _add_Grad_BroadcastGradientArgs_2;\n  _add_Grad_Shape_out_mul_0_1 -> _add_Grad_BroadcastGradientArgs_2;\n  _add_Grad_BroadcastGradientArgs_2 -> _add_Grad_ReduceAxes_out_mul_0_2;\n  _add_Grad_BroadcastGradientArgs_2 -> _add_Grad_ReduceAxes_out_mul_0_1;\n\n  _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_1 [shape=box label=\"_add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_1\" fontsize=10];\n  _add_Grad_ReduceSum_5 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_Grad_ReduceSum_5)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_grad -> _add_Grad_ReduceSum_5;\n  _add_Grad_ReduceAxes_out_mul_0_1 -> _add_Grad_ReduceSum_5;\n  _add_Grad_ReduceSum_5 -> _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_1;\n\n  out_mul_0_1_grad [shape=box label=\"out_mul_0_1_grad\" fontsize=10];\n  _add_Grad_Reshape_6 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_Grad_Reshape_6)\nallowzero=0\" fontsize=10];\n  _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_1 -> _add_Grad_Reshape_6;\n  _add_Grad_Shape_out_mul_0_1 -> _add_Grad_Reshape_6;\n  _add_Grad_Reshape_6 -> out_mul_0_1_grad;\n\n  _mul_1_Grad_PreReduceGrad0 [shape=box label=\"_mul_1_Grad_PreReduceGrad0\" fontsize=10];\n  _mul_1_Grad_Mul_3 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1_Grad_Mul_3)\" fontsize=10];\n  out_mul_0_1_grad -> _mul_1_Grad_Mul_3;\n  init -> _mul_1_Grad_Mul_3;\n  _mul_1_Grad_Mul_3 -> _mul_1_Grad_PreReduceGrad0;\n\n  _mul_1_Grad_Shape_init [shape=box label=\"_mul_1_Grad_Shape_init\" fontsize=10];\n  _mul_1_Grad_Shape_init_rhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_mul_1_Grad_Shape_init_rhs)\" fontsize=10];\n  init -> _mul_1_Grad_Shape_init_rhs;\n  _mul_1_Grad_Shape_init_rhs -> _mul_1_Grad_Shape_init;\n\n  _mul_1_Grad_Shape_out_mul_0 [shape=box label=\"_mul_1_Grad_Shape_out_mul_0\" fontsize=10];\n  _mul_1_Grad_Shape_out_mul_0_lhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_mul_1_Grad_Shape_out_mul_0_lhs)\" fontsize=10];\n  out_mul_0 -> _mul_1_Grad_Shape_out_mul_0_lhs;\n  _mul_1_Grad_Shape_out_mul_0_lhs -> _mul_1_Grad_Shape_out_mul_0;\n\n  _mul_1_Grad_ReduceAxes_out_mul_0 [shape=box label=\"_mul_1_Grad_ReduceAxes_out_mul_0\" fontsize=10];\n  _mul_1_Grad_ReduceAxes_init [shape=box label=\"_mul_1_Grad_ReduceAxes_init\" fontsize=10];\n  _mul_1_Grad_BroadcastGradientArgs_2 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(_mul_1_Grad_BroadcastGradientArgs_2)\" fontsize=10];\n  _mul_1_Grad_Shape_out_mul_0 -> _mul_1_Grad_BroadcastGradientArgs_2;\n  _mul_1_Grad_Shape_init -> _mul_1_Grad_BroadcastGradientArgs_2;\n  _mul_1_Grad_BroadcastGradientArgs_2 -> _mul_1_Grad_ReduceAxes_out_mul_0;\n  _mul_1_Grad_BroadcastGradientArgs_2 -> _mul_1_Grad_ReduceAxes_init;\n\n  _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad0_for_out_mul_0 [shape=box label=\"_mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad0_for_out_mul_0\" fontsize=10];\n  _mul_1_Grad_ReduceSum_4 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_mul_1_Grad_ReduceSum_4)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  _mul_1_Grad_PreReduceGrad0 -> _mul_1_Grad_ReduceSum_4;\n  _mul_1_Grad_ReduceAxes_out_mul_0 -> _mul_1_Grad_ReduceSum_4;\n  _mul_1_Grad_ReduceSum_4 -> _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad0_for_out_mul_0;\n\n  out_mul_0_grad [shape=box label=\"out_mul_0_grad\" fontsize=10];\n  _mul_1_Grad_Reshape_5 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_mul_1_Grad_Reshape_5)\nallowzero=0\" fontsize=10];\n  _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad0_for_out_mul_0 -> _mul_1_Grad_Reshape_5;\n  _mul_1_Grad_Shape_out_mul_0 -> _mul_1_Grad_Reshape_5;\n  _mul_1_Grad_Reshape_5 -> out_mul_0_grad;\n\n  x_grad_2 [shape=box label=\"x_grad_2\" fontsize=10];\n  _mul_Grad_Mul_1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_Grad_Mul_1)\" fontsize=10];\n  out_mul_0_grad -> _mul_Grad_Mul_1;\n  x -> _mul_Grad_Mul_1;\n  _mul_Grad_Mul_1 -> x_grad_2;\n\n  _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_2 [shape=box label=\"_add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_2\" fontsize=10];\n  _add_Grad_ReduceSum_3 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_Grad_ReduceSum_3)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_grad -> _add_Grad_ReduceSum_3;\n  _add_Grad_ReduceAxes_out_mul_0_2 -> _add_Grad_ReduceSum_3;\n  _add_Grad_ReduceSum_3 -> _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_2;\n\n  out_mul_0_2_grad [shape=box label=\"out_mul_0_2_grad\" fontsize=10];\n  _add_Grad_Reshape_4 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_Grad_Reshape_4)\nallowzero=0\" fontsize=10];\n  _add_Grad_ReduceSum_out_add_0_grad_for_out_mul_0_2 -> _add_Grad_Reshape_4;\n  _add_Grad_Shape_out_mul_0_2 -> _add_Grad_Reshape_4;\n  _add_Grad_Reshape_4 -> out_mul_0_2_grad;\n\n  _mul_2_Grad_PreReduceGrad0 [shape=box label=\"_mul_2_Grad_PreReduceGrad0\" fontsize=10];\n  _mul_2_Grad_Mul_3 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_2_Grad_Mul_3)\" fontsize=10];\n  out_mul_0_2_grad -> _mul_2_Grad_Mul_3;\n  init_1 -> _mul_2_Grad_Mul_3;\n  _mul_2_Grad_Mul_3 -> _mul_2_Grad_PreReduceGrad0;\n\n  _mul_2_Grad_Shape_init_1 [shape=box label=\"_mul_2_Grad_Shape_init_1\" fontsize=10];\n  _mul_2_Grad_Shape_init_1_rhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_mul_2_Grad_Shape_init_1_rhs)\" fontsize=10];\n  init_1 -> _mul_2_Grad_Shape_init_1_rhs;\n  _mul_2_Grad_Shape_init_1_rhs -> _mul_2_Grad_Shape_init_1;\n\n  _mul_2_Grad_Shape_x [shape=box label=\"_mul_2_Grad_Shape_x\" fontsize=10];\n  _mul_2_Grad_Shape_x_lhs [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_mul_2_Grad_Shape_x_lhs)\" fontsize=10];\n  x -> _mul_2_Grad_Shape_x_lhs;\n  _mul_2_Grad_Shape_x_lhs -> _mul_2_Grad_Shape_x;\n\n  _mul_2_Grad_ReduceAxes_x [shape=box label=\"_mul_2_Grad_ReduceAxes_x\" fontsize=10];\n  _mul_2_Grad_ReduceAxes_init_1 [shape=box label=\"_mul_2_Grad_ReduceAxes_init_1\" fontsize=10];\n  _mul_2_Grad_BroadcastGradientArgs_2 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(_mul_2_Grad_BroadcastGradientArgs_2)\" fontsize=10];\n  _mul_2_Grad_Shape_x -> _mul_2_Grad_BroadcastGradientArgs_2;\n  _mul_2_Grad_Shape_init_1 -> _mul_2_Grad_BroadcastGradientArgs_2;\n  _mul_2_Grad_BroadcastGradientArgs_2 -> _mul_2_Grad_ReduceAxes_x;\n  _mul_2_Grad_BroadcastGradientArgs_2 -> _mul_2_Grad_ReduceAxes_init_1;\n\n  _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad0_for_x [shape=box label=\"_mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad0_for_x\" fontsize=10];\n  _mul_2_Grad_ReduceSum_4 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_mul_2_Grad_ReduceSum_4)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  _mul_2_Grad_PreReduceGrad0 -> _mul_2_Grad_ReduceSum_4;\n  _mul_2_Grad_ReduceAxes_x -> _mul_2_Grad_ReduceSum_4;\n  _mul_2_Grad_ReduceSum_4 -> _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad0_for_x;\n\n  x_grad_0 [shape=box label=\"x_grad_0\" fontsize=10];\n  _mul_2_Grad_Reshape_5 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_mul_2_Grad_Reshape_5)\nallowzero=0\" fontsize=10];\n  _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad0_for_x -> _mul_2_Grad_Reshape_5;\n  _mul_2_Grad_Shape_x -> _mul_2_Grad_Reshape_5;\n  _mul_2_Grad_Reshape_5 -> x_grad_0;\n\n  AccumulateGrad_x_grad [shape=box style=\"filled,rounded\" color=orange label=\"Sum\n(AccumulateGrad_x_grad)\" fontsize=10];\n  x_grad_0 -> AccumulateGrad_x_grad;\n  x_grad_2 -> AccumulateGrad_x_grad;\n  x_grad_2 -> AccumulateGrad_x_grad;\n  AccumulateGrad_x_grad -> x_grad;\n\n  _add_2_Grad_ReduceSum_out_add_0_2_grad_for_init_b10 [shape=box label=\"_add_2_Grad_ReduceSum_out_add_0_2_grad_for_init_b10\" fontsize=10];\n  _add_2_Grad_ReduceSum_5 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_add_2_Grad_ReduceSum_5)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  out_add_0_2_grad -> _add_2_Grad_ReduceSum_5;\n  _add_2_Grad_ReduceAxes_init_b10 -> _add_2_Grad_ReduceSum_5;\n  _add_2_Grad_ReduceSum_5 -> _add_2_Grad_ReduceSum_out_add_0_2_grad_for_init_b10;\n\n  _add_2_Grad_Reshape_6 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_add_2_Grad_Reshape_6)\nallowzero=0\" fontsize=10];\n  _add_2_Grad_ReduceSum_out_add_0_2_grad_for_init_b10 -> _add_2_Grad_Reshape_6;\n  _add_2_Grad_Shape_init_b10 -> _add_2_Grad_Reshape_6;\n  _add_2_Grad_Reshape_6 -> init_b10_grad;\n\n  _mul_1_Grad_PreReduceGrad1 [shape=box label=\"_mul_1_Grad_PreReduceGrad1\" fontsize=10];\n  _mul_1_Grad_Mul_6 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1_Grad_Mul_6)\" fontsize=10];\n  out_mul_0_1_grad -> _mul_1_Grad_Mul_6;\n  out_mul_0 -> _mul_1_Grad_Mul_6;\n  _mul_1_Grad_Mul_6 -> _mul_1_Grad_PreReduceGrad1;\n\n  _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad1_for_init [shape=box label=\"_mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad1_for_init\" fontsize=10];\n  _mul_1_Grad_ReduceSum_7 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_mul_1_Grad_ReduceSum_7)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  _mul_1_Grad_PreReduceGrad1 -> _mul_1_Grad_ReduceSum_7;\n  _mul_1_Grad_ReduceAxes_init -> _mul_1_Grad_ReduceSum_7;\n  _mul_1_Grad_ReduceSum_7 -> _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad1_for_init;\n\n  _mul_1_Grad_Reshape_8 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_mul_1_Grad_Reshape_8)\nallowzero=0\" fontsize=10];\n  _mul_1_Grad_ReduceSum__mul_1_Grad_PreReduceGrad1_for_init -> _mul_1_Grad_Reshape_8;\n  _mul_1_Grad_Shape_init -> _mul_1_Grad_Reshape_8;\n  _mul_1_Grad_Reshape_8 -> init_grad;\n\n  _mul_2_Grad_PreReduceGrad1 [shape=box label=\"_mul_2_Grad_PreReduceGrad1\" fontsize=10];\n  _mul_2_Grad_Mul_6 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_2_Grad_Mul_6)\" fontsize=10];\n  out_mul_0_2_grad -> _mul_2_Grad_Mul_6;\n  x -> _mul_2_Grad_Mul_6;\n  _mul_2_Grad_Mul_6 -> _mul_2_Grad_PreReduceGrad1;\n\n  _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad1_for_init_1 [shape=box label=\"_mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad1_for_init_1\" fontsize=10];\n  _mul_2_Grad_ReduceSum_7 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(_mul_2_Grad_ReduceSum_7)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  _mul_2_Grad_PreReduceGrad1 -> _mul_2_Grad_ReduceSum_7;\n  _mul_2_Grad_ReduceAxes_init_1 -> _mul_2_Grad_ReduceSum_7;\n  _mul_2_Grad_ReduceSum_7 -> _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad1_for_init_1;\n\n  _mul_2_Grad_Reshape_8 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_mul_2_Grad_Reshape_8)\nallowzero=0\" fontsize=10];\n  _mul_2_Grad_ReduceSum__mul_2_Grad_PreReduceGrad1_for_init_1 -> _mul_2_Grad_Reshape_8;\n  _mul_2_Grad_Shape_init_1 -> _mul_2_Grad_Reshape_8;\n  _mul_2_Grad_Reshape_8 -> init_1_grad;\n}");
+    document.getElementById('M35735c6ae970406aafb74b702b5795a4').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from mlprodict.plotting.text_plot import onnx_text_plot_io, onnx_simple_text_plot
+    print(onnx_text_plot_io(grad))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    opset: domain='com.microsoft.nchwc' version=1
+    opset: domain='ai.onnx.ml' version=2
+    opset: domain='com.ms.internal.nhwc' version=1
+    opset: domain='ai.onnx.training' version=1
+    opset: domain='ai.onnx.preview.training' version=1
+    opset: domain='com.microsoft' version=1
+    opset: domain='com.microsoft.experimental' version=1
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    input: name='init' type=dtype('float32') shape=(1, 2)
+    input: name='init_1' type=dtype('float32') shape=(1, 2)
+    input: name='init_b10' type=dtype('float32') shape=(1,)
+    input: name='y_grad' type=dtype('float32') shape=(0, 1)
+    init: name='init_5' type=dtype('int64') shape=(0,)
+    init: name='init_2' type=dtype('int64') shape=(0,)
+    init: name='init_3' type=dtype('int64') shape=(0,)
+    output: name='x_grad' type=dtype('float32') shape=(0, 2)
+    output: name='init_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_1_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_b10_grad' type=dtype('float32') shape=(1,)
+
+
+.. code:: ipython3
+
+    from mlprodict.onnx_tools.onnx_manipulations import onnx_rename_names
+    renamed = onnx_rename_names(grad)
+
+.. code:: ipython3
+
+    print(onnx_simple_text_plot(renamed))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    opset: domain='com.microsoft.nchwc' version=1
+    opset: domain='ai.onnx.ml' version=2
+    opset: domain='com.ms.internal.nhwc' version=1
+    opset: domain='ai.onnx.training' version=1
+    opset: domain='ai.onnx.preview.training' version=1
+    opset: domain='com.microsoft' version=1
+    opset: domain='com.microsoft.experimental' version=1
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    input: name='init' type=dtype('float32') shape=(1, 2)
+    input: name='init_1' type=dtype('float32') shape=(1, 2)
+    input: name='init_b10' type=dtype('float32') shape=(1,)
+    input: name='y_grad' type=dtype('float32') shape=(0, 1)
+    init: name='i0' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='i1' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='i2' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    Mul(x, x) -> r0
+      Mul(r0, init) -> r1
+        Shape(r1) -> r32
+    Mul(x, init_1) -> r2
+      Add(r2, r1) -> r3
+        Slice(r3, i1, i2, i1) -> r4
+          Squeeze(r4, i1) -> r5
+            Shape(r5) -> r18
+        Slice(r3, i0, i1, i1) -> r6
+          Squeeze(r6, i1) -> r7
+            Add(r7, r5) -> r8
+              Add(r8, init_b10) -> r9
+                Shape(r9) -> r10
+                  Reshape(y_grad, r10, allowzero=0) -> r11
+    Shape(init_b10) -> r12
+    Shape(r8) -> r13
+      BroadcastGradientArgs(r13, r12) -> r14, r15
+        ReduceSum(r11, r14, keepdims=1, noop_with_empty_axes=1) -> r16
+      Reshape(r16, r13, allowzero=0) -> r17
+    Shape(r7) -> r19
+      BroadcastGradientArgs(r19, r18) -> r20, r21
+        ReduceSum(r17, r21, keepdims=1, noop_with_empty_axes=1) -> r22
+          Reshape(r22, r18, allowzero=0) -> r23
+            Unsqueeze(r23, i1) -> r24
+        Shape(r3) -> r25
+          SliceGrad(r24, r25, i1, i2, i1) -> r26
+        ReduceSum(r17, r20, keepdims=1, noop_with_empty_axes=1) -> r27
+      Reshape(r27, r19, allowzero=0) -> r28
+        Unsqueeze(r28, i1) -> r29
+          SliceGrad(r29, r25, i0, i1, i1) -> r30
+            Sum(r30, r26) -> r31
+      Shape(r2) -> r33
+        BroadcastGradientArgs(r33, r32) -> r34, r35
+          ReduceSum(r31, r35, keepdims=1, noop_with_empty_axes=1) -> r36
+          Reshape(r36, r32, allowzero=0) -> r37
+            Mul(r37, init) -> r38
+    Shape(init) -> r39
+    Shape(r0) -> r40
+      BroadcastGradientArgs(r40, r39) -> r41, r42
+        ReduceSum(r38, r41, keepdims=1, noop_with_empty_axes=1) -> r43
+      Reshape(r43, r40, allowzero=0) -> r44
+        Mul(r44, x) -> r45
+    ReduceSum(r31, r34, keepdims=1, noop_with_empty_axes=1) -> r46
+      Reshape(r46, r33, allowzero=0) -> r47
+        Mul(r47, init_1) -> r48
+    Shape(init_1) -> r49
+    Shape(x) -> r50
+      BroadcastGradientArgs(r50, r49) -> r51, r52
+        ReduceSum(r48, r51, keepdims=1, noop_with_empty_axes=1) -> r53
+      Reshape(r53, r50, allowzero=0) -> r54
+        Sum(r54, r45, r45) -> x_grad
+    ReduceSum(r11, r15, keepdims=1, noop_with_empty_axes=1) -> r55
+      Reshape(r55, r12, allowzero=0) -> init_b10_grad
+    Mul(r37, r0) -> r56
+      ReduceSum(r56, r42, keepdims=1, noop_with_empty_axes=1) -> r57
+      Reshape(r57, r39, allowzero=0) -> init_grad
+    Mul(r47, x) -> r58
+      ReduceSum(r58, r52, keepdims=1, noop_with_empty_axes=1) -> r59
+      Reshape(r59, r49, allowzero=0) -> init_1_grad
+    output: name='x_grad' type=dtype('float32') shape=(0, 2)
+    output: name='init_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_1_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_b10_grad' type=dtype('float32') shape=(1,)
+
+
+.. code:: ipython3
+
+    set(n.op_type for n in grad.graph.node)
+
+
+
+
+.. parsed-literal::
+    {'Add',
+     'BroadcastGradientArgs',
+     'Mul',
+     'ReduceSum',
+     'Reshape',
+     'Shape',
+     'Slice',
+     'SliceGrad',
+     'Squeeze',
+     'Sum',
+     'Unsqueeze'}
+
+
+
+The resulting graph assumes the gradient for ``y_grad`` is known. That’s
+the case for a layer in a neural network. In our case, this gradient
+should come from the loss. Let’s add it to the graph.
+
+Add a square loss
+-----------------
+
+.. code:: ipython3
+
+    from onnxcustom.utils.orttraining_helper import add_loss_output
+    onx_loss = add_loss_output(onx)
+    
+    %onnxview onx_loss
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Me642ba63bf8e494d8c8e236c8f867838-cont"><div id="Me642ba63bf8e494d8c8e236c8f867838" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  size=7;\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  x [shape=box color=red label=\"x\nfloat((0, 2))\" fontsize=10];\n  label [shape=box color=red label=\"label\nfloat((0, 1))\" fontsize=10];\n\n  loss [shape=box color=green label=\"loss\nfloat((1, 1))\" fontsize=10];\n  y [shape=box color=green label=\"y\nfloat((0, 1))\" fontsize=10];\n\n  init [shape=box label=\"init\nfloat32((1, 2))\n[[ 0.5     -0.33333]]\" fontsize=10];\n  init_1 [shape=box label=\"init_1\nfloat32((1, 2))\n[[-2.  3.]]\" fontsize=10];\n  init_2 [shape=box label=\"init_2\nint64((1,))\n[1]\" fontsize=10];\n  init_3 [shape=box label=\"init_3\nint64((1,))\n[2]\" fontsize=10];\n  init_5 [shape=box label=\"init_5\nint64((1,))\n[0]\" fontsize=10];\n  init_b10 [shape=box label=\"init_b10\nfloat32((1,))\n[-1.]\" fontsize=10];\n  init_b11 [shape=box label=\"init_b11\nint64((2,))\n[-1  1]\" fontsize=10];\n\n  out_mul_0 [shape=box label=\"out_mul_0\" fontsize=10];\n  _mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul)\" fontsize=10];\n  x -> _mul;\n  x -> _mul;\n  _mul -> out_mul_0;\n\n  out_mul_0_1 [shape=box label=\"out_mul_0_1\" fontsize=10];\n  _mul_1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1)\" fontsize=10];\n  out_mul_0 -> _mul_1;\n  init -> _mul_1;\n  _mul_1 -> out_mul_0_1;\n\n  out_mul_0_2 [shape=box label=\"out_mul_0_2\" fontsize=10];\n  _mul_2 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_2)\" fontsize=10];\n  x -> _mul_2;\n  init_1 -> _mul_2;\n  _mul_2 -> out_mul_0_2;\n\n  out_add_0 [shape=box label=\"out_add_0\" fontsize=10];\n  _add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add)\" fontsize=10];\n  out_mul_0_2 -> _add;\n  out_mul_0_1 -> _add;\n  _add -> out_add_0;\n\n  out_sli_0 [shape=box label=\"out_sli_0\" fontsize=10];\n  _slice [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice)\" fontsize=10];\n  out_add_0 -> _slice;\n  init_2 -> _slice;\n  init_3 -> _slice;\n  init_2 -> _slice;\n  _slice -> out_sli_0;\n\n  out_sli_0_1 [shape=box label=\"out_sli_0_1\" fontsize=10];\n  _slice_1 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice_1)\" fontsize=10];\n  out_add_0 -> _slice_1;\n  init_5 -> _slice_1;\n  init_2 -> _slice_1;\n  init_2 -> _slice_1;\n  _slice_1 -> out_sli_0_1;\n\n  out_squ_0 [shape=box label=\"out_squ_0\" fontsize=10];\n  _squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze)\" fontsize=10];\n  out_sli_0 -> _squeeze;\n  init_2 -> _squeeze;\n  _squeeze -> out_squ_0;\n\n  out_squ_0_1 [shape=box label=\"out_squ_0_1\" fontsize=10];\n  _squeeze_1 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze_1)\" fontsize=10];\n  out_sli_0_1 -> _squeeze_1;\n  init_2 -> _squeeze_1;\n  _squeeze_1 -> out_squ_0_1;\n\n  out_add_0_1 [shape=box label=\"out_add_0_1\" fontsize=10];\n  _add_1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_1)\" fontsize=10];\n  out_squ_0_1 -> _add_1;\n  out_squ_0 -> _add_1;\n  _add_1 -> out_add_0_1;\n\n  out_add_0_2 [shape=box label=\"out_add_0_2\" fontsize=10];\n  _add_2 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_2)\" fontsize=10];\n  out_add_0_1 -> _add_2;\n  init_b10 -> _add_2;\n  _add_2 -> out_add_0_2;\n\n  _reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_reshape)\" fontsize=10];\n  out_add_0_2 -> _reshape;\n  init_b11 -> _reshape;\n  _reshape -> y;\n\n  loss_diff [shape=box label=\"loss_diff\" fontsize=10];\n  Sub [shape=box style=\"filled,rounded\" color=orange label=\"Sub\n(Sub)\" fontsize=10];\n  y -> Sub;\n  label -> Sub;\n  Sub -> loss_diff;\n\n  loss_diff_2 [shape=box label=\"loss_diff_2\" fontsize=10];\n  Mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(Mul)\" fontsize=10];\n  loss_diff -> Mul;\n  loss_diff -> Mul;\n  Mul -> loss_diff_2;\n\n  ReduceSum [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum)\" fontsize=10];\n  loss_diff_2 -> ReduceSum;\n  ReduceSum -> loss;\n}");
+    document.getElementById('Me642ba63bf8e494d8c8e236c8f867838').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    print(onnx_simple_text_plot(onx_loss))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    input: name='label' type=dtype('float32') shape=(0, 1)
+    init: name='init' type=dtype('float32') shape=(0,) -- array([ 0.5    , -0.33333], dtype=float32)
+    init: name='init_1' type=dtype('float32') shape=(0,) -- array([-2.,  3.], dtype=float32)
+    init: name='init_2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='init_3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    init: name='init_5' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='init_b10' type=dtype('float32') shape=(0,) -- array([-1.], dtype=float32)
+    init: name='init_b11' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    Mul(x, x) -> out_mul_0
+      Mul(out_mul_0, init) -> out_mul_0_1
+    Mul(x, init_1) -> out_mul_0_2
+      Add(out_mul_0_2, out_mul_0_1) -> out_add_0
+        Slice(out_add_0, init_2, init_3, init_2) -> out_sli_0
+          Squeeze(out_sli_0, init_2) -> out_squ_0
+        Slice(out_add_0, init_5, init_2, init_2) -> out_sli_0_1
+          Squeeze(out_sli_0_1, init_2) -> out_squ_0_1
+            Add(out_squ_0_1, out_squ_0) -> out_add_0_1
+              Add(out_add_0_1, init_b10) -> out_add_0_2
+                Reshape(out_add_0_2, init_b11) -> y
+                  Sub(y, label) -> loss_diff
+                    Mul(loss_diff, loss_diff) -> loss_diff_2
+                      ReduceSum(loss_diff_2) -> loss
+    output: name='loss' type=dtype('float32') shape=(1, 1)
+    output: name='y' type=dtype('float32') shape=(0, 1)
+
+
+The graph has 5 inputs: ``x``, ``label`` or the expected target, and the
+weights and two outputs, the function output and the loss. We don’t need
+the first one so we remove it.
+
+.. code:: ipython3
+
+    from mlprodict.onnx_tools.onnx_manipulations import select_model_inputs_outputs
+    
+    onx_loss_only = select_model_inputs_outputs(onx_loss, outputs=['loss'])
+    print(onnx_simple_text_plot(onx_loss_only))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    input: name='label' type=dtype('float32') shape=(0, 1)
+    init: name='init' type=dtype('float32') shape=(0,) -- array([ 0.5    , -0.33333], dtype=float32)
+    init: name='init_1' type=dtype('float32') shape=(0,) -- array([-2.,  3.], dtype=float32)
+    init: name='init_2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='init_3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    init: name='init_5' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='init_b10' type=dtype('float32') shape=(0,) -- array([-1.], dtype=float32)
+    init: name='init_b11' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    Mul(x, x) -> out_mul_0
+      Mul(out_mul_0, init) -> out_mul_0_1
+    Mul(x, init_1) -> out_mul_0_2
+      Add(out_mul_0_2, out_mul_0_1) -> out_add_0
+        Slice(out_add_0, init_5, init_2, init_2) -> out_sli_0_1
+          Squeeze(out_sli_0_1, init_2) -> out_squ_0_1
+        Slice(out_add_0, init_2, init_3, init_2) -> out_sli_0
+          Squeeze(out_sli_0, init_2) -> out_squ_0
+            Add(out_squ_0_1, out_squ_0) -> out_add_0_1
+              Add(out_add_0_1, init_b10) -> out_add_0_2
+                Reshape(out_add_0_2, init_b11) -> y
+                  Sub(y, label) -> loss_diff
+                    Mul(loss_diff, loss_diff) -> loss_diff_2
+                      ReduceSum(loss_diff_2) -> loss
+    output: name='loss' type=dtype('float32') shape=(1, 1)
+
+
+Gradient again : loss + retropropagation
+----------------------------------------
+
+.. code:: ipython3
+
+    grad_loss = onnx_rename_names(onnx_derivative(
+        onx_loss_only, options=DerivativeOptions.FillGrad | DerivativeOptions.KeepOutputs))
+    %onnxview grad_loss
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M4b0d3ea4884a46af83b00a88611df88a-cont"><div id="M4b0d3ea4884a46af83b00a88611df88a" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  size=7;\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  x [shape=box color=red label=\"x\nfloat((0, 2))\" fontsize=10];\n  label [shape=box color=red label=\"label\nfloat((0, 1))\" fontsize=10];\n  init [shape=box color=red label=\"init\nfloat((1, 2))\" fontsize=10];\n  init_1 [shape=box color=red label=\"init_1\nfloat((1, 2))\" fontsize=10];\n  init_b10 [shape=box color=red label=\"init_b10\nfloat((1,))\" fontsize=10];\n\n  x_grad [shape=box color=green label=\"x_grad\nfloat((0, 2))\" fontsize=10];\n  label_grad [shape=box color=green label=\"label_grad\nfloat((0, 1))\" fontsize=10];\n  init_grad [shape=box color=green label=\"init_grad\nfloat((1, 2))\" fontsize=10];\n  init_1_grad [shape=box color=green label=\"init_1_grad\nfloat((1, 2))\" fontsize=10];\n  init_b10_grad [shape=box color=green label=\"init_b10_grad\nfloat((1,))\" fontsize=10];\n  loss [shape=box color=green label=\"loss\nfloat((1, 1))\" fontsize=10];\n\n  i0 [shape=box label=\"i0\nint64((2,))\n[-1  1]\" fontsize=10];\n  i1 [shape=box label=\"i1\nint64((1,))\n[0]\" fontsize=10];\n  i2 [shape=box label=\"i2\nint64((1,))\n[1]\" fontsize=10];\n  i3 [shape=box label=\"i3\nint64((1,))\n[2]\" fontsize=10];\n\n  r0 [shape=box label=\"r0\" fontsize=10];\n  n0 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n0)\" fontsize=10];\n  x -> n0;\n  init_1 -> n0;\n  n0 -> r0;\n\n  r1 [shape=box label=\"r1\" fontsize=10];\n  n1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n1)\" fontsize=10];\n  x -> n1;\n  x -> n1;\n  n1 -> r1;\n\n  r2 [shape=box label=\"r2\" fontsize=10];\n  n2 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n2)\" fontsize=10];\n  r1 -> n2;\n  init -> n2;\n  n2 -> r2;\n\n  r3 [shape=box label=\"r3\" fontsize=10];\n  n3 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(n3)\" fontsize=10];\n  r0 -> n3;\n  r2 -> n3;\n  n3 -> r3;\n\n  r4 [shape=box label=\"r4\" fontsize=10];\n  n4 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(n4)\" fontsize=10];\n  r3 -> n4;\n  i1 -> n4;\n  i2 -> n4;\n  i2 -> n4;\n  n4 -> r4;\n\n  r5 [shape=box label=\"r5\" fontsize=10];\n  n5 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(n5)\" fontsize=10];\n  r4 -> n5;\n  i2 -> n5;\n  n5 -> r5;\n\n  r6 [shape=box label=\"r6\" fontsize=10];\n  n6 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(n6)\" fontsize=10];\n  r3 -> n6;\n  i2 -> n6;\n  i3 -> n6;\n  i2 -> n6;\n  n6 -> r6;\n\n  r7 [shape=box label=\"r7\" fontsize=10];\n  n7 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(n7)\" fontsize=10];\n  r6 -> n7;\n  i2 -> n7;\n  n7 -> r7;\n\n  r8 [shape=box label=\"r8\" fontsize=10];\n  n8 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(n8)\" fontsize=10];\n  r5 -> n8;\n  r7 -> n8;\n  n8 -> r8;\n\n  r9 [shape=box label=\"r9\" fontsize=10];\n  n9 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(n9)\" fontsize=10];\n  r8 -> n9;\n  init_b10 -> n9;\n  n9 -> r9;\n\n  r10 [shape=box label=\"r10\" fontsize=10];\n  n10 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n10)\nallowzero=0\" fontsize=10];\n  r9 -> n10;\n  i0 -> n10;\n  n10 -> r10;\n\n  r11 [shape=box label=\"r11\" fontsize=10];\n  n11 [shape=box style=\"filled,rounded\" color=orange label=\"Sub\n(n11)\" fontsize=10];\n  r10 -> n11;\n  label -> n11;\n  n11 -> r11;\n\n  r12 [shape=box label=\"r12\" fontsize=10];\n  n12 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n12)\" fontsize=10];\n  r11 -> n12;\n  r11 -> n12;\n  n12 -> r12;\n\n  n13 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n13)\nkeepdims=1\nnoop_with_empty_axes=0\" fontsize=10];\n  r12 -> n13;\n  n13 -> loss;\n\n  r13 [shape=box label=\"r13\" fontsize=10];\n  n14 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n14)\" fontsize=10];\n  r12 -> n14;\n  n14 -> r13;\n\n  r15 [shape=box label=\"r15\" fontsize=10];\n  n15 [shape=box style=\"filled,rounded\" color=orange label=\"Expand\n(n15)\" fontsize=10];\n  r14 -> n15;\n  r13 -> n15;\n  n15 -> r15;\n\n  r16 [shape=box label=\"r16\" fontsize=10];\n  n16 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n16)\" fontsize=10];\n  r15 -> n16;\n  r11 -> n16;\n  n16 -> r16;\n\n  r17 [shape=box label=\"r17\" fontsize=10];\n  n17 [shape=box style=\"filled,rounded\" color=orange label=\"Sum\n(n17)\" fontsize=10];\n  r16 -> n17;\n  r16 -> n17;\n  n17 -> r17;\n\n  r18 [shape=box label=\"r18\" fontsize=10];\n  n18 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n18)\" fontsize=10];\n  label -> n18;\n  n18 -> r18;\n\n  r19 [shape=box label=\"r19\" fontsize=10];\n  n19 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n19)\" fontsize=10];\n  r10 -> n19;\n  n19 -> r19;\n\n  r20 [shape=box label=\"r20\" fontsize=10];\n  r21 [shape=box label=\"r21\" fontsize=10];\n  n20 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n20)\" fontsize=10];\n  r19 -> n20;\n  r18 -> n20;\n  n20 -> r20;\n  n20 -> r21;\n\n  r22 [shape=box label=\"r22\" fontsize=10];\n  n21 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n21)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r17 -> n21;\n  r20 -> n21;\n  n21 -> r22;\n\n  r23 [shape=box label=\"r23\" fontsize=10];\n  n22 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n22)\nallowzero=0\" fontsize=10];\n  r22 -> n22;\n  r19 -> n22;\n  n22 -> r23;\n\n  r24 [shape=box label=\"r24\" fontsize=10];\n  n23 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n23)\" fontsize=10];\n  r9 -> n23;\n  n23 -> r24;\n\n  r25 [shape=box label=\"r25\" fontsize=10];\n  n24 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n24)\nallowzero=0\" fontsize=10];\n  r23 -> n24;\n  r24 -> n24;\n  n24 -> r25;\n\n  r26 [shape=box label=\"r26\" fontsize=10];\n  n25 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n25)\" fontsize=10];\n  init_b10 -> n25;\n  n25 -> r26;\n\n  r27 [shape=box label=\"r27\" fontsize=10];\n  n26 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n26)\" fontsize=10];\n  r8 -> n26;\n  n26 -> r27;\n\n  r28 [shape=box label=\"r28\" fontsize=10];\n  r29 [shape=box label=\"r29\" fontsize=10];\n  n27 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n27)\" fontsize=10];\n  r27 -> n27;\n  r26 -> n27;\n  n27 -> r28;\n  n27 -> r29;\n\n  r30 [shape=box label=\"r30\" fontsize=10];\n  n28 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n28)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r25 -> n28;\n  r28 -> n28;\n  n28 -> r30;\n\n  r31 [shape=box label=\"r31\" fontsize=10];\n  n29 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n29)\nallowzero=0\" fontsize=10];\n  r30 -> n29;\n  r27 -> n29;\n  n29 -> r31;\n\n  r32 [shape=box label=\"r32\" fontsize=10];\n  n30 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n30)\" fontsize=10];\n  r7 -> n30;\n  n30 -> r32;\n\n  r33 [shape=box label=\"r33\" fontsize=10];\n  n31 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n31)\" fontsize=10];\n  r5 -> n31;\n  n31 -> r33;\n\n  r34 [shape=box label=\"r34\" fontsize=10];\n  r35 [shape=box label=\"r35\" fontsize=10];\n  n32 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n32)\" fontsize=10];\n  r33 -> n32;\n  r32 -> n32;\n  n32 -> r34;\n  n32 -> r35;\n\n  r36 [shape=box label=\"r36\" fontsize=10];\n  n33 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n33)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r31 -> n33;\n  r34 -> n33;\n  n33 -> r36;\n\n  r37 [shape=box label=\"r37\" fontsize=10];\n  n34 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n34)\nallowzero=0\" fontsize=10];\n  r36 -> n34;\n  r33 -> n34;\n  n34 -> r37;\n\n  r38 [shape=box label=\"r38\" fontsize=10];\n  n35 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(n35)\" fontsize=10];\n  r37 -> n35;\n  i2 -> n35;\n  n35 -> r38;\n\n  r39 [shape=box label=\"r39\" fontsize=10];\n  n36 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n36)\" fontsize=10];\n  r3 -> n36;\n  n36 -> r39;\n\n  r40 [shape=box label=\"r40\" fontsize=10];\n  n37 [shape=box style=\"filled,rounded\" color=orange label=\"SliceGrad\n(n37)\" fontsize=10];\n  r38 -> n37;\n  r39 -> n37;\n  i1 -> n37;\n  i2 -> n37;\n  i2 -> n37;\n  n37 -> r40;\n\n  r41 [shape=box label=\"r41\" fontsize=10];\n  n38 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n38)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r31 -> n38;\n  r35 -> n38;\n  n38 -> r41;\n\n  r42 [shape=box label=\"r42\" fontsize=10];\n  n39 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n39)\nallowzero=0\" fontsize=10];\n  r41 -> n39;\n  r32 -> n39;\n  n39 -> r42;\n\n  r43 [shape=box label=\"r43\" fontsize=10];\n  n40 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(n40)\" fontsize=10];\n  r42 -> n40;\n  i2 -> n40;\n  n40 -> r43;\n\n  r44 [shape=box label=\"r44\" fontsize=10];\n  n41 [shape=box style=\"filled,rounded\" color=orange label=\"SliceGrad\n(n41)\" fontsize=10];\n  r43 -> n41;\n  r39 -> n41;\n  i2 -> n41;\n  i3 -> n41;\n  i2 -> n41;\n  n41 -> r44;\n\n  r45 [shape=box label=\"r45\" fontsize=10];\n  n42 [shape=box style=\"filled,rounded\" color=orange label=\"Sum\n(n42)\" fontsize=10];\n  r44 -> n42;\n  r40 -> n42;\n  n42 -> r45;\n\n  r46 [shape=box label=\"r46\" fontsize=10];\n  n43 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n43)\" fontsize=10];\n  r2 -> n43;\n  n43 -> r46;\n\n  r47 [shape=box label=\"r47\" fontsize=10];\n  n44 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n44)\" fontsize=10];\n  r0 -> n44;\n  n44 -> r47;\n\n  r48 [shape=box label=\"r48\" fontsize=10];\n  r49 [shape=box label=\"r49\" fontsize=10];\n  n45 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n45)\" fontsize=10];\n  r47 -> n45;\n  r46 -> n45;\n  n45 -> r48;\n  n45 -> r49;\n\n  r50 [shape=box label=\"r50\" fontsize=10];\n  n46 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n46)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r45 -> n46;\n  r48 -> n46;\n  n46 -> r50;\n\n  r51 [shape=box label=\"r51\" fontsize=10];\n  n47 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n47)\nallowzero=0\" fontsize=10];\n  r50 -> n47;\n  r47 -> n47;\n  n47 -> r51;\n\n  r52 [shape=box label=\"r52\" fontsize=10];\n  n48 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n48)\" fontsize=10];\n  r51 -> n48;\n  init_1 -> n48;\n  n48 -> r52;\n\n  r53 [shape=box label=\"r53\" fontsize=10];\n  n49 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n49)\" fontsize=10];\n  init_1 -> n49;\n  n49 -> r53;\n\n  r54 [shape=box label=\"r54\" fontsize=10];\n  n50 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n50)\" fontsize=10];\n  x -> n50;\n  n50 -> r54;\n\n  r55 [shape=box label=\"r55\" fontsize=10];\n  r56 [shape=box label=\"r56\" fontsize=10];\n  n51 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n51)\" fontsize=10];\n  r54 -> n51;\n  r53 -> n51;\n  n51 -> r55;\n  n51 -> r56;\n\n  r57 [shape=box label=\"r57\" fontsize=10];\n  n52 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n52)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r52 -> n52;\n  r55 -> n52;\n  n52 -> r57;\n\n  r58 [shape=box label=\"r58\" fontsize=10];\n  n53 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n53)\nallowzero=0\" fontsize=10];\n  r57 -> n53;\n  r54 -> n53;\n  n53 -> r58;\n\n  r59 [shape=box label=\"r59\" fontsize=10];\n  n54 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n54)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r45 -> n54;\n  r49 -> n54;\n  n54 -> r59;\n\n  r60 [shape=box label=\"r60\" fontsize=10];\n  n55 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n55)\nallowzero=0\" fontsize=10];\n  r59 -> n55;\n  r46 -> n55;\n  n55 -> r60;\n\n  r61 [shape=box label=\"r61\" fontsize=10];\n  n56 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n56)\" fontsize=10];\n  r60 -> n56;\n  init -> n56;\n  n56 -> r61;\n\n  r62 [shape=box label=\"r62\" fontsize=10];\n  n57 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n57)\" fontsize=10];\n  init -> n57;\n  n57 -> r62;\n\n  r63 [shape=box label=\"r63\" fontsize=10];\n  n58 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n58)\" fontsize=10];\n  r1 -> n58;\n  n58 -> r63;\n\n  r64 [shape=box label=\"r64\" fontsize=10];\n  r65 [shape=box label=\"r65\" fontsize=10];\n  n59 [shape=box style=\"filled,rounded\" color=orange label=\"BroadcastGradientArgs\n(n59)\" fontsize=10];\n  r63 -> n59;\n  r62 -> n59;\n  n59 -> r64;\n  n59 -> r65;\n\n  r66 [shape=box label=\"r66\" fontsize=10];\n  n60 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n60)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r61 -> n60;\n  r64 -> n60;\n  n60 -> r66;\n\n  r67 [shape=box label=\"r67\" fontsize=10];\n  n61 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n61)\nallowzero=0\" fontsize=10];\n  r66 -> n61;\n  r63 -> n61;\n  n61 -> r67;\n\n  r68 [shape=box label=\"r68\" fontsize=10];\n  n62 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n62)\" fontsize=10];\n  r67 -> n62;\n  x -> n62;\n  n62 -> r68;\n\n  n63 [shape=box style=\"filled,rounded\" color=orange label=\"Sum\n(n63)\" fontsize=10];\n  r68 -> n63;\n  r68 -> n63;\n  r58 -> n63;\n  n63 -> x_grad;\n\n  r69 [shape=box label=\"r69\" fontsize=10];\n  n64 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n64)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r17 -> n64;\n  r21 -> n64;\n  n64 -> r69;\n\n  r70 [shape=box label=\"r70\" fontsize=10];\n  n65 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n65)\nallowzero=0\" fontsize=10];\n  r69 -> n65;\n  r18 -> n65;\n  n65 -> r70;\n\n  n66 [shape=box style=\"filled,rounded\" color=orange label=\"Neg\n(n66)\" fontsize=10];\n  r70 -> n66;\n  n66 -> label_grad;\n\n  r71 [shape=box label=\"r71\" fontsize=10];\n  n67 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n67)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r25 -> n67;\n  r29 -> n67;\n  n67 -> r71;\n\n  n68 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n68)\nallowzero=0\" fontsize=10];\n  r71 -> n68;\n  r26 -> n68;\n  n68 -> init_b10_grad;\n\n  r72 [shape=box label=\"r72\" fontsize=10];\n  n69 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n69)\" fontsize=10];\n  r51 -> n69;\n  x -> n69;\n  n69 -> r72;\n\n  r73 [shape=box label=\"r73\" fontsize=10];\n  n70 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n70)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r72 -> n70;\n  r56 -> n70;\n  n70 -> r73;\n\n  n71 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n71)\nallowzero=0\" fontsize=10];\n  r73 -> n71;\n  r53 -> n71;\n  n71 -> init_1_grad;\n\n  r74 [shape=box label=\"r74\" fontsize=10];\n  n72 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(n72)\" fontsize=10];\n  r60 -> n72;\n  r1 -> n72;\n  n72 -> r74;\n\n  r75 [shape=box label=\"r75\" fontsize=10];\n  n73 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(n73)\nkeepdims=1\nnoop_with_empty_axes=1\" fontsize=10];\n  r74 -> n73;\n  r65 -> n73;\n  n73 -> r75;\n\n  n74 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(n74)\nallowzero=0\" fontsize=10];\n  r75 -> n74;\n  r62 -> n74;\n  n74 -> init_grad;\n\n  r76 [shape=box label=\"r76\" fontsize=10];\n  n75 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(n75)\" fontsize=10];\n  loss -> n75;\n  n75 -> r76;\n\n  r14 [shape=box label=\"r14\" fontsize=10];\n  n76 [shape=box style=\"filled,rounded\" color=orange label=\"ConstantOfShape\n(n76)\nvalue=[1.]\" fontsize=10];\n  r76 -> n76;\n  n76 -> r14;\n}");
+    document.getElementById('M4b0d3ea4884a46af83b00a88611df88a').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    print(onnx_simple_text_plot(grad_loss))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    opset: domain='com.microsoft.nchwc' version=1
+    opset: domain='ai.onnx.ml' version=2
+    opset: domain='com.ms.internal.nhwc' version=1
+    opset: domain='ai.onnx.training' version=1
+    opset: domain='ai.onnx.preview.training' version=1
+    opset: domain='com.microsoft' version=1
+    opset: domain='com.microsoft.experimental' version=1
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    input: name='label' type=dtype('float32') shape=(0, 1)
+    input: name='init' type=dtype('float32') shape=(1, 2)
+    input: name='init_1' type=dtype('float32') shape=(1, 2)
+    input: name='init_b10' type=dtype('float32') shape=(1,)
+    init: name='i0' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    init: name='i1' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='i2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='i3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    Mul(x, init_1) -> r0
+      Shape(r0) -> r47
+    Mul(x, x) -> r1
+      Mul(r1, init) -> r2
+      Add(r0, r2) -> r3
+        Slice(r3, i1, i2, i2) -> r4
+          Squeeze(r4, i2) -> r5
+            Shape(r5) -> r33
+        Slice(r3, i2, i3, i2) -> r6
+          Squeeze(r6, i2) -> r7
+            Add(r5, r7) -> r8
+              Add(r8, init_b10) -> r9
+                Reshape(r9, i0, allowzero=0) -> r10
+                  Sub(r10, label) -> r11
+                    Mul(r11, r11) -> r12
+                      ReduceSum(r12, keepdims=1, noop_with_empty_axes=0) -> loss
+                        Shape(loss) -> r76
+                          ConstantOfShape(r76) -> r14
+                      Shape(r12) -> r13
+                        Expand(r14, r13) -> r15
+                    Mul(r15, r11) -> r16
+                      Sum(r16, r16) -> r17
+    Shape(label) -> r18
+    Shape(r10) -> r19
+      BroadcastGradientArgs(r19, r18) -> r20, r21
+        ReduceSum(r17, r20, keepdims=1, noop_with_empty_axes=1) -> r22
+      Reshape(r22, r19, allowzero=0) -> r23
+    Shape(r9) -> r24
+      Reshape(r23, r24, allowzero=0) -> r25
+    Shape(init_b10) -> r26
+    Shape(r8) -> r27
+      BroadcastGradientArgs(r27, r26) -> r28, r29
+        ReduceSum(r25, r28, keepdims=1, noop_with_empty_axes=1) -> r30
+      Reshape(r30, r27, allowzero=0) -> r31
+    Shape(r7) -> r32
+      BroadcastGradientArgs(r33, r32) -> r34, r35
+        ReduceSum(r31, r34, keepdims=1, noop_with_empty_axes=1) -> r36
+          Reshape(r36, r33, allowzero=0) -> r37
+            Unsqueeze(r37, i2) -> r38
+        Shape(r3) -> r39
+          SliceGrad(r38, r39, i1, i2, i2) -> r40
+        ReduceSum(r31, r35, keepdims=1, noop_with_empty_axes=1) -> r41
+      Reshape(r41, r32, allowzero=0) -> r42
+        Unsqueeze(r42, i2) -> r43
+          SliceGrad(r43, r39, i2, i3, i2) -> r44
+            Sum(r44, r40) -> r45
+        Shape(r2) -> r46
+        BroadcastGradientArgs(r47, r46) -> r48, r49
+          ReduceSum(r45, r48, keepdims=1, noop_with_empty_axes=1) -> r50
+        Reshape(r50, r47, allowzero=0) -> r51
+          Mul(r51, init_1) -> r52
+    Shape(init_1) -> r53
+    Shape(x) -> r54
+      BroadcastGradientArgs(r54, r53) -> r55, r56
+        ReduceSum(r52, r55, keepdims=1, noop_with_empty_axes=1) -> r57
+      Reshape(r57, r54, allowzero=0) -> r58
+    ReduceSum(r45, r49, keepdims=1, noop_with_empty_axes=1) -> r59
+      Reshape(r59, r46, allowzero=0) -> r60
+        Mul(r60, init) -> r61
+    Shape(init) -> r62
+    Shape(r1) -> r63
+      BroadcastGradientArgs(r63, r62) -> r64, r65
+        ReduceSum(r61, r64, keepdims=1, noop_with_empty_axes=1) -> r66
+      Reshape(r66, r63, allowzero=0) -> r67
+        Mul(r67, x) -> r68
+        Sum(r68, r68, r58) -> x_grad
+    ReduceSum(r17, r21, keepdims=1, noop_with_empty_axes=1) -> r69
+      Reshape(r69, r18, allowzero=0) -> r70
+        Neg(r70) -> label_grad
+    ReduceSum(r25, r29, keepdims=1, noop_with_empty_axes=1) -> r71
+      Reshape(r71, r26, allowzero=0) -> init_b10_grad
+    Mul(r51, x) -> r72
+      ReduceSum(r72, r56, keepdims=1, noop_with_empty_axes=1) -> r73
+      Reshape(r73, r53, allowzero=0) -> init_1_grad
+    Mul(r60, r1) -> r74
+      ReduceSum(r74, r65, keepdims=1, noop_with_empty_axes=1) -> r75
+      Reshape(r75, r62, allowzero=0) -> init_grad
+    output: name='x_grad' type=dtype('float32') shape=(0, 2)
+    output: name='label_grad' type=dtype('float32') shape=(0, 1)
+    output: name='init_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_1_grad' type=dtype('float32') shape=(1, 2)
+    output: name='init_b10_grad' type=dtype('float32') shape=(1,)
+    output: name='loss' type=dtype('float32') shape=(1, 1)
+
+
+Let’s compute the gradient.
+
+.. code:: ipython3
+
+    x
+
+
+
+
+.. parsed-literal::
+    array([[0., 0.],
+           [1., 0.],
+           [0., 1.],
+           [1., 1.],
+           [2., 2.]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    y = fct(x)
+    y
+
+
+
+
+.. parsed-literal::
+    array([[-1.        ],
+           [-2.5       ],
+           [ 1.6666701 ],
+           [ 0.16667008],
+           [ 1.6666799 ]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(grad_loss, runtime='onnxruntime1')
+
+.. code:: ipython3
+
+    import pprint
+    
+    init = numpy.array([[2, 3]], dtype=numpy.float32)
+    init_1 = numpy.array([[0.5, 0.33333]], dtype=numpy.float32)
+    init_b10 = numpy.array([1], dtype=numpy.float32)
+    result = oinf.run({'x': x, 'label': y, 
+                       'init': init, 'init_1': init_1, 'init_b10': init_b10})
+    pprint.pprint(result)
+
+
+.. parsed-literal::
+    {'init_1_grad': array([[109.333244, 102.666565]], dtype=float32),
+     'init_b10_grad': array([76.6666], dtype=float32),
+     'init_grad': array([[193.33316, 186.66649]], dtype=float32),
+     'label_grad': array([[ -4.      ],
+           [-12.      ],
+           [ -5.33332 ],
+           [-13.333321],
+           [-41.99996 ]], dtype=float32),
+     'loss': array([[532.5546]], dtype=float32),
+     'x_grad': array([[  2.      ,   1.33332 ],
+           [ 54.      ,   3.99996 ],
+           [  2.66666 ,  33.777676],
+           [ 59.999943,  84.44432 ],
+           [356.99966 , 517.9994  ]], dtype=float32)}
+
+
+We could use this gradient to implement a stochastic gradient descent in
+python. Two comments: \* If we implement it this with numpy, it cannot
+work on GPU. \* If we use OrtValue (tensor from onnxruntime), how to do
+simple addition between OrtValue ?
+
+We need to implemented the second option. A simple addition between two
+OrtValue must be done with an ONNX graph.
+
+TrainingSession
+---------------
+
+.. code:: ipython3
+
+    X = numpy.random.randn(100, 2).astype(numpy.float32) / 10
+    y = fct(X) + (numpy.random.randn(100, 1) / 1000).astype(numpy.float32)
+    X.shape, y.shape
+
+
+
+
+.. parsed-literal::
+    ((100, 2), (100, 1))
+
+
+
+.. code:: ipython3
+
+    print(onnx_simple_text_plot(onx))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    init: name='init' type=dtype('float32') shape=(0,) -- array([ 0.5    , -0.33333], dtype=float32)
+    init: name='init_1' type=dtype('float32') shape=(0,) -- array([-2.,  3.], dtype=float32)
+    init: name='init_2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='init_3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    init: name='init_5' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='init_b10' type=dtype('float32') shape=(0,) -- array([-1.], dtype=float32)
+    init: name='init_b11' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    Mul(x, x) -> out_mul_0
+      Mul(out_mul_0, init) -> out_mul_0_1
+    Mul(x, init_1) -> out_mul_0_2
+      Add(out_mul_0_2, out_mul_0_1) -> out_add_0
+        Slice(out_add_0, init_2, init_3, init_2) -> out_sli_0
+          Squeeze(out_sli_0, init_2) -> out_squ_0
+        Slice(out_add_0, init_5, init_2, init_2) -> out_sli_0_1
+          Squeeze(out_sli_0_1, init_2) -> out_squ_0_1
+            Add(out_squ_0_1, out_squ_0) -> out_add_0_1
+              Add(out_add_0_1, init_b10) -> out_add_0_2
+                Reshape(out_add_0_2, init_b11) -> y
+    output: name='y' type=dtype('float32') shape=(0, 1)
+
+
+.. code:: ipython3
+
+    from onnxcustom.training.optimizers import OrtGradientOptimizer
+    
+    train_session = OrtGradientOptimizer(
+        onx_loss, ['init', 'init_1', 'init_b10'], learning_rate=1e-1,
+        batch_size=5, max_iter=100)
+    
+    train_session.fit(X, y)
+
+
+
+
+.. parsed-literal::
+    OrtGradientOptimizer(model_onnx='ir_version...', weights_to_train=['init', 'init_1', 'init_b10'], loss_output_name='loss', max_iter=100, training_optimizer_name='SGDOptimizer', batch_size=5, learning_rate=LearningRateSGD(eta0=0.1, alpha=0.0001, power_t=0.25, learning_rate='invscaling'), value=0.03162277660168379, device='cpu', warm_start=False, verbose=0, validation_every=10, saved_gradient=None, sample_weight_name='weight')
+
+
+
+.. code:: ipython3
+
+    train_session.trained_coef_
+
+
+
+
+.. parsed-literal::
+    {'init': array([[-0.34785354,  1.1399053 ]], dtype=float32),
+     'init_1': array([[-1.9156165,  2.4292002]], dtype=float32),
+     'init_b10': array([-1.0016667], dtype=float32)}
+
+
+
+.. code:: ipython3
+
+    train_session.train_losses_[-5:]
+
+
+
+
+.. parsed-literal::
+    [0.0036812867, 0.0038135047, 0.0037041684, 0.0037206002, 0.0032002896]
+
+
+
+.. code:: ipython3
+
+    import pandas
+    
+    pandas.DataFrame({'loss': train_session.train_losses_}).plot();
+
+
+
+.. image:: onnxruntime_training_nb_34_0.png
+
+
+Fordward backward: TrainingAgent
+--------------------------------
+
+This second implementation uses
+`TrainingAgent <http://www.xavierdupre.fr/app/onnxcustom/helpsphinx/api/onnxruntime_python/training_partial.html#trainingagent>`__.
+
+.. code:: ipython3
+
+    from onnxcustom.training.optimizers_partial import OrtGradientForwardBackwardOptimizer
+    
+    train_session = OrtGradientForwardBackwardOptimizer(
+        onx, ['init', 'init_1', 'init_b10'], learning_rate=1e-1, 
+        batch_size=2, max_iter=100)
+
+.. code:: ipython3
+
+    train_session.fit(X, y)
+
+
+
+
+.. parsed-literal::
+    OrtGradientForwardBackwardOptimizer(model_onnx='ir_version...', weights_to_train=['init', 'init_1', 'init_b10'], loss_output_name='loss', max_iter=100, training_optimizer_name='SGDOptimizer', batch_size=2, learning_rate=LearningRateSGD(eta0=0.1, alpha=0.0001, power_t=0.25, learning_rate='invscaling'), value=0.03162277660168379, device='cpu', warm_start=False, verbose=0, validation_every=10, learning_loss=SquareLearningLoss(), enable_logging=False, weight_name=None, learning_penalty=NoLearningPenalty(), exc=True)
+
+
+
+.. code:: ipython3
+
+    train_session.train_losses_[-5:]
+
+
+
+
+.. parsed-literal::
+    [0.00040441833, 0.00037421435, 0.00049950054, 0.00042527347, 0.00031072882]
+
+
+
+.. code:: ipython3
+
+    pandas.DataFrame({'loss': train_session.train_losses_}).plot();
+
+
+
+.. image:: onnxruntime_training_nb_39_0.png
+
+
+.. code:: ipython3
+
+    train_session.trained_coef_
+
+
+
+
+.. parsed-literal::
+    {'init': <onnxruntime.capi.onnxruntime_pybind11_state.OrtValue at 0x162a9199fb0>,
+     'init_1': <onnxruntime.capi.onnxruntime_pybind11_state.OrtValue at 0x162a91a20f0>,
+     'init_b10': <onnxruntime.capi.onnxruntime_pybind11_state.OrtValue at 0x162a91a2030>}
+
+
+
+.. code:: ipython3
+
+    {k: v.numpy() for k, v in train_session.trained_coef_.items()}
+
+
+
+
+.. parsed-literal::
+    {'init': array([[-0.35357383,  0.6850407 ]], dtype=float32),
+     'init_1': array([[-1.916494 ,  2.8799832]], dtype=float32),
+     'init_b10': array([-1.0036615], dtype=float32)}
+
+
+
+Not the same weights? What about the prediction?
+
+.. code:: ipython3
+
+    trained_onx = train_session.get_trained_onnx()
+
+.. code:: ipython3
+
+    print(onnx_simple_text_plot(trained_onx))
+
+
+.. parsed-literal::
+    opset: domain='' version=14
+    input: name='x' type=dtype('float32') shape=(0, 2)
+    init: name='init' type=dtype('float32') shape=(0,) -- array([-0.35357383,  0.6850407 ], dtype=float32)
+    init: name='init_1' type=dtype('float32') shape=(0,) -- array([-1.916494 ,  2.8799832], dtype=float32)
+    init: name='init_2' type=dtype('int64') shape=(0,) -- array([1], dtype=int64)
+    init: name='init_3' type=dtype('int64') shape=(0,) -- array([2], dtype=int64)
+    init: name='init_5' type=dtype('int64') shape=(0,) -- array([0], dtype=int64)
+    init: name='init_b10' type=dtype('float32') shape=(0,) -- array([-1.0036615], dtype=float32)
+    init: name='init_b11' type=dtype('int64') shape=(0,) -- array([-1,  1], dtype=int64)
+    Mul(x, x) -> out_mul_0
+      Mul(out_mul_0, init) -> out_mul_0_1
+    Mul(x, init_1) -> out_mul_0_2
+      Add(out_mul_0_2, out_mul_0_1) -> out_add_0
+        Slice(out_add_0, init_2, init_3, init_2) -> out_sli_0
+          Squeeze(out_sli_0, init_2) -> out_squ_0
+        Slice(out_add_0, init_5, init_2, init_2) -> out_sli_0_1
+          Squeeze(out_sli_0_1, init_2) -> out_squ_0_1
+            Add(out_squ_0_1, out_squ_0) -> out_add_0_1
+              Add(out_add_0_1, init_b10) -> out_add_0_2
+                Reshape(out_add_0_2, init_b11) -> y
+    output: name='y' type=dtype('float32') shape=(0, 1)
+
+
+.. code:: ipython3
+
+    oinf = OnnxInference(trained_onx)
+    oinf.run({'x': X})['y'][:5]
+
+
+
+
+.. parsed-literal::
+    array([[-0.6123954],
+           [-1.303561 ],
+           [-2.0257921],
+           [-1.2778704],
+           [-0.9708453]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    y[:5]
+
+
+
+
+.. parsed-literal::
+    array([[-0.58675164],
+           [-1.3148587 ],
+           [-2.0666485 ],
+           [-1.272753  ],
+           [-0.95404863]], dtype=float32)
+
+
+
+It works.
+
+MLPregressor
+------------
+
+.. code:: ipython3
+
+    import warnings
+    import time
+    import numpy
+    import matplotlib.pyplot as plt
+    from pandas import DataFrame
+    from onnxruntime import get_device
+    from sklearn.datasets import make_regression
+    from sklearn.model_selection import train_test_split
+    from sklearn.neural_network import MLPRegressor
+    from skl2onnx import to_onnx
+    
+    
+    X, y = make_regression(1000, n_features=100, bias=2)
+    X = X.astype(numpy.float32)
+    y = y.astype(numpy.float32)
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+.. code:: ipython3
+
+    batch_size = 15
+    max_iter = 100
+    
+    nn = MLPRegressor(hidden_layer_sizes=(50, 10), max_iter=max_iter,
+                      solver='sgd', learning_rate_init=5e-5,
+                      n_iter_no_change=max_iter * 3, batch_size=batch_size,
+                      learning_rate="invscaling",
+                      # default values
+                      momentum=0.9, nesterovs_momentum=True, power_t=0.5)
+    
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        nn.fit(X_train, y_train)
+
+Conversion to ONNX
+
+.. code:: ipython3
+
+    from onnxcustom.utils.onnx_helper import onnx_rename_weights
+    onx = to_onnx(nn, X_train[:1].astype(numpy.float32), target_opset=15)
+    onx = onnx_rename_weights(onx)
+
+.. code:: ipython3
+
+    train_session = OrtGradientForwardBackwardOptimizer(
+        onx, device='cpu', learning_rate=5e-5,
+        warm_start=False, max_iter=max_iter, batch_size=batch_size)
+
+.. code:: ipython3
+
+    train_session.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    OrtGradientForwardBackwardOptimizer(model_onnx='ir_version...', weights_to_train="['I0_coeff...", loss_output_name='loss', max_iter=100, training_optimizer_name='SGDOptimizer', batch_size=15, learning_rate=LearningRateSGD(eta0=5e-05, alpha=0.0001, power_t=0.25, learning_rate='invscaling'), value=1.5811388300841898e-05, device='cpu', warm_start=False, verbose=0, validation_every=10, learning_loss=SquareLearningLoss(), enable_logging=False, weight_name=None, learning_penalty=NoLearningPenalty(), exc=True)
+
+
+
+.. code:: ipython3
+
+    pandas.DataFrame(dict(skl_loss=nn.loss_curve_, ort_loss=train_session.train_losses_)).plot();
+
+
+
+.. image:: onnxruntime_training_nb_55_0.png
+
+
+.. code:: ipython3
+
+    %timeit -n 1 -r 1 nn.fit(X_train, y_train)
+
+
+.. parsed-literal::
+    C:\Python395_x64\lib\site-packages\sklearn\neural_network\_multilayer_perceptron.py:692: ConvergenceWarning: Stochastic Optimizer: Maximum iterations (100) reached and the optimization hasn't converged yet.
+      warnings.warn(
+
+
+.. parsed-literal::
+
+    1.98 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
+
+.. code:: ipython3
+
+    %timeit -n 1 -r 1 train_session.fit(X_train, y_train)
+
+
+.. parsed-literal::
+    1.88 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
+
+Not exactly the same: Nesterov?
+-------------------------------
+
+.. code:: ipython3
+
+    from onnxcustom.training.sgd_learning_rate import LearningRateSGDNesterov
+    
+    train_session2 = OrtGradientForwardBackwardOptimizer(
+        onx, device='cpu', warm_start=False, max_iter=max_iter, batch_size=batch_size,
+        learning_rate=LearningRateSGDNesterov(1e-5, nesterov=True, momentum=0.9))
+
+.. code:: ipython3
+
+    train_session2.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    OrtGradientForwardBackwardOptimizer(model_onnx='ir_version...', weights_to_train="['I0_coeff...", loss_output_name='loss', max_iter=100, training_optimizer_name='SGDOptimizer', batch_size=15, learning_rate=LearningRateSGDNesterov(eta0=1e-05, alpha=0.0001, power_t=0.25, learning_rate='invscaling', momentum=0.9, nesterov=True), value=3.162277660168379e-06, device='cpu', warm_start=False, verbose=0, validation_every=10, learning_loss=SquareLearningLoss(), enable_logging=False, weight_name=None, learning_penalty=NoLearningPenalty(), exc=True)
+
+
+
+.. code:: ipython3
+
+    pandas.DataFrame(dict(skl_loss=nn.loss_curve_, 
+                          ort_loss=train_session.train_losses_,
+                          ort_loss2=train_session2.train_losses_)).plot();
+
+
+
+.. image:: onnxruntime_training_nb_61_0.png
+
+
+.. code:: ipython3
+
+    %timeit -n 1 -r 1 train_session2.fit(X_train, y_train)
+
+
+.. parsed-literal::
+    2.26 s ± 0 ns per loop (mean ± std. dev. of 1 run, 1 loop each)
+
+
+Profiling
+---------
+
+.. code:: ipython3
+
+    def clean_name(text):
+        pos = text.find('onnxruntime')
+        if pos >= 0:
+            return text[pos:]
+        pos = text.find('sklearn')
+        if pos >= 0:
+            return text[pos:]
+        pos = text.find('onnxcustom')
+        if pos >= 0:
+            return text[pos:]
+        pos = text.find('site-packages')
+        if pos >= 0:
+            return text[pos:]
+        return text
+    
+    from pyquickhelper.pycode.profiling import profile, profile2graph
+    
+    ps = profile(lambda:train_session2.fit(X, y))[0]
+    root, nodes = profile2graph(ps, clean_text=clean_name)
+    text = root.to_text()
+    print(text)
+
+
+.. parsed-literal::
+    <lambda>                                                     --       1       1 -- 0.00001 3.78074 -- <ipython-input-81-1255a3a5f723>:18:<lambda> (<lambda>)
+        fit                                                      --       1       1 -- 0.00181 3.78073 -- onnxcustom/onnxcustom/training/optimizers_partial.py:263:fit (fit)
+            __init__                                             --       1       1 -- 0.00002 0.00003 -- onnxcustom/onnxcustom/training/data_loader.py:26:__init__ (__init__)
+                get_ort_device                                   --       1       1 -- 0.00000 0.00000 -- onnxruntime_helper.py:55:get_ort_device (get_ort_device)
+                numpy_to_ort_value                               --       2       2 -- 0.00000 0.00001 -- onnxruntime_helper.py:120:numpy_to_ort_value (numpy_to_ort_value) +++
+            needs_grad                                           --       3       3 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/optimizers_partial.py:99:needs_grad (needs_grad)
+                needs_grad                                       --       3       3 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:299:needs_grad (needs_grad)
+            get_full_state                                       --     101     101 -- 0.00020 0.00093 -- onnxcustom/onnxcustom/training/optimizers_partial.py:147:get_full_state (get_full_state) +++
+            set_state                                            --       4       4 -- 0.00008 0.00026 -- onnxcustom/onnxcustom/training/optimizers_partial.py:196:set_state (set_state)
+                _get_att_state                                   --       4       4 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/optimizers_partial.py:139:_get_att_state (_get_att_state) +++
+                numpy_to_ort_value                               --      24      24 -- 0.00002 0.00011 -- onnxruntime_helper.py:120:numpy_to_ort_value (numpy_to_ort_value) +++
+                <built-in method numpy.zeros>                    --      12      12 -- 0.00002 0.00002 -- ~:0:<built-in method numpy.zeros> (<built-in method numpy.zeros>)
+                <method 'append' of 'list' objects>              --      56      56 -- 0.00001 0.00001 -- ~:0:<method 'append' of 'list' objects> (<method 'append' of 'list' objects>) +++
+                <built-in method builtins.isinstance>            --      24      24 -- 0.00000 0.00000 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+            <listcomp>                                           --       1       1 -- 0.00001 0.00095 -- onnxcustom/onnxcustom/training/optimizers_partial.py:311:<listcomp> (<listcomp>)
+                get_initializer                                  --       7       7 -- 0.00004 0.00094 -- onnxcustom/onnxcustom/training/ortgradient.py:269:get_initializer (get_initializer) +++
+            <listcomp>                                           --       1       1 -- 0.00001 0.00083 -- onnxcustom/onnxcustom/training/optimizers_partial.py:315:<listcomp> (<listcomp>)
+                get_initializer                                  --       7       7 -- 0.00004 0.00082 -- onnxcustom/onnxcustom/training/ortgradient.py:269:get_initializer (get_initializer) +++
+            _iteration                                           --     100     100 -- 0.41903 3.74610 -- onnxcustom/onnxcustom/training/optimizers_partial.py:397:_iteration (_iteration)
+                iter_ortvalue                                    --    6800    6800 -- 0.02838 0.14761 -- onnxcustom/onnxcustom/training/data_loader.py:139:iter_ortvalue (iter_ortvalue)
+                    _next_iter                                   --    6700    6700 -- 0.00946 0.07207 -- onnxcustom/onnxcustom/training/data_loader.py:93:_next_iter (_next_iter)
+                        <built-in method builtins.len>           --    6700    6700 -- 0.00245 0.00423 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+                        <method 'randint' o...domState' objects> --    6700    6700 -- 0.05838 0.05838 -- ~:0:<method 'randint' of 'numpy.random.mtrand.RandomState' objects> (<method 'randint' of 'numpy.random.mtrand.RandomState' objects>)
+                    numpy_to_ort_value                           --   13400   13400 -- 0.00658 0.03860 -- onnxruntime_helper.py:120:numpy_to_ort_value (numpy_to_ort_value) +++
+                    <built-in method builtins.len>               --    6900    6900 -- 0.00467 0.00855 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+                forward                                          --    6700    6700 -- 0.31685 0.44643 -- onnxcustom/onnxcustom/training/ortgradient.py:623:forward (forward)
+                    input_to_ort                                 --    6700    6700 -- 0.08002 0.11492 -- onnxcustom/onnxcustom/training/ortgradient.py:552:input_to_ort (input_to_ort) +++
+                    save_for_backward                            --    6700    6700 -- 0.01032 0.01032 -- onnxcustom/onnxcustom/training/ortgradient.py:604:save_for_backward (save_for_backward)
+                    <method 'append' of 'list' objects>          --    6700    6700 -- 0.00434 0.00434 -- ~:0:<method 'append' of 'list' objects> (<method 'append' of 'list' objects>) +++
+                backward                                         --    6700    6700 -- 0.43012 0.48957 -- onnxcustom/onnxcustom/training/ortgradient.py:702:backward (backward)
+                    input_to_ort                                 --    6700    6700 -- 0.04148 0.05262 -- onnxcustom/onnxcustom/training/ortgradient.py:552:input_to_ort (input_to_ort) +++
+                    saved_tensors                                --    6700    6700 -- 0.00207 0.00207 -- onnxcustom/onnxcustom/training/ortgradient.py:613:saved_tensors (saved_tensors)
+                    <method 'pop' of 'list' objects>             --    6700    6700 -- 0.00476 0.00476 -- ~:0:<method 'pop' of 'list' objects> (<method 'pop' of 'list' objects>)
+                loss_gradient                                    --    6700    6700 -- 0.05841 0.26967 -- onnxcustom/onnxcustom/training/sgd_learning_loss.py:53:loss_gradient (loss_gradient)
+                    clear_binding_inputs                         --    6700    6700 -- 0.00545 0.01270 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:130:clear_binding_inputs (clear_binding_inputs)
+                        _cache_in_clear                          --    6700    6700 -- 0.00568 0.00725 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:119:_cache_in_clear (_cache_in_clear)
+                            <built-in method builtins.id>        --    6700    6700 -- 0.00157 0.00157 -- ~:0:<built-in method builtins.id> (<built-in method builtins.id>) +++
+                    _bind_input_ortvalue                         --   13400   13400 -- 0.02070 0.07545 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:159:_bind_input_ortvalue (_bind_input_ortvalue) +++
+                    _call_iobinding                              --    6700    6700 -- 0.11997 0.11997 -- onnxcustom/onnxcustom/training/sgd_learning_loss.py:50:_call_iobinding (_call_iobinding)
+                    <built-in method builtins.hasattr>           --   13400   13400 -- 0.00315 0.00315 -- ~:0:<built-in method builtins.hasattr> (<built-in method builtins.hasattr>) +++
+                penalty_loss                                     --    6700    6700 -- 0.00112 0.00112 -- onnxcustom/onnxcustom/training/sgd_learning_penalty.py:84:penalty_loss (penalty_loss)
+                update_weights                                   --   40200   40200 -- 0.00651 0.00651 -- onnxcustom/onnxcustom/training/sgd_learning_penalty.py:95:update_weights (update_weights)
+                update_weights                                   --   40200   40200 -- 0.40487 1.94238 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:345:update_weights (update_weights)
+                    _bind_input_ortvalue                         --  201000  201000 -- 0.19630 0.51693 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:159:_bind_input_ortvalue (_bind_input_ortvalue) +++
+                    _bind_output_ortvalue                        --   80400   80400 -- 0.07458 0.18952 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:202:_bind_output_ortvalue (_bind_output_ortvalue)
+                        _bio_cache                               --   80400   80400 -- 0.04417 0.05406 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:138:_bio_cache (_bio_cache) +++
+                        _bio_ptr                                 --   80400   80400 -- 0.05222 0.05222 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:155:_bio_ptr (_bio_ptr) +++
+                        _bio_do_bind_out                         --      12      12 -- 0.00003 0.00003 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:198:_bio_do_bind_out (_bio_do_bind_out)
+                        <built-in method builtins.isinstance>    --   80400   80400 -- 0.00863 0.00863 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+                    _call_iobinding                              --   40200   40200 -- 0.63987 0.63987 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:28:_call_iobinding (_call_iobinding)
+                    value                                        --   40200   40200 -- 0.00953 0.00953 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:160:value (value) +++
+                    <built-in method onnx...ortvalue_from_numpy> --   80400   80400 -- 0.16512 0.16512 -- ~:0:<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy> (<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy>) +++
+                    <built-in method builtins.hasattr>           --   80400   80400 -- 0.01655 0.01655 -- ~:0:<built-in method builtins.hasattr> (<built-in method builtins.hasattr>) +++
+                <method 'mean' of 'numpy.ndarray' objects>       --     100     100 -- 0.00026 0.00426 -- ~:0:<method 'mean' of 'numpy.ndarray' objects> (<method 'mean' of 'numpy.ndarray' objects>)
+                    _mean                                        --     100     100 -- 0.00163 0.00400 -- site-packages/numpy/core/_methods.py:162:_mean (_mean)
+                        _count_reduce_items                      --     100     100 -- 0.00097 0.00107 -- site-packages/numpy/core/_methods.py:66:_count_reduce_items (_count_reduce_items)
+                            <built-in method ...lize_axis_index> --     200     200 -- 0.00010 0.00010 -- ~:0:<built-in method numpy.core._multiarray_umath.normalize_axis_index> (<built-in method numpy.core._multiarray_umath.normalize_axis_index>)
+                        <built-in method numpy.asanyarray>       --     100     100 -- 0.00004 0.00004 -- ~:0:<built-in method numpy.asanyarray> (<built-in method numpy.asanyarray>)
+                        <method 'reduce' of...py.ufunc' objects> --     100     100 -- 0.00109 0.00109 -- ~:0:<method 'reduce' of 'numpy.ufunc' objects> (<method 'reduce' of 'numpy.ufunc' objects>)
+                        <built-in method builtins.hasattr>       --     100     100 -- 0.00006 0.00006 -- ~:0:<built-in method builtins.hasattr> (<built-in method builtins.hasattr>) +++
+                        <built-in method builtins.isinstance>    --     100     100 -- 0.00004 0.00004 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+                        <built-in method builtins.issubclass>    --     200     200 -- 0.00007 0.00007 -- ~:0:<built-in method builtins.issubclass> (<built-in method builtins.issubclass>)
+                <built-in method numpy.array>                    --     100     100 -- 0.00358 0.00358 -- ~:0:<built-in method numpy.array> (<built-in method numpy.array>)
+                <method 'append' of 'list' objects>              --    6700    6700 -- 0.00169 0.00169 -- ~:0:<method 'append' of 'list' objects> (<method 'append' of 'list' objects>) +++
+                <built-in method builtins.len>                   --   40300   40300 -- 0.01424 0.01424 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+            _create_training_session                             --       1       1 -- 0.00001 0.02824 -- onnxcustom/onnxcustom/training/optimizers_partial.py:626:_create_training_session (_create_training_session)
+                __init__                                         --       1       1 -- 0.00008 0.02820 -- onnxcustom/onnxcustom/training/ortgradient.py:54:__init__ (__init__)
+                    <listcomp>                                   --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:91:<listcomp> (<listcomp>)
+                    <listcomp>                                   --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:94:<listcomp> (<listcomp>)
+                    <listcomp>                                   --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:113:<listcomp> (<listcomp>)
+                    _init_next                                   --       1       1 -- 0.00010 0.02809 -- onnxcustom/onnxcustom/training/ortgradient.py:163:_init_next (_init_next)
+                        <listcomp>                               --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:173:<listcomp> (<listcomp>)
+                        <listcomp>                               --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:175:<listcomp> (<listcomp>)
+                        <listcomp>                               --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:178:<listcomp> (<listcomp>)
+                        _create_onnx_graphs                      --       1       1 -- 0.00662 0.02797 -- onnxcustom/onnxcustom/training/ortgradient.py:287:_create_onnx_graphs (_create_onnx_graphs)
+                            <listcomp>                           --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:396:<listcomp> (<listcomp>)
+                            <listcomp>                           --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:397:<listcomp> (<listcomp>)
+                            <listcomp>                           --       1       1 -- 0.00001 0.00002 -- onnxcustom/onnxcustom/training/ortgradient.py:399:<listcomp> (<listcomp>)
+                                _provider_name_to_device_type    --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:260:_provider_name_to_device_type (_provider_name_to_device_type) +++
+                            <listcomp>                           --       1       1 -- 0.00002 0.00002 -- onnxcustom/onnxcustom/training/ortgradient.py:404:<listcomp> (<listcomp>)
+                                _provider_name_to_device_type    --       7       7 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:260:_provider_name_to_device_type (_provider_name_to_device_type) +++
+                            <listcomp>                           --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:410:<listcomp> (<listcomp>)
+                                _provider_name_to_device_type    --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:260:_provider_name_to_device_type (_provider_name_to_device_type) +++
+                            <listcomp>                           --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:479:<listcomp> (<listcomp>)
+                            <listcomp>                           --       1       1 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:480:<listcomp> (<listcomp>)
+                            get_inputs                           --       1       1 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:111:get_inputs (get_inputs)
+                            get_outputs                          --       1       1 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:115:get_outputs (get_outputs)
+                            __init__                             --       2       2 -- 0.00004 0.02063 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:283:__init__ (__init__)
+                                get                              --       2       2 -- 0.00001 0.00004 -- C:/Python395_x64/lib/_collections_abc.py:759:get (get)
+                                    __getitem__                  --       2       2 -- 0.00001 0.00003 -- C:/Python395_x64/lib/os.py:674:__getitem__ (__getitem__)
+                                        encodekey                --       2       2 -- 0.00001 0.00002 -- C:/Python395_x64/lib/os.py:746:encodekey (encodekey)
+                                            check_str            --       2       2 -- 0.00000 0.00000 -- C:/Python395_x64/lib/os.py:740:check_str (check_str)
+                                __init__                         --       2       2 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:101:__init__ (__init__)
+                                _create_inference_session        --       2       2 -- 0.02045 0.02055 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:346:_create_inference_session (_create_inference_session)
+                                    check_and_nor...rovider_args --       2       2 -- 0.00004 0.00008 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:25:check_and_normalize_provider_args (check_and_normalize_provider_args)
+                                        set_provider_options     --       2       2 -- 0.00001 0.00001 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:53:set_provider_options (set_provider_options)
+                                            <dictcomp>           --       2       2 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:62:<dictcomp> (<dictcomp>)
+                                        <listcomp>               --       2       2 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:75:<listcomp> (<listcomp>)
+                                        <listcomp>               --       2       2 -- 0.00000 0.00000 -- onnxruntime/build/Windows/Release/Release/onnxruntime/capi/onnxruntime_inference_collection.py:78:<listcomp> (<listcomp>)
+                            load_model                           --       2       2 -- 0.00001 0.00049 -- site-packages/onnx/__init__.py:107:load_model (load_model)
+                                _load_bytes                      --       2       2 -- 0.00002 0.00003 -- site-packages/onnx/__init__.py:30:_load_bytes (_load_bytes)
+                                    inner                        --       4       4 -- 0.00000 0.00000 -- C:/Python395_x64/lib/typing.py:262:inner (inner) +++
+                                    cast                         --       4       4 -- 0.00000 0.00000 -- C:/Python395_x64/lib/typing.py:1333:cast (cast) +++
+                                _get_file_path                   --       2       2 -- 0.00000 0.00000 -- site-packages/onnx/__init__.py:50:_get_file_path (_get_file_path)
+                                load_model_from_string           --       2       2 -- 0.00001 0.00045 -- site-packages/onnx/__init__.py:147:load_model_from_string (load_model_from_string)
+                                    _deserialize                 --       2       2 -- 0.00001 0.00044 -- site-packages/onnx/__init__.py:81:_deserialize (_deserialize)
+                                        inner                    --       2       2 -- 0.00000 0.00000 -- C:/Python395_x64/lib/typing.py:262:inner (inner) +++
+                                        cast                     --       2       2 -- 0.00000 0.00000 -- C:/Python395_x64/lib/typing.py:1333:cast (cast) +++
+                                        <method 'Pa...' objects> --       2       2 -- 0.00042 0.00042 -- ~:0:<method 'ParseFromString' of 'google.protobuf.pyext._message.CMessage' objects> (<method 'ParseFromString' of 'google.protobuf.pyext._message.CMessage' objects>)
+                            <built-in method builtins.len>       --      16      16 -- 0.00000 0.00000 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+                            <method 'Serializ...essage' objects> --       1       1 -- 0.00014 0.00014 -- ~:0:<method 'SerializeToString' of 'google.protobuf.pyext._message.CMessage' objects> (<method 'SerializeToString' of 'google.protobuf.pyext._message.CMessage' objects>)
+                new_instance                                     --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:211:new_instance (new_instance)
+                    __init__                                     --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/ortgradient.py:501:__init__ (__init__)
+                device_to_providers                              --       1       1 -- 0.00003 0.00003 -- onnxruntime_helper.py:133:device_to_providers (device_to_providers)
+            value                                                --     100     100 -- 0.00003 0.00003 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:160:value (value) +++
+            init_learning_rate                                   --       1       1 -- 0.00000 0.00001 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:307:init_learning_rate (init_learning_rate)
+                init_learning_rate                               --       1       1 -- 0.00000 0.00000 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:176:init_learning_rate (init_learning_rate)
+            update_learning_rate                                 --     100     100 -- 0.00015 0.00098 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:314:update_learning_rate (update_learning_rate)
+                update_learning_rate                             --     100     100 -- 0.00084 0.00084 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:194:update_learning_rate (update_learning_rate)
+            proto_type_to_dtype                                  --       6       6 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/utils/onnx_helper.py:53:proto_type_to_dtype (proto_type_to_dtype)
+            <method 'append' of 'list' objects>                  --     107     107 -- 0.00003 0.00003 -- ~:0:<method 'append' of 'list' objects> (<method 'append' of 'list' objects>) +++
+            <built-in method builtins.len>                       --     108     108 -- 0.00002 0.00002 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+            <method 'randn' of 'numpy...nd.RandomState' objects> --       6       6 -- 0.00040 0.00040 -- ~:0:<method 'randn' of 'numpy.random.mtrand.RandomState' objects> (<method 'randn' of 'numpy.random.mtrand.RandomState' objects>)
+    inner                                                        --       6       6 -- 0.00001 0.00001 -- C:/Python395_x64/lib/typing.py:262:inner (inner)
+    cast                                                         --       6       6 -- 0.00000 0.00000 -- C:/Python395_x64/lib/typing.py:1333:cast (cast)
+    _bio_cache                                                   --  294800  294800 -- 0.18126 0.22052 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:138:_bio_cache (_bio_cache)
+        <built-in method builtins.id>                            --  294800  294800 -- 0.03926 0.03926 -- ~:0:<built-in method builtins.id> (<built-in method builtins.id>) +++
+    _bio_ptr                                                     --  294800  294800 -- 0.20762 0.20762 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:155:_bio_ptr (_bio_ptr)
+    _bind_input_ortvalue                                         --  214400  214400 -- 0.21699 0.59239 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:159:_bind_input_ortvalue (_bind_input_ortvalue)
+        _bio_cache                                               --  214400  214400 -- 0.13709 0.16646 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:138:_bio_cache (_bio_cache) +++
+        _bio_do_bind_in                                          --   14000   14000 -- 0.03012 0.03012 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:151:_bio_do_bind_in (_bio_do_bind_in)
+        _bio_ptr                                                 --  214400  214400 -- 0.15540 0.15540 -- onnxcustom/onnxcustom/training/_base_onnx_function.py:155:_bio_ptr (_bio_ptr) +++
+        <built-in method builtins.isinstance>                    --  214400  214400 -- 0.02341 0.02341 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+    _get_att_state                                               --     205     205 -- 0.00007 0.00007 -- onnxcustom/onnxcustom/training/optimizers_partial.py:139:_get_att_state (_get_att_state)
+    get_full_state                                               --     101     301 -- 0.00049 0.00093 -- onnxcustom/onnxcustom/training/optimizers_partial.py:147:get_full_state (get_full_state)
+        _get_att_state                                           --     201     201 -- 0.00007 0.00007 -- onnxcustom/onnxcustom/training/optimizers_partial.py:139:_get_att_state (_get_att_state) +++
+        <listcomp>                                               --     100     100 -- 0.00021 0.00072 -- onnxcustom/onnxcustom/training/optimizers_partial.py:152:<listcomp> (<listcomp>)
+            get_full_state                                       --     200     200 -- 0.00030 0.00050 -- onnxcustom/onnxcustom/training/optimizers_partial.py:147:get_full_state (get_full_state) +++
+        <built-in method builtins.getattr>                       --     201     201 -- 0.00004 0.00004 -- ~:0:<built-in method builtins.getattr> (<built-in method builtins.getattr>) +++
+        <built-in method builtins.hasattr>                       --     201     201 -- 0.00005 0.00005 -- ~:0:<built-in method builtins.hasattr> (<built-in method builtins.hasattr>) +++
+        <built-in method builtins.isinstance>                    --     301     301 -- 0.00007 0.00007 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+    _provider_name_to_device_type                                --       9       9 -- 0.00001 0.00001 -- onnxcustom/onnxcustom/training/ortgradient.py:260:_provider_name_to_device_type (_provider_name_to_device_type)
+    get_initializer                                              --      14      14 -- 0.00008 0.00175 -- onnxcustom/onnxcustom/training/ortgradient.py:269:get_initializer (get_initializer)
+        to_array                                                 --      12      12 -- 0.00009 0.00168 -- site-packages/onnx/numpy_helper.py:21:to_array (to_array)
+            uses_external_data                                   --      12      12 -- 0.00001 0.00001 -- site-packages/onnx/external_data_helper.py:224:uses_external_data (uses_external_data)
+                <method 'HasField' of '...age.CMessage' objects> --      12      12 -- 0.00000 0.00000 -- ~:0:<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects> (<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects>) +++
+            <method 'astype' of 'numpy.ndarray' objects>         --      12      12 -- 0.00006 0.00006 -- ~:0:<method 'astype' of 'numpy.ndarray' objects> (<method 'astype' of 'numpy.ndarray' objects>) +++
+            <method 'reshape' of 'numpy.ndarray' objects>        --      12      12 -- 0.00002 0.00002 -- ~:0:<method 'reshape' of 'numpy.ndarray' objects> (<method 'reshape' of 'numpy.ndarray' objects>) +++
+            <built-in method numpy.asarray>                      --      12      12 -- 0.00148 0.00148 -- ~:0:<built-in method numpy.asarray> (<built-in method numpy.asarray>)
+            <built-in method builtins.getattr>                   --      12      12 -- 0.00001 0.00001 -- ~:0:<built-in method builtins.getattr> (<built-in method builtins.getattr>) +++
+            <method 'HasField' of 'go...ssage.CMessage' objects> --      24      24 -- 0.00001 0.00001 -- ~:0:<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects> (<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects>) +++
+    input_to_ort                                                 --   13400   13400 -- 0.12150 0.16754 -- onnxcustom/onnxcustom/training/ortgradient.py:552:input_to_ort (input_to_ort)
+        <built-in method builtins.all>                           --   13400   13400 -- 0.01681 0.03690 -- ~:0:<built-in method builtins.all> (<built-in method builtins.all>) +++
+        <built-in method builtins.isinstance>                    --   13400   13400 -- 0.00712 0.00712 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+        <built-in method builtins.len>                           --   13400   13400 -- 0.00202 0.00202 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>) +++
+    value                                                        --   40300   40300 -- 0.00955 0.00955 -- onnxcustom/onnxcustom/training/sgd_learning_rate.py:160:value (value)
+    numpy_to_ort_value                                           --   13426   13426 -- 0.00661 0.03872 -- onnxruntime_helper.py:120:numpy_to_ort_value (numpy_to_ort_value)
+        <built-in method onnxruntim...state.ortvalue_from_numpy> --   13426   13426 -- 0.03211 0.03211 -- ~:0:<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy> (<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy>) +++
+    <method 'astype' of 'numpy.ndarray' objects>                 --      18      18 -- 0.00014 0.00014 -- ~:0:<method 'astype' of 'numpy.ndarray' objects> (<method 'astype' of 'numpy.ndarray' objects>)
+    <method 'append' of 'list' objects>                          --   13575   13575 -- 0.00608 0.00608 -- ~:0:<method 'append' of 'list' objects> (<method 'append' of 'list' objects>)
+    <built-in method builtins.hasattr>                           --   94120   94120 -- 0.01981 0.01981 -- ~:0:<built-in method builtins.hasattr> (<built-in method builtins.hasattr>)
+    <built-in method builtins.isinstance>                        --  362251  362251 -- 0.04476 0.04477 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>)
+        __instancecheck__                                        --       4       4 -- 0.00001 0.00001 -- C:/Python395_x64/lib/abc.py:96:__instancecheck__ (__instancecheck__)
+    <built-in method builtins.len>                               --   67437   67437 -- 0.02341 0.02908 -- ~:0:<built-in method builtins.len> (<built-in method builtins.len>)
+        __len__                                                  --   13600   13600 -- 0.00567 0.00567 -- onnxcustom/onnxcustom/training/data_loader.py:89:__len__ (__len__)
+    <method 'reshape' of 'numpy.ndarray' objects>                --      14      14 -- 0.00002 0.00002 -- ~:0:<method 'reshape' of 'numpy.ndarray' objects> (<method 'reshape' of 'numpy.ndarray' objects>)
+    <built-in method builtins.getattr>                           --     213     213 -- 0.00005 0.00005 -- ~:0:<built-in method builtins.getattr> (<built-in method builtins.getattr>)
+    <built-in method onnxruntime....1_state.ortvalue_from_numpy> --   93826   93826 -- 0.19723 0.19723 -- ~:0:<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy> (<built-in method onnxruntime.capi.onnxruntime_pybind11_state.ortvalue_from_numpy>)
+    <built-in method builtins.id>                                --  301501  301501 -- 0.04083 0.04083 -- ~:0:<built-in method builtins.id> (<built-in method builtins.id>)
+    <method 'HasField' of 'google...._message.CMessage' objects> --      36      36 -- 0.00001 0.00001 -- ~:0:<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects> (<method 'HasField' of 'google.protobuf.pyext._message.CMessage' objects>)
+    <built-in method builtins.all>                               --   13404   13404 -- 0.01681 0.03690 -- ~:0:<built-in method builtins.all> (<built-in method builtins.all>)
+        <lambda>                                                 --   53600   53600 -- 0.01461 0.02009 -- onnxcustom/onnxcustom/training/ortgradient.py:572:<lambda> (<lambda>)
+            <built-in method builtins.isinstance>                --   53600   53600 -- 0.00548 0.00548 -- ~:0:<built-in method builtins.isinstance> (<built-in method builtins.isinstance>) +++
+
+
+::
+
+           _iteration                                           --     100     100 -- 0.41903 3.74610 -- 
+               iter_ortvalue                                    --    6800    6800 -- 0.02838 0.14761 -- 
+                   _next_iter                                   --    6700    6700 -- 0.00946 0.07207 -- 
+                       <built-in method builtins.len>           --    6700    6700 -- 0.00245 0.00423 -- 
+                       <method 'randint' o...domState' objects> --    6700    6700 -- 0.05838 0.05838 -- 
+                   numpy_to_ort_value                           --   13400   13400 -- 0.00658 0.03860 -- 
+                   <built-in method builtins.len>               --    6900    6900 -- 0.00467 0.00855 -- 
+               forward                                          --    6700    6700 -- 0.31685 0.44643 -- 
+                   input_to_ort                                 --    6700    6700 -- 0.08002 0.11492 -- 
+                   save_for_backward                            --    6700    6700 -- 0.01032 0.01032 -- 
+                   <method 'append' of 'list' objects>          --    6700    6700 -- 0.00434 0.00434 -- 
+               backward                                         --    6700    6700 -- 0.43012 0.48957 -- 
+                   input_to_ort                                 --    6700    6700 -- 0.04148 0.05262 -- 
+                   saved_tensors                                --    6700    6700 -- 0.00207 0.00207 -- 
+                   <method 'pop' of 'list' objects>             --    6700    6700 -- 0.00476 0.00476 -- 
+               loss_gradient                                    --    6700    6700 -- 0.05841 0.26967 -- 
+                   clear_binding_inputs                         --    6700    6700 -- 0.00545 0.01270 -- 
+                       _cache_in_clear                          --    6700    6700 -- 0.00568 0.00725 -- 
+                           <built-in method builtins.id>        --    6700    6700 -- 0.00157 0.00157 -- 
+                   _bind_input_ortvalue                         --   13400   13400 -- 0.02070 0.07545 -- 
+                   _call_iobinding                              --    6700    6700 -- 0.11997 0.11997 -- 
+                   <built-in method builtins.hasattr>           --   13400   13400 -- 0.00315 0.00315 -- 
+               penalty_loss                                     --    6700    6700 -- 0.00112 0.00112 -- 
+               update_weights                                   --   40200   40200 -- 0.00651 0.00651 -- 
+               update_weights                                   --   40200   40200 -- 0.40487 1.94238 -- 
+                   _bind_input_ortvalue                         --  201000  201000 -- 0.19630 0.51693 -- 
+                   _bind_output_ortvalue                        --   80400   80400 -- 0.07458 0.18952 -- 
+                       _bio_cache                               --   80400   80400 -- 0.04417 0.05406 -- 
+                       _bio_ptr                                 --   80400   80400 -- 0.05222 0.05222 -- 
+                       _bio_do_bind_out                         --      12      12 -- 0.00003 0.00003 -- 
+                       <built-in method builtins.isinstance>    --   80400   80400 -- 0.00863 0.00863 -- 
+                   _call_iobinding                              --   40200   40200 -- 0.63987 0.63987 -- 
+                   value                                        --   40200   40200 -- 0.00953 0.00953 -- 
+                   <built-in method onnx...ortvalue_from_numpy> --   80400   80400 -- 0.16512 0.16512 -- 
+                   <built-in method builtins.hasattr>           --   80400   80400 -- 0.01655 0.01655 -- 
+               <method 'mean' of 'numpy.ndarray' objects>       --     100     100 -- 0.00026 0.00426 -- 
+                   _mean                                        --     100     100 -- 0.00163 0.00400 -- 
+                       _count_reduce_items                      --     100     100 -- 0.00097 0.00107 -- 
+                           <built-in method ...lize_axis_index> --     200     200 -- 0.00010 0.00010 -- 
+                       <built-in method numpy.asanyarray>       --     100     100 -- 0.00004 0.00004 -- 
+                       <method 'reduce' of...py.ufunc' objects> --     100     100 -- 0.00109 0.00109 -- 
+                       <built-in method builtins.hasattr>       --     100     100 -- 0.00006 0.00006 -- 
+                       <built-in method builtins.isinstance>    --     100     100 -- 0.00004 0.00004 -- 
+                       <built-in method builtins.issubclass>    --     200     200 -- 0.00007 0.00007 -- 
+               <built-in method numpy.array>                    --     100     100 -- 0.00358 0.00358 -- 
+               <method 'append' of 'list' objects>              --    6700    6700 -- 0.00169 0.00169 -- 
+               <built-in method builtins.len>                   --   40300   40300 -- 0.01424 0.01424 -- 
+           _create_training_session                             --       1       1 -- 0.00001 0.02824 -- 
+               __init__                                         --       1       1 -- 0.00008 0.02820 -- 
+                   <listcomp>                                   --       1       1 -- 0.00001 0.00001 -- 
+                   <listcomp>                                   --       1       1 -- 0.00000 0.00000 -- 
+                   <listcomp>                                   --       1       1 -- 0.00000 0.00000 -- 
+                   _init_next                                   --       1       1 -- 0.00010 0.02809 -- 
+                       <listcomp>                               --       1       1 -- 0.00001 0.00001 -- 
+                       <listcomp>                               --       1       1 -- 0.00000 0.00000 -- 
+                       <listcomp>                               --       1       1 -- 0.00000 0.00000 -- 
+                       _create_onnx_graphs                      --       1       1 -- 0.00662 0.02797 -- 
+                           <listcomp>                           --       1       1 -- 0.00001 0.00001 -- 
+                           <listcomp>                           --       1       1 -- 0.00001 0.00001 -- 
+                           <listcomp>                           --       1       1 -- 0.00001 0.00002 -- 
+                               _provider_name_to_device_type    --       1       1 -- 0.00000 0.00000 -- 
+                           <listcomp>                           --       1       1 -- 0.00002 0.00002 -- 
+                               _provider_name_to_device_type    --       7       7 -- 0.00000 0.00000 -- 
+                           <listcomp>                           --       1       1 -- 0.00000 0.00000 -- 
+                               _provider_name_to_device_type    --       1       1 -- 0.00000 0.00000 -- 
+                           <listcomp>                           --       1       1 -- 0.00001 0.00001 -- 
+                           <listcomp>                           --       1       1 -- 0.00001 0.00001 -- 
+                           get_inputs                           --       1       1 -- 0.00000 0.00000 -- 
+                           get_outputs                          --       1       1 -- 0.00000 0.00000 -- 
+                           __init__                             --       2       2 -- 0.00004 0.02063 -- 
+                               get                              --       2       2 -- 0.00001 0.00004 -- 
+                                   __getitem__                  --       2       2 -- 0.00001 0.00003 -- 
+                                       encodekey                --       2       2 -- 0.00001 0.00002 -- 
+                                           check_str            --       2       2 -- 0.00000 0.00000 -- 
+                               __init__                         --       2       2 -- 0.00000 0.00000 -- 
+                               _create_inference_session        --       2       2 -- 0.02045 0.02055 -- 
+                                   check_and_nor...rovider_args --       2       2 -- 0.00004 0.00008 -- 
+                                       set_provider_options     --       2       2 -- 0.00001 0.00001 -- 
+                                           <dictcomp>           --       2       2 -- 0.00000 0.00000 -- 
+                                       <listcomp>               --       2       2 -- 0.00000 0.00000 -- 
+                                       <listcomp>               --       2       2 -- 0.00000 0.00000 -- 
+                           load_model                           --       2       2 -- 0.00001 0.00049 -- 
+                               _load_bytes                      --       2       2 -- 0.00002 0.00003 -- 
+                                   inner                        --       4       4 -- 0.00000 0.00000 -- 
+                                   cast                         --       4       4 -- 0.00000 0.00000 -- 
+                               _get_file_path                   --       2       2 -- 0.00000 0.00000 -- 
+                               load_model_from_string           --       2       2 -- 0.00001 0.00045 -- 
+                                   _deserialize                 --       2       2 -- 0.00001 0.00044 -- 
+                                       inner                    --       2       2 -- 0.00000 0.00000 -- 
+                                       cast                     --       2       2 -- 0.00000 0.00000 -- 
+                                       <method 'Pa...' objects> --       2       2 -- 0.00042 0.00042 -- 
+                           <built-in method builtins.len>       --      16      16 -- 0.00000 0.00000 -- 
+                           <method 'Serializ...essage' objects> --       1       1 -- 0.00014 0.00014 -- 
+               new_instance                                     --       1       1 -- 0.00000 0.00000 -- 
+                   __init__                                     --       1       1 -- 0.00000 0.00000 -- 
+               device_to_providers                              --       1       1 -- 0.00003 0.00003 -- 
+           value                                                --     100     100 -- 0.00003 0.00003 -- 
+
+.. code:: ipython3
+
+    import os
+    if not os.path.exists("mlp_onnx_ort"):
+        os.mkdir("mlp_onnx_ort")
+    train_session2.save_onnx_graph("mlp_onnx_ort")
+
+
+
+
+.. parsed-literal::
+    {'model_onnx': 'mlp_onnx_ort\\GradFBOptimizer.model_onnx.onnx',
+     'learning_rate': {'axpyw_onnx_': 'mlp_onnx_ort\\LRateSGDNesterov.learning_rate.axpyw_onnx_.onnx'},
+     'learning_loss': {'loss_grad_onnx_': 'mlp_onnx_ort\\SquareLLoss.learning_loss.loss_grad_onnx_.onnx',
+      'loss_score_onnx_': 'mlp_onnx_ort\\SquareLLoss.learning_loss.loss_score_onnx_.onnx'},
+     'learning_penalty': {},
+     'zero_onnx_': 'mlp_onnx_ort\\GradFBOptimizer.zero_onnx_.onnx',
+     'train_function_': {'_trained_onnx': 'mlp_onnx_ort\\OrtGradientForwardBackwardFunction_1523278698000.train_function_._trained_onnx.onnx',
+      '_optimized_pre_grad_model': 'mlp_onnx_ort\\OrtGradientForwardBackwardFunction_1523278698000.train_function_._optimized_pre_grad_model.onnx'}}
+
+
+
+Weights are updated with the following ONNX graph:
+
+.. code:: ipython3
+
+    %onnxview train_session2.learning_rate.axpyw_onnx_
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M535d70bde10646b088951599157d0d15-cont"><div id="M535d70bde10646b088951599157d0d15" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  size=7;\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  X1 [shape=box color=red label=\"X1\nfloat(('?',))\" fontsize=10];\n  X2 [shape=box color=red label=\"X2\nfloat(('?',))\" fontsize=10];\n  G [shape=box color=red label=\"G\nfloat(('?',))\" fontsize=10];\n  alpha [shape=box color=red label=\"alpha\nfloat((1,))\" fontsize=10];\n  beta [shape=box color=red label=\"beta\nfloat((1,))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat(('?',))\" fontsize=10];\n  Z [shape=box color=green label=\"Z\nfloat(('?',))\" fontsize=10];\n\n\n  Mu_C03 [shape=box label=\"Mu_C03\" fontsize=10];\n  Mu_Mul1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(Mu_Mul1)\" fontsize=10];\n  G -> Mu_Mul1;\n  beta -> Mu_Mul1;\n  Mu_Mul1 -> Mu_C03;\n\n  Mu_C0 [shape=box label=\"Mu_C0\" fontsize=10];\n  Mu_Mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(Mu_Mul)\" fontsize=10];\n  X1 -> Mu_Mul;\n  alpha -> Mu_Mul;\n  Mu_Mul -> Mu_C0;\n\n  Ad_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add)\" fontsize=10];\n  Mu_C0 -> Ad_Add;\n  Mu_C03 -> Ad_Add;\n  Ad_Add -> Z;\n\n  Mu_C02 [shape=box label=\"Mu_C02\" fontsize=10];\n  Mu_Mul2 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(Mu_Mul2)\" fontsize=10];\n  Z -> Mu_Mul2;\n  beta -> Mu_Mul2;\n  Mu_Mul2 -> Mu_C02;\n\n  Ad_C0 [shape=box label=\"Ad_C0\" fontsize=10];\n  Ad_Add1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add1)\" fontsize=10];\n  Mu_C0 -> Ad_Add1;\n  Mu_C02 -> Ad_Add1;\n  Ad_Add1 -> Ad_C0;\n\n  Ad_Add2 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add2)\" fontsize=10];\n  Ad_C0 -> Ad_Add2;\n  X2 -> Ad_Add2;\n  Ad_Add2 -> Y;\n}");
+    document.getElementById('M535d70bde10646b088951599157d0d15').innerHTML = svgGraph; });
+
+    </script>

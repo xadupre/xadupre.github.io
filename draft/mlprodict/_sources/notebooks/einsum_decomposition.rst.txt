@@ -1,0 +1,1767 @@
+
+.. _einsumdecompositionrst:
+
+====================
+Einsum decomposition
+====================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <einsum_decomposition.ipynb>`, :downloadlink:`html <einsum_decomposition2html.html>`, :download:`PDF <einsum_decomposition.pdf>`, :download:`python <einsum_decomposition.py>`, :downloadlink:`slides <einsum_decomposition.slides.html>`, :githublink:`GitHub|_doc/notebooks/einsum_decomposition.ipynb|*`
+
+
+This notebook shows a way to decompose
+`einsum <https://numpy.org/doc/stable/reference/generated/numpy.einsum.html>`__
+into a subset of operations (expand_dims, squeeze, transpose, extended
+matrix multiplication).
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+Operator explanation with equation ``bac,cd,def=ebc``
+-----------------------------------------------------
+
+The operator einsum takes an equation and some inputs. Every letter
+involved in the equation is a loop. Let’s see on one example.
+
+.. code:: ipython3
+
+    import numpy
+    
+    m1 = numpy.arange(0, 8).astype(numpy.float32).reshape((2, 2, 2)) + 10
+    m2 = numpy.arange(0, 4).astype(numpy.float32).reshape((2, 2)) + 100
+    m3 = numpy.arange(0, 8).astype(numpy.float32).reshape((2, 2, 2)) + 1000
+    
+    equation = "bac,cd,def->ebc"
+    truth = numpy.einsum(equation, m1, m2, m3)
+    truth
+
+
+
+
+.. parsed-literal::
+    array([[[ 8866198.,  9864696.],
+            [12090270., 13152928.]],
+           [[ 8883886.,  9884376.],
+            [12114390., 13179168.]]], dtype=float32)
+
+
+
+This summation is equalent to:
+
+.. code:: ipython3
+
+    res = numpy.zeros((2, 2, 2))
+    for a in range(0, 2):
+        for b in range(0, 2):
+            for c in range(0, 2):
+                for d in range(0, 2):
+                    for e in range(0, 2):
+                        for f in range(0, 2):
+                            res[e, b, c] += m1[b, a, c] * m2[c, d] * m3[d, e, f]
+    res
+
+
+
+
+.. parsed-literal::
+    array([[[ 8866198.,  9864696.],
+            [12090270., 13152928.]],
+           [[ 8883886.,  9884376.],
+            [12114390., 13179168.]]])
+
+
+
+Theoritically, this summation is in this case has a cost of
+:math:`O(N^6)`. However this simple computation is usually much longer
+than using matrix multiplications along the path. :math:`O(N^4)` is the
+cost of the heaviest matrix multiplication in this case). But to do
+that, the equation needs to be decomposed into a sequence of matrix
+multiplications.
+
+Decomposition of ``bac,cd,def=ebc``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    import numpy
+    from mlprodict.testing.einsum import (
+        decompose_einsum_equation, apply_einsum_sequence)
+
+.. code:: ipython3
+
+    m1 = numpy.arange(0, 8).astype(numpy.float32).reshape((2, 2, 2)) + 10
+    m2 = numpy.arange(0, 4).astype(numpy.float32).reshape((2, 2)) + 100
+    m3 = numpy.arange(0, 8).astype(numpy.float32).reshape((2, 2, 2)) + 1000
+
+.. code:: ipython3
+
+    seq = decompose_einsum_equation("bac,cd,def->ebc")
+
+.. code:: ipython3
+
+    from jyquickhelper import RenderJsDot
+    RenderJsDot(seq.to_dot(size=7))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mbb3fcddfa5ac434693f1a53d89435c0c-cont"><div id="Mbb3fcddfa5ac434693f1a53d89435c0c" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\norientation=portrait;\nranksep=0.25;\nnodesep=0.05;\nwidth=0.5;\nheight=0.1;\nsize=7;\nnode [shape=record];\n0 [label=\"input 0\\nbac\\n[ 1  0  2 -1 -1 -1]\"];\n1953478148880 [label=\"id\\nNone\"];\n0 -> 1953478148880;\n1953478149120 [label=\"expand_dims\\naxes=((3, 3), (3, 4), (3, 5))None\"];\n1953478148880 -> 1953478149120;\n1953478148496 [label=\"transpose\\nperm=(1, 0, 2, 3, 4, 5)None\"];\n1953478149120 -> 1953478148496;\n1953478149168 [label=\"reduce_sum - I0\\naxes=(0,)None\" style=filled fillcolor=red];\n1953478148496 -> 1953478149168;\n1 [label=\"input 1\\ncd\\n[-1 -1  0  1 -1 -1]\"];\n1953478149408 [label=\"id\\nNone\"];\n1 -> 1953478149408;\n1953478149456 [label=\"expand_dims\\naxes=((0, 0), (0, 1), (2, 4), (2, 5))None\"];\n1953478149408 -> 1953478149456;\n1953478149888 [label=\"matmul - I1\\naxes=() left=(1, 2) ndim=6 right=(2, 3)\\n~aBCdef,abCDef-\\>aBCDef\" style=filled fillcolor=red];\n1953478149168 -> 1953478149888;\n1953478149456 -> 1953478149888;\n2 [label=\"input 2\\ndef\\n[-1 -1 -1  0  1  2]\"];\n1953478149840 [label=\"id\\nNone\"];\n2 -> 1953478149840;\n1953478149744 [label=\"expand_dims\\naxes=((0, 0), (0, 1), (0, 2))None\"];\n1953478149840 -> 1953478149744;\n1953478149648 [label=\"reduce_sum\\naxes=(5,)None\"];\n1953478149744 -> 1953478149648;\n1953478150416 [label=\"matmul - I2\\naxes=(3,) left=(1, 2) ndim=6 right=(4,)\\n~aBCdef,abcdEf-\\>aBCEf\" style=filled fillcolor=red];\n1953478149888 -> 1953478150416;\n1953478149648 -> 1953478150416;\n1953478150320 [label=\"transpose\\nperm=(0, 4, 1, 3, 2, 5)None\"];\n1953478150416 -> 1953478150320;\n1953478148976 [label=\"squeeze - I-1\\naxes=(0, 3, 5)None\" style=filled fillcolor=red];\n1953478150320 -> 1953478148976;\n}");
+    document.getElementById('Mbb3fcddfa5ac434693f1a53d89435c0c').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Then the result can be obtained as follows:
+
+.. code:: ipython3
+
+    apply_einsum_sequence(seq, m1, m2, m3)
+
+
+
+
+.. parsed-literal::
+    array([[[ 8866198.,  9864696.],
+            [12090270., 13152928.]],
+           [[ 8883886.,  9884376.],
+            [12114390., 13179168.]]], dtype=float32)
+
+
+
+operator matmul
+~~~~~~~~~~~~~~~
+
+This operator can be used to represent either a multiplication, either a
+matrix multiplication but it applies only on arrays with the same number
+of dimensions. It can be broken into multiplication of matrix
+multiplication.
+
+.. code:: ipython3
+
+    seq_clean = decompose_einsum_equation("bac,cd,def->ebc", strategy='numpy', clean=True)
+    RenderJsDot(seq_clean.to_dot(size=7))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M121c1620486d4a3098492902ec6af2fe-cont"><div id="M121c1620486d4a3098492902ec6af2fe" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\norientation=portrait;\nranksep=0.25;\nnodesep=0.05;\nwidth=0.5;\nheight=0.1;\nsize=7;\nnode [shape=record];\n0 [label=\"input 0\\nbac\\n[ 1  0  2 -1 -1 -1]\"];\n1953478175184 [label=\"id\\nNone\"];\n0 -> 1953478175184;\n1953478175376 [label=\"expand_dims\\naxes=((3, 3), (3, 4), (3, 5))None\"];\n1953478175184 -> 1953478175376;\n1953478175616 [label=\"transpose\\nperm=(1, 0, 2, 3, 4, 5)None\"];\n1953478175376 -> 1953478175616;\n1953478175424 [label=\"reduce_sum - I0\\naxes=(0,)None\" style=filled fillcolor=red];\n1953478175616 -> 1953478175424;\n1 [label=\"input 1\\ncd\\n[-1 -1  0  1 -1 -1]\"];\n1953478172880 [label=\"id\\nNone\"];\n1 -> 1953478172880;\n1953478173216 [label=\"expand_dims\\naxes=((0, 0), (0, 1), (2, 4), (2, 5))None\"];\n1953478172880 -> 1953478173216;\n1953478176192 [label=\"transpose\\nperm=(0, 2, 4, 5, 1, 3)None\"];\n1953478175424 -> 1953478176192;\n1953478176096 [label=\"transpose\\nperm=(0, 2, 4, 5, 1, 3)None\"];\n1953478173216 -> 1953478176096;\n1953478176240 [label=\"batch_dot\\nbatch_axes=(0, 1, 2, 3) keep_axes=None left=(1, 4) ndim=6 right=(1, 5) sum_axes=()None\"];\n1953478176192 -> 1953478176240;\n1953478176096 -> 1953478176240;\n2 [label=\"input 2\\ndef\\n[-1 -1 -1  0  1  2]\"];\n1953478176000 [label=\"id\\nNone\"];\n2 -> 1953478176000;\n1953478175904 [label=\"expand_dims\\naxes=((0, 0), (0, 1), (0, 2))None\"];\n1953478176000 -> 1953478175904;\n1953478176048 [label=\"reduce_sum\\naxes=(5,)None\"];\n1953478175904 -> 1953478176048;\n1953478152144 [label=\"transpose\\nperm=(0, 5, 1, 2, 4, 3)None\"];\n1953478176048 -> 1953478152144;\n1953478151472 [label=\"batch_dot\\nbatch_axes=(0, 1) keep_axes=None left=(2, 3) ndim=6 right=(4,) sum_axes=(5,)None\"];\n1953478176528 -> 1953478151472;\n1953478152144 -> 1953478151472;\n1953478175280 [label=\"squeeze - I-1\\naxes=(0, 3, 5)None\" style=filled fillcolor=red];\n1953478176336 -> 1953478175280;\n1953478176528 [label=\"transpose - I1\\nperm=(0, 3, 4, 1, 2, 5)None\" style=filled fillcolor=red];\n1953478176240 -> 1953478176528;\n1953478176336 [label=\"transpose - I2\\nperm=(0, 4, 2, 5, 3, 1)None\" style=filled fillcolor=red];\n1953478151472 -> 1953478176336;\n}");
+    document.getElementById('M121c1620486d4a3098492902ec6af2fe').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Operator *transpose_mm* is a regular transposition, it takes two inputs
+but only tranposes the first input before returning it. Operator
+*batch_dot* is a matrix multiplication. It is left that way on purpose
+as it may be implemented with function dot or gemm. The operator
+distinguishes between 3 kind of axes: batch axes, kept axes, sum(mation)
+axes. It then reshapes both input matrices with 3D tensors, batch axis,
+row axis, column axis to use function
+`numpy.dot <https://numpy.org/doc/stable/reference/generated/numpy.dot.html>`__.
+
+ONNX
+~~~~
+
+The previous graph can be converted into ONNX.
+
+.. code:: ipython3
+
+    onx = seq_clean.to_onnx("Y", "X1", "X2", "X3", dtype=numpy.float32)
+    # with open("einsum.onnx", "wb") as f:
+    #      f.write(onx.SerializeToString())
+    %onnxview onx 
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mf0be36c6013546b1bddfc5b3607fd032-cont"><div id="Mf0be36c6013546b1bddfc5b3607fd032" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  size=None;\n  orientation=portrait;\n  ranksep=0.25;\n\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0))\" fontsize=10];\n  X2 [shape=box color=red label=\"X2\nfloat((0, 0))\" fontsize=10];\n  X3 [shape=box color=red label=\"X3\nfloat((0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0))\" fontsize=10];\n\n  einsum1953478175184_id_axes [shape=box label=\"einsum1953478175184_id_axes\nint64((3,))\n[3 4 5]\" fontsize=10];\n  einsum1953478175424_re_axes [shape=box label=\"einsum1953478175424_re_axes\nint64((1,))\n[0]\" fontsize=10];\n  einsum1953478172880_id_axes [shape=box label=\"einsum1953478172880_id_axes\nint64((4,))\n[0 1 4 5]\" fontsize=10];\n  einsum1953478176240_ba_batch_axes [shape=box label=\"einsum1953478176240_ba_batch_axes\nint64((4,))\n[0 1 2 3]\" fontsize=10];\n  einsum1953478176240_ba__1 [shape=box label=\"einsum1953478176240_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953478176240_ba_1 [shape=box label=\"einsum1953478176240_ba_1\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953478176240_ba_left_set [shape=box label=\"einsum1953478176240_ba_left_set\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953478176240_ba_right_set [shape=box label=\"einsum1953478176240_ba_right_set\nint64((1,))\n[5]\" fontsize=10];\n  einsum1953478176000_id_axes [shape=box label=\"einsum1953478176000_id_axes\nint64((3,))\n[0 1 2]\" fontsize=10];\n  einsum1953478176048_re_axes [shape=box label=\"einsum1953478176048_re_axes\nint64((1,))\n[5]\" fontsize=10];\n  einsum1953478151472_ba_batch_axes [shape=box label=\"einsum1953478151472_ba_batch_axes\nint64((2,))\n[0 1]\" fontsize=10];\n  einsum1953478151472_ba_sum_axes [shape=box label=\"einsum1953478151472_ba_sum_axes\nint64((1,))\n[5]\" fontsize=10];\n  einsum1953478151472_ba__1 [shape=box label=\"einsum1953478151472_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953478151472_ba__01 [shape=box label=\"einsum1953478151472_ba__01\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953478151472_ba_left_set [shape=box label=\"einsum1953478151472_ba_left_set\nint64((2,))\n[2 3]\" fontsize=10];\n  einsum1953478151472_ba_right_set [shape=box label=\"einsum1953478151472_ba_right_set\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953478151472_ba_ones [shape=box label=\"einsum1953478151472_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953478176336_tr_axes [shape=box label=\"einsum1953478176336_tr_axes\nint64((3,))\n[0 3 5]\" fontsize=10];\n\n  einsum1953478175184_id [shape=box label=\"einsum1953478175184_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X1 -> Identity;\n  Identity -> einsum1953478175184_id;\n\n  einsum1953478175376_ex [shape=box label=\"einsum1953478175376_ex\" fontsize=10];\n  Unsqueeze [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze)\" fontsize=10];\n  einsum1953478175184_id -> Unsqueeze;\n  einsum1953478175184_id_axes -> Unsqueeze;\n  Unsqueeze -> einsum1953478175376_ex;\n\n  einsum1953478175616_tr [shape=box label=\"einsum1953478175616_tr\" fontsize=10];\n  Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose)\nperm=[1 0 2 3 4 5]\" fontsize=10];\n  einsum1953478175376_ex -> Transpose;\n  Transpose -> einsum1953478175616_tr;\n\n  einsum1953478175424_re [shape=box label=\"einsum1953478175424_re\" fontsize=10];\n  ReduceSum [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum)\nkeepdims=1\" fontsize=10];\n  einsum1953478175616_tr -> ReduceSum;\n  einsum1953478175424_re_axes -> ReduceSum;\n  ReduceSum -> einsum1953478175424_re;\n\n  einsum1953478172880_id [shape=box label=\"einsum1953478172880_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X2 -> Identity1;\n  Identity1 -> einsum1953478172880_id;\n\n  einsum1953478173216_ex [shape=box label=\"einsum1953478173216_ex\" fontsize=10];\n  Unsqueeze1 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze1)\" fontsize=10];\n  einsum1953478172880_id -> Unsqueeze1;\n  einsum1953478172880_id_axes -> Unsqueeze1;\n  Unsqueeze1 -> einsum1953478173216_ex;\n\n  einsum1953478176192_tr [shape=box label=\"einsum1953478176192_tr\" fontsize=10];\n  Transpose1 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1)\nperm=[0 2 4 5 1 3]\" fontsize=10];\n  einsum1953478175424_re -> Transpose1;\n  Transpose1 -> einsum1953478176192_tr;\n\n  einsum1953478176096_tr [shape=box label=\"einsum1953478176096_tr\" fontsize=10];\n  Transpose12 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12)\nperm=[0 2 4 5 1 3]\" fontsize=10];\n  einsum1953478173216_ex -> Transpose12;\n  Transpose12 -> einsum1953478176096_tr;\n\n  einsum1953478176240_ba_shape1 [shape=box label=\"einsum1953478176240_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum1953478176192_tr -> Shape;\n  Shape -> einsum1953478176240_ba_shape1;\n\n  einsum1953478176240_ba_shape2 [shape=box label=\"einsum1953478176240_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum1953478176096_tr -> Shape1;\n  Shape1 -> einsum1953478176240_ba_shape2;\n\n  einsum1953478176240_ba_dim0g [shape=box label=\"einsum1953478176240_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum1953478176240_ba_shape1 -> Gather;\n  einsum1953478176240_ba_batch_axes -> Gather;\n  Gather -> einsum1953478176240_ba_dim0g;\n\n  einsum1953478176240_ba_dim0bg [shape=box label=\"einsum1953478176240_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum1953478176240_ba_shape2 -> Gather1;\n  einsum1953478176240_ba_batch_axes -> Gather1;\n  Gather1 -> einsum1953478176240_ba_dim0bg;\n\n  einsum1953478176240_ba_dim0 [shape=box label=\"einsum1953478176240_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum1953478176240_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum1953478176240_ba_dim0;\n\n  einsum1953478176240_ba_dim0b [shape=box label=\"einsum1953478176240_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum1953478176240_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum1953478176240_ba_dim0b;\n\n  einsum1953478176240_ba_resh1 [shape=box label=\"einsum1953478176240_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum1953478176240_ba_dim0 -> Concat;\n  einsum1953478176240_ba__1 -> Concat;\n  einsum1953478176240_ba_1 -> Concat;\n  Concat -> einsum1953478176240_ba_resh1;\n\n  einsum1953478176240_ba_resh2 [shape=box label=\"einsum1953478176240_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum1953478176240_ba_dim0b -> Concat1;\n  einsum1953478176240_ba__1 -> Concat1;\n  einsum1953478176240_ba_1 -> Concat1;\n  Concat1 -> einsum1953478176240_ba_resh2;\n\n  einsum1953478176240_ba_aresh1 [shape=box label=\"einsum1953478176240_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum1953478176192_tr -> Reshape;\n  einsum1953478176240_ba_resh1 -> Reshape;\n  Reshape -> einsum1953478176240_ba_aresh1;\n\n  einsum1953478176240_ba_aresh2 [shape=box label=\"einsum1953478176240_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum1953478176096_tr -> Reshape1;\n  einsum1953478176240_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum1953478176240_ba_aresh2;\n\n  einsum1953478176240_ba_aresh2_tr [shape=box label=\"einsum1953478176240_ba_aresh2_tr\" fontsize=10];\n  Transpose123 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose123)\nperm=[0 2 1]\" fontsize=10];\n  einsum1953478176240_ba_aresh2 -> Transpose123;\n  Transpose123 -> einsum1953478176240_ba_aresh2_tr;\n\n  einsum1953478176240_ba_dot [shape=box label=\"einsum1953478176240_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum1953478176240_ba_aresh1 -> MatMul;\n  einsum1953478176240_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum1953478176240_ba_dot;\n\n  einsum1953478176240_ba_max_dim [shape=box label=\"einsum1953478176240_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum1953478176240_ba_dim0g -> Max;\n  einsum1953478176240_ba_dim0bg -> Max;\n  Max -> einsum1953478176240_ba_max_dim;\n\n  einsum1953478176240_ba_left_dim [shape=box label=\"einsum1953478176240_ba_left_dim\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum1953478176240_ba_shape1 -> Gather12;\n  einsum1953478176240_ba_left_set -> Gather12;\n  Gather12 -> einsum1953478176240_ba_left_dim;\n\n  einsum1953478176240_ba_right_dim [shape=box label=\"einsum1953478176240_ba_right_dim\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum1953478176240_ba_shape2 -> Gather123;\n  einsum1953478176240_ba_right_set -> Gather123;\n  Gather123 -> einsum1953478176240_ba_right_dim;\n\n  einsum1953478176240_ba_new_shape [shape=box label=\"einsum1953478176240_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum1953478176240_ba_max_dim -> Concat12;\n  einsum1953478176240_ba_left_dim -> Concat12;\n  einsum1953478176240_ba_right_dim -> Concat12;\n  Concat12 -> einsum1953478176240_ba_new_shape;\n\n  einsum1953478176240_ba_final [shape=box label=\"einsum1953478176240_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum1953478176240_ba_dot -> Reshape12;\n  einsum1953478176240_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum1953478176240_ba_final;\n\n  einsum1953478176528_tr [shape=box label=\"einsum1953478176528_tr\" fontsize=10];\n  Transpose1234 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1234)\nperm=[0 3 4 1 2 5]\" fontsize=10];\n  einsum1953478176240_ba_final -> Transpose1234;\n  Transpose1234 -> einsum1953478176528_tr;\n\n  einsum1953478176000_id [shape=box label=\"einsum1953478176000_id\" fontsize=10];\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  X3 -> Identity12;\n  Identity12 -> einsum1953478176000_id;\n\n  einsum1953478175904_ex [shape=box label=\"einsum1953478175904_ex\" fontsize=10];\n  Unsqueeze12 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze12)\" fontsize=10];\n  einsum1953478176000_id -> Unsqueeze12;\n  einsum1953478176000_id_axes -> Unsqueeze12;\n  Unsqueeze12 -> einsum1953478175904_ex;\n\n  einsum1953478176048_re [shape=box label=\"einsum1953478176048_re\" fontsize=10];\n  ReduceSum1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum1)\nkeepdims=1\" fontsize=10];\n  einsum1953478175904_ex -> ReduceSum1;\n  einsum1953478176048_re_axes -> ReduceSum1;\n  ReduceSum1 -> einsum1953478176048_re;\n\n  einsum1953478152144_tr [shape=box label=\"einsum1953478152144_tr\" fontsize=10];\n  Transpose12345 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12345)\nperm=[0 5 1 2 4 3]\" fontsize=10];\n  einsum1953478176048_re -> Transpose12345;\n  Transpose12345 -> einsum1953478152144_tr;\n\n  einsum1953478151472_ba_shape1 [shape=box label=\"einsum1953478151472_ba_shape1\" fontsize=10];\n  Shape12 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape12)\" fontsize=10];\n  einsum1953478176528_tr -> Shape12;\n  Shape12 -> einsum1953478151472_ba_shape1;\n\n  einsum1953478151472_ba_shape2 [shape=box label=\"einsum1953478151472_ba_shape2\" fontsize=10];\n  Shape123 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape123)\" fontsize=10];\n  einsum1953478152144_tr -> Shape123;\n  Shape123 -> einsum1953478151472_ba_shape2;\n\n  einsum1953478151472_ba_dim0g [shape=box label=\"einsum1953478151472_ba_dim0g\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum1953478151472_ba_shape1 -> Gather1234;\n  einsum1953478151472_ba_batch_axes -> Gather1234;\n  Gather1234 -> einsum1953478151472_ba_dim0g;\n\n  einsum1953478151472_ba_dim0bg [shape=box label=\"einsum1953478151472_ba_dim0bg\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum1953478151472_ba_shape2 -> Gather12345;\n  einsum1953478151472_ba_batch_axes -> Gather12345;\n  Gather12345 -> einsum1953478151472_ba_dim0bg;\n\n  einsum1953478151472_ba_dim0 [shape=box label=\"einsum1953478151472_ba_dim0\" fontsize=10];\n  ReduceProd12 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd12)\nkeepdims=1\" fontsize=10];\n  einsum1953478151472_ba_dim0g -> ReduceProd12;\n  ReduceProd12 -> einsum1953478151472_ba_dim0;\n\n  einsum1953478151472_ba_dim0b [shape=box label=\"einsum1953478151472_ba_dim0b\" fontsize=10];\n  ReduceProd123 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd123)\nkeepdims=1\" fontsize=10];\n  einsum1953478151472_ba_dim0bg -> ReduceProd123;\n  ReduceProd123 -> einsum1953478151472_ba_dim0b;\n\n  einsum1953478151472_ba_dim1 [shape=box label=\"einsum1953478151472_ba_dim1\" fontsize=10];\n  Gather123456 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123456)\" fontsize=10];\n  einsum1953478151472_ba_shape1 -> Gather123456;\n  einsum1953478151472_ba_sum_axes -> Gather123456;\n  Gather123456 -> einsum1953478151472_ba_dim1;\n\n  einsum1953478151472_ba_dim2 [shape=box label=\"einsum1953478151472_ba_dim2\" fontsize=10];\n  Gather1234567 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234567)\" fontsize=10];\n  einsum1953478151472_ba_shape2 -> Gather1234567;\n  einsum1953478151472_ba_sum_axes -> Gather1234567;\n  Gather1234567 -> einsum1953478151472_ba_dim2;\n\n  einsum1953478151472_ba_resh1_11 [shape=box label=\"einsum1953478151472_ba_resh1_11\" fontsize=10];\n  Concat123 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat123)\naxis=0\" fontsize=10];\n  einsum1953478151472_ba__01 -> Concat123;\n  einsum1953478151472_ba_dim1 -> Concat123;\n  Concat123 -> einsum1953478151472_ba_resh1_11;\n\n  einsum1953478151472_ba_resh2_11 [shape=box label=\"einsum1953478151472_ba_resh2_11\" fontsize=10];\n  Concat1234 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1234)\naxis=0\" fontsize=10];\n  einsum1953478151472_ba__01 -> Concat1234;\n  einsum1953478151472_ba_dim2 -> Concat1234;\n  Concat1234 -> einsum1953478151472_ba_resh2_11;\n\n  einsum1953478151472_ba_aresh1 [shape=box label=\"einsum1953478151472_ba_aresh1\" fontsize=10];\n  Reshape123 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape123)\" fontsize=10];\n  einsum1953478176528_tr -> Reshape123;\n  einsum1953478151472_ba_resh1_11 -> Reshape123;\n  Reshape123 -> einsum1953478151472_ba_aresh1;\n\n  einsum1953478151472_ba_aresh2 [shape=box label=\"einsum1953478151472_ba_aresh2\" fontsize=10];\n  Reshape1234 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1234)\" fontsize=10];\n  einsum1953478152144_tr -> Reshape1234;\n  einsum1953478151472_ba_resh2_11 -> Reshape1234;\n  Reshape1234 -> einsum1953478151472_ba_aresh2;\n\n  einsum1953478151472_ba_gemm [shape=box label=\"einsum1953478151472_ba_gemm\" fontsize=10];\n  Gemm [shape=box style=\"filled,rounded\" color=orange label=\"Gemm\n(Gemm)\nalpha=1.0\nbeta=0.0\ntransA=0\ntransB=1\" fontsize=10];\n  einsum1953478151472_ba_aresh1 -> Gemm;\n  einsum1953478151472_ba_aresh2 -> Gemm;\n  Gemm -> einsum1953478151472_ba_gemm;\n\n  einsum1953478151472_ba_max_dim [shape=box label=\"einsum1953478151472_ba_max_dim\" fontsize=10];\n  Max1 [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max1)\" fontsize=10];\n  einsum1953478151472_ba_dim0g -> Max1;\n  einsum1953478151472_ba_dim0bg -> Max1;\n  Max1 -> einsum1953478151472_ba_max_dim;\n\n  einsum1953478151472_ba_left_dim [shape=box label=\"einsum1953478151472_ba_left_dim\" fontsize=10];\n  Gather12345678 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345678)\" fontsize=10];\n  einsum1953478151472_ba_shape1 -> Gather12345678;\n  einsum1953478151472_ba_left_set -> Gather12345678;\n  Gather12345678 -> einsum1953478151472_ba_left_dim;\n\n  einsum1953478151472_ba_right_dim [shape=box label=\"einsum1953478151472_ba_right_dim\" fontsize=10];\n  Gather123456789 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123456789)\" fontsize=10];\n  einsum1953478151472_ba_shape2 -> Gather123456789;\n  einsum1953478151472_ba_right_set -> Gather123456789;\n  Gather123456789 -> einsum1953478151472_ba_right_dim;\n\n  einsum1953478151472_ba_new_shape [shape=box label=\"einsum1953478151472_ba_new_shape\" fontsize=10];\n  Concat12345 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12345)\naxis=0\" fontsize=10];\n  einsum1953478151472_ba_max_dim -> Concat12345;\n  einsum1953478151472_ba_left_dim -> Concat12345;\n  einsum1953478151472_ba_right_dim -> Concat12345;\n  einsum1953478151472_ba_ones -> Concat12345;\n  Concat12345 -> einsum1953478151472_ba_new_shape;\n\n  einsum1953478151472_ba_final [shape=box label=\"einsum1953478151472_ba_final\" fontsize=10];\n  Reshape12345 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12345)\" fontsize=10];\n  einsum1953478151472_ba_gemm -> Reshape12345;\n  einsum1953478151472_ba_new_shape -> Reshape12345;\n  Reshape12345 -> einsum1953478151472_ba_final;\n\n  einsum1953478176336_tr [shape=box label=\"einsum1953478176336_tr\" fontsize=10];\n  Transpose123456 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose123456)\nperm=[0 4 2 5 3 1]\" fontsize=10];\n  einsum1953478151472_ba_final -> Transpose123456;\n  Transpose123456 -> einsum1953478176336_tr;\n\n  einsum1953478175280_sq [shape=box label=\"einsum1953478175280_sq\" fontsize=10];\n  Squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze)\" fontsize=10];\n  einsum1953478176336_tr -> Squeeze;\n  einsum1953478176336_tr_axes -> Squeeze;\n  Squeeze -> einsum1953478175280_sq;\n\n  Identity123 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity123)\" fontsize=10];\n  einsum1953478175280_sq -> Identity123;\n  Identity123 -> Y;\n}");
+    document.getElementById('Mf0be36c6013546b1bddfc5b3607fd032').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from onnxruntime import InferenceSession
+    sess = InferenceSession(onx.SerializeToString())
+    sess.run(None, {'X1': m1.astype(numpy.float32), 
+                    'X2': m2.astype(numpy.float32), 
+                    'X3': m3.astype(numpy.float32)})[0]
+
+
+
+
+.. parsed-literal::
+    array([[[ 8866198.,  9864696.],
+            [12090270., 13152928.]],
+           [[ 8883886.,  9884376.],
+            [12114390., 13179168.]]], dtype=float32)
+
+
+
+onnxruntime
+~~~~~~~~~~~
+
+.. code:: ipython3
+
+    import onnx
+    from onnx import helper, numpy_helper
+    from onnxruntime import InferenceSession
+    
+    
+    def make_model1(equation):
+        model = helper.make_model(
+            opset_imports=[helper.make_operatorsetid('', 13)],
+            graph=helper.make_graph(
+                name='einsum_test',
+                inputs=[helper.make_tensor_value_info("X", onnx.TensorProto.FLOAT, None),
+                        helper.make_tensor_value_info("Y", onnx.TensorProto.FLOAT, None),
+                        helper.make_tensor_value_info("Z", onnx.TensorProto.FLOAT, None)],
+                outputs=[helper.make_tensor_value_info("A", onnx.TensorProto.FLOAT, None)],
+                nodes=[
+                    helper.make_node("Einsum", ["X", "Y", "Z"], ["A"], equation=equation)
+                ]
+            )
+        )
+        return model
+    
+    
+    model = make_model1("bac,cd,def->ebc")
+    sess = InferenceSession(model.SerializeToString())
+
+.. code:: ipython3
+
+    sess.run(None, {'X': m1.astype(numpy.float32), 
+                    'Y': m2.astype(numpy.float32), 
+                    'Z': m3.astype(numpy.float32)})[0]
+
+
+
+
+.. parsed-literal::
+    array([[[ 8866198.,  9864696.],
+            [12090270., 13152928.]],
+           [[ 8883886.,  9884376.],
+            [12114390., 13179168.]]], dtype=float32)
+
+
+
+Benchmark
+~~~~~~~~~
+
+It clearly shows the summation done with the basic algorithm is the
+slowest.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt.validate.validate_helper import measure_time
+    from tqdm import tqdm
+    from pandas import DataFrame
+    
+    
+    def raw_product(m1, m2, m3):
+        N = m1.shape[0]
+        res = numpy.zeros((N, N, N))
+        for a in range(0, N):
+            for b in range(0, N):
+                for c in range(0, N):
+                    for d in range(0, N):
+                        for e in range(0, N):
+                            for f in range(0, N):
+                                res[e, b, c] += m1[b, a, c] * m2[c, d] * m3[d, e, f]
+        return res
+    
+    
+    def benchmark0(equation):
+        sess = None
+        sess2 = None
+        seq = None 
+        seq2 = None 
+    
+        results = []
+        for N in tqdm([2, 3, 4, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]):
+            m1 = numpy.random.randn(N, N, N)
+            m2 = numpy.random.randn(N, N)
+            m3 = numpy.random.randn(N, N, N)
+    
+            if seq is None:
+                seq = decompose_einsum_equation(equation, clean=True)
+            if seq2 is None:
+                seq2 = decompose_einsum_equation(equation, clean=True, strategy='numpy')
+            if sess is None:
+                model = make_model1(equation)
+                sess = InferenceSession(model.SerializeToString())
+            if sess2 is None:
+                onx = seq2.to_onnx("Y", "X1", "X2", "X3", dtype=numpy.float32)
+                sess2 = InferenceSession(onx.SerializeToString())
+    
+            res = measure_time(lambda x: numpy.einsum(equation, *x, optimize=True),
+                               [m1, m2, m3],
+                               repeat=10, number=10)
+    
+            res['name'] = "numpy.einsum"
+            res["N"] = N
+            results.append(res)
+    
+            if N <= 4:
+                res = measure_time(lambda x: raw_product(*x),
+                                   [m1, m2, m3],
+                                   repeat=10, number=10)
+                res['name'] = "raw_product"
+                res["N"] = N
+                results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x),
+                               [m1, m2, m3],
+                               repeat=10, number=10)
+    
+            res['name'] = "custom_einsum"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x, matmul_impl="pyf"),
+                               [m1, m2, m3],
+                               repeat=10, number=10)
+            res['name'] = "dec-matmul"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq2, *x, matmul_impl="pyf"),
+                               [m1, m2, m3],
+                               repeat=10, number=10)
+            res['name'] = "dec-batch_dot"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess.run(None, {'X': x[0], 'Y': x[1], 'Z': x[2]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=10, number=10)
+            res['name'] = "ort-einsum"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess2.run(None, {'X1': x[0], 'X2': x[1], 'X3': x[2]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=10, number=10)
+            res['name'] = "ort-matmul"
+            res["N"] = N
+            results.append(res)    
+        return DataFrame(results)
+    
+    df = benchmark0("bac,cd,def->ebc")
+    df.tail()
+
+
+.. parsed-literal::
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\experimental\enable_hist_gradient_boosting.py:16: UserWarning: Since version 1.0, it is not needed to import enable_hist_gradient_boosting anymore. HistGradientBoostingClassifier and HistGradientBoostingRegressor are now stable and can be normally imported from sklearn.ensemble.
+      warnings.warn(
+    100%|██████████| 14/14 [00:20<00:00,  1.47s/it]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>82</th>
+          <td>0.065132</td>
+          <td>0.001338</td>
+          <td>0.063801</td>
+          <td>0.068927</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.651318</td>
+          <td>custom_einsum</td>
+          <td>60</td>
+        </tr>
+        <tr>
+          <th>83</th>
+          <td>0.051615</td>
+          <td>0.001206</td>
+          <td>0.049987</td>
+          <td>0.053465</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.516154</td>
+          <td>dec-matmul</td>
+          <td>60</td>
+        </tr>
+        <tr>
+          <th>84</th>
+          <td>0.062689</td>
+          <td>0.003658</td>
+          <td>0.058949</td>
+          <td>0.073073</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.626888</td>
+          <td>dec-batch_dot</td>
+          <td>60</td>
+        </tr>
+        <tr>
+          <th>85</th>
+          <td>0.009917</td>
+          <td>0.000274</td>
+          <td>0.009737</td>
+          <td>0.010686</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.099166</td>
+          <td>ort-einsum</td>
+          <td>60</td>
+        </tr>
+        <tr>
+          <th>86</th>
+          <td>0.015518</td>
+          <td>0.001107</td>
+          <td>0.014413</td>
+          <td>0.018179</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.155178</td>
+          <td>ort-matmul</td>
+          <td>60</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    import matplotlib.pyplot as plt
+    
+    piv = df.pivot("N", "name", "average")
+    piv2 = piv.copy()
+    np = piv["numpy.einsum"]
+    for c in piv2.columns:
+        piv2[c] /= np
+        
+    fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+    piv.plot(logy=True, logx=True, ax=ax[0])
+    ax[0].set_title("Benchmark einsum function\nbac,cd,def->ebc")
+    piv2.plot(logy=True, logx=True, ax=ax[1])
+    ax[1].set_title("Benchmark einsum function\n(ratio, baseline=numpy)");
+
+
+
+.. image:: einsum_decomposition_26_0.png
+
+
+Version ``dec-matmul`` is an implementation based on the decomposition
+of a simplified einsum into a sequence of transpose, reshape,
+(batch_)dot or mul operations. This decomposition is converted into ONNX
+and executed with *onnxruntime*, version ``ort-matmul``. Both versions
+are faster than the numpy optimized version.
+
+Another example with ``bsnh,btnh=bnts``
+---------------------------------------
+
+Another case, more frequent in deep learning.
+
+Decomposition of ``bsnh,btnh=bnts``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    seq2 = decompose_einsum_equation("bsnh,btnh->bnts", strategy='numpy', clean=True)
+    RenderJsDot(seq2.to_dot(size=7))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M0ff7b916aa03460b930dd4fba936d864-cont"><div id="M0ff7b916aa03460b930dd4fba936d864" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\norientation=portrait;\nranksep=0.25;\nnodesep=0.05;\nwidth=0.5;\nheight=0.1;\nsize=7;\nnode [shape=record];\n0 [label=\"input 0\\nbsnh\\n[ 0  3  2  1 -1]\"];\n1953554424352 [label=\"id\\nNone\"];\n0 -> 1953554424352;\n1953554424400 [label=\"expand_dims\\naxes=((4, 4),)None\"];\n1953554424352 -> 1953554424400;\n1 [label=\"input 1\\nbtnh\\n[ 0  3  2 -1  1]\"];\n1953557277376 [label=\"id\\nNone\"];\n1 -> 1953557277376;\n1953557276368 [label=\"expand_dims\\naxes=((3, 3),)None\"];\n1953557277376 -> 1953557276368;\n1953557276656 [label=\"batch_dot\\nbatch_axes=(0, 1) keep_axes=None left=(0, 1, 2) ndim=5 right=(0, 1, 3) sum_axes=(4,)None\"];\n1953557277328 -> 1953557276656;\n1953557274976 -> 1953557276656;\n1953557276560 [label=\"squeeze - I-1\\naxes=(1,)None\" style=filled fillcolor=red];\n1953554424496 -> 1953557276560;\n1953557277328 [label=\"transpose - I0\\nperm=(0, 2, 1, 4, 3)None\" style=filled fillcolor=red];\n1953554424400 -> 1953557277328;\n1953557274976 [label=\"transpose\\nperm=(0, 2, 3, 1, 4)None\"];\n1953557276368 -> 1953557274976;\n1953554424496 [label=\"transpose - I1\\nperm=(0, 4, 1, 3, 2)None\" style=filled fillcolor=red];\n1953557276656 -> 1953554424496;\n}");
+    document.getElementById('M0ff7b916aa03460b930dd4fba936d864').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+ONNX version
+~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    onx2 = seq2.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+    %onnxview onx2 
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M8a5d7ec3f4e24b63acbddaf394664468-cont"><div id="M8a5d7ec3f4e24b63acbddaf394664468" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  size=None;\n  orientation=portrait;\n  ranksep=0.25;\n\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0, 0))\" fontsize=10];\n  X2 [shape=box color=red label=\"X2\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  einsum1953554424352_id_axes [shape=box label=\"einsum1953554424352_id_axes\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953557277376_id_axes [shape=box label=\"einsum1953557277376_id_axes\nint64((1,))\n[3]\" fontsize=10];\n  einsum1953557276656_ba_batch_axes [shape=box label=\"einsum1953557276656_ba_batch_axes\nint64((2,))\n[0 1]\" fontsize=10];\n  einsum1953557276656_ba_sum_axes [shape=box label=\"einsum1953557276656_ba_sum_axes\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953557276656_ba__1 [shape=box label=\"einsum1953557276656_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953557276656_ba_left_set [shape=box label=\"einsum1953557276656_ba_left_set\nint64((1,))\n[2]\" fontsize=10];\n  einsum1953557276656_ba_right_set [shape=box label=\"einsum1953557276656_ba_right_set\nint64((1,))\n[3]\" fontsize=10];\n  einsum1953557276656_ba_ones [shape=box label=\"einsum1953557276656_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953554424496_tr_axes [shape=box label=\"einsum1953554424496_tr_axes\nint64((1,))\n[1]\" fontsize=10];\n\n  einsum1953554424352_id [shape=box label=\"einsum1953554424352_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X1 -> Identity;\n  Identity -> einsum1953554424352_id;\n\n  einsum1953554424400_ex [shape=box label=\"einsum1953554424400_ex\" fontsize=10];\n  Unsqueeze [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze)\" fontsize=10];\n  einsum1953554424352_id -> Unsqueeze;\n  einsum1953554424352_id_axes -> Unsqueeze;\n  Unsqueeze -> einsum1953554424400_ex;\n\n  einsum1953557277328_tr [shape=box label=\"einsum1953557277328_tr\" fontsize=10];\n  Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose)\nperm=[0 2 1 4 3]\" fontsize=10];\n  einsum1953554424400_ex -> Transpose;\n  Transpose -> einsum1953557277328_tr;\n\n  einsum1953557277376_id [shape=box label=\"einsum1953557277376_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X2 -> Identity1;\n  Identity1 -> einsum1953557277376_id;\n\n  einsum1953557276368_ex [shape=box label=\"einsum1953557276368_ex\" fontsize=10];\n  Unsqueeze1 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze1)\" fontsize=10];\n  einsum1953557277376_id -> Unsqueeze1;\n  einsum1953557277376_id_axes -> Unsqueeze1;\n  Unsqueeze1 -> einsum1953557276368_ex;\n\n  einsum1953557274976_tr [shape=box label=\"einsum1953557274976_tr\" fontsize=10];\n  Transpose1 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1)\nperm=[0 2 3 1 4]\" fontsize=10];\n  einsum1953557276368_ex -> Transpose1;\n  Transpose1 -> einsum1953557274976_tr;\n\n  einsum1953557276656_ba_shape1 [shape=box label=\"einsum1953557276656_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum1953557277328_tr -> Shape;\n  Shape -> einsum1953557276656_ba_shape1;\n\n  einsum1953557276656_ba_shape2 [shape=box label=\"einsum1953557276656_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum1953557274976_tr -> Shape1;\n  Shape1 -> einsum1953557276656_ba_shape2;\n\n  einsum1953557276656_ba_dim0g [shape=box label=\"einsum1953557276656_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum1953557276656_ba_shape1 -> Gather;\n  einsum1953557276656_ba_batch_axes -> Gather;\n  Gather -> einsum1953557276656_ba_dim0g;\n\n  einsum1953557276656_ba_dim0bg [shape=box label=\"einsum1953557276656_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum1953557276656_ba_shape2 -> Gather1;\n  einsum1953557276656_ba_batch_axes -> Gather1;\n  Gather1 -> einsum1953557276656_ba_dim0bg;\n\n  einsum1953557276656_ba_dim0 [shape=box label=\"einsum1953557276656_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum1953557276656_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum1953557276656_ba_dim0;\n\n  einsum1953557276656_ba_dim0b [shape=box label=\"einsum1953557276656_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum1953557276656_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum1953557276656_ba_dim0b;\n\n  einsum1953557276656_ba_dim1 [shape=box label=\"einsum1953557276656_ba_dim1\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum1953557276656_ba_shape1 -> Gather12;\n  einsum1953557276656_ba_sum_axes -> Gather12;\n  Gather12 -> einsum1953557276656_ba_dim1;\n\n  einsum1953557276656_ba_dim2 [shape=box label=\"einsum1953557276656_ba_dim2\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum1953557276656_ba_shape2 -> Gather123;\n  einsum1953557276656_ba_sum_axes -> Gather123;\n  Gather123 -> einsum1953557276656_ba_dim2;\n\n  einsum1953557276656_ba_resh1 [shape=box label=\"einsum1953557276656_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum1953557276656_ba_dim0 -> Concat;\n  einsum1953557276656_ba__1 -> Concat;\n  einsum1953557276656_ba_dim1 -> Concat;\n  Concat -> einsum1953557276656_ba_resh1;\n\n  einsum1953557276656_ba_resh2 [shape=box label=\"einsum1953557276656_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum1953557276656_ba_dim0b -> Concat1;\n  einsum1953557276656_ba__1 -> Concat1;\n  einsum1953557276656_ba_dim2 -> Concat1;\n  Concat1 -> einsum1953557276656_ba_resh2;\n\n  einsum1953557276656_ba_aresh1 [shape=box label=\"einsum1953557276656_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum1953557277328_tr -> Reshape;\n  einsum1953557276656_ba_resh1 -> Reshape;\n  Reshape -> einsum1953557276656_ba_aresh1;\n\n  einsum1953557276656_ba_aresh2 [shape=box label=\"einsum1953557276656_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum1953557274976_tr -> Reshape1;\n  einsum1953557276656_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum1953557276656_ba_aresh2;\n\n  einsum1953557276656_ba_aresh2_tr [shape=box label=\"einsum1953557276656_ba_aresh2_tr\" fontsize=10];\n  Transpose12 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12)\nperm=[0 2 1]\" fontsize=10];\n  einsum1953557276656_ba_aresh2 -> Transpose12;\n  Transpose12 -> einsum1953557276656_ba_aresh2_tr;\n\n  einsum1953557276656_ba_dot [shape=box label=\"einsum1953557276656_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum1953557276656_ba_aresh1 -> MatMul;\n  einsum1953557276656_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum1953557276656_ba_dot;\n\n  einsum1953557276656_ba_max_dim [shape=box label=\"einsum1953557276656_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum1953557276656_ba_dim0g -> Max;\n  einsum1953557276656_ba_dim0bg -> Max;\n  Max -> einsum1953557276656_ba_max_dim;\n\n  einsum1953557276656_ba_left_dim [shape=box label=\"einsum1953557276656_ba_left_dim\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum1953557276656_ba_shape1 -> Gather1234;\n  einsum1953557276656_ba_left_set -> Gather1234;\n  Gather1234 -> einsum1953557276656_ba_left_dim;\n\n  einsum1953557276656_ba_right_dim [shape=box label=\"einsum1953557276656_ba_right_dim\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum1953557276656_ba_shape2 -> Gather12345;\n  einsum1953557276656_ba_right_set -> Gather12345;\n  Gather12345 -> einsum1953557276656_ba_right_dim;\n\n  einsum1953557276656_ba_new_shape [shape=box label=\"einsum1953557276656_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum1953557276656_ba_max_dim -> Concat12;\n  einsum1953557276656_ba_left_dim -> Concat12;\n  einsum1953557276656_ba_right_dim -> Concat12;\n  einsum1953557276656_ba_ones -> Concat12;\n  Concat12 -> einsum1953557276656_ba_new_shape;\n\n  einsum1953557276656_ba_final [shape=box label=\"einsum1953557276656_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum1953557276656_ba_dot -> Reshape12;\n  einsum1953557276656_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum1953557276656_ba_final;\n\n  einsum1953554424496_tr [shape=box label=\"einsum1953554424496_tr\" fontsize=10];\n  Transpose123 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose123)\nperm=[0 4 1 3 2]\" fontsize=10];\n  einsum1953557276656_ba_final -> Transpose123;\n  Transpose123 -> einsum1953554424496_tr;\n\n  einsum1953557276560_sq [shape=box label=\"einsum1953557276560_sq\" fontsize=10];\n  Squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze)\" fontsize=10];\n  einsum1953554424496_tr -> Squeeze;\n  einsum1953554424496_tr_axes -> Squeeze;\n  Squeeze -> einsum1953557276560_sq;\n\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  einsum1953557276560_sq -> Identity12;\n  Identity12 -> Y;\n}");
+    document.getElementById('M8a5d7ec3f4e24b63acbddaf394664468').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Benchmark
+~~~~~~~~~
+
+.. code:: ipython3
+
+    def make_model2(equation):
+        model = helper.make_model(
+            opset_imports=[helper.make_operatorsetid('', 13)],
+            graph=helper.make_graph(
+                name='einsum_test',
+                inputs=[helper.make_tensor_value_info("X", onnx.TensorProto.FLOAT, None),
+                        helper.make_tensor_value_info("Y", onnx.TensorProto.FLOAT, None)],
+                outputs=[helper.make_tensor_value_info("A", onnx.TensorProto.FLOAT, None)],
+                nodes=[
+                    helper.make_node("Einsum", ["X", "Y"], ["A"], equation=equation)
+                ]
+            )
+        )
+        return model
+    
+    
+    def benchmark(equation, second_input_size=4):
+        sess = None
+        sess2 = None
+        seq = None
+        seq2 = None
+    
+    
+        results = []
+        for N in tqdm([2, 3, 4, 10, 20, 30, 40]):
+            m1 = numpy.random.randn(10, N, N, N)
+            m2 = numpy.random.randn(10 * N ** (second_input_size-1)).reshape((10, ) + (N, ) * (second_input_size-1))
+            
+    
+            if seq is None:
+                seq = decompose_einsum_equation(equation, clean=True)
+            if seq2 is None:
+                seq2 = decompose_einsum_equation(equation, clean=True, strategy='numpy')
+            if sess is None:
+                model = make_model2(equation)
+                sess = InferenceSession(model.SerializeToString())
+            if sess2 is None:
+                onx = seq2.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+                sess2 = InferenceSession(onx.SerializeToString())
+    
+            res = measure_time(lambda x: numpy.einsum(equation, *x, optimize=True),
+                               [m1, m2],
+                               repeat=10, number=10)
+    
+            res['name'] = "numpy.einsum"
+            res["N"] = N
+            results.append(res)
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x),
+                               [m1, m2],
+                               repeat=10, number=10)
+            res['name'] = "custom_einsum"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x, matmul_impl="pyf"),
+                               [m1, m2],
+                               repeat=10, number=10)
+            res['name'] = "dec-matmul"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq2, *x, matmul_impl="pyf"),
+                               [m1, m2],
+                               repeat=10, number=10)
+            res['name'] = "dec-batch_dot"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess.run(None, {'X': x[0], 'Y': x[1]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=10, number=10)
+            res['name'] = "ort-einsum"
+            res["N"] = N
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess2.run(None, {'X1': x[0], 'X2': x[1]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=10, number=10)
+            res['name'] = "ort-matmul"
+            res["N"] = N
+            results.append(res)    
+        return DataFrame(results)
+    
+    
+    df = benchmark("bsnh,btnh->bnts")
+    df.tail()
+
+
+.. parsed-literal::
+    100%|██████████| 7/7 [00:13<00:00,  1.93s/it]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>37</th>
+          <td>0.229418</td>
+          <td>0.020792</td>
+          <td>0.217997</td>
+          <td>0.291032</td>
+          <td>10</td>
+          <td>10</td>
+          <td>2.294175</td>
+          <td>custom_einsum</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>38</th>
+          <td>0.160575</td>
+          <td>0.005435</td>
+          <td>0.150772</td>
+          <td>0.167411</td>
+          <td>10</td>
+          <td>10</td>
+          <td>1.605746</td>
+          <td>dec-matmul</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>39</th>
+          <td>0.112844</td>
+          <td>0.011305</td>
+          <td>0.102173</td>
+          <td>0.141890</td>
+          <td>10</td>
+          <td>10</td>
+          <td>1.128436</td>
+          <td>dec-batch_dot</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>40</th>
+          <td>0.051181</td>
+          <td>0.003533</td>
+          <td>0.047244</td>
+          <td>0.057054</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.511815</td>
+          <td>ort-einsum</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>41</th>
+          <td>0.078827</td>
+          <td>0.008735</td>
+          <td>0.067893</td>
+          <td>0.099156</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.788271</td>
+          <td>ort-matmul</td>
+          <td>40</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    piv = df.pivot("N", "name", "average")
+    piv2 = piv.copy()
+    np = piv["numpy.einsum"]
+    for c in piv2.columns:
+        piv2[c] /= np
+        
+    fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+    piv.plot(logy=True, logx=True, ax=ax[0])
+    ax[0].set_title("Benchmark einsum function\nbsnh,btnh->bnts")
+    piv2.plot(logy=True, logx=True, ax=ax[1])
+    ax[1].set_title("Benchmark einsum function\n(ratio, baseline=numpy)");
+
+
+
+.. image:: einsum_decomposition_35_0.png
+
+
+Permutation
+~~~~~~~~~~~
+
+Einsum’s algorithm started by aligning all matrices involved in the
+computation to the same dimension in the same order. But which order is
+the best, that’s the question.
+
+.. code:: ipython3
+
+    equation = "bsnh,btnh->bnts"
+    letters = list(sorted(set([c for c in equation if "a" <= c < "z"])))
+    letters
+
+
+
+
+.. parsed-literal::
+    ['b', 'h', 'n', 's', 't']
+
+
+
+.. code:: ipython3
+
+    from itertools import permutations
+    
+    
+    def benchmark_perm(equation, number=5, second_input_size=4, repeat=3, N=15):
+        
+        def n_operator(seq, name):
+            n = 0
+            for op in seq:
+                if op.name == name:
+                    n += 1
+            return n
+    
+    
+        def n_onnx_op(onx, name):
+            n = 0
+            for op in onx.graph.node:
+                if op.op_type == name:
+                    n += 1
+            return n
+    
+    
+        def get_kind(seq):
+            n = 0
+            for op in seq:
+                if op.name == 'batch_dot':
+                    return op.get_dot_kind()
+            return None
+    
+    
+        m1 = numpy.random.randn(N, N, N, N)
+        m2 = numpy.random.randn(N ** second_input_size).reshape((N, ) * second_input_size)
+    
+        results = []
+        for perm in tqdm(list(permutations(letters))):
+            replace = {d: c for c, d in zip(letters, perm)}
+            eq = equation
+            for k, v in replace.items():
+                eq = eq.replace(k, v.upper())
+            eq = eq.lower()
+    
+            seq = decompose_einsum_equation(eq, clean=True)
+            seq2 = decompose_einsum_equation(eq, clean=True, strategy='numpy')
+            model = make_model2(eq)
+            sess = InferenceSession(model.SerializeToString())
+            onx = seq2.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+            sess2 = InferenceSession(onx.SerializeToString())
+    
+            n_tra = n_operator(seq2, 'transpose')
+            n_tra_onnx = n_onnx_op(onx, 'Transpose')
+            n_gemm_onnx = n_onnx_op(onx, 'Gemm')
+            kind = get_kind(seq2)
+    
+            res = measure_time(lambda x: numpy.einsum(eq, *x, optimize=True),
+                               [m1, m2],
+                               repeat=repeat, number=number)
+    
+            res['name'] = "numpy.einsum"
+            res["N"] = N
+            res["eq"] = eq
+            results.append(res)
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x),
+                               [m1, m2],
+                               repeat=repeat, number=number)
+            res['name'] = "custom_einsum"
+            res["N"] = N
+            res["eq"] = eq
+            res['transpose'] = n_tra
+            res['kind'] = kind
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq, *x, matmul_impl="pyf"),
+                               [m1, m2],
+                               repeat=repeat, number=number)
+            res['name'] = "dec-matmul"
+            res["N"] = N
+            res["eq"] = eq
+            res['transpose'] = n_tra
+            res['kind'] = kind
+            results.append(res)    
+    
+            res = measure_time(lambda x: apply_einsum_sequence(seq2, *x, matmul_impl="pyf"),
+                               [m1, m2],
+                               repeat=repeat, number=number)
+            res['name'] = "dec-batch_dot"
+            res["N"] = N
+            res["eq"] = eq
+            res['transpose'] = n_tra
+            res['kind'] = kind
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess.run(None, {'X': x[0], 'Y': x[1]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=repeat, number=number)
+            res['name'] = "ort-einsum"
+            res["N"] = N
+            res["eq"] = eq
+            res['transpose'] = n_tra_onnx
+            res['gemm'] = n_gemm_onnx
+            results.append(res)    
+    
+            res = measure_time(lambda x: sess2.run(None, {'X1': x[0], 'X2': x[1]}),
+                               [m1.astype(numpy.float32), m2.astype(numpy.float32),
+                                m3.astype(numpy.float32)],
+                               repeat=repeat, number=number)
+            res['name'] = "ort-matmul"
+            res["N"] = N
+            res["eq"] = eq
+            res['transpose'] = n_tra_onnx
+            res['gemm'] = n_gemm_onnx
+            results.append(res)    
+        return DataFrame(results)
+    
+    
+    df = benchmark_perm("bsnh,btnh->bnts", number=4)
+    df.tail()
+
+
+.. parsed-literal::
+    100%|██████████| 120/120 [00:11<00:00, 10.23it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+          <th>eq</th>
+          <th>transpose</th>
+          <th>kind</th>
+          <th>gemm</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>715</th>
+          <td>0.006162</td>
+          <td>0.000038</td>
+          <td>0.006128</td>
+          <td>0.006216</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.018485</td>
+          <td>custom_einsum</td>
+          <td>15</td>
+          <td>thns,tbns-&gt;tnbh</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>716</th>
+          <td>0.002343</td>
+          <td>0.000046</td>
+          <td>0.002294</td>
+          <td>0.002405</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.007029</td>
+          <td>dec-matmul</td>
+          <td>15</td>
+          <td>thns,tbns-&gt;tnbh</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>717</th>
+          <td>0.001645</td>
+          <td>0.000035</td>
+          <td>0.001610</td>
+          <td>0.001694</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.004934</td>
+          <td>dec-batch_dot</td>
+          <td>15</td>
+          <td>thns,tbns-&gt;tnbh</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>718</th>
+          <td>0.000833</td>
+          <td>0.000015</td>
+          <td>0.000820</td>
+          <td>0.000853</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002498</td>
+          <td>ort-einsum</td>
+          <td>15</td>
+          <td>thns,tbns-&gt;tnbh</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>719</th>
+          <td>0.001251</td>
+          <td>0.000012</td>
+          <td>0.001238</td>
+          <td>0.001268</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.003753</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>thns,tbns-&gt;tnbh</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = df.sort_values("average").reset_index(drop=True)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+          <th>eq</th>
+          <th>transpose</th>
+          <th>kind</th>
+          <th>gemm</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.000758</td>
+          <td>0.000015</td>
+          <td>0.000738</td>
+          <td>0.000771</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002275</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>hsnt,hbnt-&gt;hnbs</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000770</td>
+          <td>0.000023</td>
+          <td>0.000739</td>
+          <td>0.000793</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002310</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>hnts,hbts-&gt;htbn</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000778</td>
+          <td>0.000020</td>
+          <td>0.000758</td>
+          <td>0.000806</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002334</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>bnst,bhst-&gt;bshn</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000783</td>
+          <td>0.000021</td>
+          <td>0.000760</td>
+          <td>0.000812</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002350</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>bnht,bsht-&gt;bhsn</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000784</td>
+          <td>0.000011</td>
+          <td>0.000774</td>
+          <td>0.000799</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.002351</td>
+          <td>ort-matmul</td>
+          <td>15</td>
+          <td>hnst,hbst-&gt;hsbn</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df.tail()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+          <th>eq</th>
+          <th>transpose</th>
+          <th>kind</th>
+          <th>gemm</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>715</th>
+          <td>0.011529</td>
+          <td>0.000882</td>
+          <td>0.010456</td>
+          <td>0.012617</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.034587</td>
+          <td>custom_einsum</td>
+          <td>15</td>
+          <td>sbnt,shnt-&gt;snhb</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>716</th>
+          <td>0.011548</td>
+          <td>0.000422</td>
+          <td>0.010967</td>
+          <td>0.011953</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.034644</td>
+          <td>custom_einsum</td>
+          <td>15</td>
+          <td>htsb,hnsb-&gt;hsnt</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>717</th>
+          <td>0.013971</td>
+          <td>0.001984</td>
+          <td>0.012279</td>
+          <td>0.016754</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.041912</td>
+          <td>custom_einsum</td>
+          <td>15</td>
+          <td>nbsh,ntsh-&gt;nstb</td>
+          <td>3.0</td>
+          <td>NN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>718</th>
+          <td>0.014765</td>
+          <td>0.001483</td>
+          <td>0.013366</td>
+          <td>0.016818</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.044295</td>
+          <td>numpy.einsum</td>
+          <td>15</td>
+          <td>bnsh,btsh-&gt;bstn</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>719</th>
+          <td>0.015813</td>
+          <td>0.002921</td>
+          <td>0.012546</td>
+          <td>0.019636</td>
+          <td>3</td>
+          <td>4</td>
+          <td>0.047438</td>
+          <td>numpy.einsum</td>
+          <td>15</td>
+          <td>nbsh,ntsh-&gt;nstb</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    piv = df.pivot("eq", "name", "average").sort_values("numpy.einsum")
+        
+    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+    piv.plot(logy=True, logx=True, ax=ax)
+    ax.set_title("Benchmark einsum function - bsnh,btnh->bnts");
+
+
+
+.. image:: einsum_decomposition_41_0.png
+
+
+.. code:: ipython3
+
+    set(df['transpose'].dropna()), set(df['gemm'].dropna()), set(df['kind'].dropna())
+
+
+
+
+.. parsed-literal::
+    ({3.0, 4.0}, {0.0}, {'NN'})
+
+
+
+Decomposition of ``bsnh,ctnh=nts``
+----------------------------------
+
+.. code:: ipython3
+
+    seq3 = decompose_einsum_equation("bsnh,ctnh->nts", strategy='numpy', clean=True)
+    RenderJsDot(seq3.to_dot(size=7))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Meb6086db0fab472abdb408bbf118b6b2-cont"><div id="Meb6086db0fab472abdb408bbf118b6b2" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\norientation=portrait;\nranksep=0.25;\nnodesep=0.05;\nwidth=0.5;\nheight=0.1;\nsize=7;\nnode [shape=record];\n0 [label=\"input 0\\nbsnh\\n[ 0 -1  3  2  1 -1]\"];\n1953478781920 [label=\"id\\nNone\"];\n0 -> 1953478781920;\n1952748528784 [label=\"expand_dims\\naxes=((1, 1), (4, 5))None\"];\n1953478781920 -> 1952748528784;\n1952748529792 [label=\"transpose\\nperm=(0, 1, 4, 3, 2, 5)None\"];\n1952748528784 -> 1952748529792;\n1953464871472 [label=\"reduce_sum - I0\\naxes=(0,)None\" style=filled fillcolor=red];\n1952748529792 -> 1953464871472;\n1 [label=\"input 1\\nctnh\\n[-1  0  3  2 -1  1]\"];\n1953464870896 [label=\"id\\nNone\"];\n1 -> 1953464870896;\n1953554823296 [label=\"expand_dims\\naxes=((0, 0), (3, 4))None\"];\n1953464870896 -> 1953554823296;\n1952748692240 [label=\"transpose\\nperm=(0, 1, 5, 3, 4, 2)None\"];\n1953554823296 -> 1952748692240;\n1952748692048 [label=\"reduce_sum\\naxes=(1,)None\"];\n1952748692240 -> 1952748692048;\n1953478418192 [label=\"transpose\\nperm=(0, 1, 3, 4, 5, 2)None\"];\n1953464871472 -> 1953478418192;\n1953478417568 [label=\"transpose\\nperm=(0, 1, 3, 4, 5, 2)None\"];\n1952748692048 -> 1953478417568;\n1953478417424 [label=\"batch_dot\\nbatch_axes=(0, 1, 2) keep_axes=None left=(2, 3) ndim=6 right=(2, 4) sum_axes=(5,)None\"];\n1953478418192 -> 1953478417424;\n1953478417568 -> 1953478417424;\n1952748692336 [label=\"squeeze - I-1\\naxes=(0, 1, 2)None\" style=filled fillcolor=red];\n1953478417136 -> 1952748692336;\n1953478417136 [label=\"transpose - I1\\nperm=(0, 1, 5, 2, 4, 3)None\" style=filled fillcolor=red];\n1953478417424 -> 1953478417136;\n}");
+    document.getElementById('Meb6086db0fab472abdb408bbf118b6b2').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    onx3 = seq3.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+    %onnxview onx3
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mfe661a8f8d1144cda72ea5cd5748bdb3-cont"><div id="Mfe661a8f8d1144cda72ea5cd5748bdb3" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  size=None;\n  orientation=portrait;\n  ranksep=0.25;\n\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0, 0))\" fontsize=10];\n  X2 [shape=box color=red label=\"X2\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0))\" fontsize=10];\n\n  einsum1953478781920_id_axes [shape=box label=\"einsum1953478781920_id_axes\nint64((2,))\n[1 5]\" fontsize=10];\n  einsum1953464871472_re_axes [shape=box label=\"einsum1953464871472_re_axes\nint64((1,))\n[0]\" fontsize=10];\n  einsum1953464870896_id_axes [shape=box label=\"einsum1953464870896_id_axes\nint64((2,))\n[0 4]\" fontsize=10];\n  einsum1952748692048_re_axes [shape=box label=\"einsum1952748692048_re_axes\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953478417424_ba_batch_axes [shape=box label=\"einsum1953478417424_ba_batch_axes\nint64((3,))\n[0 1 2]\" fontsize=10];\n  einsum1953478417424_ba_sum_axes [shape=box label=\"einsum1953478417424_ba_sum_axes\nint64((1,))\n[5]\" fontsize=10];\n  einsum1953478417424_ba__1 [shape=box label=\"einsum1953478417424_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953478417424_ba_left_set [shape=box label=\"einsum1953478417424_ba_left_set\nint64((1,))\n[3]\" fontsize=10];\n  einsum1953478417424_ba_right_set [shape=box label=\"einsum1953478417424_ba_right_set\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953478417424_ba_ones [shape=box label=\"einsum1953478417424_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953478417136_tr_axes [shape=box label=\"einsum1953478417136_tr_axes\nint64((3,))\n[0 1 2]\" fontsize=10];\n\n  einsum1953478781920_id [shape=box label=\"einsum1953478781920_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X1 -> Identity;\n  Identity -> einsum1953478781920_id;\n\n  einsum1952748528784_ex [shape=box label=\"einsum1952748528784_ex\" fontsize=10];\n  Unsqueeze [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze)\" fontsize=10];\n  einsum1953478781920_id -> Unsqueeze;\n  einsum1953478781920_id_axes -> Unsqueeze;\n  Unsqueeze -> einsum1952748528784_ex;\n\n  einsum1952748529792_tr [shape=box label=\"einsum1952748529792_tr\" fontsize=10];\n  Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose)\nperm=[0 1 4 3 2 5]\" fontsize=10];\n  einsum1952748528784_ex -> Transpose;\n  Transpose -> einsum1952748529792_tr;\n\n  einsum1953464871472_re [shape=box label=\"einsum1953464871472_re\" fontsize=10];\n  ReduceSum [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum)\nkeepdims=1\" fontsize=10];\n  einsum1952748529792_tr -> ReduceSum;\n  einsum1953464871472_re_axes -> ReduceSum;\n  ReduceSum -> einsum1953464871472_re;\n\n  einsum1953464870896_id [shape=box label=\"einsum1953464870896_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X2 -> Identity1;\n  Identity1 -> einsum1953464870896_id;\n\n  einsum1953554823296_ex [shape=box label=\"einsum1953554823296_ex\" fontsize=10];\n  Unsqueeze1 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze1)\" fontsize=10];\n  einsum1953464870896_id -> Unsqueeze1;\n  einsum1953464870896_id_axes -> Unsqueeze1;\n  Unsqueeze1 -> einsum1953554823296_ex;\n\n  einsum1952748692240_tr [shape=box label=\"einsum1952748692240_tr\" fontsize=10];\n  Transpose1 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1)\nperm=[0 1 5 3 4 2]\" fontsize=10];\n  einsum1953554823296_ex -> Transpose1;\n  Transpose1 -> einsum1952748692240_tr;\n\n  einsum1952748692048_re [shape=box label=\"einsum1952748692048_re\" fontsize=10];\n  ReduceSum1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum1)\nkeepdims=1\" fontsize=10];\n  einsum1952748692240_tr -> ReduceSum1;\n  einsum1952748692048_re_axes -> ReduceSum1;\n  ReduceSum1 -> einsum1952748692048_re;\n\n  einsum1953478418192_tr [shape=box label=\"einsum1953478418192_tr\" fontsize=10];\n  Transpose12 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12)\nperm=[0 1 3 4 5 2]\" fontsize=10];\n  einsum1953464871472_re -> Transpose12;\n  Transpose12 -> einsum1953478418192_tr;\n\n  einsum1953478417568_tr [shape=box label=\"einsum1953478417568_tr\" fontsize=10];\n  Transpose123 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose123)\nperm=[0 1 3 4 5 2]\" fontsize=10];\n  einsum1952748692048_re -> Transpose123;\n  Transpose123 -> einsum1953478417568_tr;\n\n  einsum1953478417424_ba_shape1 [shape=box label=\"einsum1953478417424_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum1953478418192_tr -> Shape;\n  Shape -> einsum1953478417424_ba_shape1;\n\n  einsum1953478417424_ba_shape2 [shape=box label=\"einsum1953478417424_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum1953478417568_tr -> Shape1;\n  Shape1 -> einsum1953478417424_ba_shape2;\n\n  einsum1953478417424_ba_dim0g [shape=box label=\"einsum1953478417424_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum1953478417424_ba_shape1 -> Gather;\n  einsum1953478417424_ba_batch_axes -> Gather;\n  Gather -> einsum1953478417424_ba_dim0g;\n\n  einsum1953478417424_ba_dim0bg [shape=box label=\"einsum1953478417424_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum1953478417424_ba_shape2 -> Gather1;\n  einsum1953478417424_ba_batch_axes -> Gather1;\n  Gather1 -> einsum1953478417424_ba_dim0bg;\n\n  einsum1953478417424_ba_dim0 [shape=box label=\"einsum1953478417424_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum1953478417424_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum1953478417424_ba_dim0;\n\n  einsum1953478417424_ba_dim0b [shape=box label=\"einsum1953478417424_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum1953478417424_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum1953478417424_ba_dim0b;\n\n  einsum1953478417424_ba_dim1 [shape=box label=\"einsum1953478417424_ba_dim1\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum1953478417424_ba_shape1 -> Gather12;\n  einsum1953478417424_ba_sum_axes -> Gather12;\n  Gather12 -> einsum1953478417424_ba_dim1;\n\n  einsum1953478417424_ba_dim2 [shape=box label=\"einsum1953478417424_ba_dim2\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum1953478417424_ba_shape2 -> Gather123;\n  einsum1953478417424_ba_sum_axes -> Gather123;\n  Gather123 -> einsum1953478417424_ba_dim2;\n\n  einsum1953478417424_ba_resh1 [shape=box label=\"einsum1953478417424_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum1953478417424_ba_dim0 -> Concat;\n  einsum1953478417424_ba__1 -> Concat;\n  einsum1953478417424_ba_dim1 -> Concat;\n  Concat -> einsum1953478417424_ba_resh1;\n\n  einsum1953478417424_ba_resh2 [shape=box label=\"einsum1953478417424_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum1953478417424_ba_dim0b -> Concat1;\n  einsum1953478417424_ba__1 -> Concat1;\n  einsum1953478417424_ba_dim2 -> Concat1;\n  Concat1 -> einsum1953478417424_ba_resh2;\n\n  einsum1953478417424_ba_aresh1 [shape=box label=\"einsum1953478417424_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum1953478418192_tr -> Reshape;\n  einsum1953478417424_ba_resh1 -> Reshape;\n  Reshape -> einsum1953478417424_ba_aresh1;\n\n  einsum1953478417424_ba_aresh2 [shape=box label=\"einsum1953478417424_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum1953478417568_tr -> Reshape1;\n  einsum1953478417424_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum1953478417424_ba_aresh2;\n\n  einsum1953478417424_ba_aresh2_tr [shape=box label=\"einsum1953478417424_ba_aresh2_tr\" fontsize=10];\n  Transpose1234 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1234)\nperm=[0 2 1]\" fontsize=10];\n  einsum1953478417424_ba_aresh2 -> Transpose1234;\n  Transpose1234 -> einsum1953478417424_ba_aresh2_tr;\n\n  einsum1953478417424_ba_dot [shape=box label=\"einsum1953478417424_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum1953478417424_ba_aresh1 -> MatMul;\n  einsum1953478417424_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum1953478417424_ba_dot;\n\n  einsum1953478417424_ba_max_dim [shape=box label=\"einsum1953478417424_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum1953478417424_ba_dim0g -> Max;\n  einsum1953478417424_ba_dim0bg -> Max;\n  Max -> einsum1953478417424_ba_max_dim;\n\n  einsum1953478417424_ba_left_dim [shape=box label=\"einsum1953478417424_ba_left_dim\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum1953478417424_ba_shape1 -> Gather1234;\n  einsum1953478417424_ba_left_set -> Gather1234;\n  Gather1234 -> einsum1953478417424_ba_left_dim;\n\n  einsum1953478417424_ba_right_dim [shape=box label=\"einsum1953478417424_ba_right_dim\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum1953478417424_ba_shape2 -> Gather12345;\n  einsum1953478417424_ba_right_set -> Gather12345;\n  Gather12345 -> einsum1953478417424_ba_right_dim;\n\n  einsum1953478417424_ba_new_shape [shape=box label=\"einsum1953478417424_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum1953478417424_ba_max_dim -> Concat12;\n  einsum1953478417424_ba_left_dim -> Concat12;\n  einsum1953478417424_ba_right_dim -> Concat12;\n  einsum1953478417424_ba_ones -> Concat12;\n  Concat12 -> einsum1953478417424_ba_new_shape;\n\n  einsum1953478417424_ba_final [shape=box label=\"einsum1953478417424_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum1953478417424_ba_dot -> Reshape12;\n  einsum1953478417424_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum1953478417424_ba_final;\n\n  einsum1953478417136_tr [shape=box label=\"einsum1953478417136_tr\" fontsize=10];\n  Transpose12345 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12345)\nperm=[0 1 5 2 4 3]\" fontsize=10];\n  einsum1953478417424_ba_final -> Transpose12345;\n  Transpose12345 -> einsum1953478417136_tr;\n\n  einsum1952748692336_sq [shape=box label=\"einsum1952748692336_sq\" fontsize=10];\n  Squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze)\" fontsize=10];\n  einsum1953478417136_tr -> Squeeze;\n  einsum1953478417136_tr_axes -> Squeeze;\n  Squeeze -> einsum1952748692336_sq;\n\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  einsum1952748692336_sq -> Identity12;\n  Identity12 -> Y;\n}");
+    document.getElementById('Mfe661a8f8d1144cda72ea5cd5748bdb3').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Benchmark size
+~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    df = benchmark("bsnh,ctnh->nts")
+    df.tail()
+
+
+.. parsed-literal::
+    100%|██████████| 7/7 [00:39<00:00,  5.71s/it]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>37</th>
+          <td>0.043389</td>
+          <td>0.016879</td>
+          <td>0.030195</td>
+          <td>0.077480</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.433885</td>
+          <td>custom_einsum</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>38</th>
+          <td>0.015310</td>
+          <td>0.000222</td>
+          <td>0.014909</td>
+          <td>0.015622</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.153098</td>
+          <td>dec-matmul</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>39</th>
+          <td>0.013508</td>
+          <td>0.000425</td>
+          <td>0.013148</td>
+          <td>0.014576</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.135085</td>
+          <td>dec-batch_dot</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>40</th>
+          <td>0.032725</td>
+          <td>0.000266</td>
+          <td>0.032409</td>
+          <td>0.033212</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.327254</td>
+          <td>ort-einsum</td>
+          <td>40</td>
+        </tr>
+        <tr>
+          <th>41</th>
+          <td>0.057384</td>
+          <td>0.002703</td>
+          <td>0.053734</td>
+          <td>0.062845</td>
+          <td>10</td>
+          <td>10</td>
+          <td>0.573841</td>
+          <td>ort-matmul</td>
+          <td>40</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    piv = df.pivot("N", "name", "average")
+    piv2 = piv.copy()
+    np = piv["numpy.einsum"]
+    for c in piv2.columns:
+        piv2[c] /= np
+        
+    fig, ax = plt.subplots(1, 2, figsize=(14, 6))
+    piv.plot(logy=True, logx=True, ax=ax[0])
+    ax[0].set_title("Benchmark einsum function\nbsnh,ctnh->nts")
+    piv2.plot(logy=True, logx=True, ax=ax[1])
+    ax[1].set_title("Benchmark einsum function\n(ratio, baseline=numpy)");
+
+
+
+.. image:: einsum_decomposition_48_0.png
+
+
+Benchmark permutation
+~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    df = benchmark_perm("bsnh,ctnh->nts", number=2, repeat=3, N=10)
+
+
+.. parsed-literal::
+    100%|██████████| 120/120 [00:06<00:00, 17.41it/s]
+
+
+.. code:: ipython3
+
+    df = df.sort_values("average").reset_index(drop=True)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>total</th>
+          <th>name</th>
+          <th>N</th>
+          <th>eq</th>
+          <th>transpose</th>
+          <th>kind</th>
+          <th>gemm</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.000125</td>
+          <td>0.000008</td>
+          <td>0.000118</td>
+          <td>0.000136</td>
+          <td>3</td>
+          <td>2</td>
+          <td>0.000374</td>
+          <td>ort-matmul</td>
+          <td>10</td>
+          <td>bnst,chst-&gt;shn</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000126</td>
+          <td>0.000007</td>
+          <td>0.000119</td>
+          <td>0.000136</td>
+          <td>3</td>
+          <td>2</td>
+          <td>0.000377</td>
+          <td>ort-matmul</td>
+          <td>10</td>
+          <td>bhst,cnst-&gt;snh</td>
+          <td>4.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000141</td>
+          <td>0.000006</td>
+          <td>0.000136</td>
+          <td>0.000150</td>
+          <td>3</td>
+          <td>2</td>
+          <td>0.000422</td>
+          <td>ort-matmul</td>
+          <td>10</td>
+          <td>hbst,cnst-&gt;snb</td>
+          <td>5.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000141</td>
+          <td>0.000007</td>
+          <td>0.000135</td>
+          <td>0.000151</td>
+          <td>3</td>
+          <td>2</td>
+          <td>0.000423</td>
+          <td>ort-matmul</td>
+          <td>10</td>
+          <td>nbst,chst-&gt;shb</td>
+          <td>5.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000144</td>
+          <td>0.000007</td>
+          <td>0.000138</td>
+          <td>0.000154</td>
+          <td>3</td>
+          <td>2</td>
+          <td>0.000432</td>
+          <td>ort-matmul</td>
+          <td>10</td>
+          <td>btns,chns-&gt;nht</td>
+          <td>5.0</td>
+          <td>NaN</td>
+          <td>0.0</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    set(df['transpose'].dropna()), set(df['gemm'].dropna()), set(df['kind'].dropna())
+
+
+
+
+.. parsed-literal::
+    ({3.0, 4.0, 5.0, 6.0}, {0.0}, {'NN'})
+
+
+
+.. code:: ipython3
+
+    piv = df.pivot("eq", "name", "average").sort_values("numpy.einsum")
+        
+    fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+    piv.plot(logy=True, logx=True, ax=ax)
+    ax.set_title("Benchmark einsum function");
+
+
+
+.. image:: einsum_decomposition_53_0.png
+
+
+Best permutation
+~~~~~~~~~~~~~~~~
+
+One of the best permutation is ``bnst,chst->shn``.
+
+.. code:: ipython3
+
+    seq4 = decompose_einsum_equation("bnst,chst->shn", strategy='numpy', clean=True)
+    RenderJsDot(seq4.to_dot(size=7))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mc9fd8fba20df47fc9612e1387bd4a6c5-cont"><div id="Mc9fd8fba20df47fc9612e1387bd4a6c5" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\norientation=portrait;\nranksep=0.25;\nnodesep=0.05;\nwidth=0.5;\nheight=0.1;\nsize=7;\nnode [shape=record];\n0 [label=\"input 0\\nbnst\\n[ 0 -1 -1  1  2  3]\"];\n1953554186048 [label=\"id\\nNone\"];\n0 -> 1953554186048;\n1953554182832 [label=\"expand_dims\\naxes=((1, 1), (1, 2))None\"];\n1953554186048 -> 1953554182832;\n1953554184416 [label=\"reduce_sum - I0\\naxes=(0,)None\" style=filled fillcolor=red];\n1953554182832 -> 1953554184416;\n1 [label=\"input 1\\nchst\\n[-1  0  1 -1  2  3]\"];\n1953554184656 [label=\"id\\nNone\"];\n1 -> 1953554184656;\n1953554185664 [label=\"expand_dims\\naxes=((0, 0), (2, 3))None\"];\n1953554184656 -> 1953554185664;\n1953554185616 [label=\"reduce_sum\\naxes=(1,)None\"];\n1953554185664 -> 1953554185616;\n1953555141968 [label=\"transpose\\nperm=(0, 1, 4, 2, 3, 5)None\"];\n1953554184416 -> 1953555141968;\n1953555141104 [label=\"transpose\\nperm=(0, 1, 4, 2, 3, 5)None\"];\n1953554185616 -> 1953555141104;\n1953555144032 [label=\"batch_dot\\nbatch_axes=(0, 1, 2) keep_axes=None left=(2, 4) ndim=6 right=(2, 3) sum_axes=(5,)None\"];\n1953555141968 -> 1953555144032;\n1953555141104 -> 1953555144032;\n1953554182448 [label=\"squeeze - I-1\\naxes=(0, 1, 5)None\" style=filled fillcolor=red];\n1953555256800 -> 1953554182448;\n1953555256800 [label=\"transpose - I1\\nperm=(0, 1, 2, 4, 3, 5)None\" style=filled fillcolor=red];\n1953555144032 -> 1953555256800;\n}");
+    document.getElementById('Mc9fd8fba20df47fc9612e1387bd4a6c5').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    onx4 = seq4.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+    %onnxview onx4
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Me859b1ce2a7c4c89ba25522461aed2b8-cont"><div id="Me859b1ce2a7c4c89ba25522461aed2b8" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  size=None;\n  orientation=portrait;\n  ranksep=0.25;\n\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0, 0))\" fontsize=10];\n  X2 [shape=box color=red label=\"X2\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0))\" fontsize=10];\n\n  einsum1953554186048_id_axes [shape=box label=\"einsum1953554186048_id_axes\nint64((2,))\n[1 2]\" fontsize=10];\n  einsum1953554184416_re_axes [shape=box label=\"einsum1953554184416_re_axes\nint64((1,))\n[0]\" fontsize=10];\n  einsum1953554184656_id_axes [shape=box label=\"einsum1953554184656_id_axes\nint64((2,))\n[0 3]\" fontsize=10];\n  einsum1953554185616_re_axes [shape=box label=\"einsum1953554185616_re_axes\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953555144032_ba_batch_axes [shape=box label=\"einsum1953555144032_ba_batch_axes\nint64((3,))\n[0 1 2]\" fontsize=10];\n  einsum1953555144032_ba_sum_axes [shape=box label=\"einsum1953555144032_ba_sum_axes\nint64((1,))\n[5]\" fontsize=10];\n  einsum1953555144032_ba__1 [shape=box label=\"einsum1953555144032_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum1953555144032_ba_left_set [shape=box label=\"einsum1953555144032_ba_left_set\nint64((1,))\n[4]\" fontsize=10];\n  einsum1953555144032_ba_right_set [shape=box label=\"einsum1953555144032_ba_right_set\nint64((1,))\n[3]\" fontsize=10];\n  einsum1953555144032_ba_ones [shape=box label=\"einsum1953555144032_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum1953555256800_tr_axes [shape=box label=\"einsum1953555256800_tr_axes\nint64((3,))\n[0 1 5]\" fontsize=10];\n\n  einsum1953554186048_id [shape=box label=\"einsum1953554186048_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X1 -> Identity;\n  Identity -> einsum1953554186048_id;\n\n  einsum1953554182832_ex [shape=box label=\"einsum1953554182832_ex\" fontsize=10];\n  Unsqueeze [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze)\" fontsize=10];\n  einsum1953554186048_id -> Unsqueeze;\n  einsum1953554186048_id_axes -> Unsqueeze;\n  Unsqueeze -> einsum1953554182832_ex;\n\n  einsum1953554184416_re [shape=box label=\"einsum1953554184416_re\" fontsize=10];\n  ReduceSum [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum)\nkeepdims=1\" fontsize=10];\n  einsum1953554182832_ex -> ReduceSum;\n  einsum1953554184416_re_axes -> ReduceSum;\n  ReduceSum -> einsum1953554184416_re;\n\n  einsum1953554184656_id [shape=box label=\"einsum1953554184656_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X2 -> Identity1;\n  Identity1 -> einsum1953554184656_id;\n\n  einsum1953554185664_ex [shape=box label=\"einsum1953554185664_ex\" fontsize=10];\n  Unsqueeze1 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze1)\" fontsize=10];\n  einsum1953554184656_id -> Unsqueeze1;\n  einsum1953554184656_id_axes -> Unsqueeze1;\n  Unsqueeze1 -> einsum1953554185664_ex;\n\n  einsum1953554185616_re [shape=box label=\"einsum1953554185616_re\" fontsize=10];\n  ReduceSum1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSum\n(ReduceSum1)\nkeepdims=1\" fontsize=10];\n  einsum1953554185664_ex -> ReduceSum1;\n  einsum1953554185616_re_axes -> ReduceSum1;\n  ReduceSum1 -> einsum1953554185616_re;\n\n  einsum1953555141968_tr [shape=box label=\"einsum1953555141968_tr\" fontsize=10];\n  Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose)\nperm=[0 1 4 2 3 5]\" fontsize=10];\n  einsum1953554184416_re -> Transpose;\n  Transpose -> einsum1953555141968_tr;\n\n  einsum1953555141104_tr [shape=box label=\"einsum1953555141104_tr\" fontsize=10];\n  Transpose1 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose1)\nperm=[0 1 4 2 3 5]\" fontsize=10];\n  einsum1953554185616_re -> Transpose1;\n  Transpose1 -> einsum1953555141104_tr;\n\n  einsum1953555144032_ba_shape1 [shape=box label=\"einsum1953555144032_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum1953555141968_tr -> Shape;\n  Shape -> einsum1953555144032_ba_shape1;\n\n  einsum1953555144032_ba_shape2 [shape=box label=\"einsum1953555144032_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum1953555141104_tr -> Shape1;\n  Shape1 -> einsum1953555144032_ba_shape2;\n\n  einsum1953555144032_ba_dim0g [shape=box label=\"einsum1953555144032_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum1953555144032_ba_shape1 -> Gather;\n  einsum1953555144032_ba_batch_axes -> Gather;\n  Gather -> einsum1953555144032_ba_dim0g;\n\n  einsum1953555144032_ba_dim0bg [shape=box label=\"einsum1953555144032_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum1953555144032_ba_shape2 -> Gather1;\n  einsum1953555144032_ba_batch_axes -> Gather1;\n  Gather1 -> einsum1953555144032_ba_dim0bg;\n\n  einsum1953555144032_ba_dim0 [shape=box label=\"einsum1953555144032_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum1953555144032_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum1953555144032_ba_dim0;\n\n  einsum1953555144032_ba_dim0b [shape=box label=\"einsum1953555144032_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum1953555144032_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum1953555144032_ba_dim0b;\n\n  einsum1953555144032_ba_dim1 [shape=box label=\"einsum1953555144032_ba_dim1\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum1953555144032_ba_shape1 -> Gather12;\n  einsum1953555144032_ba_sum_axes -> Gather12;\n  Gather12 -> einsum1953555144032_ba_dim1;\n\n  einsum1953555144032_ba_dim2 [shape=box label=\"einsum1953555144032_ba_dim2\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum1953555144032_ba_shape2 -> Gather123;\n  einsum1953555144032_ba_sum_axes -> Gather123;\n  Gather123 -> einsum1953555144032_ba_dim2;\n\n  einsum1953555144032_ba_resh1 [shape=box label=\"einsum1953555144032_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum1953555144032_ba_dim0 -> Concat;\n  einsum1953555144032_ba__1 -> Concat;\n  einsum1953555144032_ba_dim1 -> Concat;\n  Concat -> einsum1953555144032_ba_resh1;\n\n  einsum1953555144032_ba_resh2 [shape=box label=\"einsum1953555144032_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum1953555144032_ba_dim0b -> Concat1;\n  einsum1953555144032_ba__1 -> Concat1;\n  einsum1953555144032_ba_dim2 -> Concat1;\n  Concat1 -> einsum1953555144032_ba_resh2;\n\n  einsum1953555144032_ba_aresh1 [shape=box label=\"einsum1953555144032_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum1953555141968_tr -> Reshape;\n  einsum1953555144032_ba_resh1 -> Reshape;\n  Reshape -> einsum1953555144032_ba_aresh1;\n\n  einsum1953555144032_ba_aresh2 [shape=box label=\"einsum1953555144032_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum1953555141104_tr -> Reshape1;\n  einsum1953555144032_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum1953555144032_ba_aresh2;\n\n  einsum1953555144032_ba_aresh2_tr [shape=box label=\"einsum1953555144032_ba_aresh2_tr\" fontsize=10];\n  Transpose12 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose12)\nperm=[0 2 1]\" fontsize=10];\n  einsum1953555144032_ba_aresh2 -> Transpose12;\n  Transpose12 -> einsum1953555144032_ba_aresh2_tr;\n\n  einsum1953555144032_ba_dot [shape=box label=\"einsum1953555144032_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum1953555144032_ba_aresh1 -> MatMul;\n  einsum1953555144032_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum1953555144032_ba_dot;\n\n  einsum1953555144032_ba_max_dim [shape=box label=\"einsum1953555144032_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum1953555144032_ba_dim0g -> Max;\n  einsum1953555144032_ba_dim0bg -> Max;\n  Max -> einsum1953555144032_ba_max_dim;\n\n  einsum1953555144032_ba_left_dim [shape=box label=\"einsum1953555144032_ba_left_dim\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum1953555144032_ba_shape1 -> Gather1234;\n  einsum1953555144032_ba_left_set -> Gather1234;\n  Gather1234 -> einsum1953555144032_ba_left_dim;\n\n  einsum1953555144032_ba_right_dim [shape=box label=\"einsum1953555144032_ba_right_dim\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum1953555144032_ba_shape2 -> Gather12345;\n  einsum1953555144032_ba_right_set -> Gather12345;\n  Gather12345 -> einsum1953555144032_ba_right_dim;\n\n  einsum1953555144032_ba_new_shape [shape=box label=\"einsum1953555144032_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum1953555144032_ba_max_dim -> Concat12;\n  einsum1953555144032_ba_left_dim -> Concat12;\n  einsum1953555144032_ba_right_dim -> Concat12;\n  einsum1953555144032_ba_ones -> Concat12;\n  Concat12 -> einsum1953555144032_ba_new_shape;\n\n  einsum1953555144032_ba_final [shape=box label=\"einsum1953555144032_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum1953555144032_ba_dot -> Reshape12;\n  einsum1953555144032_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum1953555144032_ba_final;\n\n  einsum1953555256800_tr [shape=box label=\"einsum1953555256800_tr\" fontsize=10];\n  Transpose123 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose123)\nperm=[0 1 2 4 3 5]\" fontsize=10];\n  einsum1953555144032_ba_final -> Transpose123;\n  Transpose123 -> einsum1953555256800_tr;\n\n  einsum1953554182448_sq [shape=box label=\"einsum1953554182448_sq\" fontsize=10];\n  Squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze)\" fontsize=10];\n  einsum1953555256800_tr -> Squeeze;\n  einsum1953555256800_tr_axes -> Squeeze;\n  Squeeze -> einsum1953554182448_sq;\n\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  einsum1953554182448_sq -> Identity12;\n  Identity12 -> Y;\n}");
+    document.getElementById('Me859b1ce2a7c4c89ba25522461aed2b8').innerHTML = svgGraph; });
+
+    </script>

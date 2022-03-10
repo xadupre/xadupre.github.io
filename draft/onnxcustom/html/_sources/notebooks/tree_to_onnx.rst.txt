@@ -1,0 +1,608 @@
+
+.. _treetoonnxrst:
+
+========================
+Convert a tree into ONNX
+========================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <tree_to_onnx.ipynb>`, :downloadlink:`html <tree_to_onnx2html.html>`, :download:`PDF <tree_to_onnx.pdf>`, :download:`python <tree_to_onnx.py>`, :downloadlink:`slides <tree_to_onnx.slides.html>`, :githublink:`GitHub|_doc/notebooks/tree_to_onnx.ipynb|*`
+
+
+This notebook shows how to create a tree and execute it with
+`onnx <https://github.com/onnx/onnx>`__ and
+`onnxruntime <https://onnxruntime.ai/docs/api/python/>`__. The direct
+way to do it is simple to use ONNX API and more precisely, the node
+`TreeEnsembleRegressor <https://github.com/onnx/onnx/blob/master/docs/Operators-ml.md#ai.onnx.ml.TreeEnsembleRegressor>`__.
+Another option is to create a tree in
+`scikit-learn <https://scikit-learn.org/stable/>`__ and then to convert
+it using `skl2onnx <https://onnx.ai/sklearn-onnx/>`__.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+Tree and cython
+---------------
+
+Class
+`DecisionTreeRegressor <https://scikit-learn.org/stable/modules/generated/sklearn.tree.DecisionTreeRegressor.html#sklearn.tree.DecisionTreeRegressor>`__
+is the public API for a tree in scikit-learn. It relies one another
+implemented in `cython <https://cython.org/>`__ called
+`Tree <https://github.com/scikit-learn/scikit-learn/blob/main/sklearn/tree/_tree.pyx#L490>`__.
+This one is private and not supposed to be accessed by users. All
+methods cannot be accessed from python including the one used to add
+nodes
+`add_node <https://github.com/scikit-learn/scikit-learn/blob/main/sklearn/tree/_tree.pyx#L716>`__.
+Then a little bit of cython is needed to actually create a tree… or we
+could use function
+`tree_add_node <http://www.xavierdupre.fr/app/mlinsights/helpsphinx/mlinsights/mltree/_tree_digitize.cpython-39-x86_64-linux-gnu.html>`__.
+
+.. code:: ipython3
+
+    from mlinsights.mltree._tree_digitize import tree_add_node
+    help(tree_add_node)
+
+
+.. parsed-literal::
+    Help on built-in function tree_add_node in module mlinsights.mltree._tree_digitize:
+    tree_add_node(...)
+        tree_add_node(tree, parent, is_left, is_leaf, feature, threshold, impurity, n_node_samples, weighted_n_node_samples)
+        Adds a node to tree.
+        :param parent: parent index (-1 for the root)
+        :param is_left: is left node?
+        :param is_leaf: is leave?
+        :param feature: feature index
+        :param threshold: threshold (or value)
+        :param impurity: impurity
+        :param n_node_samples: number of samples this node represents
+        :param weighted_n_node_samples: node weight
+    
+
+
+A simple problem
+----------------
+
+.. code:: ipython3
+
+    import numpy
+    import matplotlib.pyplot as plt
+    
+    
+    def plot_function(fct, title):
+        x_min, x_max = -1, 1
+        y_min, y_max = -1, 1
+        h = 0.02  # step size in the mesh
+        xx, yy = numpy.meshgrid(numpy.arange(x_min, x_max, h),
+                                numpy.arange(y_min, y_max, h))
+        Z = fct(numpy.c_[xx.ravel(), yy.ravel()])
+    
+        # Put the result into a color plot
+        Z = Z.reshape(xx.shape)
+        fig, ax = plt.subplots(1, 1, figsize=(4, 3))
+        ax.pcolormesh(xx, yy, Z)
+        ax.set_title(title)
+        return ax
+    
+    
+    def tree_function(x, y):
+        if x <= 0:
+            if y <= 0.2:
+                return 0
+            else:
+                return 1
+        else:
+            if y <= -0.1:
+                return 2
+            else:
+                return 3
+    
+    
+    def tree_function_data(xy):
+        res = numpy.empty(xy.shape[0], dtype=numpy.float64)
+        for i in range(0, xy.shape[0]):
+            res[i] = tree_function(xy[i, 0], xy[i, 1])
+        return res
+    
+            
+    plot_function(tree_function_data, "tree_function_data");
+
+
+.. parsed-literal::
+    <ipython-input-4-09db879347c8>:16: MatplotlibDeprecationWarning: shading='flat' when X and Y have the same dimensions as C is deprecated since 3.3.  Either specify the corners of the quadrilaterals with X and Y, or pass shading='auto', 'nearest' or 'gouraud', or set rcParams['pcolor.shading'].  This will become an error two minor releases later.
+      ax.pcolormesh(xx, yy, Z)
+
+
+
+.. image:: tree_to_onnx_6_1.png
+
+
+The tree construction
+---------------------
+
+The tree needs two features and has three nodes.
+
+.. code:: ipython3
+
+    from sklearn.tree._tree import Tree
+    
+    UNUSED = 99999
+    
+    values = []  # stored the predicted values
+    
+    tree = Tree(2,  # n_features
+                numpy.array([1], dtype=numpy.intp),  #  n_classes
+                1,  # n_outputs
+                )
+    
+    
+    # First node: the root: x <= 0
+    index = tree_add_node(tree,
+                          -1,          # parent index
+                          False,       # is left node
+                          False,       # is leaf
+                          0,           # feature index
+                          0,           # threshold
+                          0, 1, 1.)    # impurity, n_node_samples, node weight
+    values.append(UNUSED)
+    
+    
+    # Second node: y <= 0.2
+    index1 = tree_add_node(tree,
+                           index,       # parent index
+                           True,        # is left node
+                           False,       # is leaf
+                           1,           # feature index
+                           0.2,         # threshold
+                           0, 1, 1.)    # impurity, n_node_samples, node weight
+    values.append(UNUSED)
+    
+    # First leaf
+    leaf_1 = tree_add_node(tree,
+                           index1,      # parent index
+                           True,        # is left node
+                           True,        # is leaf
+                           0,           # feature index
+                           0,           # threshold
+                           0, 1, 1.)    # impurity, n_node_samples, node weight
+    values.append(0)
+    
+    # Second leaf
+    leaf_2 = tree_add_node(tree, index1, False, True, 0, 0, 0, 1, 1.)
+    values.append(1)
+    
+    # Third node: y <= -0.1
+    index2 = tree_add_node(tree,
+                           index,       # parent index
+                           False,       # is left node
+                           False,       # is right node
+                           1,           # feature index
+                           -0.1,        # threshold
+                           0, 1, 1.)    # impurity, n_node_samples, node weight
+    values.append(UNUSED)
+    
+    # Third leaf
+    leaf_3 = tree_add_node(tree,
+                           index2,      # parent index
+                           True,        # is left node
+                           True,        # is leaf
+                           0,           # feature index
+                           0,           # threshold
+                           0, 1, 1.)    # impurity, n_node_samples, node weight
+    values.append(2)
+    
+    # Fourth leaf
+    leaf_4 = tree_add_node(tree, index2, False, True, 0, 0, 0, 1, 1.)
+    values.append(3)
+    
+    
+    index, index1, index2, values
+
+
+
+
+.. parsed-literal::
+    (0, 1, 4, [99999, 99999, 0, 1, 99999, 2, 3])
+
+
+
+The final detail.
+
+.. code:: ipython3
+
+    tree.max_depth = 2
+
+The internal structure is created, let’s complete the public API.
+
+.. code:: ipython3
+
+    from sklearn.tree import DecisionTreeRegressor
+    
+    reg = DecisionTreeRegressor()
+    reg.tree_ = tree
+    reg.tree_.value[:, 0, 0] = numpy.array(  # pylint: disable=E1137
+        values, dtype=numpy.float64)
+    reg.n_outputs = 1
+    reg.n_outputs_ = 1
+    reg.n_features_in_ = 2  # scikit-learn >= 0.24
+    reg.maxdepth = tree.max_depth
+    
+    reg
+
+
+
+
+.. parsed-literal::
+    DecisionTreeRegressor()
+
+
+
+.. code:: ipython3
+
+    plot_function(reg.predict, "DecisionTreeRegressor");
+
+
+.. parsed-literal::
+    <ipython-input-4-09db879347c8>:16: MatplotlibDeprecationWarning: shading='flat' when X and Y have the same dimensions as C is deprecated since 3.3.  Either specify the corners of the quadrilaterals with X and Y, or pass shading='auto', 'nearest' or 'gouraud', or set rcParams['pcolor.shading'].  This will become an error two minor releases later.
+      ax.pcolormesh(xx, yy, Z)
+
+
+
+.. image:: tree_to_onnx_13_1.png
+
+
+It is the same.
+
+Conversion to ONNX
+------------------
+
+The only difference is ONNX does not support double (float64) in opset
+15 or below with
+`TreeEnsembleRegressor <https://github.com/onnx/onnx/blob/master/docs/Operators-ml.md#ai.onnx.ml.TreeEnsembleRegressor>`__.
+It does not really matter for this example but it could (see this
+example
+`Discrepancies <http://www.xavierdupre.fr/app/onnxcustom/helpsphinx/gyexamples/plot_ebegin_float_double.html>`__).
+
+.. code:: ipython3
+
+    from skl2onnx import to_onnx
+    
+    feat = numpy.empty((1, 2), dtype=numpy.float32)
+    onx = to_onnx(reg, feat, target_opset={'': 14, 'ai.onnx.ml': 2})
+    
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Md63c91c5e18d4b9c822aa65ee38f5380-cont"><div id="Md63c91c5e18d4b9c822aa65ee38f5380" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  ranksep=0.25;\n  size=7;\n  orientation=portrait;\n  nodesep=0.05;\n\n  X [shape=box color=red label=\"X\nfloat((0, 2))\" fontsize=10];\n\n  variable [shape=box color=green label=\"variable\nfloat((0, 1))\" fontsize=10];\n\n\n  TreeEnsembleRegressor [shape=box style=\"filled,rounded\" color=orange label=\"TreeEnsembleRegressor\n(TreeEnsembleRegressor)\nn_targets=1\nnodes_falsenodeids=[4 3 0 0 6 0...\nnodes_featureids=[0 1 0 0 1 0 0...\nnodes_hitrates=[1. 1. 1. 1. 1. ...\nnodes_missing_value_tracks_true=[0 0 0 0 0...\nnodes_modes=[b'BRANCH_LEQ' b'BR...\nnodes_nodeids=[0 1 2 3 4 5 6]\nnodes_treeids=[0 0 0 0 0 0 0]\nnodes_truenodeids=[1 2 0 0 5 0 ...\nnodes_values=[ 0.          0.19...\npost_transform=b'NONE'\ntarget_ids=[0 0 0 0]\ntarget_nodeids=[2 3 5 6]\ntarget_treeids=[0 0 0 0]\ntarget_weights=[0. 1. 2. 3.]\" fontsize=10];\n  X -> TreeEnsembleRegressor;\n  TreeEnsembleRegressor -> variable;\n}");
+    document.getElementById('Md63c91c5e18d4b9c822aa65ee38f5380').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+And we execute it with onnxruntime.
+
+.. code:: ipython3
+
+    from onnxruntime import InferenceSession
+    
+    sess = InferenceSession(onx.SerializeToString())
+    
+    plot_function(lambda x: sess.run(None, {'X': x.astype(numpy.float32)})[0], "onnxruntime");
+
+
+.. parsed-literal::
+    No CUDA runtime is found, using CUDA_HOME='C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v11.4'
+
+
+.. parsed-literal::
+
+    <ipython-input-4-09db879347c8>:16: MatplotlibDeprecationWarning: shading='flat' when X and Y have the same dimensions as C is deprecated since 3.3.  Either specify the corners of the quadrilaterals with X and Y, or pass shading='auto', 'nearest' or 'gouraud', or set rcParams['pcolor.shading'].  This will become an error two minor releases later.
+      ax.pcolormesh(xx, yy, Z)
+
+
+
+.. image:: tree_to_onnx_18_2.png
+
+
+Still the same.
+
+Text visualization
+------------------
+
+This can be useful to debug a function building a tree.
+
+See
+`onnx_text_plot_tree <http://www.xavierdupre.fr/app/mlprodict/helpsphinx/mlprodict/plotting/text_plot.html#mlprodict.plotting.text_plot.onnx_text_plot_tree>`__,
+`export_text <https://scikit-learn.org/stable/modules/generated/sklearn.tree.export_text.html?highlight=export_text#sklearn.tree.export_text>`__,
+`plot_tree <https://scikit-learn.org/stable/modules/generated/sklearn.tree.plot_tree.html?highlight=plot_tree#sklearn.tree.plot_tree>`__.
+
+.. code:: ipython3
+
+    from mlprodict.plotting.text_plot import onnx_text_plot_tree
+    
+    print(onnx_text_plot_tree(onx.graph.node[0]))
+
+
+.. parsed-literal::
+    n_targets=1
+    n_trees=1
+    ----
+    treeid=0
+     X0 <= 0.0
+       F X1 <= -0.1
+          F y=3.0 f=0 i=6
+          T y=2.0 f=0 i=5
+       T X1 <= 0.19999999
+          F y=1.0 f=0 i=3
+          T y=0.0 f=0 i=2
+
+
+.. code:: ipython3
+
+    from sklearn.tree import export_text
+    
+    print(export_text(reg))
+
+
+.. parsed-literal::
+    |--- feature_0 <= 0.00
+    |   |--- feature_1 <= 0.20
+    |   |   |--- value: [0.00]
+    |   |--- feature_1 >  0.20
+    |   |   |--- value: [1.00]
+    |--- feature_0 >  0.00
+    |   |--- feature_1 <= -0.10
+    |   |   |--- value: [2.00]
+    |   |--- feature_1 >  -0.10
+    |   |   |--- value: [3.00]
+    
+
+
+.. code:: ipython3
+
+    from sklearn.tree import plot_tree
+    
+    fig = plt.figure(figsize=(10,5))
+    plot_tree(reg, feature_names=['x', 'y'], filled=True);
+
+
+
+.. image:: tree_to_onnx_23_0.png
+
+
+Convert a forest of trees
+-------------------------
+
+`sklearn-onnx <https://github.com/onnx/sklearn-onnx>`__ does not support
+the conversion of mulitple trees in a list. It can only convert a model.
+Converting list produces the following error:
+
+.. code:: ipython3
+
+    try:
+        to_onnx([reg, reg], feat, target_opset={'': 14, 'ai.onnx.ml': 2})
+    except Exception as e:
+        print(e)
+
+
+.. parsed-literal::
+    Unable to find a shape calculator for type '<class 'list'>'.
+    It usually means the pipeline being converted contains a
+    transformer or a predictor with no corresponding converter
+    implemented in sklearn-onnx. If the converted is implemented
+    in another library, you need to register
+    the converted so that it can be used by sklearn-onnx (function
+    update_registered_converter). If the model is not yet covered
+    by sklearn-onnx, you may raise an issue to
+    https://github.com/onnx/sklearn-onnx/issues
+    to get the converter implemented or even contribute to the
+    project. If the model is a custom model, a new converter must
+    be implemented. Examples can be found in the gallery.
+    
+
+
+However, the model
+`RandomForestRegressor <https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html>`__
+is an average of decision trees which we can use to convert those trees.
+Let’s assume we want to convert weighted average of regressions tree. We
+first need to multiply every leaf of a tree by its weight.
+
+.. code:: ipython3
+
+    from sklearn.tree._tree import Tree
+    from sklearn.tree import DecisionTreeRegressor
+    from sklearn.ensemble import RandomForestRegressor
+    
+    
+    def build_dummy_tree(leaf_values):
+        UNUSED = 99999
+        values = []
+    
+        tree = Tree(2,  # n_features
+                    numpy.array([1], dtype=numpy.intp),  #  n_classes
+                    1,  # n_outputs
+                    )
+    
+    
+        # First node: the root: x <= 0
+        index = tree_add_node(tree,
+                              -1,          # parent index
+                              False,       # is left node
+                              False,       # is leaf
+                              0,           # feature index
+                              0,           # threshold
+                              0, 1, 1.)    # impurity, n_node_samples, node weight
+        values.append(UNUSED)
+    
+    
+        # Second node: y <= 0.2
+        index1 = tree_add_node(tree,
+                               index,       # parent index
+                               True,        # is left node
+                               False,       # is leaf
+                               1,           # feature index
+                               0.2,         # threshold
+                               0, 1, 1.)    # impurity, n_node_samples, node weight
+        values.append(UNUSED)
+    
+        # First leaf
+        leaf_1 = tree_add_node(tree, index1, True, True, 0, 0, 0, 1, 1.)
+        values.append(leaf_values[0])
+    
+        # Second leaf
+        leaf_2 = tree_add_node(tree, index1, False, True, 0, 0, 0, 1, 1.)
+        values.append(leaf_values[1])
+    
+        # Third node: y <= -0.1
+        index2 = tree_add_node(tree,
+                               index,       # parent index
+                               False,       # is left node
+                               False,       # is right node
+                               1,           # feature index
+                               -0.1,        # threshold
+                               0, 1, 1.)    # impurity, n_node_samples, node weight
+        values.append(UNUSED)
+    
+        # Third leaf
+        leaf_3 = tree_add_node(tree, index2, True, True, 0, 0, 0, 1, 1.)
+        values.append(leaf_values[2])
+    
+        # Fourth leaf
+        leaf_4 = tree_add_node(tree, index2, False, True, 0, 0, 0, 1, 1.)
+        values.append(leaf_values[3])
+        
+        tree.value[:, 0, 0] = numpy.array(values, dtype=numpy.float64)
+    
+        reg = DecisionTreeRegressor()
+        reg.tree_ = tree
+        reg.n_outputs = 1
+        reg.n_outputs_ = 1
+        reg.n_features_in_ = 2  # scikit-learn >= 0.24
+        reg.maxdepth = tree.max_depth    
+        return reg
+    
+    
+    def build_dummy_forest(trees):    
+        rf = RandomForestRegressor()
+        rf.estimators_ = trees
+        rf.n_outputs_ = trees[0].n_outputs_ 
+        rf.n_features_in_ = trees[0].n_features_in_ 
+        return rf
+    
+    
+    tree1 = build_dummy_tree(
+        numpy.array([4, 5, -5, -6], dtype=numpy.float32) * 0.2)
+    tree2 = build_dummy_tree(
+        numpy.array([5, 6, 5, -7], dtype=numpy.float32) * 0.8)
+    
+    rf = build_dummy_forest([tree1, tree2])
+    print(export_text(rf.estimators_[0]))
+    print(export_text(rf.estimators_[1]))
+
+
+.. parsed-literal::
+    |--- feature_0 <= 0.00
+    |   |--- feature_1 <= 0.20
+    |   |   |--- value: [0.80]
+    |   |--- feature_1 >  0.20
+    |   |   |--- value: [1.00]
+    |--- feature_0 >  0.00
+    |   |--- feature_1 <= -0.10
+    |   |   |--- value: [-1.00]
+    |   |--- feature_1 >  -0.10
+    |   |   |--- value: [-1.20]
+    |--- feature_0 <= 0.00
+    |   |--- feature_1 <= 0.20
+    |   |   |--- value: [4.00]
+    |   |--- feature_1 >  0.20
+    |   |   |--- value: [4.80]
+    |--- feature_0 >  0.00
+    |   |--- feature_1 <= -0.10
+    |   |   |--- value: [4.00]
+    |   |--- feature_1 >  -0.10
+    |   |   |--- value: [-5.60]
+    
+
+
+.. code:: ipython3
+
+    rf.predict(numpy.array([[0, 2.5]]))
+
+
+
+
+.. parsed-literal::
+    array([2.9000001])
+
+
+
+Conversion to ONNX.
+
+.. code:: ipython3
+
+    feat = numpy.empty((1, 2), dtype=numpy.float32)
+    onx = to_onnx(rf, feat, target_opset={'': 14, 'ai.onnx.ml': 2})
+    
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M5bc8a555e67f47bcb3c5d0d13d32cb36-cont"><div id="M5bc8a555e67f47bcb3c5d0d13d32cb36" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  ranksep=0.25;\n  size=7;\n  orientation=portrait;\n  nodesep=0.05;\n\n  X [shape=box color=red label=\"X\nfloat((0, 2))\" fontsize=10];\n\n  variable [shape=box color=green label=\"variable\nfloat((0, 1))\" fontsize=10];\n\n\n  TreeEnsembleRegressor [shape=box style=\"filled,rounded\" color=orange label=\"TreeEnsembleRegressor\n(TreeEnsembleRegressor)\nn_targets=1\nnodes_falsenodeids=[4 3 0 0 6 0...\nnodes_featureids=[0 1 0 0 1 0 0...\nnodes_hitrates=[1. 1. 1. 1. 1. ...\nnodes_missing_value_tracks_true=[0 0 0 0 0...\nnodes_modes=[b'BRANCH_LEQ' b'BR...\nnodes_nodeids=[0 1 2 3 4 5 6 0 ...\nnodes_treeids=[0 0 0 0 0 0 0 1 ...\nnodes_truenodeids=[1 2 0 0 5 0 ...\nnodes_values=[ 0.          0.19...\npost_transform=b'NONE'\ntarget_ids=[0 0 0 0 0 0 0 0]\ntarget_nodeids=[2 3 5 6 2 3 5 6...\ntarget_treeids=[0 0 0 0 1 1 1 1...\ntarget_weights=[ 0.4  0.5 -0.5 ...\" fontsize=10];\n  X -> TreeEnsembleRegressor;\n  TreeEnsembleRegressor -> variable;\n}");
+    document.getElementById('M5bc8a555e67f47bcb3c5d0d13d32cb36').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    sess = InferenceSession(onx.SerializeToString())
+    
+    sess.run(None, {'X': numpy.array([[0, 2.5]], dtype=numpy.float32)})
+
+
+
+
+.. parsed-literal::
+    [array([[2.9]], dtype=float32)]
+
+
+
+It works.
