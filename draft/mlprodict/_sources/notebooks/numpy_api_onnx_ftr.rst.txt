@@ -1,0 +1,644 @@
+
+.. _numpyapionnxftrrst:
+
+=========================================================
+Introduction to a numpy API for ONNX: FunctionTransformer
+=========================================================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <numpy_api_onnx_ftr.ipynb>`, :downloadlink:`html <numpy_api_onnx_ftr2html.html>`, :download:`PDF <numpy_api_onnx_ftr.pdf>`, :download:`python <numpy_api_onnx_ftr.py>`, :downloadlink:`slides <numpy_api_onnx_ftr.slides.html>`, :githublink:`GitHub|_doc/notebooks/numpy_api_onnx_ftr.ipynb|*`
+
+
+This notebook shows how to write python functions similar functions as
+numpy offers and get a function which can be converted into ONNX.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+A pipeline with FunctionTransformer
+-----------------------------------
+
+.. code:: ipython3
+
+    from sklearn.datasets import load_iris
+    from sklearn.model_selection import train_test_split
+    data = load_iris()
+    X, y = data.data, data.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+.. code:: ipython3
+
+    import numpy
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    
+    pipe = make_pipeline(
+                FunctionTransformer(numpy.log),
+                StandardScaler(),
+                LogisticRegression())
+    pipe.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    Pipeline(steps=[('functiontransformer',
+                     FunctionTransformer(func=<ufunc 'log'>)),
+                    ('standardscaler', StandardScaler()),
+                    ('logisticregression', LogisticRegression())])
+
+
+
+Let’s convert it into ONNX.
+
+.. code:: ipython3
+
+    from mlprodict.onnx_conv import to_onnx
+    try:
+        onx = to_onnx(pipe, X_train.astype(numpy.float64))
+    except (RuntimeError, TypeError) as e:
+        print(e)
+
+
+.. parsed-literal::
+    FunctionTransformer is not supported unless the transform function is None (= identity). You may raise an issue at https://github.com/onnx/sklearn-onnx/issues.
+
+
+Use ONNX instead of numpy
+-------------------------
+
+The pipeline cannot be converter because the converter does not know how
+to convert the function (``numpy.log``) held by ``FunctionTransformer``
+into ONNX. One way to avoid that is to replace it by a function ``log``
+defined with *ONNX* operators and executed with an ONNX runtime.
+
+.. code:: ipython3
+
+    import mlprodict.npy.numpy_onnx_pyrt as npnxrt
+    
+    pipe = make_pipeline(
+                FunctionTransformer(npnxrt.log),
+                StandardScaler(),
+                LogisticRegression())
+    pipe.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    Pipeline(steps=[('functiontransformer',
+                     FunctionTransformer(func=<mlprodict.npy.onnx_numpy_wrapper.onnxnumpy_nb_log_None_None object at 0x000002B02D5D7550>)),
+                    ('standardscaler', StandardScaler()),
+                    ('logisticregression', LogisticRegression())])
+
+
+
+.. code:: ipython3
+
+    onx = to_onnx(pipe, X_train.astype(numpy.float64), rewrite_ops=True)
+
+
+.. parsed-literal::
+    C:\Python395_x64\lib\site-packages\xgboost\compat.py:36: FutureWarning: pandas.Int64Index is deprecated and will be removed from pandas in a future version. Use pandas.Index with the appropriate dtype instead.
+      from pandas import MultiIndex, Int64Index
+
+
+.. code:: ipython3
+
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mf5623408ebc44c239ece05c19a80a72f-cont"><div id="Mf5623408ebc44c239ece05c19a80a72f" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  nodesep=0.05;\n  size=7;\n  ranksep=0.25;\n\n  X [shape=box color=red label=\"X\ndouble((0, 4))\" fontsize=10];\n\n  output_label [shape=box color=green label=\"output_label\nint64((0,))\" fontsize=10];\n  output_probability [shape=box color=green label=\"output_probability\n[{int64, {'kind': 'tensor', 'elem': 'double', 'shape': }}]\" fontsize=10];\n\n  Su_Subcst [shape=box label=\"Su_Subcst\nfloat64((4,))\n[ 1.75233693  1.11020979  1.16721816 -0.19607855]\" fontsize=10];\n  Di_Divcst [shape=box label=\"Di_Divcst\nfloat64((4,))\n[0.13316014 0.14052184 0.57746737 0.98983177]\" fontsize=10];\n  coef [shape=box label=\"coef\nfloat64((4, 3))\n[[-0.92381911  0.19033174  0.73348737]\n [ 1.000908...\" fontsize=10];\n  intercept [shape=box label=\"intercept\nfloat64((1, 3))\n[[ 0.33436407  1.83444625 -2.16881032]]\" fontsize=10];\n  classes [shape=box label=\"classes\nint32((3,))\n[0 1 2]\" fontsize=10];\n  shape_tensor [shape=box label=\"shape_tensor\nint64((1,))\n[-1]\" fontsize=10];\n\n  ft_y [shape=box label=\"ft_y\" fontsize=10];\n  ft_Log [shape=box style=\"filled,rounded\" color=orange label=\"Log\n(ft_Log)\" fontsize=10];\n  X -> ft_Log;\n  ft_Log -> ft_y;\n\n  Su_C0 [shape=box label=\"Su_C0\" fontsize=10];\n  Su_Sub [shape=box style=\"filled,rounded\" color=orange label=\"Sub\n(Su_Sub)\" fontsize=10];\n  ft_y -> Su_Sub;\n  Su_Subcst -> Su_Sub;\n  Su_Sub -> Su_C0;\n\n  variable1 [shape=box label=\"variable1\" fontsize=10];\n  Di_Div [shape=box style=\"filled,rounded\" color=orange label=\"Div\n(Di_Div)\" fontsize=10];\n  Su_C0 -> Di_Div;\n  Di_Divcst -> Di_Div;\n  Di_Div -> variable1;\n\n  multiplied [shape=box label=\"multiplied\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  variable1 -> MatMul;\n  coef -> MatMul;\n  MatMul -> multiplied;\n\n  raw_scores [shape=box label=\"raw_scores\" fontsize=10];\n  Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Add)\" fontsize=10];\n  multiplied -> Add;\n  intercept -> Add;\n  Add -> raw_scores;\n\n  label1 [shape=box label=\"label1\" fontsize=10];\n  ArgMax [shape=box style=\"filled,rounded\" color=orange label=\"ArgMax\n(ArgMax)\naxis=1\" fontsize=10];\n  raw_scores -> ArgMax;\n  ArgMax -> label1;\n\n  probabilities [shape=box label=\"probabilities\" fontsize=10];\n  Softmax [shape=box style=\"filled,rounded\" color=orange label=\"Softmax\n(Softmax)\naxis=-1\" fontsize=10];\n  raw_scores -> Softmax;\n  Softmax -> probabilities;\n\n  array_feature_extractor_result [shape=box label=\"array_feature_extractor_result\" fontsize=10];\n  ArrayFeatureExtractor [shape=box style=\"filled,rounded\" color=orange label=\"ArrayFeatureExtractor\n(ArrayFeatureExtractor)\" fontsize=10];\n  classes -> ArrayFeatureExtractor;\n  label1 -> ArrayFeatureExtractor;\n  ArrayFeatureExtractor -> array_feature_extractor_result;\n\n  ZipMap [shape=box style=\"filled,rounded\" color=orange label=\"ZipMap\n(ZipMap)\nclasslabels_int64s=[0 1 2]\" fontsize=10];\n  probabilities -> ZipMap;\n  ZipMap -> output_probability;\n\n  cast2_result [shape=box label=\"cast2_result\" fontsize=10];\n  Cast [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast)\nto=11\" fontsize=10];\n  array_feature_extractor_result -> Cast;\n  Cast -> cast2_result;\n\n  reshaped_result [shape=box label=\"reshaped_result\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  cast2_result -> Reshape;\n  shape_tensor -> Reshape;\n  Reshape -> reshaped_result;\n\n  label [shape=box label=\"label\" fontsize=10];\n  Cast1 [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast1)\nto=7\" fontsize=10];\n  reshaped_result -> Cast1;\n  Cast1 -> label;\n\n  Cast2 [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast2)\nto=7\" fontsize=10];\n  label -> Cast2;\n  Cast2 -> output_label;\n}");
+    document.getElementById('Mf5623408ebc44c239ece05c19a80a72f').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+The operator ``Log`` is belongs to the graph. There is some overhead by
+using this function on small matrices. The gap is much less on big
+matrices.
+
+.. code:: ipython3
+
+    %timeit numpy.log(X_train)
+
+
+.. parsed-literal::
+    3.86 µs ± 177 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit npnxrt.log(X_train)
+
+
+.. parsed-literal::
+    22.5 µs ± 1.66 µs per loop (mean ± std. dev. of 7 runs, 10,000 loops each)
+
+
+Slightly more complex functions with a FunctionTransformer
+----------------------------------------------------------
+
+What about more complex functions? It is a bit more complicated too. The
+previous syntax does not work.
+
+.. code:: ipython3
+
+    def custom_fct(x):
+        return npnxrt.log(x + 1)
+    
+    pipe = make_pipeline(
+                FunctionTransformer(custom_fct),
+                StandardScaler(),
+                LogisticRegression())
+    pipe.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    Pipeline(steps=[('functiontransformer',
+                     FunctionTransformer(func=<function custom_fct at 0x000002B02E5B24C0>)),
+                    ('standardscaler', StandardScaler()),
+                    ('logisticregression', LogisticRegression())])
+
+
+
+.. code:: ipython3
+
+    try:
+        onx = to_onnx(pipe, X_train.astype(numpy.float64), rewrite_ops=True)
+    except TypeError as e:
+        print(e)
+
+
+.. parsed-literal::
+    FunctionTransformer is not supported unless the transform function is of type <class 'function'> wrapped with onnxnumpy.
+
+
+The syntax is different.
+
+.. code:: ipython3
+
+    from typing import Any
+    from mlprodict.npy import onnxnumpy_default, NDArray
+    import mlprodict.npy.numpy_onnx_impl as npnx
+    
+    @onnxnumpy_default
+    def custom_fct(x: NDArray[(None, None), numpy.float64]) -> NDArray[(None, None), numpy.float64]:
+        return npnx.log(x + numpy.float64(1))
+    
+    pipe = make_pipeline(
+                FunctionTransformer(custom_fct),
+                StandardScaler(),
+                LogisticRegression())
+    pipe.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    Pipeline(steps=[('functiontransformer',
+                     FunctionTransformer(func=<mlprodict.npy.onnx_numpy_wrapper.onnxnumpy_custom_fct_None_None object at 0x000002B02E63F6D0>)),
+                    ('standardscaler', StandardScaler()),
+                    ('logisticregression', LogisticRegression())])
+
+
+
+.. code:: ipython3
+
+    onx = to_onnx(pipe, X_train.astype(numpy.float64), rewrite_ops=True)
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M16f0d5d6b9224a5484d3f67d6c828749-cont"><div id="M16f0d5d6b9224a5484d3f67d6c828749" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  nodesep=0.05;\n  size=7;\n  ranksep=0.25;\n\n  X [shape=box color=red label=\"X\ndouble((0, 4))\" fontsize=10];\n\n  output_label [shape=box color=green label=\"output_label\nint64((0,))\" fontsize=10];\n  output_probability [shape=box color=green label=\"output_probability\n[{int64, {'kind': 'tensor', 'elem': 'double', 'shape': }}]\" fontsize=10];\n\n  ft_init [shape=box label=\"ft_init\nfloat64((1,))\n[1.]\" fontsize=10];\n  Su_Subcst [shape=box label=\"Su_Subcst\nfloat64((4,))\n[1.9133287  1.39684219 1.46982746 0.71125505]\" fontsize=10];\n  Di_Divcst [shape=box label=\"Di_Divcst\nfloat64((4,))\n[0.11354364 0.10570008 0.41965295 0.38344944]\" fontsize=10];\n  coef [shape=box label=\"coef\nfloat64((4, 3))\n[[-0.91820372  0.25731821  0.66088551]\n [ 1.034911...\" fontsize=10];\n  intercept [shape=box label=\"intercept\nfloat64((1, 3))\n[[ 0.176704    1.79748833 -1.97419233]]\" fontsize=10];\n  classes [shape=box label=\"classes\nint32((3,))\n[0 1 2]\" fontsize=10];\n  shape_tensor [shape=box label=\"shape_tensor\nint64((1,))\n[-1]\" fontsize=10];\n\n  ft_out_add_0 [shape=box label=\"ft_out_add_0\" fontsize=10];\n  ft_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(ft_Add)\" fontsize=10];\n  X -> ft_Add;\n  ft_init -> ft_Add;\n  ft_Add -> ft_out_add_0;\n\n  ft_y [shape=box label=\"ft_y\" fontsize=10];\n  ft_Log [shape=box style=\"filled,rounded\" color=orange label=\"Log\n(ft_Log)\" fontsize=10];\n  ft_out_add_0 -> ft_Log;\n  ft_Log -> ft_y;\n\n  Su_C0 [shape=box label=\"Su_C0\" fontsize=10];\n  Su_Sub [shape=box style=\"filled,rounded\" color=orange label=\"Sub\n(Su_Sub)\" fontsize=10];\n  ft_y -> Su_Sub;\n  Su_Subcst -> Su_Sub;\n  Su_Sub -> Su_C0;\n\n  variable1 [shape=box label=\"variable1\" fontsize=10];\n  Di_Div [shape=box style=\"filled,rounded\" color=orange label=\"Div\n(Di_Div)\" fontsize=10];\n  Su_C0 -> Di_Div;\n  Di_Divcst -> Di_Div;\n  Di_Div -> variable1;\n\n  multiplied [shape=box label=\"multiplied\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  variable1 -> MatMul;\n  coef -> MatMul;\n  MatMul -> multiplied;\n\n  raw_scores [shape=box label=\"raw_scores\" fontsize=10];\n  Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Add)\" fontsize=10];\n  multiplied -> Add;\n  intercept -> Add;\n  Add -> raw_scores;\n\n  probabilities [shape=box label=\"probabilities\" fontsize=10];\n  Softmax [shape=box style=\"filled,rounded\" color=orange label=\"Softmax\n(Softmax)\naxis=-1\" fontsize=10];\n  raw_scores -> Softmax;\n  Softmax -> probabilities;\n\n  label1 [shape=box label=\"label1\" fontsize=10];\n  ArgMax [shape=box style=\"filled,rounded\" color=orange label=\"ArgMax\n(ArgMax)\naxis=1\" fontsize=10];\n  raw_scores -> ArgMax;\n  ArgMax -> label1;\n\n  ZipMap [shape=box style=\"filled,rounded\" color=orange label=\"ZipMap\n(ZipMap)\nclasslabels_int64s=[0 1 2]\" fontsize=10];\n  probabilities -> ZipMap;\n  ZipMap -> output_probability;\n\n  array_feature_extractor_result [shape=box label=\"array_feature_extractor_result\" fontsize=10];\n  ArrayFeatureExtractor [shape=box style=\"filled,rounded\" color=orange label=\"ArrayFeatureExtractor\n(ArrayFeatureExtractor)\" fontsize=10];\n  classes -> ArrayFeatureExtractor;\n  label1 -> ArrayFeatureExtractor;\n  ArrayFeatureExtractor -> array_feature_extractor_result;\n\n  cast2_result [shape=box label=\"cast2_result\" fontsize=10];\n  Cast [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast)\nto=11\" fontsize=10];\n  array_feature_extractor_result -> Cast;\n  Cast -> cast2_result;\n\n  reshaped_result [shape=box label=\"reshaped_result\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  cast2_result -> Reshape;\n  shape_tensor -> Reshape;\n  Reshape -> reshaped_result;\n\n  label [shape=box label=\"label\" fontsize=10];\n  Cast1 [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast1)\nto=7\" fontsize=10];\n  reshaped_result -> Cast1;\n  Cast1 -> label;\n\n  Cast2 [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast2)\nto=7\" fontsize=10];\n  label -> Cast2;\n  Cast2 -> output_label;\n}");
+    document.getElementById('M16f0d5d6b9224a5484d3f67d6c828749').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Let’s compare the time to *numpy*.
+
+.. code:: ipython3
+
+    def custom_numpy_fct(x):
+        return numpy.log(x + numpy.float64(1))
+    
+    %timeit custom_numpy_fct(X_train)
+
+
+.. parsed-literal::
+    5.43 µs ± 99.3 ns per loop (mean ± std. dev. of 7 runs, 100,000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit custom_fct(X_train)
+
+
+.. parsed-literal::
+    25 µs ± 1.13 µs per loop (mean ± std. dev. of 7 runs, 10,000 loops each)
+
+
+The new function is slower but the gap is much less on bigger matrices.
+The default ONNX runtime has a significant cost compare to the cost of a
+couple of operations on small matrices.
+
+.. code:: ipython3
+
+    bigx = numpy.random.rand(10000, X_train.shape[1])
+    %timeit custom_numpy_fct(bigx)
+
+
+.. parsed-literal::
+    351 µs ± 41.4 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit custom_fct(bigx)
+
+
+.. parsed-literal::
+    334 µs ± 2.63 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+
+
+Function transformer with FFT
+-----------------------------
+
+The following function is equivalent to the module of the output of a
+FFT transform. The matrix :math:`M_{kn}` is defined by
+:math:`M_{kn}=(\exp(-2i\pi kn/N))_{kn}`. Complex features are then
+obtained by computing :math:`MX`. Taking the module leads to real
+features: :math:`\sqrt{Re(MX)^2 + Im(MX)^2}`. That’s what the following
+function does.
+
+numpy implementation
+~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    def custom_fft_abs_py(x):
+        "onnx fft + abs python"
+        # see https://jakevdp.github.io/blog/
+        # 2013/08/28/understanding-the-fft/
+        dim = x.shape[1]
+        n = numpy.arange(dim)
+        k = n.reshape((-1, 1)).astype(numpy.float64)
+        kn = k * n * (-numpy.pi * 2 / dim)
+        kn_cos = numpy.cos(kn)
+        kn_sin = numpy.sin(kn)
+        ekn = numpy.empty((2,) + kn.shape, dtype=x.dtype)
+        ekn[0, :, :] = kn_cos
+        ekn[1, :, :] = kn_sin
+        res = numpy.dot(ekn, x.T)
+        tr = res ** 2
+        mod = tr[0, :, :] + tr[1, :, :]
+        return numpy.sqrt(mod).T
+    
+    x = numpy.random.randn(3, 4).astype(numpy.float32)
+    custom_fft_abs_py(x)
+
+
+
+
+.. parsed-literal::
+    array([[1.982739  , 1.1724371 , 3.4323769 , 1.172437  ],
+           [2.764481  , 3.0285406 , 0.28028846, 3.0285406 ],
+           [2.8741124 , 1.8547025 , 2.1338394 , 1.8547024 ]], dtype=float32)
+
+
+
+ONNX implementation
+~~~~~~~~~~~~~~~~~~~
+
+This function cannot be exported into ONNX unless it is written with
+ONNX operators. This is where the numpy API for ONNX helps speeding up
+the process.
+
+.. code:: ipython3
+
+    from mlprodict.npy import onnxnumpy_default, onnxnumpy_np, NDArray
+    import mlprodict.npy.numpy_onnx_impl as nxnp
+    
+    
+    def _custom_fft_abs(x):
+        dim = x.shape[1]
+        n = nxnp.arange(0, dim).astype(numpy.float32)
+        k = n.reshape((-1, 1))
+        kn = (k * (n * numpy.float32(-numpy.pi * 2))) / dim.astype(numpy.float32)
+        kn3 = nxnp.expand_dims(kn, 0)
+        kn_cos = nxnp.cos(kn3)
+        kn_sin = nxnp.sin(kn3)
+        ekn = nxnp.vstack(kn_cos, kn_sin)
+        res = nxnp.dot(ekn, x.T)
+        tr = res ** 2
+        mod = tr[0, :, :] + tr[1, :, :]
+        return nxnp.sqrt(mod).T
+    
+    
+    @onnxnumpy_default
+    def custom_fft_abs(x: NDArray[Any, numpy.float32],
+                       ) -> NDArray[Any, numpy.float32]:
+        "onnx fft + abs"
+        return _custom_fft_abs(x)
+    
+    
+    custom_fft_abs(x)
+
+
+.. parsed-literal::
+    C:\xavierdupre\__home_\GitHub\mlprodict\mlprodict\npy\numpy_onnx_impl.py:253: UserWarning: npnx.dot is equivalent to npnx.matmul == numpy.matmul != numpy.dot with arrays with more than 3D dimensions.
+      warnings.warn(
+
+
+
+
+.. parsed-literal::
+
+    array([[1.982739  , 1.1724371 , 3.4323769 , 1.172437  ],
+           [2.7644813 , 3.0285406 , 0.28028846, 3.0285406 ],
+           [2.8741124 , 1.8547025 , 2.1338396 , 1.8547025 ]], dtype=float32)
+
+
+
+``custom_fft_abs`` is not a function a class holding an ONNX graph. A
+method ``__call__`` executes the ONNX graph with a python runtime.
+
+.. code:: ipython3
+
+    fonx = custom_fft_abs.to_onnx()
+    %onnxview fonx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M5dbac4943bec4ca88a94e4923223ff16-cont"><div id="M5dbac4943bec4ca88a94e4923223ff16" style="width:;height:;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  nodesep=0.05;\n  size=7;\n  ranksep=0.25;\n\n  x [shape=box color=red label=\"x\nfloat(('?',))\" fontsize=10];\n\n  y [shape=box color=green label=\"y\nfloat(('?',))\" fontsize=10];\n\n  init [shape=box label=\"init\nint64(())\n1\" fontsize=10];\n  init_1 [shape=box label=\"init_1\nint64((1,))\n[-1]\" fontsize=10];\n  init_2 [shape=box label=\"init_2\nint64((1,))\n[0]\" fontsize=10];\n  init_4 [shape=box label=\"init_4\nfloat32((1,))\n[-6.2831855]\" fontsize=10];\n  init_5 [shape=box label=\"init_5\nint64((2,))\n[-1  1]\" fontsize=10];\n  init_7 [shape=box label=\"init_7\nint64((1,))\n[2]\" fontsize=10];\n  init_8 [shape=box label=\"init_8\nint64((1,))\n[1]\" fontsize=10];\n\n  out_sha_0 [shape=box label=\"out_sha_0\" fontsize=10];\n  _shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(_shape)\" fontsize=10];\n  x -> _shape;\n  _shape -> out_sha_0;\n\n  out_gat_0 [shape=box label=\"out_gat_0\" fontsize=10];\n  _gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(_gather)\naxis=0\" fontsize=10];\n  out_sha_0 -> _gather;\n  init -> _gather;\n  _gather -> out_gat_0;\n\n  out_res_0 [shape=box label=\"out_res_0\" fontsize=10];\n  _reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_reshape)\" fontsize=10];\n  out_gat_0 -> _reshape;\n  init_1 -> _reshape;\n  _reshape -> out_res_0;\n\n  out_con_0 [shape=box label=\"out_con_0\" fontsize=10];\n  _constantofshape [shape=box style=\"filled,rounded\" color=orange label=\"ConstantOfShape\n(_constantofshape)\nvalue=[1]\" fontsize=10];\n  out_res_0 -> _constantofshape;\n  _constantofshape -> out_con_0;\n\n  out_cum_0 [shape=box label=\"out_cum_0\" fontsize=10];\n  _cumsum [shape=box style=\"filled,rounded\" color=orange label=\"CumSum\n(_cumsum)\" fontsize=10];\n  out_con_0 -> _cumsum;\n  init_2 -> _cumsum;\n  _cumsum -> out_cum_0;\n\n  out_add_0 [shape=box label=\"out_add_0\" fontsize=10];\n  _add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add)\" fontsize=10];\n  out_cum_0 -> _add;\n  init_1 -> _add;\n  _add -> out_add_0;\n\n  out_cas_0 [shape=box label=\"out_cas_0\" fontsize=10];\n  _cast [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(_cast)\nto=1\" fontsize=10];\n  out_add_0 -> _cast;\n  _cast -> out_cas_0;\n\n  out_mul_0 [shape=box label=\"out_mul_0\" fontsize=10];\n  _mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul)\" fontsize=10];\n  out_cas_0 -> _mul;\n  init_4 -> _mul;\n  _mul -> out_mul_0;\n\n  out_res_0_1 [shape=box label=\"out_res_0_1\" fontsize=10];\n  _reshape_1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(_reshape_1)\" fontsize=10];\n  out_cas_0 -> _reshape_1;\n  init_5 -> _reshape_1;\n  _reshape_1 -> out_res_0_1;\n\n  out_cas_0_1 [shape=box label=\"out_cas_0_1\" fontsize=10];\n  _cast_1 [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(_cast_1)\nto=1\" fontsize=10];\n  out_gat_0 -> _cast_1;\n  _cast_1 -> out_cas_0_1;\n\n  out_mul_0_1 [shape=box label=\"out_mul_0_1\" fontsize=10];\n  _mul_1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(_mul_1)\" fontsize=10];\n  out_res_0_1 -> _mul_1;\n  out_mul_0 -> _mul_1;\n  _mul_1 -> out_mul_0_1;\n\n  out_div_0 [shape=box label=\"out_div_0\" fontsize=10];\n  _div [shape=box style=\"filled,rounded\" color=orange label=\"Div\n(_div)\" fontsize=10];\n  out_mul_0_1 -> _div;\n  out_cas_0_1 -> _div;\n  _div -> out_div_0;\n\n  out_uns_0 [shape=box label=\"out_uns_0\" fontsize=10];\n  _unsqueeze [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(_unsqueeze)\" fontsize=10];\n  out_div_0 -> _unsqueeze;\n  init_2 -> _unsqueeze;\n  _unsqueeze -> out_uns_0;\n\n  out_sin_0 [shape=box label=\"out_sin_0\" fontsize=10];\n  _sin [shape=box style=\"filled,rounded\" color=orange label=\"Sin\n(_sin)\" fontsize=10];\n  out_uns_0 -> _sin;\n  _sin -> out_sin_0;\n\n  out_cos_0 [shape=box label=\"out_cos_0\" fontsize=10];\n  _cos [shape=box style=\"filled,rounded\" color=orange label=\"Cos\n(_cos)\" fontsize=10];\n  out_uns_0 -> _cos;\n  _cos -> out_cos_0;\n\n  out_tra_0 [shape=box label=\"out_tra_0\" fontsize=10];\n  _transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(_transpose)\" fontsize=10];\n  x -> _transpose;\n  _transpose -> out_tra_0;\n\n  out_con_0_1 [shape=box label=\"out_con_0_1\" fontsize=10];\n  _concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(_concat)\naxis=0\" fontsize=10];\n  out_cos_0 -> _concat;\n  out_sin_0 -> _concat;\n  _concat -> out_con_0_1;\n\n  out_mat_0 [shape=box label=\"out_mat_0\" fontsize=10];\n  _matmul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(_matmul)\" fontsize=10];\n  out_con_0_1 -> _matmul;\n  out_tra_0 -> _matmul;\n  _matmul -> out_mat_0;\n\n  out_pow_0 [shape=box label=\"out_pow_0\" fontsize=10];\n  _pow [shape=box style=\"filled,rounded\" color=orange label=\"Pow\n(_pow)\" fontsize=10];\n  out_mat_0 -> _pow;\n  init_7 -> _pow;\n  _pow -> out_pow_0;\n\n  out_sli_0 [shape=box label=\"out_sli_0\" fontsize=10];\n  _slice [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice)\" fontsize=10];\n  out_pow_0 -> _slice;\n  init_8 -> _slice;\n  init_7 -> _slice;\n  init_2 -> _slice;\n  _slice -> out_sli_0;\n\n  out_sli_0_1 [shape=box label=\"out_sli_0_1\" fontsize=10];\n  _slice_1 [shape=box style=\"filled,rounded\" color=orange label=\"Slice\n(_slice_1)\" fontsize=10];\n  out_pow_0 -> _slice_1;\n  init_2 -> _slice_1;\n  init_8 -> _slice_1;\n  init_2 -> _slice_1;\n  _slice_1 -> out_sli_0_1;\n\n  out_squ_0 [shape=box label=\"out_squ_0\" fontsize=10];\n  _squeeze [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze)\" fontsize=10];\n  out_sli_0 -> _squeeze;\n  init_2 -> _squeeze;\n  _squeeze -> out_squ_0;\n\n  out_squ_0_1 [shape=box label=\"out_squ_0_1\" fontsize=10];\n  _squeeze_1 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(_squeeze_1)\" fontsize=10];\n  out_sli_0_1 -> _squeeze_1;\n  init_2 -> _squeeze_1;\n  _squeeze_1 -> out_squ_0_1;\n\n  out_add_0_1 [shape=box label=\"out_add_0_1\" fontsize=10];\n  _add_1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(_add_1)\" fontsize=10];\n  out_squ_0_1 -> _add_1;\n  out_squ_0 -> _add_1;\n  _add_1 -> out_add_0_1;\n\n  out_sqr_0 [shape=box label=\"out_sqr_0\" fontsize=10];\n  _sqrt [shape=box style=\"filled,rounded\" color=orange label=\"Sqrt\n(_sqrt)\" fontsize=10];\n  out_add_0_1 -> _sqrt;\n  _sqrt -> out_sqr_0;\n\n  _transpose_1 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(_transpose_1)\" fontsize=10];\n  out_sqr_0 -> _transpose_1;\n  _transpose_1 -> y;\n}");
+    document.getElementById('M5dbac4943bec4ca88a94e4923223ff16').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Every intermediate output can be logged.
+
+.. code:: ipython3
+
+     custom_fft_abs(x, verbose=1, fLOG=print)
+
+
+.. parsed-literal::
+    -- OnnxInference: run 26 nodes
+    Onnx-Shape(x) -> out_sha_0    (name='_shape')
+    +kr='out_sha_0': (2,) (dtype=int64 min=3 max=4)
+    Onnx-Gather(out_sha_0, init) -> out_gat_0    (name='_gather')
+    +kr='out_gat_0': () (dtype=int64 min=4 max=4)
+    Onnx-Reshape(out_gat_0, init_1) -> out_res_0    (name='_reshape')
+    +kr='out_res_0': (1,) (dtype=int64 min=4 max=4)
+    Onnx-ConstantOfShape(out_res_0) -> out_con_0    (name='_constantofshape')
+    +kr='out_con_0': (4,) (dtype=int64 min=1 max=1)
+    Onnx-CumSum(out_con_0, init_2) -> out_cum_0    (name='_cumsum')
+    +kr='out_cum_0': (4,) (dtype=int64 min=1 max=4)
+    Onnx-Add(out_cum_0, init_1) -> out_add_0    (name='_add')
+    +kr='out_add_0': (4,) (dtype=int64 min=0 max=3)
+    Onnx-Cast(out_add_0) -> out_cas_0    (name='_cast')
+    +kr='out_cas_0': (4,) (dtype=float32 min=0.0 max=3.0)
+    Onnx-Mul(out_cas_0, init_4) -> out_mul_0    (name='_mul')
+    +kr='out_mul_0': (4,) (dtype=float32 min=-18.84955596923828 max=-0.0)
+    Onnx-Reshape(out_cas_0, init_5) -> out_res_0_1    (name='_reshape_1')
+    +kr='out_res_0_1': (4, 1) (dtype=float32 min=0.0 max=3.0)
+    Onnx-Cast(out_gat_0) -> out_cas_0_1    (name='_cast_1')
+    +kr='out_cas_0_1': () (dtype=float32 min=4.0 max=4.0)
+    Onnx-Mul(out_res_0_1, out_mul_0) -> out_mul_0_1    (name='_mul_1')
+    +kr='out_mul_0_1': (4, 4) (dtype=float32 min=-56.548667907714844 max=-0.0)
+    Onnx-Div(out_mul_0_1, out_cas_0_1) -> out_div_0    (name='_div')
+    +kr='out_div_0': (4, 4) (dtype=float32 min=-14.137166976928711 max=-0.0)
+    Onnx-Unsqueeze(out_div_0, init_2) -> out_uns_0    (name='_unsqueeze')
+    +kr='out_uns_0': (1, 4, 4) (dtype=float32 min=-14.137166976928711 max=-0.0)
+    Onnx-Sin(out_uns_0) -> out_sin_0    (name='_sin')
+    +kr='out_sin_0': (1, 4, 4) (dtype=float32 min=-1.0 max=1.0)
+    Onnx-Cos(out_uns_0) -> out_cos_0    (name='_cos')
+    +kr='out_cos_0': (1, 4, 4) (dtype=float32 min=-1.0 max=1.0)
+    Onnx-Transpose(x) -> out_tra_0    (name='_transpose')
+    +kr='out_tra_0': (4, 3) (dtype=float32 min=-2.118224620819092 max=2.176269054412842)
+    Onnx-Concat(out_cos_0, out_sin_0) -> out_con_0_1    (name='_concat')
+    +kr='out_con_0_1': (2, 4, 4) (dtype=float32 min=-1.0 max=1.0)
+    Onnx-MatMul(out_con_0_1, out_tra_0) -> out_mat_0    (name='_matmul')
+    +kr='out_mat_0': (2, 4, 3) (dtype=float32 min=-2.9943528175354004 max=3.4323768615722656)
+    Onnx-Pow(out_mat_0, init_7) -> out_pow_0    (name='_pow')
+    +kr='out_pow_0': (2, 4, 3) (dtype=float32 min=0.0 max=11.781210899353027)
+    Onnx-Slice(out_pow_0, init_8, init_7, init_2) -> out_sli_0    (name='_slice')
+    +kr='out_sli_0': (1, 4, 3) (dtype=float32 min=0.0 max=0.20590990781784058)
+    Onnx-Slice(out_pow_0, init_2, init_8, init_2) -> out_sli_0_1    (name='_slice_1')
+    +kr='out_sli_0_1': (1, 4, 3) (dtype=float32 min=0.07856161892414093 max=11.781210899353027)
+    Onnx-Squeeze(out_sli_0, init_2) -> out_squ_0    (name='_squeeze')
+    +kr='out_squ_0': (4, 3) (dtype=float32 min=0.0 max=0.20590990781784058)
+    Onnx-Squeeze(out_sli_0_1, init_2) -> out_squ_0_1    (name='_squeeze_1')
+    +kr='out_squ_0_1': (4, 3) (dtype=float32 min=0.07856161892414093 max=11.781210899353027)
+    Onnx-Add(out_squ_0_1, out_squ_0) -> out_add_0_1    (name='_add_1')
+    +kr='out_add_0_1': (4, 3) (dtype=float32 min=0.07856161892414093 max=11.781210899353027)
+    Onnx-Sqrt(out_add_0_1) -> out_sqr_0    (name='_sqrt')
+    +kr='out_sqr_0': (4, 3) (dtype=float32 min=0.2802884578704834 max=3.4323768615722656)
+    Onnx-Transpose(out_sqr_0) -> y    (name='_transpose_1')
+    +kr='y': (3, 4) (dtype=float32 min=0.2802884578704834 max=3.4323768615722656)
+
+
+
+
+.. parsed-literal::
+
+    array([[1.982739  , 1.1724371 , 3.4323769 , 1.172437  ],
+           [2.7644813 , 3.0285406 , 0.28028846, 3.0285406 ],
+           [2.8741124 , 1.8547025 , 2.1338396 , 1.8547025 ]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    %timeit custom_fft_abs_py(x)
+
+
+.. parsed-literal::
+    18.6 µs ± 581 ns per loop (mean ± std. dev. of 7 runs, 10,000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit custom_fft_abs(x)
+
+
+.. parsed-literal::
+    261 µs ± 8.92 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+
+
+Again the gap is less on bigger matrices. It cannot be faster with the
+default runtime as it is also using *numpy*. That’s another story with
+*onnxruntime* (see below).
+
+.. code:: ipython3
+
+    bigx = numpy.random.randn(10000, x.shape[1]).astype(numpy.float32)
+    %timeit custom_fft_abs_py(bigx)
+
+
+.. parsed-literal::
+    1.64 ms ± 49.1 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit custom_fft_abs(bigx)
+
+
+.. parsed-literal::
+    3.69 ms ± 224 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
+
+
+Using onnxruntime
+~~~~~~~~~~~~~~~~~
+
+The python runtime is using numpy but is usually quite slow as the
+runtime needs to go through the graph structure. *onnxruntime* is
+faster.
+
+.. code:: ipython3
+
+    @onnxnumpy_np(runtime='onnxruntime')
+    def custom_fft_abs_ort(x: NDArray[Any, numpy.float32],
+                           ) -> NDArray[Any, numpy.float32]:
+        "onnx fft + abs"
+        return _custom_fft_abs(x)
+    
+    
+    custom_fft_abs(x)
+
+
+
+
+.. parsed-literal::
+    array([[1.982739  , 1.1724371 , 3.4323769 , 1.172437  ],
+           [2.7644813 , 3.0285406 , 0.28028846, 3.0285406 ],
+           [2.8741124 , 1.8547025 , 2.1338396 , 1.8547025 ]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    %timeit custom_fft_abs_ort(x)
+
+
+.. parsed-literal::
+    77.7 µs ± 44 µs per loop (mean ± std. dev. of 7 runs, 1 loop each)
+
+
+*onnxruntime* is faster than numpy in this case.
+
+.. code:: ipython3
+
+    %timeit custom_fft_abs_ort(bigx)
+
+
+.. parsed-literal::
+    231 µs ± 48.8 µs per loop (mean ± std. dev. of 7 runs, 1,000 loops each)
+
+
+Inside a FunctionTransformer
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The conversion to ONNX fails if the python function is used.
+
+.. code:: ipython3
+
+    from mlprodict.onnx_conv import to_onnx
+    
+    tr = FunctionTransformer(custom_fft_abs_py)
+    tr.fit(x)
+    
+    try:
+        onnx_model = to_onnx(tr, x)
+    except Exception as e:
+        print(e)
+
+
+.. parsed-literal::
+    FunctionTransformer is not supported unless the transform function is of type <class 'function'> wrapped with onnxnumpy.
+
+
+Now with the onnx version but before, the converter for
+FunctionTransformer needs to be overwritten to handle this functionality
+not available in
+`sklearn-onnx <https://github.com/onnx/sklearn-onnx>`__. These version
+are automatically called in function
+`to_onnx <http://www.xavierdupre.fr/app/mlprodict/helpsphinx/mlprodict/onnx_conv/convert.html#mlprodict.onnx_conv.convert.to_onnx>`__
+from *mlprodict*.
+
+.. code:: ipython3
+
+    tr = FunctionTransformer(custom_fft_abs)
+    tr.fit(x)
+    
+    onnx_model = to_onnx(tr, x)
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(onnx_model)
+    y_onx = oinf.run({'X': x})
+    y_onx['variable']
+
+
+
+
+.. parsed-literal::
+    array([[1.982739  , 1.1724371 , 3.4323769 , 1.172437  ],
+           [2.7644813 , 3.0285406 , 0.28028846, 3.0285406 ],
+           [2.8741124 , 1.8547025 , 2.1338396 , 1.8547025 ]], dtype=float32)

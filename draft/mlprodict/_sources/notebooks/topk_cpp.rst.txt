@@ -1,0 +1,454 @@
+
+.. _topkcpprst:
+
+==================
+Fast TopK elements
+==================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <topk_cpp.ipynb>`, :downloadlink:`html <topk_cpp2html.html>`, :download:`PDF <topk_cpp.pdf>`, :download:`python <topk_cpp.py>`, :downloadlink:`slides <topk_cpp.slides.html>`, :githublink:`GitHub|_doc/notebooks/topk_cpp.ipynb|*`
+
+
+Looking for the top k elements is something needed to implement a simple
+k nearest neighbors. The implementation *scikit-learn* is using relies
+on *numpy*:
+`\_kneighbors_reduce_func <https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/neighbors/_base.py#L496>`__.
+*mlprodict* also contains a C++ implementation of the same function.
+Let’s compare them.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %matplotlib inline
+
+Two implementations
+-------------------
+
+We assume we are looking for the ``k`` nearest elements of every row of
+matrix ``X`` which is a dense matrix of doubles.
+
+.. code:: ipython3
+
+    import numpy.random as rnd
+    from sklearn.neighbors._base import KNeighborsMixin
+    
+    mixin = KNeighborsMixin()
+
+.. code:: ipython3
+
+    def topk_sklearn(X, k):
+        return mixin._kneighbors_reduce_func(X, 0, k, False)
+        
+    X = rnd.randn(5, 10)
+    ind = topk_sklearn(X, 3)
+    ind
+
+
+
+
+.. parsed-literal::
+    array([[2, 7, 3],
+           [7, 0, 8],
+           [1, 5, 6],
+           [8, 9, 3],
+           [4, 6, 5]], dtype=int64)
+
+
+
+Now the implementation with *mlprodict* (C++) available at
+`topk_element_min <https://github.com/sdpython/mlprodict/blob/master/mlprodict/onnxrt/ops_cpu/_op_onnx_numpy.cpp#L201>`__.
+It uses `heap <https://en.wikipedia.org/wiki/Heap_(data_structure)>`__.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt.ops_cpu._op_onnx_numpy import topk_element_min_double
+
+.. code:: ipython3
+
+    def topk_cpp(X, k):
+        return topk_element_min_double(X, k, True, 50)
+        
+    ind = topk_cpp(X, 3)
+    ind
+
+
+
+
+.. parsed-literal::
+    array([[2, 7, 3],
+           [7, 0, 8],
+           [1, 5, 6],
+           [8, 9, 3],
+           [4, 6, 5]], dtype=int64)
+
+
+
+Speed comparison by size
+------------------------
+
+.. code:: ipython3
+
+    %timeit topk_sklearn(X, 3)
+
+
+.. parsed-literal::
+    21.7 µs ± 4.19 µs per loop (mean ± std. dev. of 7 runs, 100000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit topk_cpp(X, 3)
+
+
+.. parsed-literal::
+    4.1 µs ± 435 ns per loop (mean ± std. dev. of 7 runs, 100000 loops each)
+
+
+Quite a lot faster on this simple example. Let’s look for bigger
+matrices.
+
+.. code:: ipython3
+
+    X = rnd.randn(1000, 100)
+
+.. code:: ipython3
+
+    %timeit topk_sklearn(X, 10)
+
+
+.. parsed-literal::
+    1.8 ms ± 102 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+.. code:: ipython3
+
+    %timeit topk_cpp(X, 10)
+
+
+.. parsed-literal::
+    786 µs ± 116 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+.. code:: ipython3
+
+    from cpyquickhelper.numbers import measure_time
+    from tqdm import tqdm
+    from pandas import DataFrame
+    
+    rows = []
+    for n in tqdm(range(1000, 10001, 1000)):
+        X = rnd.randn(n, 1000)
+        res = measure_time('topk_sklearn(X, 20)',
+                           {'X': X, 'topk_sklearn': topk_sklearn},
+                           div_by_number=True,
+                           number=2, repeat=2)
+        res["N"] = n
+        res["name"] = 'topk_sklearn'
+        rows.append(res)
+        res = measure_time('topk_cpp(X, 20)',
+                           {'X': X, 'topk_cpp': topk_cpp},
+                           div_by_number=True,
+                           number=4, repeat=4)
+        res["N"] = n
+        res["name"] = 'topk_cpp'
+        rows.append(res)
+    
+    df = DataFrame(rows)
+    df.head()
+
+
+.. parsed-literal::
+    100%|██████████| 10/10 [00:08<00:00,  1.16it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>N</th>
+          <th>name</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.016310</td>
+          <td>0.000260</td>
+          <td>0.016050</td>
+          <td>0.016571</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>1000</td>
+          <td>topk_sklearn</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.003872</td>
+          <td>0.000501</td>
+          <td>0.003335</td>
+          <td>0.004631</td>
+          <td>4</td>
+          <td>4</td>
+          <td>240</td>
+          <td>1000</td>
+          <td>topk_cpp</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.034684</td>
+          <td>0.001629</td>
+          <td>0.033055</td>
+          <td>0.036313</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>2000</td>
+          <td>topk_sklearn</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.006973</td>
+          <td>0.000558</td>
+          <td>0.006307</td>
+          <td>0.007756</td>
+          <td>4</td>
+          <td>4</td>
+          <td>240</td>
+          <td>2000</td>
+          <td>topk_cpp</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.051934</td>
+          <td>0.000851</td>
+          <td>0.051084</td>
+          <td>0.052785</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>3000</td>
+          <td>topk_sklearn</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    import matplotlib.pyplot as plt
+    
+    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    piv = df.pivot("N", "name", "average")
+    piv.plot(ax=ax[0], logy=True, logx=True)
+    ax[0].set_title("top 20")
+    piv["ratio"] = piv["topk_cpp"] / piv["topk_sklearn"]
+    piv[["ratio"]].plot(ax=ax[1])
+    ax[1].set_title("ratio");
+
+
+
+.. image:: topk_cpp_17_0.png
+
+
+Speed comparison by k
+---------------------
+
+.. code:: ipython3
+
+    rows = []
+    X = rnd.randn(2000, 1000)
+    for k in tqdm(list(range(1, 20)) + list(range(20, 1000, 20))):
+        res = measure_time('topk_sklearn(X, k)',
+                           {'X': X, 'topk_sklearn': topk_sklearn, 'k': k},
+                           div_by_number=True,
+                           number=2, repeat=2)
+        res["k"] = k
+        res["name"] = 'topk_sklearn'
+        rows.append(res)
+        res = measure_time('topk_cpp(X, k)',
+                           {'X': X, 'topk_cpp': topk_cpp, 'k': k},
+                           div_by_number=True,
+                           number=2, repeat=2)
+        res["k"] = k
+        res["name"] = 'topk_cpp'
+        rows.append(res)
+    
+    df = DataFrame(rows)
+    df.head()
+
+
+.. parsed-literal::
+    100%|██████████| 68/68 [00:34<00:00,  1.95it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>k</th>
+          <th>name</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.009558</td>
+          <td>0.001392</td>
+          <td>0.008166</td>
+          <td>0.010949</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>1</td>
+          <td>topk_sklearn</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.002665</td>
+          <td>0.000571</td>
+          <td>0.002094</td>
+          <td>0.003236</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>1</td>
+          <td>topk_cpp</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.021933</td>
+          <td>0.000575</td>
+          <td>0.021358</td>
+          <td>0.022508</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>2</td>
+          <td>topk_sklearn</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.001000</td>
+          <td>0.000084</td>
+          <td>0.000917</td>
+          <td>0.001084</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>2</td>
+          <td>topk_cpp</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.025986</td>
+          <td>0.001411</td>
+          <td>0.024575</td>
+          <td>0.027398</td>
+          <td>2</td>
+          <td>2</td>
+          <td>240</td>
+          <td>3</td>
+          <td>topk_sklearn</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    fig, ax = plt.subplots(1, 2, figsize=(10, 4))
+    piv = df.pivot("k", "name", "average")
+    piv.plot(ax=ax[0], logy=True, logx=True)
+    ax[0].set_title("top k for 2000 rows")
+    piv["ratio"] = piv["topk_cpp"] / piv["topk_sklearn"]
+    piv[["ratio"]].plot(ax=ax[1])
+    ax[1].set_title("ratio")
+    ax[0].set_xlabel("k")
+    ax[1].set_xlabel("k");
+
+
+
+.. image:: topk_cpp_20_0.png
+
+
+The implementation is half faster in all cases and much more efficient
+for small values which is usually the case for the nearest neighbors.
+This implementation is using *openmp*, maybe that’s why it gets 50%
+faster on this two cores machine.
