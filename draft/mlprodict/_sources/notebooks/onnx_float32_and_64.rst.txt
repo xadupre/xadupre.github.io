@@ -1,0 +1,691 @@
+
+.. _onnxfloat32and64rst:
+
+===================================
+ONNX graph, single or double floats
+===================================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <onnx_float32_and_64.ipynb>`, :downloadlink:`html <onnx_float32_and_642html.html>`, :download:`PDF <onnx_float32_and_64.pdf>`, :download:`python <onnx_float32_and_64.py>`, :downloadlink:`slides <onnx_float32_and_64.slides.html>`, :githublink:`GitHub|_doc/notebooks/onnx_float32_and_64.ipynb|*`
+
+
+The notebook shows discrepencies obtained by using double floats instead
+of single float in two cases. The second one involves
+`GaussianProcessRegressor <https://scikit-learn.org/stable/modules/generated/sklearn.gaussian_process.GaussianProcessRegressor.html>`__.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+Simple case of a linear regression
+----------------------------------
+
+A linear regression is simply a matrix multiplication followed by an
+addition: :math:`Y=AX+B`. Let’s train one with
+`scikit-learn <https://scikit-learn.org/stable/>`__.
+
+.. code:: ipython3
+
+    from sklearn.linear_model import LinearRegression
+    from sklearn.datasets import load_boston
+    from sklearn.model_selection import train_test_split
+    data = load_boston()
+    X, y = data.data, data.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+    clr = LinearRegression()
+    clr.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    LinearRegression()
+
+
+
+.. code:: ipython3
+
+    clr.score(X_test, y_test)
+
+
+
+
+.. parsed-literal::
+    0.7305965839248935
+
+
+
+.. code:: ipython3
+
+    clr.coef_
+
+
+
+
+.. parsed-literal::
+    array([-1.15896254e-01,  3.85174778e-02,  1.59315996e-02,  3.22074735e+00,
+           -1.85418374e+01,  3.21813935e+00,  1.12610939e-02, -1.32043742e+00,
+            3.67002299e-01, -1.41101521e-02, -1.10152072e+00,  6.17018918e-03,
+           -5.71549389e-01])
+
+
+
+.. code:: ipython3
+
+    clr.intercept_
+
+
+
+
+.. parsed-literal::
+    43.97633987084284
+
+
+
+Let’s predict with *scikit-learn* and *python*.
+
+.. code:: ipython3
+
+    ypred = clr.predict(X_test)
+    ypred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.72795971, 18.69312745, 21.13760633, 16.65607505, 22.47115623])
+
+
+
+.. code:: ipython3
+
+    py_pred = X_test @ clr.coef_ + clr.intercept_
+    py_pred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.72795971, 18.69312745, 21.13760633, 16.65607505, 22.47115623])
+
+
+
+.. code:: ipython3
+
+    clr.coef_.dtype, clr.intercept_.dtype
+
+
+
+
+.. parsed-literal::
+    (dtype('float64'), dtype('float64'))
+
+
+
+With ONNX
+---------
+
+With *ONNX*, we would write this operation as follows… We still need to
+convert everything into single floats = float32.
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+.. code:: ipython3
+
+    from skl2onnx.algebra.onnx_ops import OnnxMatMul, OnnxAdd
+    import numpy
+    
+    onnx_fct = OnnxAdd(OnnxMatMul('X', clr.coef_.astype(numpy.float32), op_version=12),
+                       numpy.array([clr.intercept_], dtype=numpy.float32),
+                       output_names=['Y'], op_version=12)
+    onnx_model32 = onnx_fct.to_onnx({'X': X_test.astype(numpy.float32)})
+    
+    # add -l 1 if nothing shows up
+    %onnxview onnx_model32
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M372e1537ddeb44678a141216b9c1d756-cont"><div id="M372e1537ddeb44678a141216b9c1d756" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  nodesep=0.05;\n  ranksep=0.25;\n\n  X [shape=box color=red label=\"X\nfloat((0, 13))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0,))\" fontsize=10];\n\n  Ma_MatMulcst [shape=box label=\"Ma_MatMulcst\nfloat32((13,))\n[-1.15896255e-01  3.85174789e-02  1.59315988e-02  ...\" fontsize=10];\n  Ad_Addcst [shape=box label=\"Ad_Addcst\nfloat32((1,))\n[43.97634]\" fontsize=10];\n\n  Ma_Y0 [shape=box label=\"Ma_Y0\" fontsize=10];\n  Ma_MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(Ma_MatMul)\" fontsize=10];\n  X -> Ma_MatMul;\n  Ma_MatMulcst -> Ma_MatMul;\n  Ma_MatMul -> Ma_Y0;\n\n  Ad_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add)\" fontsize=10];\n  Ma_Y0 -> Ad_Add;\n  Ad_Addcst -> Ad_Add;\n  Ad_Add -> Y;\n}");
+    document.getElementById('M372e1537ddeb44678a141216b9c1d756').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+The next line uses a python runtime to compute the prediction.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    oinf = OnnxInference(onnx_model32, inplace=False)
+    ort_pred = oinf.run({'X': X_test.astype(numpy.float32)})['Y']
+    ort_pred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.727959, 18.693125, 21.137608, 16.656076, 22.471157],
+          dtype=float32)
+
+
+
+And here is the same with
+`onnxruntime <https://github.com/microsoft/onnxruntime>`__\ …
+
+.. code:: ipython3
+
+    from mlprodict.tools.asv_options_helper import get_ir_version_from_onnx
+    # line needed when onnx is more recent than onnxruntime
+    onnx_model32.ir_version = get_ir_version_from_onnx()
+    oinf = OnnxInference(onnx_model32, runtime="onnxruntime1")
+    ort_pred = oinf.run({'X': X_test.astype(numpy.float32)})['Y']
+    ort_pred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.727959, 18.693125, 21.137608, 16.656076, 22.471157],
+          dtype=float32)
+
+
+
+With double instead of single float
+-----------------------------------
+
+`ONNX <https://onnx.ai/>`__ was originally designed for deep learning
+which usually uses floats but it does not mean cannot be used. Every
+number is converted into double floats.
+
+.. code:: ipython3
+
+    onnx_fct = OnnxAdd(OnnxMatMul('X', clr.coef_.astype(numpy.float64), op_version=12),
+                       numpy.array([clr.intercept_], dtype=numpy.float64),
+                       output_names=['Y'], op_version=12)
+    onnx_model64 = onnx_fct.to_onnx({'X': X_test.astype(numpy.float64)})
+
+And now the *python* runtime…
+
+.. code:: ipython3
+
+    oinf = OnnxInference(onnx_model64)
+    ort_pred = oinf.run({'X': X_test})['Y']
+    ort_pred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.72795971, 18.69312745, 21.13760633, 16.65607505, 22.47115623])
+
+
+
+And the *onnxruntime* version of it.
+
+.. code:: ipython3
+
+    oinf = OnnxInference(onnx_model64, runtime="onnxruntime1")
+    ort_pred = oinf.run({'X': X_test.astype(numpy.float64)})['Y']
+    ort_pred[:5]
+
+
+
+
+.. parsed-literal::
+    array([17.72795971, 18.69312745, 21.13760633, 16.65607505, 22.47115623])
+
+
+
+And now the GaussianProcessRegressor
+------------------------------------
+
+This shows a case
+
+.. code:: ipython3
+
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import DotProduct
+    gau = GaussianProcessRegressor(alpha=10, kernel=DotProduct())
+    gau.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    GaussianProcessRegressor(alpha=10, kernel=DotProduct(sigma_0=1))
+
+
+
+.. code:: ipython3
+
+    from mlprodict.onnx_conv import to_onnx
+    onnxgau32 = to_onnx(gau, X_train.astype(numpy.float32))
+    oinf32 = OnnxInference(onnxgau32, runtime="python", inplace=False)
+    ort_pred32 = oinf32.run({'X': X_test.astype(numpy.float32)})['GPmean']
+    numpy.squeeze(ort_pred32)[:25]
+
+
+
+
+.. parsed-literal::
+    array([17.25    , 19.59375 , 21.34375 , 17.625   , 21.953125, 30.      ,
+           18.875   , 19.625   ,  9.9375  , 20.5     , -0.53125 , 16.375   ,
+           16.8125  , 20.6875  , 27.65625 , 16.375   , 39.0625  , 36.0625  ,
+           40.71875 , 21.53125 , 29.875   , 30.34375 , 23.53125 , 15.25    ,
+           35.5     ], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    onnxgau64 = to_onnx(gau, X_train.astype(numpy.float64))
+    oinf64 = OnnxInference(onnxgau64, runtime="python", inplace=False)
+    ort_pred64 = oinf64.run({'X': X_test.astype(numpy.float64)})['GPmean']
+    numpy.squeeze(ort_pred64)[:25]
+
+
+
+
+.. parsed-literal::
+    array([17.22940605, 19.07756253, 21.000277  , 17.33514034, 22.37701168,
+           30.10867125, 18.72937468, 19.2220674 ,  9.74660609, 20.3440565 ,
+           -0.1354653 , 16.47852265, 17.12332707, 21.04137646, 27.21477015,
+           16.2668399 , 39.31065954, 35.99032274, 40.53761676, 21.51909954,
+           29.49016665, 30.22944875, 23.58969906, 14.56499415, 35.28957228])
+
+
+
+The differences between the predictions for single floats and double
+floats…
+
+.. code:: ipython3
+
+    numpy.sort(numpy.sort(numpy.squeeze(ort_pred32 - ort_pred64)))[-5:]
+
+
+
+
+.. parsed-literal::
+    array([0.51618747, 0.54317928, 0.61256575, 0.63292898, 0.68500585])
+
+
+
+Who’s right or wrong… The differences between the predictions with the
+original model…
+
+.. code:: ipython3
+
+    pred = gau.predict(X_test.astype(numpy.float64))
+
+.. code:: ipython3
+
+    numpy.sort(numpy.sort(numpy.squeeze(ort_pred32 - pred)))[-5:]
+
+
+
+
+.. parsed-literal::
+    array([0.51618747, 0.54317928, 0.61256575, 0.63292898, 0.68500585])
+
+
+
+.. code:: ipython3
+
+    numpy.sort(numpy.sort(numpy.squeeze(ort_pred64 - pred)))[-5:]
+
+
+
+
+.. parsed-literal::
+    array([0., 0., 0., 0., 0.])
+
+
+
+Double predictions clearly wins.
+
+.. code:: ipython3
+
+    # add -l 1 if nothing shows up
+    %onnxview onnxgau64
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M520d09a837f2422b9577c898fa0d2099-cont"><div id="M520d09a837f2422b9577c898fa0d2099" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  nodesep=0.05;\n  ranksep=0.25;\n\n  X [shape=box color=red label=\"X\ndouble((0, 13))\" fontsize=10];\n\n  GPmean [shape=box color=green label=\"GPmean\ndouble((0, 1))\" fontsize=10];\n\n  kgpd_MatMulcst [shape=box label=\"kgpd_MatMulcst\nfloat64((13, 379))\n[[1.68118e+01 2.61690e-01 7.67202e+00 ... 1.50980e...\" fontsize=10];\n  kgpd_Addcst [shape=box label=\"kgpd_Addcst\nfloat64((1,))\n[1117.71804465]\" fontsize=10];\n  gpr_MatMulcst [shape=box label=\"gpr_MatMulcst\nfloat64((379,))\n[-4.06814127e-02 -3.70796935e-01 -7.95940241e-01  ...\" fontsize=10];\n  gpr_Addcst [shape=box label=\"gpr_Addcst\nfloat64((1, 1))\n[[0.]]\" fontsize=10];\n\n  kgpd_Y0 [shape=box label=\"kgpd_Y0\" fontsize=10];\n  kgpd_MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(kgpd_MatMul)\" fontsize=10];\n  X -> kgpd_MatMul;\n  kgpd_MatMulcst -> kgpd_MatMul;\n  kgpd_MatMul -> kgpd_Y0;\n\n  kgpd_C0 [shape=box label=\"kgpd_C0\" fontsize=10];\n  kgpd_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(kgpd_Add)\" fontsize=10];\n  kgpd_Y0 -> kgpd_Add;\n  kgpd_Addcst -> kgpd_Add;\n  kgpd_Add -> kgpd_C0;\n\n  gpr_Y0 [shape=box label=\"gpr_Y0\" fontsize=10];\n  gpr_MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(gpr_MatMul)\" fontsize=10];\n  kgpd_C0 -> gpr_MatMul;\n  gpr_MatMulcst -> gpr_MatMul;\n  gpr_MatMul -> gpr_Y0;\n\n  gpr_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(gpr_Add)\" fontsize=10];\n  gpr_Y0 -> gpr_Add;\n  gpr_Addcst -> gpr_Add;\n  gpr_Add -> GPmean;\n}");
+    document.getElementById('M520d09a837f2422b9577c898fa0d2099').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Saves…
+------
+
+Let’s keep track of it.
+
+.. code:: ipython3
+
+    with open("gpr_dot_product_boston_32.onnx", "wb") as f:
+        f.write(onnxgau32.SerializePartialToString())
+    from IPython.display import FileLink
+    FileLink('gpr_dot_product_boston_32.onnx')
+
+
+
+
+
+
+.. raw:: html
+
+    <a href='gpr_dot_product_boston_32.onnx' target='_blank'>gpr_dot_product_boston_32.onnx</a><br>
+
+
+
+.. code:: ipython3
+
+    with open("gpr_dot_product_boston_64.onnx", "wb") as f:
+        f.write(onnxgau64.SerializePartialToString())
+    FileLink('gpr_dot_product_boston_64.onnx')
+
+
+
+
+
+
+.. raw:: html
+
+    <a href='gpr_dot_product_boston_64.onnx' target='_blank'>gpr_dot_product_boston_64.onnx</a><br>
+
+
+
+Side by side
+------------
+
+We may wonder where the discrepencies start. But for that, we need to do
+a side by side.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt.validate.side_by_side import side_by_side_by_values
+    sbs = side_by_side_by_values([(oinf32, {'X': X_test.astype(numpy.float32)}),
+                                  (oinf64, {'X': X_test.astype(numpy.float64)})])
+    
+    from pandas import DataFrame
+    df = DataFrame(sbs)
+    # dfd = df.drop(['value[0]', 'value[1]', 'value[2]'], axis=1).copy()
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>metric</th>
+          <th>step</th>
+          <th>v[0]</th>
+          <th>v[1]</th>
+          <th>cmp</th>
+          <th>name</th>
+          <th>value[0]</th>
+          <th>shape[0]</th>
+          <th>value[1]</th>
+          <th>shape[1]</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>nb_results</td>
+          <td>-1</td>
+          <td>9</td>
+          <td>9.000000e+00</td>
+          <td>OK</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>abs-diff</td>
+          <td>0</td>
+          <td>0</td>
+          <td>4.902064e-08</td>
+          <td>OK</td>
+          <td>X</td>
+          <td>[[0.21977, 0.0, 6.91, 0.0, 0.448, 5.602, 62.0,...</td>
+          <td>(127, 13)</td>
+          <td>[[0.21977, 0.0, 6.91, 0.0, 0.448, 5.602, 62.0,...</td>
+          <td>(127, 13)</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>abs-diff</td>
+          <td>1</td>
+          <td>0</td>
+          <td>2.402577e-02</td>
+          <td>e&lt;0.1</td>
+          <td>GPmean</td>
+          <td>[[17.25, 19.59375, 21.34375, 17.625, 21.953125...</td>
+          <td>(1, 127)</td>
+          <td>[[17.229406048412784, 19.077562531849253, 21.0...</td>
+          <td>(1, 127)</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>abs-diff</td>
+          <td>2</td>
+          <td>0</td>
+          <td>5.553783e-08</td>
+          <td>OK</td>
+          <td>kgpd_MatMulcst</td>
+          <td>[[16.8118, 0.26169, 7.67202, 0.57529, 1.13081,...</td>
+          <td>(13, 379)</td>
+          <td>[[16.8118, 0.26169, 7.67202, 0.57529, 1.13081,...</td>
+          <td>(13, 379)</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>abs-diff</td>
+          <td>3</td>
+          <td>0</td>
+          <td>2.421959e-08</td>
+          <td>OK</td>
+          <td>kgpd_Addcst</td>
+          <td>[1117.718]</td>
+          <td>(1,)</td>
+          <td>[1117.718044648797]</td>
+          <td>(1,)</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>abs-diff</td>
+          <td>4</td>
+          <td>0</td>
+          <td>5.206948e-08</td>
+          <td>OK</td>
+          <td>gpr_MatMulcst</td>
+          <td>[-0.040681414, -0.37079695, -0.7959402, 0.4380...</td>
+          <td>(379,)</td>
+          <td>[-0.04068141268069173, -0.37079693473728526, -...</td>
+          <td>(379,)</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>abs-diff</td>
+          <td>5</td>
+          <td>0</td>
+          <td>0.000000e+00</td>
+          <td>OK</td>
+          <td>gpr_Addcst</td>
+          <td>[[0.0]]</td>
+          <td>(1, 1)</td>
+          <td>[[0.0]]</td>
+          <td>(1, 1)</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>abs-diff</td>
+          <td>6</td>
+          <td>0</td>
+          <td>1.856291e-07</td>
+          <td>OK</td>
+          <td>kgpd_Y0</td>
+          <td>[[321007.53, 235496.9, 319374.4, 230849.73, 22...</td>
+          <td>(127, 379)</td>
+          <td>[[321007.55279690475, 235496.9156560601, 31937...</td>
+          <td>(127, 379)</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>abs-diff</td>
+          <td>7</td>
+          <td>0</td>
+          <td>1.856291e-07</td>
+          <td>OK</td>
+          <td>kgpd_C0</td>
+          <td>[[321007.53, 235496.9, 319374.4, 230849.73, 22...</td>
+          <td>(127, 379)</td>
+          <td>[[321007.55279690475, 235496.9156560601, 31937...</td>
+          <td>(127, 379)</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>abs-diff</td>
+          <td>8</td>
+          <td>0</td>
+          <td>2.402577e-02</td>
+          <td>e&lt;0.1</td>
+          <td>gpr_Y0</td>
+          <td>[17.25, 19.59375, 21.34375, 17.625, 21.953125,...</td>
+          <td>(127,)</td>
+          <td>[17.229406048412784, 19.077562531849253, 21.00...</td>
+          <td>(127,)</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+The differences really starts for output ``'O0'`` after the matrix
+multiplication. This matrix melts different number with very different
+order of magnitudes and that alone explains the discrepencies with
+doubles and floats on that particular model.
+
+.. code:: ipython3
+
+    %matplotlib inline
+    ax = df[['name', 'v[1]']].iloc[1:].set_index('name').plot(kind='bar', figsize=(14,4), logy=True)
+    ax.set_title("Relative differences for each output between float32 and "
+                 "float64\nfor a GaussianProcessRegressor");
+
+
+
+.. image:: onnx_float32_and_64_42_0.png
+
+
+Before going further, let’s check how sensitive the trained model is
+about converting double into floats.
+
+.. code:: ipython3
+
+    pg1 = gau.predict(X_test)
+    pg2 = gau.predict(X_test.astype(numpy.float32).astype(numpy.float64))
+    numpy.sort(numpy.sort(numpy.squeeze(pg1 - pg2)))[-5:]
+
+
+
+
+.. parsed-literal::
+    array([1.53295696e-06, 1.60621130e-06, 1.65373785e-06, 1.66549580e-06,
+           2.36724736e-06])
+
+
+
+Having float or double inputs should not matter. We confirm that with
+the model converted into ONNX.
+
+.. code:: ipython3
+
+    p1 = oinf64.run({'X': X_test})['GPmean']
+    p2 = oinf64.run({'X': X_test.astype(numpy.float32).astype(numpy.float64)})['GPmean']
+    numpy.sort(numpy.sort(numpy.squeeze(p1 - p2)))[-5:]
+
+
+
+
+.. parsed-literal::
+    array([1.53295696e-06, 1.60621130e-06, 1.65373785e-06, 1.66549580e-06,
+           2.36724736e-06])
+
+
+
+Last verification.
+
+.. code:: ipython3
+
+    sbs = side_by_side_by_values([(oinf64, {'X': X_test.astype(numpy.float32).astype(numpy.float64)}),
+                                  (oinf64, {'X': X_test.astype(numpy.float64)})])
+    df = DataFrame(sbs)
+    ax = df[['name', 'v[1]']].iloc[1:].set_index('name').plot(kind='bar', figsize=(14,4), logy=True)
+    ax.set_title("Relative differences for each output between float64 and float64 rounded to float32"
+                 "\nfor a GaussianProcessRegressor");
+
+
+
+.. image:: onnx_float32_and_64_48_0.png

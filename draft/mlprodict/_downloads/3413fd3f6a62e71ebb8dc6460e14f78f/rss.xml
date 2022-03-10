@@ -1,0 +1,722 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0">
+<channel>
+    <title>mlprodict</title>
+    <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/main_0000.html</link>
+    <description>blog associated to mlprodict</description>
+    
+<item>
+            <title>Xop, easy to create onnx graph</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2022/2022-02-27_xop.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2022/2022-02-27_xop.html</guid>
+            <description>:epkg:`onnx` package has a very verbose API to create ONNX
+graph. Could you imagine a user to directly write the syntax tree
+of a program instead of some python code? Creating a ONNX graph is
+very similar to that task except ONNX language is more simple
+than python.
+
+We could start writing a compiler for ONNX language but it should be
+defined first. Another option consists in using an existing API,
+such as :epkg:`numpy` API (see :ref:`l-numpy2onnx-tutorial`).
+But it is not always easy to keep the same simplicity when numpy is
+not strongly typed and ONNX is. Another direction is to implement
+:epkg:`ONNX Operators` as function. Adding an operator into a graph
+becomes similar to a function call. This API is introduced in
+:ref:`l-xop-api`.</description>
+            <pubDate>2022-02-27</pubDate>
+        </item>
+<item>
+            <title>A few tricks for tf2onnx</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-12_tf2onnx.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-12_tf2onnx.html</guid>
+            <description>A few things I tend to forget. To run a specific
+test on a specific opset.
+
+::
+
+    python tests/test_backend.py --opset 12 BackendTests.test_rfft2d_ops_specific_dimension
+
+Optimisation of an onnx file. It applies the whole list of
+optimizers available in :epkg:`tensorflow-onnx`.
+
+::
+
+    import logging
+    import onnx
+    from onnx import helper
+    from tf2onnx.graph import GraphUtil
+    from tf2onnx import logging, optimizer, constants
+    from tf2onnx.late_rewriters import rewrite_channels_first, rewrite_channels_last
+
+    logging.basicConfig(level=logging.DEBUG)
+
+    def load_graph(fname, target):
+        model_proto = onnx.ModelProto()
+        with open(fname, "rb") as f:
+            data = f.read()
+            model_proto.ParseFromString(data)
+        g = GraphUtil.create_graph_from_onnx_model(model_proto, target)
+        return g, model_proto
+
+    def optimize(input, output):
+        g, org_model_proto = load_graph(input, [])
+        if g.is_target(constants.TARGET_CHANNELS_FIRST):
+            g.reset_nodes(rewrite_channels_first(g, g.get_nodes()))
+        if g.is_target(constants.TARGET_CHANNELS_LAST):
+            g.reset_nodes(rewrite_channels_last(g, g.get_nodes()))
+        g = optimizer.optimize_graph(g)
+        onnx_graph = g.make_graph(
+            org_model_proto.graph.doc_string + " (+tf2onnx/onnx-optimize)")
+        kwargs = GraphUtil.get_onnx_model_properties(org_model_proto)
+        model_proto = helper.make_model(onnx_graph, **kwargs)
+        with open(output, "wb") as f:
+            f.write(model_proto.SerializeToString())
+
+    optimize("debug_noopt.onnx", "debug_opt.onnx")</description>
+            <pubDate>2021-08-12</pubDate>
+        </item>
+<item>
+            <title>Decompose einsum into numpy operators</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-11_einsum.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-11_einsum.html</guid>
+            <description>Notebook :ref:`einsumdecompositionrst` what function :epkg:`numpy:einsum`
+does and how it can be decomposed into a series of basic operations,
+all available in ONNX. That's the purpose of function
+Function :func:`decompose_einsum_equation
+&lt;mlprodict.testing.einsum.einsum_impl.decompose_einsum_equation&gt;`.
+With function :func:`export2numpy
+&lt;mlprodict.onnx_tools.onnx_export.export2numpy&gt;`, it is possible to
+convert back this ONNX graph into a series of numpy operations.
+
+.. runpython::
+    :showcode:
+    :process:
+
+    import numpy
+    from mlprodict.testing.einsum import decompose_einsum_equation
+    from mlprodict.onnx_tools.onnx_export import export2numpy
+
+    seq_clean = decompose_einsum_equation(
+        "bsnh,btnh-&gt;bnts", strategy='numpy', clean=True)
+    onx = seq_clean.to_onnx("Y", "X1", "X2", dtype=numpy.float32)
+    code = export2numpy(onx, name="einsum", rename=True)
+    print(code)
+
+In some cases, it is faster to permute a matrix before doing
+a matrix multiplication. There exists many equivalent equation
+by permutating letters inside the initial equation.
+All leads to the same results but, once decomposed, they do different
+transpositions. The following code is obtained by looking for the
+best permutation and converting the optimized ONNX graph into
+*numpy*.
+
+.. runpython::
+    :showcode:
+    :process:
+
+    import numpy
+    from mlprodict.onnx_tools.onnx_export import export2numpy
+    from mlprodict.testing.einsum import optimize_decompose_einsum_equation
+
+    seq_opt = optimize_decompose_einsum_equation(
+        "bsnh,btnh-&gt;bnts", numpy.float64, strategy='ml', verbose=1,
+        runtime="python", optimize=True)
+
+    print("best equation:", seq_opt.equation_)
+    code = export2numpy(seq_opt.onnx_, name="einsum_opt", rename=True)
+    print(code)
+
+The optimization was done for :epkg:`onnxruntime`, that does not guarantee
+the result will be faster than with :epkg:`numpy:einsum`.
+Let's check...
+
+.. runpython::
+    :showcode:
+    :process:
+
+    import pprint
+    import numpy
+    from mlprodict.onnx_tools.exports.numpy_helper import (
+        argmin_use_numpy_select_last_index,
+        make_slice)
+    from cpyquickhelper.numbers.speed_measure import measure_time
+
+    def numpy_einsum(X1, X2):
+        '''
+        Numpy function for ``einsum``.
+
+        * producer: mlprodict
+        * version: 0
+        * description:
+        '''
+        # initializers
+
+        B = numpy.array([4], dtype=numpy.int64)
+        C = numpy.array([3], dtype=numpy.int64)
+        D = numpy.array([0, 1], dtype=numpy.int64)
+        E = numpy.array([4], dtype=numpy.int64)
+        F = numpy.array([-1], dtype=numpy.int64)
+        G = numpy.array([2], dtype=numpy.int64)
+        H = numpy.array([3], dtype=numpy.int64)
+        I = numpy.array([1], dtype=numpy.int64)
+        J = numpy.array([1], dtype=numpy.int64)
+
+        # nodes
+
+        K = X1
+        L = numpy.expand_dims(K, axis=tuple(B))
+        M = numpy.transpose(L, axes=(0, 2, 1, 4, 3))
+        N = X2
+        O = numpy.expand_dims(N, axis=tuple(C))
+        P = numpy.transpose(O, axes=(0, 2, 3, 1, 4))
+        Q = numpy.array(M.shape, dtype=numpy.int64)
+        R = numpy.array(P.shape, dtype=numpy.int64)
+        S = numpy.take(Q, D, axis=0)
+        T = numpy.take(R, D, axis=0)
+        U = S.prod(axis=0, keepdims=1)
+        V = T.prod(axis=0, keepdims=1)
+        W = numpy.take(Q, E, axis=0)
+        X = numpy.take(R, E, axis=0)
+        Z = numpy.concatenate([U, F, W], 0)
+        BA = numpy.concatenate([V, F, X], 0)
+        BB = M.reshape(tuple(Z))
+        BC = P.reshape(tuple(BA))
+        BD = numpy.transpose(BC, axes=(0, 2, 1))
+        BE = BB @ BD
+        BF = numpy.maximum(S, T)
+        BG = numpy.take(Q, G, axis=0)
+        BH = numpy.take(R, H, axis=0)
+        BI = numpy.concatenate([BF, BG, BH, I], 0)
+        BJ = BE.reshape(tuple(BI))
+        BK = numpy.transpose(BJ, axes=(0, 4, 1, 3, 2))
+        BL = numpy.squeeze(BK, axis=tuple(J))
+        BM = BL
+        Y = BM
+
+        return Y
+
+    def numpy_einsum_opt(X0, X1):
+        '''
+        Numpy function for ``einsum``.
+
+        * producer: mlprodict
+        * version: 0
+        * description:
+        '''
+        # initializers
+
+        B = numpy.array([2], dtype=numpy.int64)
+        C = numpy.array([1], dtype=numpy.int64)
+        D = numpy.array([0, 1], dtype=numpy.int64)
+        E = numpy.array([4], dtype=numpy.int64)
+        F = numpy.array([-1], dtype=numpy.int64)
+        G = numpy.array([2], dtype=numpy.int64)
+        H = numpy.array([3], dtype=numpy.int64)
+        I = numpy.array([1], dtype=numpy.int64)
+        J = numpy.array([3], dtype=numpy.int64)
+
+        # nodes
+
+        K = X0
+        L = numpy.expand_dims(K, axis=tuple(B))
+        M = numpy.transpose(L, axes=(0, 3, 1, 2, 4))
+        N = X1
+        O = numpy.expand_dims(N, axis=tuple(C))
+        P = numpy.transpose(O, axes=(0, 3, 1, 2, 4))
+        Q = numpy.array(M.shape, dtype=numpy.int64)
+        R = numpy.array(P.shape, dtype=numpy.int64)
+        S = numpy.take(Q, D, axis=0)
+        T = numpy.take(R, D, axis=0)
+        U = S.prod(axis=0, keepdims=1)
+        V = T.prod(axis=0, keepdims=1)
+        W = numpy.take(Q, E, axis=0)
+        X = numpy.take(R, E, axis=0)
+        Z = numpy.concatenate([U, F, W], 0)
+        BA = numpy.concatenate([V, F, X], 0)
+        BB = M.reshape(tuple(Z))
+        BC = P.reshape(tuple(BA))
+        BD = numpy.transpose(BC, axes=(0, 2, 1))
+        BE = BB @ BD
+        BF = numpy.maximum(S, T)
+        BG = numpy.take(Q, G, axis=0)
+        BH = numpy.take(R, H, axis=0)
+        BI = numpy.concatenate([BF, BG, BH, I], 0)
+        BJ = BE.reshape(tuple(BI))
+        BK = numpy.transpose(BJ, axes=(0, 1, 3, 4, 2))
+        BL = numpy.squeeze(BK, axis=tuple(J))
+        BM = BL
+        Y = BM
+
+        return Y
+
+    N = 2
+    m1 = numpy.random.randn(N, N, N, N)
+    m2 = numpy.random.randn(N, N, N, N)
+
+    print("Discrepencies?")
+    print(numpy.einsum("bsnh,btnh-&gt;bnts", m1, m2))
+    print(numpy_einsum(m1, m2))
+    print(numpy_einsum_opt(m1, m2))
+
+    N = 20
+    m1 = numpy.random.randn(N, N, N, N)
+    m2 = numpy.random.randn(N, N, N, N)
+
+    print('numpy.einsum')
+    res = measure_time(
+        lambda: numpy.einsum("bsnh,btnh-&gt;bnts", m1, m2),
+        repeat=10, number=20, div_by_number=True,
+        context={'numpy': numpy, 'm1': m1, 'm2': m2})
+    pprint.pprint(res)
+
+    print('numpy.einsum decomposed')
+    res = measure_time(
+        lambda: numpy_einsum(m1, m2),
+        repeat=10, number=20, div_by_number=True,
+        context={'numpy': numpy, 'm1': m1, 'm2': m2,
+                 'numpy_einsum': numpy_einsum})
+    pprint.pprint(res)
+
+    print('numpy.einsum decomposed and optimized')
+    res = measure_time(
+        lambda: numpy_einsum_opt(m1, m2),
+        repeat=10, number=20, div_by_number=True,
+        context={'numpy': numpy, 'm1': m1, 'm2': m2,
+                 'numpy_einsum_opt': numpy_einsum_opt})
+    pprint.pprint(res)
+
+The optimization is not faster than the first decomposition
+but the decomposition is faster than the numpy implementation.</description>
+            <pubDate>2021-08-11</pubDate>
+        </item>
+<item>
+            <title>onnxruntime shape [] != None</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-10_shape.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-08-10_shape.html</guid>
+            <description>`None` is the undefined shape, `[]` is an empty shape.
+And when shapes do not fit the results, the outputs can
+be suprising. The following example shows what :epkg:`onnxruntime`
+produces for the same graph except input and output shapes
+when defined as `None` and `[]`.
+
+.. runpython::
+    :showcode:
+
+    import numpy
+    from onnx import helper, TensorProto
+    from onnxruntime import InferenceSession
+
+    def model(shape):
+        X = helper.make_tensor_value_info('X', TensorProto.FLOAT, shape)
+        Z = helper.make_tensor_value_info('Z', TensorProto.INT64, shape)
+        node_def = helper.make_node('Shape', ['X'], ['Z'], name='Zt')
+        graph_def = helper.make_graph([node_def], 'test-model', [X], [Z])
+        model_def = helper.make_model(
+            graph_def, producer_name='mlprodict', ir_version=7, producer_version='0.1',
+            opset_imports=[helper.make_operatorsetid('', 13)])
+        sess = InferenceSession(model_def.SerializeToString())
+        rnd = numpy.random.randn(12).astype(numpy.float32)
+        print("shape=%r results=%r" % (shape, sess.run(None, {"X": rnd})))
+
+    model(None)
+    model([])</description>
+            <pubDate>2021-08-10</pubDate>
+        </item>
+<item>
+            <title>ONNX from C#</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-07-09_csharp.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-07-09_csharp.html</guid>
+            <description>This example shows how to compute the predictions of a model
+using C#.
+
+::
+
+    using System.Collections.Generic;
+    using Microsoft.ML.OnnxRuntime;
+    using Microsoft.ML.OnnxRuntime.Tensors;
+
+    namespace ConsoleAppOnnx
+    {
+        class Program
+        {
+            static void Main(string[] args)
+            {
+                // Loads the model.
+                var opts = new SessionOptions();
+                string model_path = "model.onnx";
+                var session = new InferenceSession(model_path, opts);
+
+                // Creating an input tensor (assuming there is only one).
+                // Get the name of the input and the number of features.
+                string name = string.Empty;
+                int n_features = -1;
+                foreach (var inp in session.InputMetadata)
+                {
+                    name = inp.Key;
+                    n_features = inp.Value.Dimensions[1];
+                    break;
+                }
+
+                // Creates an empty input.
+                var dims = new int[] { 1, n_features };
+                var t = new DenseTensor&lt;float&gt;(dims);
+                for (int i = 0; i &lt; dims[1]; ++i)
+                    t.SetValue(i, 1.0f / (dims[1] + 1));
+                var tensor = NamedOnnxValue.CreateFromTensor(name, t);
+
+                // Runs the inference.
+                var inputs = new List&lt;NamedOnnxValue&gt;() { tensor };
+                using (var outputs = session.Run(inputs))
+                {
+                    foreach (var o in outputs)
+                    {
+                        DenseTensor&lt;float&gt; to = o.AsTensor&lt;float&gt;().ToDenseTensor();
+                        var values = new float[to.Length];
+                        to.Buffer.CopyTo(values);
+                        // values contains the results.
+                        foreach (var i in values)
+                            System.Console.Write(string.Format("{0}, ", i));
+                        System.Console.WriteLine();
+                    }
+                }
+            }
+        }
+    }</description>
+            <pubDate>2021-07-09</pubDate>
+        </item>
+<item>
+            <title>Convert a Lightgbm dump</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-07-09_lightgbm.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-07-09_lightgbm.html</guid>
+            <description>This example shows how to convert a :epkg:`lightgbm` model
+dumped as a text file. It uses :epkg:`lightgbm` to restore
+the model, converts it and checks the discrepencies.
+
+::
+
+    import numpy
+    from numpy.testing import assert_almost_equal
+    import lightgbm
+    from onnxruntime import InferenceSession
+    from onnxmltools import convert_lightgbm
+    from skl2onnx.common.data_types import FloatTensorType
+
+    booster = lightgbm.Booster(model_file="model.txt")
+    n = booster.num_feature()
+
+    onx = convert_lightgbm(booster, initial_types=[('input', FloatTensorType([None, n]))])
+
+    sess = InferenceSession(onx.SerializeToString())
+    rnd = numpy.random.random((1, n)).astype(numpy.float32)
+
+    expected = booster.predict(rnd)
+    got = sess.run(None, {'input': rnd})[0]
+
+    assert_almost_equal(expected, got.ravel(), decimal=4)</description>
+            <pubDate>2021-07-09</pubDate>
+        </item>
+<item>
+            <title>Numpy API for ONNX and scikit-learn (part II)</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-05-05_numpyapionnx2.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-05-05_numpyapionnx2.html</guid>
+            <description>This follows blog post :ref:`Numpy API for ONNX and scikit-learn (part I)
+&lt;blog-onnx-api-part1&gt;`. It demonstrated how to insert a custom
+function in a pipeline and still be able to convert that pipeline
+into ONNX. This blog post shows how to implement a custom transformer.
+
+This time, we need to implement method not a function but the method
+`transform` of a custom transformer. The design is the same
+and relies on a decorator before the class declaration.
+In the following example, a method `onnx_transform`
+implements the method transform with the API mentioned
+in the first part: :ref:`f-numpyonnximpl`.
+The decorator `onnxsklearn_class` detects that the decorated class
+is a transform. It then assumes that method `onnx_transform`
+contains the ONNX implementation of method `transform`.
+The decorator adds an implementation for method `transform`.
+It behaves like the custom function described in part I.
+Once called, this method will detects the input type,
+generates the ONNX graph if not available and executes it
+with a runtimme. That explains why the first call is much slower.
+
+.. runpython::
+    :showcode:
+    :process:
+
+    import numpy
+    from pandas import DataFrame
+    from sklearn.base import TransformerMixin, BaseEstimator
+    from sklearn.decomposition import PCA
+    from sklearn.model_selection import train_test_split
+    from sklearn.datasets import make_classification
+    from mlprodict.npy import onnxsklearn_class
+    from mlprodict.onnx_conv import to_onnx
+    from mlprodict.plotting.text_plot import onnx_simple_text_plot
+    import mlprodict.npy.numpy_onnx_impl as nxnp
+    import mlprodict.npy.numpy_onnx_impl_skl as nxnpskl
+
+    X, y = make_classification(200, n_classes=2, n_features=2, n_informative=2,
+                            n_redundant=0, n_clusters_per_class=2, hypercube=False)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+    @onnxsklearn_class("onnx_transform", op_version=14)  # opset=13, 14, ...
+    class DecorrelateTransformerOnnx(TransformerMixin, BaseEstimator):
+        def __init__(self, alpha=0.):
+            BaseEstimator.__init__(self)
+            TransformerMixin.__init__(self)
+            self.alpha = alpha
+
+        def fit(self, X, y=None, sample_weights=None):
+            self.pca_ = PCA(X.shape[1])  # pylint: disable=W0201
+            self.pca_.fit(X)
+            return self
+
+        def onnx_transform(self, X):
+            if X.dtype is None:
+                raise AssertionError("X.dtype cannot be None.")
+            mean = self.pca_.mean_.astype(X.dtype)
+            cmp = self.pca_.components_.T.astype(X.dtype)
+            return (X - mean) @ cmp
+
+    model = DecorrelateTransformerOnnx()
+    model.fit(X_train)
+    print(model.transform(X_test[:5]))
+
+    onx = to_onnx(model, X_test[:5], target_opset=14)  # opset=13, 14, ...
+    print()
+    print(onnx_simple_text_plot(onx))
+    print()
+    print(onx)
+
+The tutorial :ref:`l-numpy-api-for-onnx` extends this example
+to regressors or classifiers. It also mentions a couple of frequent
+errors that may appear along the way.</description>
+            <pubDate>2021-05-05</pubDate>
+        </item>
+<item>
+            <title>Numpy API for ONNX and scikit-learn (part I)</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-05-05_numpyapionnx1.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2021/2021-05-05_numpyapionnx1.html</guid>
+            <description>:epkg:`sklearn-onnx` converts most of the pipelines including
+numerical preprocessing or predictors but it fails whenever
+custom code is involved. That covers the use of `FunctionTransformer
+&lt;https://scikit-learn.org/stable/modules/generated/
+sklearn.preprocessing.FunctionTransformer.html&gt;`_ or a new model
+inheriting from `BaseEstimator &lt;https://scikit-learn.org/stable/
+modules/generated/sklearn.base.BaseEstimator.html&gt;`_. To be successful,
+the conversion needs a way to convert the custom code into ONNX.
+The proposed solution here is bypass that complex steps
+(rewrite a python function with ONNX operators) by directly writing
+the custom code with ONNX operators. However, even though most of
+the operator are close to :epkg:`numpy` functions, they are not
+the same. To avoid spending time looking at them, many :epkg:`numpy`
+functions were implementing with ONNX operators. The custom function
+or predictor can then just be implemented with this API to build
+a unique ONNX graph executed with a runtime.
+
+Next sections takes some examples from
+:ref:`l-numpy-api-for-onnx`.
+
+**numpy API for ONNX**
+
+Let's an example with a `FunctionTransformer
+&lt;https://scikit-learn.org/stable/modules/generated/
+sklearn.preprocessing.FunctionTransformer.html&gt;`_.
+
+The mechanism is similar to what :epkg:`pytorch` or :epkg:`tensorflow`
+put in place: write a graph assuming every node processes a variable.
+Then the user instantiates a variable and executes the graph.
+It works the same with ONNX. The following snippet implement the
+function :math:`log(1 + x)`.
+
+::
+
+    import numpy as np
+    import mlprodict.npy.numpy_onnx_impl as npnx
+
+    def onnx_log_1(x):
+        return npnx.log(x + np.float32(1))
+
+The list of implemented function is :ref:`f-numpyonnximpl`.
+ONNX is strongly typed so we need to specified them with annotations.
+
+::
+
+    from typing import Any
+    import numpy as np
+    from mlprodict.npy import NDArray
+    import mlprodict.npy.numpy_onnx_impl as npnx
+
+    def onnx_log_1(x: NDArray[Any, np.float32]) -&gt; NDArray[(None, None), np.float32]:
+        return npnx.log(x + np.float32(1))
+
+And finally, this function does not run on a numpy array as every
+function expects a variable (see :class:`OnnxVariable
+&lt;mlprodict.npy.onnx_variable.OnnxVariable&gt;`) to define an ONNX graph
+which can be executed with a runtime. That's the purpose of the decorator
+`onnxnumpy_default`.
+
+.. runpython::
+    :showcode:
+    :process:
+
+    from typing import Any
+    import numpy as np
+    from mlprodict.npy import onnxnumpy_default, NDArray
+    import mlprodict.npy.numpy_onnx_impl as npnx
+
+    @onnxnumpy_default
+    def onnx_log_1(x: NDArray[Any, np.float32]) -&gt; NDArray[(None, None), np.float32]:
+        return npnx.log(x + np.float32(1))
+
+    x = np.array([[1, 2], [3, 4]], dtype=np.float32)
+    print(onnx_log_1(x))
+    print(type(onnx_log_1))
+
+`onnx_log_1` is not a function but an instance
+of a class which defines operator `__call__` and that class
+has a hold on the ONNX graph and all the necessary information
+to have :epkg:`sklearn-onnx` convert any pipeline using it after
+a new converter for `FunctionTransformer
+&lt;https://scikit-learn.org/stable/modules/generated/
+sklearn.preprocessing.FunctionTransformer.html&gt;`_ is registered
+to handle this API.
+
+The ONNX graph is created when the function is called for the
+first time and loaded by the runtime. That explains why the first
+call is much slower and all the other call.
+
+::
+
+    from mlprodict.onnx_conv import register_rewritten_operators
+    register_rewritten_operators()
+
+**The complete example:**
+
+.. runpython::
+    :showcode:
+    :process:
+
+    from typing import Any
+    import numpy as np
+    from sklearn.datasets import load_iris
+    from sklearn.model_selection import train_test_split
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    import mlprodict.npy.numpy_onnx_impl as npnx
+    from mlprodict.npy import onnxnumpy_default, NDArray
+    from mlprodict.onnxrt import OnnxInference
+
+    from skl2onnx import to_onnx
+    from mlprodict.onnx_conv import register_rewritten_operators
+    register_rewritten_operators()
+
+    @onnxnumpy_default
+    def onnx_log_1(x: NDArray[Any, np.float32]) -&gt; NDArray[(None, None), np.float32]:
+        return npnx.log(x + np.float32(1))
+
+    data = load_iris()
+    X, y = data.data.astype(np.float32), data.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+
+    pipe = make_pipeline(
+        FunctionTransformer(onnx_log_1),
+        StandardScaler(),
+        LogisticRegression())
+    pipe.fit(X_train, y_train)
+    print(pipe.predict_proba(X_test[:2]))
+
+    onx = to_onnx(pipe, X_train[:1],
+                  options={LogisticRegression: {'zipmap': False}})
+    oinf = OnnxInference(onx)
+    print(oinf.run({'X': X_test[:2]})['probabilities'])
+
+The decorator has parameter to change the way the function
+is converted or executed. ONNX has different version or opset,
+it is possible to target a specific opset. The ONNX graph must
+be executed with a runtime, this one or :epkg:`onnxruntime`.
+This can be defined too. The function is strongly typed but it is
+possible to have an implementation which supports multiple types.
+An ONNX graph will be created for every distinct type,
+like a template in C++.
+See :ref:`l-numpy-api-for-onnx` for more information.
+
+Next: :ref:`Numpy API for ONNX and scikit-learn (part II) &lt;blog-onnx-api-part2&gt;`.</description>
+            <pubDate>2021-05-05</pubDate>
+        </item>
+<item>
+            <title>Parallelization of Random Forest predictions</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2020/2020-11-27_parallelisation.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2020/2020-11-27_parallelisation.html</guid>
+            <description>I've been struggling to understand why the first implementation
+of TreeEnsemble could not get as fast as *scikit-learn* implementation
+for a RandomForest when the number of observations was 100.000 or above,
+100 trees and a depth &gt;= 10. The only difference was that the computation
+was parallelized by trees and not by observations. These
+observations are benchmarked in
+:ref:`l-example-tree-ensemble-reg-bench`
+(:ref:`l-example-tree-ensemble-cls-bench-multi` for the
+multiclass version).
+
+* `forest.py
+  &lt;https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/ensemble/_forest.py#L683&gt;`_
+* `tree.pyx
+  &lt;https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/tree/_tree.pyx#L926&gt;`_
+
+Parallelizing by tree requires to save the outputs of every observation.
+That means the computation requires an additional buffer
+(one per thread at least) to save the trees outputs.
+However, that approximatively two, three times faster to do it
+that way instead of parallelizing per observations.
+The computational is the same in both cases. The only
+explanation would be a better use of the caches (L1, L2, L3)
+when the computation is parallelized per tree.
+The answer is probably hidden in that book.
+
+* `What Every Programmer Should Know About Memory
+  &lt;https://akkadia.org/drepper/cpumemory.pdf&gt;`_
+
+The next investigation should be a study of the difference
+between a tree described as an array of nodes or
+a structure of arrays where every node field gets its own array.
+
+* `Performance Optimization Strategies for WRF Physics Schemes
+  Used in Weather Modeling
+  &lt;https://www.researchgate.net/figure/
+  Transformation-from-AOS-to-SOA-The-2D-arrays-A-and-B-are-transformed-into-two_fig1_326307125&gt;`_
+* `Memory Layout Transformations
+  &lt;https://software.intel.com/content/www/us/en/develop/articles/
+  memory-layout-transformations.html&gt;`_
+
+Other readings:
+
+* `Demystifying The Restrict Keyword
+  &lt;https://cellperformance.beyond3d.com/articles/2006/05/demystifying-the-restrict-keyword.html&gt;`_
+* `Aliasing &lt;https://en.wikipedia.org/wiki/Aliasing_%28computing%29&gt;`_</description>
+            <pubDate>2020-11-27</pubDate>
+        </item>
+<item>
+            <title>x / y != x * (1 / y)</title>
+            <link>http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2020/2020-06-09_float_inverse.html</link>
+            <guid isPermaLink="true">http://www.xavierdupre.fr/app/mlprodict/helpsphinx//blog/2020/2020-06-09_float_inverse.html</guid>
+            <description>I was recently investigating issue
+`onnxruntime/4130 &lt;https://github.com/microsoft/onnxruntime/issues/4130&gt;`_
+in notebook :ref:`onnxdiscrepenciesrst`.
+While looking into a way to solve it, I finally discovered
+that this is not an easy problem.
+
+* `Division algorithm
+  &lt;https://en.wikipedia.org/wiki/Division_algorithm&gt;`_
+* `Efficient floating-point division with constant integer divisors
+  &lt;https://stackoverflow.com/questions/35527683/efficient-floating-point-division-with-constant-integer-divisors&gt;`_
+* `Will the compiler optimize division into multiplication
+  &lt;https://stackoverflow.com/questions/35506226/will-the-compiler-optimize-division-into-multiplication&gt;`_
+* `Accelerating Correctly Rounded Floating-Point Division When the Divisor is Known in Advance
+  &lt;http://perso.ens-lyon.fr/nicolas.brisebarre/Publi/fpdivision.pdf&gt;`_</description>
+            <pubDate>2020-06-09</pubDate>
+        </item>
+
+</channel>
+</rss>

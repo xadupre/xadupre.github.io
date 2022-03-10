@@ -1,0 +1,2402 @@
+
+.. _onnxnodetimerst:
+
+===============================================
+Time processing for every ONNX nodes in a graph
+===============================================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <onnx_node_time.ipynb>`, :downloadlink:`html <onnx_node_time2html.html>`, :download:`PDF <onnx_node_time.pdf>`, :download:`python <onnx_node_time.py>`, :downloadlink:`slides <onnx_node_time.slides.html>`, :githublink:`GitHub|_doc/notebooks/onnx_node_time.ipynb|*`
+
+
+The following notebook show how long the runtime spends in each node of
+an ONNX graph.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+.. code:: ipython3
+
+    %matplotlib inline
+
+LogisticRegression
+------------------
+
+.. code:: ipython3
+
+    from sklearn.datasets import load_iris
+    from sklearn.model_selection import train_test_split
+    from sklearn.linear_model import LogisticRegression
+    iris = load_iris()
+    X, y = iris.data, iris.target
+    X_train, X_test, y_train, y_test = train_test_split(X, y)
+    clr = LogisticRegression(solver='liblinear')
+    clr.fit(X_train, y_train)
+
+
+
+
+.. parsed-literal::
+    LogisticRegression(solver='liblinear')
+
+
+
+.. code:: ipython3
+
+    import numpy
+    from mlprodict.onnx_conv import to_onnx
+    onx = to_onnx(clr, X_test.astype(numpy.float32))
+    with open("logreg_time.onnx", "wb") as f:
+        f.write(onx.SerializeToString())
+    # add -l 1 if nothing shows up
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M55f9a2ca1198490ba84a6cd669311f6e-cont"><div id="M55f9a2ca1198490ba84a6cd669311f6e" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  X [shape=box color=red label=\"X\nfloat((0, 4))\" fontsize=10];\n\n  output_label [shape=box color=green label=\"output_label\nint64((0,))\" fontsize=10];\n  output_probability [shape=box color=green label=\"output_probability\n[{int64, {'kind': 'tensor', 'elem': 'float', 'shape': }}]\" fontsize=10];\n\n\n  label [shape=box label=\"label\" fontsize=10];\n  probability_tensor [shape=box label=\"probability_tensor\" fontsize=10];\n  LinearClassifier [shape=box style=\"filled,rounded\" color=orange label=\"LinearClassifier\n(LinearClassifier)\nclasslabels_ints=[0 1 2]\ncoefficients=[ 0.34304482  1.39...\nintercepts=[ 0.23314844  0.9524...\nmulti_class=1\npost_transform=b'LOGISTIC'\" fontsize=10];\n  X -> LinearClassifier;\n  LinearClassifier -> label;\n  LinearClassifier -> probability_tensor;\n\n  probabilities [shape=box label=\"probabilities\" fontsize=10];\n  Normalizer [shape=box style=\"filled,rounded\" color=orange label=\"Normalizer\n(Normalizer)\nnorm=b'L1'\" fontsize=10];\n  probability_tensor -> Normalizer;\n  Normalizer -> probabilities;\n\n  Cast [shape=box style=\"filled,rounded\" color=orange label=\"Cast\n(Cast)\nto=7\" fontsize=10];\n  label -> Cast;\n  Cast -> output_label;\n\n  ZipMap [shape=box style=\"filled,rounded\" color=orange label=\"ZipMap\n(ZipMap)\nclasslabels_int64s=[0 1 2]\" fontsize=10];\n  probabilities -> ZipMap;\n  ZipMap -> output_probability;\n}");
+    document.getElementById('M55f9a2ca1198490ba84a6cd669311f6e').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    import pandas
+    oinf = OnnxInference(onx)
+    res = oinf.run({'X': X_test}, node_time=True)
+    pandas.DataFrame(list(res[1]))
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.199603</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000091</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000014</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000016</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    oinf.run({'X': X_test})['output_probability'][:5]
+
+
+
+
+.. parsed-literal::
+    {0: array([8.38235830e-01, 1.21554664e-03, 6.97352537e-04, 7.93823160e-01,
+            9.24825077e-01]),
+     1: array([0.16162989, 0.39692812, 0.25688601, 0.20607722, 0.07516498]),
+     2: array([1.34279470e-04, 6.01856333e-01, 7.42416637e-01, 9.96200831e-05,
+            9.94208860e-06])}
+
+
+
+Measure time spent in each node
+-------------------------------
+
+With parameter ``node_time=True``, method *run* returns the output and
+time measurement.
+
+.. code:: ipython3
+
+    exe = oinf.run({'X': X_test}, node_time=True)
+    exe[1]
+
+
+
+
+.. parsed-literal::
+    [{'i': 0,
+      'name': 'LinearClassifier',
+      'op_type': 'LinearClassifier',
+      'time': 0.00015699999999974068},
+     {'i': 1,
+      'name': 'Normalizer',
+      'op_type': 'Normalizer',
+      'time': 5.43000000003957e-05},
+     {'i': 2, 'name': 'Cast', 'op_type': 'Cast', 'time': 1.1699999999947863e-05},
+     {'i': 3,
+      'name': 'ZipMap',
+      'op_type': 'ZipMap',
+      'time': 1.940000000111297e-05}]
+
+
+
+.. code:: ipython3
+
+    import pandas
+    pandas.DataFrame(exe[1])
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000157</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000054</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000012</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000019</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Logistic regression: python runtime vs onnxruntime
+--------------------------------------------------
+
+Function
+`enumerate_validated_operator_opsets <http://www.xavierdupre.fr/app/mlprodict/helpsphinx/mlprodict/onnxrt/validate/validate.html?highlight=enumerate_validated_operator_opsets#mlprodict.onnxrt.validate.validate.enumerate_validated_operator_opsets>`__
+implements automated tests for every model with artificial data. Option
+``node_time`` automatically returns the time spent in each node and does
+it multiple time.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt.validate import enumerate_validated_operator_opsets
+    res = list(enumerate_validated_operator_opsets(
+                verbose=0, models={"LogisticRegression"}, opset_min=12,
+                runtime='python', debug=False, node_time=True,
+                filter_exp=lambda m, p: p == "b-cl"))
+
+
+.. parsed-literal::
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+
+
+.. code:: ipython3
+
+    import pandas
+    df = pandas.DataFrame(res[0]['bench-batch'])
+    df['step'] = df.apply(lambda row: '{}-{}'.format(row['i'], row["name"]), axis=1)
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time</th>
+          <th>N</th>
+          <th>max_time</th>
+          <th>min_time</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>step</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000018</td>
+          <td>1</td>
+          <td>0.000033</td>
+          <td>0.000015</td>
+          <td>20</td>
+          <td>30</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000017</td>
+          <td>1</td>
+          <td>0.000069</td>
+          <td>0.000012</td>
+          <td>20</td>
+          <td>30</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000004</td>
+          <td>1</td>
+          <td>0.000009</td>
+          <td>0.000003</td>
+          <td>20</td>
+          <td>30</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000005</td>
+          <td>1</td>
+          <td>0.000007</td>
+          <td>0.000004</td>
+          <td>20</td>
+          <td>30</td>
+          <td>3-ZipMap</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000020</td>
+          <td>10</td>
+          <td>0.000052</td>
+          <td>0.000017</td>
+          <td>20</td>
+          <td>20</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000015</td>
+          <td>10</td>
+          <td>0.000035</td>
+          <td>0.000013</td>
+          <td>20</td>
+          <td>20</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000004</td>
+          <td>10</td>
+          <td>0.000013</td>
+          <td>0.000003</td>
+          <td>20</td>
+          <td>20</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000004</td>
+          <td>10</td>
+          <td>0.000008</td>
+          <td>0.000004</td>
+          <td>20</td>
+          <td>20</td>
+          <td>3-ZipMap</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000024</td>
+          <td>100</td>
+          <td>0.000036</td>
+          <td>0.000019</td>
+          <td>10</td>
+          <td>8</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000018</td>
+          <td>100</td>
+          <td>0.000023</td>
+          <td>0.000015</td>
+          <td>10</td>
+          <td>8</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000004</td>
+          <td>100</td>
+          <td>0.000006</td>
+          <td>0.000003</td>
+          <td>10</td>
+          <td>8</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000007</td>
+          <td>100</td>
+          <td>0.000005</td>
+          <td>0.000004</td>
+          <td>10</td>
+          <td>8</td>
+          <td>3-ZipMap</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000051</td>
+          <td>1000</td>
+          <td>0.000057</td>
+          <td>0.000047</td>
+          <td>5</td>
+          <td>5</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000041</td>
+          <td>1000</td>
+          <td>0.000045</td>
+          <td>0.000040</td>
+          <td>5</td>
+          <td>5</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000003</td>
+          <td>1000</td>
+          <td>0.000004</td>
+          <td>0.000003</td>
+          <td>5</td>
+          <td>5</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000004</td>
+          <td>1000</td>
+          <td>0.000004</td>
+          <td>0.000004</td>
+          <td>5</td>
+          <td>5</td>
+          <td>3-ZipMap</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.000315</td>
+          <td>10000</td>
+          <td>0.000328</td>
+          <td>0.000315</td>
+          <td>3</td>
+          <td>3</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.000272</td>
+          <td>10000</td>
+          <td>0.000284</td>
+          <td>0.000256</td>
+          <td>3</td>
+          <td>3</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000004</td>
+          <td>10000</td>
+          <td>0.000004</td>
+          <td>0.000004</td>
+          <td>3</td>
+          <td>3</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000004</td>
+          <td>10000</td>
+          <td>0.000004</td>
+          <td>0.000004</td>
+          <td>3</td>
+          <td>3</td>
+          <td>3-ZipMap</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0</td>
+          <td>LinearClassifier</td>
+          <td>LinearClassifier</td>
+          <td>0.005634</td>
+          <td>100000</td>
+          <td>0.005634</td>
+          <td>0.005634</td>
+          <td>1</td>
+          <td>2</td>
+          <td>0-LinearClassifier</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>1</td>
+          <td>Normalizer</td>
+          <td>Normalizer</td>
+          <td>0.004671</td>
+          <td>100000</td>
+          <td>0.004671</td>
+          <td>0.004671</td>
+          <td>1</td>
+          <td>2</td>
+          <td>1-Normalizer</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>2</td>
+          <td>Cast</td>
+          <td>Cast</td>
+          <td>0.000024</td>
+          <td>100000</td>
+          <td>0.000024</td>
+          <td>0.000024</td>
+          <td>1</td>
+          <td>2</td>
+          <td>2-Cast</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>3</td>
+          <td>ZipMap</td>
+          <td>ZipMap</td>
+          <td>0.000013</td>
+          <td>100000</td>
+          <td>0.000013</td>
+          <td>0.000013</td>
+          <td>1</td>
+          <td>2</td>
+          <td>3-ZipMap</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Following tables shows the time spent in each node, it is relative to
+the total time. For one observation, the runtime spends 10% of the time
+in ZipMap, it is only 1% or 2% with 10 observations. These proportions
+change due to the computing cost of each node.
+
+.. code:: ipython3
+
+    piv = df.pivot('step', 'N', 'time')
+    total = piv.sum(axis=0)
+    piv / total
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th>N</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+        </tr>
+        <tr>
+          <th>step</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0-LinearClassifier</th>
+          <td>0.410138</td>
+          <td>0.459103</td>
+          <td>0.450882</td>
+          <td>0.512622</td>
+          <td>0.530490</td>
+          <td>0.544785</td>
+        </tr>
+        <tr>
+          <th>1-Normalizer</th>
+          <td>0.390060</td>
+          <td>0.353622</td>
+          <td>0.350126</td>
+          <td>0.414227</td>
+          <td>0.456671</td>
+          <td>0.451642</td>
+        </tr>
+        <tr>
+          <th>2-Cast</th>
+          <td>0.095729</td>
+          <td>0.089857</td>
+          <td>0.074343</td>
+          <td>0.034398</td>
+          <td>0.006092</td>
+          <td>0.002306</td>
+        </tr>
+        <tr>
+          <th>3-ZipMap</th>
+          <td>0.104073</td>
+          <td>0.097418</td>
+          <td>0.124649</td>
+          <td>0.038753</td>
+          <td>0.006747</td>
+          <td>0.001267</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+The python implementation of *ZipMap* does not change the data but wraps
+in into a frozen class
+`ArrayZipMapDitionary <https://github.com/sdpython/mlprodict/blob/master/mlprodict/onnxrt/ops_cpu/op_zipmap.py#L90>`__
+which mocks a list of dictionaries *pandas* can ingest to create a
+DataFrame. The cost is a fixed cost and does not depend on the number of
+processed rows.
+
+.. code:: ipython3
+
+    from pyquickhelper.pycode.profiling import profile
+    bigX = numpy.random.randn(100000, X_test.shape[1]).astype(numpy.float32)
+    print(profile(lambda: oinf.run({'X': bigX}), pyinst_format="text")[1])
+
+
+.. parsed-literal::
+
+      _     ._   __/__   _ _  _  _ _/_   Recorded: 00:28:08  Samples:  4
+     /_//_/// /_\ / //_// / //_'/ //     Duration: 0.009     CPU time: 0.031
+    /   _/                      v3.0.1
+    Program: c:\python372_x64\lib\site-packages\ipykernel_launcher.py -f C:\Users\xavie\AppData\Roaming\jupyter\runtime\kernel-287476aa-b8ba-4140-902a-b0aad833ffd0.json
+    0.008 profile  pyquickhelper\pycode\profiling.py:49
+    `- 0.008 <lambda>  <ipython-input-13-ccd42692a7ed>:3
+       `- 0.008 run  mlprodict\onnxrt\onnx_inference.py:475
+          `- 0.008 _run_sequence_runtime  mlprodict\onnxrt\onnx_inference.py:558
+             `- 0.008 run  mlprodict\onnxrt\onnx_inference_node.py:141
+                |- 0.005 run  mlprodict\onnxrt\ops_cpu\_op.py:417
+                |  `- 0.005 run  mlprodict\onnxrt\ops_cpu\_op.py:298
+                |     `- 0.005 _run  mlprodict\onnxrt\ops_cpu\op_linear_classifier.py:40
+                |        |- 0.003 [self]  
+                |        `- 0.002 argmax  <__array_function__ internals>:2
+                |           `- 0.002 argmax  numpy\core\fromnumeric.py:1112
+                |                 [3 frames hidden]  numpy
+                |                    0.002 _wrapfunc  numpy\core\fromnumeric.py:55
+                `- 0.003 run  mlprodict\onnxrt\ops_cpu\_op.py:383
+                   `- 0.003 run  mlprodict\onnxrt\ops_cpu\_op.py:298
+                      `- 0.003 _run  mlprodict\onnxrt\ops_cpu\op_normalizer.py:66
+                         `- 0.003 norm_l1  mlprodict\onnxrt\ops_cpu\op_normalizer.py:42
+                            `- 0.003 _norm_L1_inplace  mlprodict\onnxrt\ops_cpu\op_normalizer.py:49
+                               |- 0.002 [self]  
+                               `- 0.002 _sum  numpy\core\_methods.py:36
+                                     [2 frames hidden]  numpy
+    
+    
+
+
+The class *ArrayZipMapDictionary* is fast to build but has an overhead
+after that because it builds data when needed.
+
+.. code:: ipython3
+
+    res = oinf.run({'X': bigX})
+    prob = res['output_probability']
+    type(prob)
+
+
+
+
+.. parsed-literal::
+    mlprodict.onnxrt.ops_cpu.op_zipmap.ArrayZipMapDictionary
+
+
+
+.. code:: ipython3
+
+    %timeit pandas.DataFrame(prob)
+
+
+.. parsed-literal::
+    721 ms ± 54.5 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+
+
+.. code:: ipython3
+
+    list_of_dict = [v.asdict() for v in prob]
+    %timeit pandas.DataFrame(list_of_dict)
+
+
+.. parsed-literal::
+    108 ms ± 2.01 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+
+But if you just need to do the following:
+
+.. code:: ipython3
+
+    %timeit pandas.DataFrame(prob).values
+
+
+.. parsed-literal::
+    713 ms ± 56.6 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+
+
+Then, you can just do that:
+
+.. code:: ipython3
+
+    print(prob.columns)
+    %timeit prob.values
+
+
+.. parsed-literal::
+    [0, 1, 2]
+    390 ns ± 51.2 ns per loop (mean ± std. dev. of 7 runs, 1000000 loops each)
+
+
+And then:
+
+.. code:: ipython3
+
+    %timeit -n 100 pandas.DataFrame(prob.values, columns=prob.columns)
+
+
+.. parsed-literal::
+    215 µs ± 82.6 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
+
+
+We can then compare to what *onnxruntime* would do when the runtime is
+called indenpently for each node. We use the runtime named
+`onnxruntime2 <http://www.xavierdupre.fr/app/mlprodict/helpsphinx/onnx_runtime.html?highlight=onnxruntime2#onnxruntime2-independent-onnxruntime-for-every-node>`__.
+Class *OnnxInference* splits the ONNX graph into multiple ONNX graphs,
+one for each node, and then calls *onnxruntime* for each of them
+indenpently. *Python* handles the graph logic.
+
+.. code:: ipython3
+
+    res = list(enumerate_validated_operator_opsets(
+                verbose=0, models={"LogisticRegression"}, opset_min=12,
+                runtime='onnxruntime2', debug=False, node_time=True))
+
+
+.. parsed-literal::
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\linear_model\_logistic.py:1356: UserWarning: 'n_jobs' > 1 does not have any effect when 'solver' is set to 'liblinear'. Got 'n_jobs' = 4.
+      " = {}.".format(effective_n_jobs(self.n_jobs)))
+
+
+.. code:: ipython3
+
+    res0 = None
+    for i, r in enumerate(res):
+        if "available-ERROR" in r:
+            print(i, str(r['available-ERROR']).split("\n")[0])
+        elif res0 is None:
+            res0 = r
+
+
+.. parsed-literal::
+    0 Unable to load node 'ZipMap' (output type was inferred)
+    1 Unable to load node 'ZipMap' (output type was inferred)
+    4 Unable to load node 'LinearClassifier' (output type was guessed)
+    5 Unable to load node 'LinearClassifier' (output type was guessed)
+    6 Unable to load node 'LinearClassifier' (output type was guessed)
+    7 Unable to load node 'LinearClassifier' (output type was guessed)
+    8 Unable to load node 'ZipMap' (output type was inferred)
+    9 Unable to load node 'ZipMap' (output type was inferred)
+
+
+.. code:: ipython3
+
+    if '_6ort_run_batch_exc' in res[0]:
+        m = "Something went wrong.", res[0]['_6ort_run_batch_exc']
+    else:
+        df = pandas.DataFrame(res0['bench-batch'])
+        print(df)
+        df['step'] = df.apply(lambda row: '{}-{}'.format(row['i'], row["name"]), axis=1)
+        piv = df.pivot('step', 'N', 'time')
+        total = piv.sum(axis=0)
+        m = piv / total
+    m
+
+
+.. parsed-literal::
+       i              name           op_type      time       N  max_time  \
+    0  0  LinearClassifier  LinearClassifier  0.000052       1  0.000190   
+    1  0  LinearClassifier  LinearClassifier  0.000044      10  0.000070   
+    2  0  LinearClassifier  LinearClassifier  0.000071     100  0.000133   
+    3  0  LinearClassifier  LinearClassifier  0.000066    1000  0.000079   
+    4  0  LinearClassifier  LinearClassifier  0.000409   10000  0.000408   
+    5  0  LinearClassifier  LinearClassifier  0.003275  100000  0.003275   
+       min_time  repeat  number  
+    0  0.000028      20      30  
+    1  0.000031      20      20  
+    2  0.000046      10       8  
+    3  0.000057       5       5  
+    4  0.000365       3       3  
+    5  0.003275       1       2  
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th>N</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+        </tr>
+        <tr>
+          <th>step</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0-LinearClassifier</th>
+          <td>1.0</td>
+          <td>1.0</td>
+          <td>1.0</td>
+          <td>1.0</td>
+          <td>1.0</td>
+          <td>1.0</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+*onnxruntime* creates a new container each time a ZipMap is executed.
+That’s whay it takes that much time and the ratio increases when the
+number of observations increases.
+
+GaussianProcessRegressor
+------------------------
+
+This operator is slow for small batches compare to scikit-learn but
+closes the gap as the batch size increases. Let’s see where the time
+goes.
+
+.. code:: ipython3
+
+    from onnx.defs import onnx_opset_version
+    from mlprodict.tools.asv_options_helper import get_opset_number_from_onnx
+    onnx_opset_version(), get_opset_number_from_onnx()
+
+
+
+
+.. parsed-literal::
+    (12, 12)
+
+
+
+.. code:: ipython3
+
+    res = list(enumerate_validated_operator_opsets(
+                verbose=1, models={"GaussianProcessRegressor"},
+                opset_min=get_opset_number_from_onnx(),
+                opset_max=get_opset_number_from_onnx(),
+                runtime='python', debug=False, node_time=True,
+                filter_exp=lambda m, p: p == "b-reg"))
+
+
+.. parsed-literal::
+    [enumerate_validated_operator_opsets] opset in [12, 12].
+
+
+.. parsed-literal::
+
+    GaussianProcessRegressor    :   0%|          | 0/1 [00:00<?, ?it/s]
+
+.. parsed-literal::
+    [enumerate_compatible_opset] opset in [12, 12].
+
+
+.. parsed-literal::
+
+    GaussianProcessRegressor    : 100%|██████████| 1/1 [00:05<00:00,  5.66s/it]
+
+
+.. code:: ipython3
+
+    res0 = None
+    for i, r in enumerate(res):
+        if "available-ERROR" in r:
+            print(i, str(r['available-ERROR']).split("\n")[0])
+        elif res0 is None:
+            res0 = r
+
+.. code:: ipython3
+
+    df = pandas.DataFrame(res0['bench-batch'])
+    df['step'] = df.apply(lambda row: '{0:02d}-{1}'.format(row['i'], row["name"]), axis=1)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time</th>
+          <th>N</th>
+          <th>max_time</th>
+          <th>min_time</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>step</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0</td>
+          <td>kgpd_CDist</td>
+          <td>CDist</td>
+          <td>0.000033</td>
+          <td>1</td>
+          <td>0.000045</td>
+          <td>0.000027</td>
+          <td>20</td>
+          <td>30</td>
+          <td>00-kgpd_CDist</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>1</td>
+          <td>kgpd_Div</td>
+          <td>Div</td>
+          <td>0.000009</td>
+          <td>1</td>
+          <td>0.000016</td>
+          <td>0.000007</td>
+          <td>20</td>
+          <td>30</td>
+          <td>01-kgpd_Div</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>2</td>
+          <td>kgpd_Mul</td>
+          <td>Mul</td>
+          <td>0.000006</td>
+          <td>1</td>
+          <td>0.000007</td>
+          <td>0.000005</td>
+          <td>20</td>
+          <td>30</td>
+          <td>02-kgpd_Mul</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>3</td>
+          <td>kgpd_Sin</td>
+          <td>Sin</td>
+          <td>0.000007</td>
+          <td>1</td>
+          <td>0.000009</td>
+          <td>0.000006</td>
+          <td>20</td>
+          <td>30</td>
+          <td>03-kgpd_Sin</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>4</td>
+          <td>kgpd_Div1</td>
+          <td>Div</td>
+          <td>0.000007</td>
+          <td>1</td>
+          <td>0.000008</td>
+          <td>0.000005</td>
+          <td>20</td>
+          <td>30</td>
+          <td>04-kgpd_Div1</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    pivpy = df.pivot('step', 'N', 'time')
+    total = pivpy.sum(axis=0)
+    pivpy / total
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th>N</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+        </tr>
+        <tr>
+          <th>step</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>00-kgpd_CDist</th>
+          <td>0.311496</td>
+          <td>0.300665</td>
+          <td>0.244035</td>
+          <td>0.227984</td>
+          <td>0.264447</td>
+          <td>0.288546</td>
+        </tr>
+        <tr>
+          <th>01-kgpd_Div</th>
+          <td>0.082535</td>
+          <td>0.067193</td>
+          <td>0.028348</td>
+          <td>0.011667</td>
+          <td>0.012230</td>
+          <td>0.015447</td>
+        </tr>
+        <tr>
+          <th>02-kgpd_Mul</th>
+          <td>0.059840</td>
+          <td>0.050664</td>
+          <td>0.018670</td>
+          <td>0.006959</td>
+          <td>0.010950</td>
+          <td>0.012468</td>
+        </tr>
+        <tr>
+          <th>03-kgpd_Sin</th>
+          <td>0.067037</td>
+          <td>0.086529</td>
+          <td>0.106165</td>
+          <td>0.113068</td>
+          <td>0.102102</td>
+          <td>0.107563</td>
+        </tr>
+        <tr>
+          <th>04-kgpd_Div1</th>
+          <td>0.061852</td>
+          <td>0.053088</td>
+          <td>0.025749</td>
+          <td>0.010935</td>
+          <td>0.009810</td>
+          <td>0.009875</td>
+        </tr>
+        <tr>
+          <th>05-kgpd_Pow</th>
+          <td>0.072520</td>
+          <td>0.166539</td>
+          <td>0.361318</td>
+          <td>0.438253</td>
+          <td>0.418169</td>
+          <td>0.404182</td>
+        </tr>
+        <tr>
+          <th>06-kgpd_Mul1</th>
+          <td>0.057508</td>
+          <td>0.050477</td>
+          <td>0.020386</td>
+          <td>0.010334</td>
+          <td>0.009079</td>
+          <td>0.010466</td>
+        </tr>
+        <tr>
+          <th>07-kgpd_Exp</th>
+          <td>0.067885</td>
+          <td>0.098850</td>
+          <td>0.150876</td>
+          <td>0.168079</td>
+          <td>0.165177</td>
+          <td>0.145106</td>
+        </tr>
+        <tr>
+          <th>08-gpr_MatMul</th>
+          <td>0.137546</td>
+          <td>0.064570</td>
+          <td>0.025069</td>
+          <td>0.009029</td>
+          <td>0.007134</td>
+          <td>0.006159</td>
+        </tr>
+        <tr>
+          <th>09-gpr_Add</th>
+          <td>0.081782</td>
+          <td>0.061424</td>
+          <td>0.019383</td>
+          <td>0.003692</td>
+          <td>0.000903</td>
+          <td>0.000190</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    ax = (pivpy / total).T.plot(logx=True, figsize=(14, 4))
+    ax.set_ylim([0,1])
+    ax.set_title("Time spent in each node relatively to the total time\npython runtime");
+
+
+
+.. image:: onnx_node_time_40_0.png
+
+
+The operator *Scan* is clearly time consuming when the batch size is
+small. *onnxruntime* is more efficient for this one.
+
+.. code:: ipython3
+
+    res = list(enumerate_validated_operator_opsets(
+                verbose=1, models={"GaussianProcessRegressor"}, 
+                opset_min=get_opset_number_from_onnx(),
+                opset_max=get_opset_number_from_onnx(),
+                runtime='onnxruntime2', debug=False, node_time=True,
+                filter_exp=lambda m, p: p == "b-reg"))
+
+
+.. parsed-literal::
+    [enumerate_validated_operator_opsets] opset in [12, 12].
+
+
+.. parsed-literal::
+
+    GaussianProcessRegressor    :   0%|          | 0/1 [00:00<?, ?it/s]
+
+.. parsed-literal::
+    [enumerate_compatible_opset] opset in [12, 12].
+
+
+.. parsed-literal::
+
+    GaussianProcessRegressor    : 100%|██████████| 1/1 [00:06<00:00,  6.84s/it]
+
+
+.. code:: ipython3
+
+    try:
+        df = pandas.DataFrame(res[0]['bench-batch'])
+    except KeyError as e:
+        print("No model available.")
+        r, df = None, None
+    if df is not None:
+        df['step'] = df.apply(lambda row: '{0:02d}-{1}'.format(row['i'], row["name"]), axis=1)
+        pivort = df.pivot('step', 'N', 'time')
+        total = pivort.sum(axis=0)
+        r = pivort / total
+    r
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th>N</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+        </tr>
+        <tr>
+          <th>step</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>00-kgpd_CDist</th>
+          <td>0.114001</td>
+          <td>0.120884</td>
+          <td>0.128845</td>
+          <td>0.148042</td>
+          <td>0.156776</td>
+          <td>0.180377</td>
+        </tr>
+        <tr>
+          <th>01-kgpd_Div</th>
+          <td>0.101792</td>
+          <td>0.098622</td>
+          <td>0.085983</td>
+          <td>0.085108</td>
+          <td>0.086603</td>
+          <td>0.084520</td>
+        </tr>
+        <tr>
+          <th>02-kgpd_Mul</th>
+          <td>0.099980</td>
+          <td>0.097547</td>
+          <td>0.084001</td>
+          <td>0.064706</td>
+          <td>0.072849</td>
+          <td>0.081023</td>
+        </tr>
+        <tr>
+          <th>03-kgpd_Sin</th>
+          <td>0.089632</td>
+          <td>0.103505</td>
+          <td>0.194194</td>
+          <td>0.301002</td>
+          <td>0.245769</td>
+          <td>0.260717</td>
+        </tr>
+        <tr>
+          <th>04-kgpd_Div1</th>
+          <td>0.099119</td>
+          <td>0.096737</td>
+          <td>0.088709</td>
+          <td>0.063237</td>
+          <td>0.095840</td>
+          <td>0.091635</td>
+        </tr>
+        <tr>
+          <th>05-kgpd_Pow</th>
+          <td>0.108045</td>
+          <td>0.098307</td>
+          <td>0.081161</td>
+          <td>0.064898</td>
+          <td>0.079015</td>
+          <td>0.076962</td>
+        </tr>
+        <tr>
+          <th>06-kgpd_Mul1</th>
+          <td>0.098561</td>
+          <td>0.098475</td>
+          <td>0.082770</td>
+          <td>0.063557</td>
+          <td>0.087732</td>
+          <td>0.076762</td>
+        </tr>
+        <tr>
+          <th>07-kgpd_Exp</th>
+          <td>0.090019</td>
+          <td>0.087015</td>
+          <td>0.086282</td>
+          <td>0.088542</td>
+          <td>0.103798</td>
+          <td>0.087690</td>
+        </tr>
+        <tr>
+          <th>08-gpr_MatMul</th>
+          <td>0.100426</td>
+          <td>0.102766</td>
+          <td>0.106220</td>
+          <td>0.102751</td>
+          <td>0.069157</td>
+          <td>0.059617</td>
+        </tr>
+        <tr>
+          <th>09-gpr_Add</th>
+          <td>0.098425</td>
+          <td>0.096143</td>
+          <td>0.061836</td>
+          <td>0.018155</td>
+          <td>0.002462</td>
+          <td>0.000696</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    if r is not None:
+        ax = (pivort / total).T.plot(logx=True, figsize=(14, 4))
+        ax.set_ylim([0,1])
+        ax.set_title("Time spent in each node relatively to the total time\nonnxtunime");
+
+
+
+.. image:: onnx_node_time_44_0.png
+
+
+The results are relative. Let’s see which runtime is best node by node.
+
+.. code:: ipython3
+
+    if r is not None:
+        r = (pivort - pivpy) / pivpy
+    r
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th>N</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+        </tr>
+        <tr>
+          <th>step</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>00-kgpd_CDist</th>
+          <td>-0.239113</td>
+          <td>-0.367743</td>
+          <td>-0.630420</td>
+          <td>-0.703226</td>
+          <td>-0.677041</td>
+          <td>-0.631775</td>
+        </tr>
+        <tr>
+          <th>01-kgpd_Div</th>
+          <td>1.564119</td>
+          <td>1.308106</td>
+          <td>1.123155</td>
+          <td>2.333824</td>
+          <td>2.857590</td>
+          <td>2.223117</td>
+        </tr>
+        <tr>
+          <th>02-kgpd_Mul</th>
+          <td>2.473648</td>
+          <td>2.027773</td>
+          <td>2.149388</td>
+          <td>3.249448</td>
+          <td>2.624165</td>
+          <td>2.828025</td>
+        </tr>
+        <tr>
+          <th>03-kgpd_Sin</th>
+          <td>1.779780</td>
+          <td>0.881090</td>
+          <td>0.280401</td>
+          <td>0.216680</td>
+          <td>0.311288</td>
+          <td>0.427768</td>
+        </tr>
+        <tr>
+          <th>04-kgpd_Div1</th>
+          <td>2.331710</td>
+          <td>1.865534</td>
+          <td>1.411570</td>
+          <td>1.642922</td>
+          <td>4.321977</td>
+          <td>4.466249</td>
+        </tr>
+        <tr>
+          <th>05-kgpd_Pow</th>
+          <td>2.097502</td>
+          <td>-0.071724</td>
+          <td>-0.842765</td>
+          <td>-0.932321</td>
+          <td>-0.897065</td>
+          <td>-0.887837</td>
+        </tr>
+        <tr>
+          <th>06-kgpd_Mul1</th>
+          <td>2.563218</td>
+          <td>2.067909</td>
+          <td>1.842112</td>
+          <td>1.811019</td>
+          <td>4.263897</td>
+          <td>3.320524</td>
+        </tr>
+        <tr>
+          <th>07-kgpd_Exp</th>
+          <td>1.756911</td>
+          <td>0.384288</td>
+          <td>-0.599693</td>
+          <td>-0.759241</td>
+          <td>-0.657668</td>
+          <td>-0.644029</td>
+        </tr>
+        <tr>
+          <th>08-gpr_MatMul</th>
+          <td>0.517953</td>
+          <td>1.502798</td>
+          <td>1.965953</td>
+          <td>4.201281</td>
+          <td>4.281286</td>
+          <td>4.701255</td>
+        </tr>
+        <tr>
+          <th>09-gpr_Add</th>
+          <td>1.502111</td>
+          <td>1.461452</td>
+          <td>1.233097</td>
+          <td>1.247736</td>
+          <td>0.486358</td>
+          <td>1.160395</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Based on this, *onnxruntime* is faster for operators *Scan*, *Pow*,
+*Exp* and slower for all the others.
+
+Measuring the time with a custom dataset
+----------------------------------------
+
+We use the example `Comparison of kernel ridge and Gaussian process
+regression <https://scikit-learn.org/stable/auto_examples/gaussian_process/plot_compare_gpr_krr.html#sphx-glr-auto-examples-gaussian-process-plot-compare-gpr-krr-py>`__.
+
+.. code:: ipython3
+
+    import numpy
+    import pandas
+    import matplotlib.pyplot as plt
+    from sklearn.kernel_ridge import KernelRidge
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import WhiteKernel, ExpSineSquared
+    
+    rng = numpy.random.RandomState(0)
+    
+    # Generate sample data
+    X = 15 * rng.rand(100, 1)
+    y = numpy.sin(X).ravel()
+    y += 3 * (0.5 - rng.rand(X.shape[0]))  # add noise
+    
+    gp_kernel = ExpSineSquared(1.0, 5.0, periodicity_bounds=(1e-2, 1e1))
+    gpr = GaussianProcessRegressor(kernel=gp_kernel)
+    gpr.fit(X, y)
+
+
+.. parsed-literal::
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\gaussian_process\kernels.py:409: ConvergenceWarning: The optimal value found for dimension 0 of parameter length_scale is close to the specified lower bound 1e-05. Decreasing the bound and calling fit again may find a better value.
+      ConvergenceWarning)
+    C:\xavierdupre\__home_\github_fork\scikit-learn\sklearn\gaussian_process\kernels.py:418: ConvergenceWarning: The optimal value found for dimension 0 of parameter periodicity is close to the specified upper bound 10.0. Increasing the bound and calling fit again may find a better value.
+      ConvergenceWarning)
+
+
+
+
+.. parsed-literal::
+
+    GaussianProcessRegressor(kernel=ExpSineSquared(length_scale=1, periodicity=5))
+
+
+
+.. code:: ipython3
+
+    onx = to_onnx(gpr, X_test.astype(numpy.float64))
+    with open("gpr_time.onnx", "wb") as f:
+        f.write(onx.SerializeToString())
+    %onnxview onx -r 1
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M2b506ed3425a4240a66f7e1bb82a958c-cont"><div id="M2b506ed3425a4240a66f7e1bb82a958c" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  orientation=portrait;\n  ranksep=0.25;\n  nodesep=0.05;\n\n  X [shape=box color=red label=\"X\ndouble((0, 4))\" fontsize=10];\n\n  GPmean [shape=box color=green label=\"GPmean\ndouble((0, 1))\" fontsize=10];\n\n  Sc_Scancst [shape=box label=\"Sc_Scancst\nfloat64((100, 1))\n[[ 8.23220256]\n [10.7278405 ]\n [ 9.04145064]\n [ 8....\" fontsize=10];\n  kgpd_Divcst [shape=box label=\"kgpd_Divcst\nfloat64((1,))\n[10.]\" fontsize=10];\n  kgpd_Mulcst [shape=box label=\"kgpd_Mulcst\nfloat64((1,))\n[3.14159265]\" fontsize=10];\n  kgpd_Divcst1 [shape=box label=\"kgpd_Divcst1\nfloat64((1,))\n[1.e-05]\" fontsize=10];\n  kgpd_Powcst [shape=box label=\"kgpd_Powcst\nfloat64((1,))\n[2.]\" fontsize=10];\n  kgpd_Mulcst1 [shape=box label=\"kgpd_Mulcst1\nfloat64((1,))\n[-2.]\" fontsize=10];\n  gpr_MatMulcst [shape=box label=\"gpr_MatMulcst\nfloat64((100,))\n[ 3.95873450e-01 -2.74396810e-01 -3.31573692e-01 -...\" fontsize=10];\n  gpr_Addcst [shape=box label=\"gpr_Addcst\nfloat64((1, 1))\n[[0.]]\" fontsize=10];\n\n  scan0 [shape=box label=\"scan0\" fontsize=10];\n  scan1 [shape=box label=\"scan1\" fontsize=10];\n  subgraph cluster_Scan2468478552544 {\n    label=\"Scan\n(Sc_Scan)\nbody=node {\n  input: 'next_in'...\nnum_scan_inputs=1\";\n    fontsize=10;\n    color=black;\n    B_next_in [shape=box color=red label=\"next_in\ndouble(('?',))\" fontsize=10];\n    B_next [shape=box color=red label=\"next\ndouble(('?',))\" fontsize=10];\n  \n    B_next_out [shape=box color=green label=\"next_out\ndouble(('?',))\" fontsize=10];\n    B_scan_out [shape=box color=green label=\"scan_out\ndouble(('?',))\" fontsize=10];\n  \n  \n    B_cdistd_Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(cdistd_Identity)\" fontsize=10];\n    B_next_in -> B_cdistd_Identity;\n    B_cdistd_Identity -> B_next_out;\n  \n    B_diff [shape=box label=\"diff\" fontsize=10];\n    B_Su_Sub [shape=box style=\"filled,rounded\" color=orange label=\"Sub\n(Su_Sub)\" fontsize=10];\n    B_next_in -> B_Su_Sub;\n    B_next -> B_Su_Sub;\n    B_Su_Sub -> B_diff;\n  \n    B_Re_ReduceSumSquare [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSumSquare\n(Re_ReduceSumSquare)\naxes=[1]\nkeepdims=0\" fontsize=10];\n    B_diff -> B_Re_ReduceSumSquare;\n    B_Re_ReduceSumSquare -> B_scan_out;\n  }\n  X -> B_next_in;\n  Sc_Scancst -> B_next;\n  B_next_out -> scan0;\n  B_scan_out -> scan1;\n\n  kgpd_transposed0 [shape=box label=\"kgpd_transposed0\" fontsize=10];\n  kgpd_Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(kgpd_Transpose)\nperm=[1 0]\" fontsize=10];\n  scan1 -> kgpd_Transpose;\n  kgpd_Transpose -> kgpd_transposed0;\n\n  kgpd_Y0 [shape=box label=\"kgpd_Y0\" fontsize=10];\n  kgpd_Sqrt [shape=box style=\"filled,rounded\" color=orange label=\"Sqrt\n(kgpd_Sqrt)\" fontsize=10];\n  kgpd_transposed0 -> kgpd_Sqrt;\n  kgpd_Sqrt -> kgpd_Y0;\n\n  kgpd_C03 [shape=box label=\"kgpd_C03\" fontsize=10];\n  kgpd_Div [shape=box style=\"filled,rounded\" color=orange label=\"Div\n(kgpd_Div)\" fontsize=10];\n  kgpd_Y0 -> kgpd_Div;\n  kgpd_Divcst -> kgpd_Div;\n  kgpd_Div -> kgpd_C03;\n\n  kgpd_C02 [shape=box label=\"kgpd_C02\" fontsize=10];\n  kgpd_Mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(kgpd_Mul)\" fontsize=10];\n  kgpd_C03 -> kgpd_Mul;\n  kgpd_Mulcst -> kgpd_Mul;\n  kgpd_Mul -> kgpd_C02;\n\n  kgpd_output02 [shape=box label=\"kgpd_output02\" fontsize=10];\n  kgpd_Sin [shape=box style=\"filled,rounded\" color=orange label=\"Sin\n(kgpd_Sin)\" fontsize=10];\n  kgpd_C02 -> kgpd_Sin;\n  kgpd_Sin -> kgpd_output02;\n\n  kgpd_C01 [shape=box label=\"kgpd_C01\" fontsize=10];\n  kgpd_Div1 [shape=box style=\"filled,rounded\" color=orange label=\"Div\n(kgpd_Div1)\" fontsize=10];\n  kgpd_output02 -> kgpd_Div1;\n  kgpd_Divcst1 -> kgpd_Div1;\n  kgpd_Div1 -> kgpd_C01;\n\n  kgpd_Z0 [shape=box label=\"kgpd_Z0\" fontsize=10];\n  kgpd_Pow [shape=box style=\"filled,rounded\" color=orange label=\"Pow\n(kgpd_Pow)\" fontsize=10];\n  kgpd_C01 -> kgpd_Pow;\n  kgpd_Powcst -> kgpd_Pow;\n  kgpd_Pow -> kgpd_Z0;\n\n  kgpd_C0 [shape=box label=\"kgpd_C0\" fontsize=10];\n  kgpd_Mul1 [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(kgpd_Mul1)\" fontsize=10];\n  kgpd_Z0 -> kgpd_Mul1;\n  kgpd_Mulcst1 -> kgpd_Mul1;\n  kgpd_Mul1 -> kgpd_C0;\n\n  kgpd_output01 [shape=box label=\"kgpd_output01\" fontsize=10];\n  kgpd_Exp [shape=box style=\"filled,rounded\" color=orange label=\"Exp\n(kgpd_Exp)\" fontsize=10];\n  kgpd_C0 -> kgpd_Exp;\n  kgpd_Exp -> kgpd_output01;\n\n  gpr_Y0 [shape=box label=\"gpr_Y0\" fontsize=10];\n  gpr_MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(gpr_MatMul)\" fontsize=10];\n  kgpd_output01 -> gpr_MatMul;\n  gpr_MatMulcst -> gpr_MatMul;\n  gpr_MatMul -> gpr_Y0;\n\n  gpr_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(gpr_Add)\" fontsize=10];\n  gpr_Y0 -> gpr_Add;\n  gpr_Addcst -> gpr_Add;\n  gpr_Add -> GPmean;\n}");
+    document.getElementById('M2b506ed3425a4240a66f7e1bb82a958c').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from mlprodict.tools import get_ir_version_from_onnx
+    onx.ir_version = get_ir_version_from_onnx()
+
+.. code:: ipython3
+
+    oinfpy = OnnxInference(onx, runtime="python")
+    oinfort = OnnxInference(onx, runtime="onnxruntime2")
+
+``runtime==onnxruntime2`` tells the class ``OnnxInference`` to use
+*onnxruntime* for every node independently, there are as many calls as
+there are nodes in the graph.
+
+.. code:: ipython3
+
+    respy = oinfpy.run({'X': X_test}, node_time=True)
+    try:
+        resort = oinfort.run({'X': X_test}, node_time=True)
+    except Exception as e:
+        print(e)
+        resort = None
+
+.. code:: ipython3
+
+    if resort is not None:
+        df = pandas.DataFrame(respy[1]).merge(pandas.DataFrame(resort[1]), on=["i", "name", "op_type"],
+                                            suffixes=("_py", "_ort"))
+        df['delta'] = df.time_ort - df.time_py
+    else:
+        df = None
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time_py</th>
+          <th>time_ort</th>
+          <th>delta</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0</td>
+          <td>Sc_Scan</td>
+          <td>Scan</td>
+          <td>0.007998</td>
+          <td>0.005970</td>
+          <td>-0.002028</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>1</td>
+          <td>kgpd_Transpose</td>
+          <td>Transpose</td>
+          <td>0.000032</td>
+          <td>0.000599</td>
+          <td>0.000567</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>2</td>
+          <td>kgpd_Sqrt</td>
+          <td>Sqrt</td>
+          <td>0.000063</td>
+          <td>0.000112</td>
+          <td>0.000049</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>3</td>
+          <td>kgpd_Div</td>
+          <td>Div</td>
+          <td>0.000143</td>
+          <td>0.000097</td>
+          <td>-0.000045</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>4</td>
+          <td>kgpd_Mul</td>
+          <td>Mul</td>
+          <td>0.000038</td>
+          <td>0.000321</td>
+          <td>0.000283</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>5</td>
+          <td>kgpd_Sin</td>
+          <td>Sin</td>
+          <td>0.000095</td>
+          <td>0.000146</td>
+          <td>0.000051</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>6</td>
+          <td>kgpd_Div1</td>
+          <td>Div</td>
+          <td>0.000027</td>
+          <td>0.000096</td>
+          <td>0.000069</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>7</td>
+          <td>kgpd_Pow</td>
+          <td>Pow</td>
+          <td>0.000299</td>
+          <td>0.000104</td>
+          <td>-0.000196</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>8</td>
+          <td>kgpd_Mul1</td>
+          <td>Mul</td>
+          <td>0.000032</td>
+          <td>0.000097</td>
+          <td>0.000065</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>9</td>
+          <td>kgpd_Exp</td>
+          <td>Exp</td>
+          <td>0.000383</td>
+          <td>0.000111</td>
+          <td>-0.000271</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>10</td>
+          <td>gpr_MatMul</td>
+          <td>MatMul</td>
+          <td>0.000080</td>
+          <td>0.004359</td>
+          <td>0.004279</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>11</td>
+          <td>gpr_Add</td>
+          <td>Add</td>
+          <td>0.000034</td>
+          <td>0.000165</td>
+          <td>0.000131</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+The following function runs multiple the same inference and aggregates
+the results node by node.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt.validate.validate import benchmark_fct
+    res = benchmark_fct(lambda X: oinfpy.run({'X': X_test}, node_time=True), 
+                        X_test, node_time=True)
+
+.. code:: ipython3
+
+    df = pandas.DataFrame(res)
+    df[df.N == 100]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>i</th>
+          <th>name</th>
+          <th>op_type</th>
+          <th>time</th>
+          <th>N</th>
+          <th>max_time</th>
+          <th>min_time</th>
+          <th>repeat</th>
+          <th>number</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>24</th>
+          <td>0</td>
+          <td>Sc_Scan</td>
+          <td>Scan</td>
+          <td>0.004154</td>
+          <td>100</td>
+          <td>0.004330</td>
+          <td>0.003843</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>25</th>
+          <td>1</td>
+          <td>kgpd_Transpose</td>
+          <td>Transpose</td>
+          <td>0.000013</td>
+          <td>100</td>
+          <td>0.000019</td>
+          <td>0.000010</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>26</th>
+          <td>2</td>
+          <td>kgpd_Sqrt</td>
+          <td>Sqrt</td>
+          <td>0.000018</td>
+          <td>100</td>
+          <td>0.000022</td>
+          <td>0.000015</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>27</th>
+          <td>3</td>
+          <td>kgpd_Div</td>
+          <td>Div</td>
+          <td>0.000025</td>
+          <td>100</td>
+          <td>0.000092</td>
+          <td>0.000015</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>28</th>
+          <td>4</td>
+          <td>kgpd_Mul</td>
+          <td>Mul</td>
+          <td>0.000012</td>
+          <td>100</td>
+          <td>0.000019</td>
+          <td>0.000009</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>29</th>
+          <td>5</td>
+          <td>kgpd_Sin</td>
+          <td>Sin</td>
+          <td>0.000057</td>
+          <td>100</td>
+          <td>0.000070</td>
+          <td>0.000050</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>30</th>
+          <td>6</td>
+          <td>kgpd_Div1</td>
+          <td>Div</td>
+          <td>0.000014</td>
+          <td>100</td>
+          <td>0.000017</td>
+          <td>0.000011</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>31</th>
+          <td>7</td>
+          <td>kgpd_Pow</td>
+          <td>Pow</td>
+          <td>0.000172</td>
+          <td>100</td>
+          <td>0.000198</td>
+          <td>0.000155</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>32</th>
+          <td>8</td>
+          <td>kgpd_Mul1</td>
+          <td>Mul</td>
+          <td>0.000020</td>
+          <td>100</td>
+          <td>0.000101</td>
+          <td>0.000009</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>33</th>
+          <td>9</td>
+          <td>kgpd_Exp</td>
+          <td>Exp</td>
+          <td>0.000213</td>
+          <td>100</td>
+          <td>0.000249</td>
+          <td>0.000193</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>34</th>
+          <td>10</td>
+          <td>gpr_MatMul</td>
+          <td>MatMul</td>
+          <td>0.000034</td>
+          <td>100</td>
+          <td>0.000047</td>
+          <td>0.000026</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+        <tr>
+          <th>35</th>
+          <td>11</td>
+          <td>gpr_Add</td>
+          <td>Add</td>
+          <td>0.000013</td>
+          <td>100</td>
+          <td>0.000019</td>
+          <td>0.000011</td>
+          <td>10</td>
+          <td>8</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df100 = df[df.N == 100]
+
+.. code:: ipython3
+
+    %matplotlib inline
+
+.. code:: ipython3
+
+    fig, ax = plt.subplots(1, 1, figsize=(14, 4))
+    ax.bar(df100.i, df100.time, align='center', color='orange')
+    ax.set_xticks(df100.i)
+    ax.set_yscale('log')
+    ax.set_xticklabels(df100.op_type)
+    ax.errorbar(df100.i, df100.time, 
+                numpy.abs(df100[["min_time", "max_time"]].T.values - df100.time.values.ravel()),
+                uplims=True, lolims=True, color='blue')
+    ax.set_title("Time spent in each node for 100 observations\nGaussianProcess");
+
+
+
+.. image:: onnx_node_time_61_0.png
+
+
+.. code:: ipython3
+
+    df100c = df100.cumsum()
+
+.. code:: ipython3
+
+    fig, ax = plt.subplots(1, 1, figsize=(14, 4))
+    ax.bar(df100.i, df100c.time, align='center', color='orange')
+    ax.set_xticks(df100.i)
+    #ax.set_yscale('log')
+    ax.set_ylim([df100c.min_time.min(), df100c.max_time.max()])
+    ax.set_xticklabels(df100.op_type)
+    ax.errorbar(df100.i, df100c.time, 
+                numpy.abs((df100c[["min_time", "max_time"]].T.values - df100c.time.values.ravel())),
+                uplims=True, lolims=True)
+    ax.set_title("Cumulated time spent in each node for 100 observations\nGaussianProcess");
+
+
+
+.. image:: onnx_node_time_63_0.png
+
+
+onnxruntime2 / onnxruntime1
+---------------------------
+
+The runtime ``onnxruntime1`` uses *onnxruntime* for the whole ONNX
+graph. There is no way to get the computation time for each node except
+if we create a ONNX graph for each intermediate node.
+
+.. code:: ipython3
+
+    oinfort1 = OnnxInference(onx, runtime='onnxruntime1')
+
+.. code:: ipython3
+
+    split = oinfort1.build_intermediate()
+    split
+
+
+
+
+.. parsed-literal::
+    OrderedDict([('scan0', OnnxInference(...)),
+                 ('scan1', OnnxInference(...)),
+                 ('kgpd_transposed0', OnnxInference(...)),
+                 ('kgpd_Y0', OnnxInference(...)),
+                 ('kgpd_C03', OnnxInference(...)),
+                 ('kgpd_C02', OnnxInference(...)),
+                 ('kgpd_output02', OnnxInference(...)),
+                 ('kgpd_C01', OnnxInference(...)),
+                 ('kgpd_Z0', OnnxInference(...)),
+                 ('kgpd_C0', OnnxInference(...)),
+                 ('kgpd_output01', OnnxInference(...)),
+                 ('gpr_Y0', OnnxInference(...)),
+                 ('GPmean', OnnxInference(...))])
+
+
+
+.. code:: ipython3
+
+    dfs = []
+    for k, v in split.items():
+        print("node", k)
+        res = benchmark_fct(lambda x: v.run({'X': x}), X_test)
+        df = pandas.DataFrame(res)
+        df['name'] = k
+        dfs.append(df.reset_index(drop=False))
+
+
+.. parsed-literal::
+    node scan0
+    node scan1
+    node kgpd_transposed0
+    node kgpd_Y0
+    node kgpd_C03
+    node kgpd_C02
+    node kgpd_output02
+    node kgpd_C01
+    node kgpd_Z0
+    node kgpd_C0
+    node kgpd_output01
+    node gpr_Y0
+    node GPmean
+
+
+.. code:: ipython3
+
+    df = pandas.concat(dfs)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>index</th>
+          <th>1</th>
+          <th>10</th>
+          <th>100</th>
+          <th>1000</th>
+          <th>10000</th>
+          <th>100000</th>
+          <th>name</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>average</td>
+          <td>0.000623</td>
+          <td>0.000592</td>
+          <td>0.000754</td>
+          <td>0.002202</td>
+          <td>0.017529</td>
+          <td>0.201192</td>
+          <td>scan0</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>deviation</td>
+          <td>0.000115</td>
+          <td>0.000030</td>
+          <td>0.000034</td>
+          <td>0.000026</td>
+          <td>0.000976</td>
+          <td>0.000000</td>
+          <td>scan0</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>min_exec</td>
+          <td>0.000541</td>
+          <td>0.000537</td>
+          <td>0.000657</td>
+          <td>0.002169</td>
+          <td>0.016677</td>
+          <td>0.201192</td>
+          <td>scan0</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>max_exec</td>
+          <td>0.000980</td>
+          <td>0.000639</td>
+          <td>0.000780</td>
+          <td>0.002239</td>
+          <td>0.018896</td>
+          <td>0.201192</td>
+          <td>scan0</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>repeat</td>
+          <td>20.000000</td>
+          <td>20.000000</td>
+          <td>10.000000</td>
+          <td>5.000000</td>
+          <td>3.000000</td>
+          <td>1.000000</td>
+          <td>scan0</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df100c = df[df['index'] == "average"]
+    df100c_min = df[df['index'] == "min_exec"]
+    df100c_max = df[df['index'] == "max_exec"]
+    ave = df100c.iloc[:, 4]
+    ave_min = df100c_min.iloc[:, 4]
+    ave_max = df100c_max.iloc[:, 4]
+    ave.shape, ave_min.shape, ave_max.shape
+    index = numpy.arange(ave.shape[0])
+
+.. code:: ipython3
+
+    fig, ax = plt.subplots(1, 1, figsize=(14, 4))
+    ax.bar(index, ave, align='center', color='orange')
+    ax.set_xticks(index)
+    ax.set_xticklabels(df100c.name)
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(20)
+    ax.errorbar(index, ave, 
+                numpy.abs((numpy.vstack([ave_min.values, ave_max.values]) - ave.values.ravel())),
+                uplims=True, lolims=True)
+    ax.set_title("Cumulated time spent in each node for 100 "
+                 "observations\nGaussianProcess and onnxruntime1");
+
+
+
+.. image:: onnx_node_time_70_0.png
+
+
+The visual graph helps matching the output names with the operator type.
+The curve is not monotononic because each experiment computes every
+output from the start. The number of repetitions should be increased.
+Documentation of function
+`benchmark_fct <http://www.xavierdupre.fr/app/mlprodict/helpsphinx/mlprodict/onnxrt/validate/validate.html?highlight=benchmark_fct#mlprodict.onnxrt.validate.validate.benchmark_fct>`__
+tells how to do it.

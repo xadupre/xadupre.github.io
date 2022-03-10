@@ -1,0 +1,1599 @@
+
+.. _onnxprofileortrst:
+
+==========================
+Profiling with onnxruntime
+==========================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <onnx_profile_ort.ipynb>`, :downloadlink:`html <onnx_profile_ort2html.html>`, :download:`PDF <onnx_profile_ort.pdf>`, :download:`python <onnx_profile_ort.py>`, :downloadlink:`slides <onnx_profile_ort.slides.html>`, :githublink:`GitHub|_doc/notebooks/onnx_profile_ort.ipynb|*`
+
+
+The notebook profiles the execution of an ONNX graph built from a
+*KMeans* model and executed with *onnxruntime*. It then study the
+decomposition of one einsum equation into more simple operators.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %matplotlib inline
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+KMeans
+------
+
+Builds a KMeans
+~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from sklearn.datasets import make_classification
+    X, y = make_classification(100000)
+
+.. code:: ipython3
+
+    from sklearn.cluster import KMeans
+    km = KMeans(max_iter=10)
+    km.fit(X)
+
+
+
+
+.. parsed-literal::
+    KMeans(max_iter=10)
+
+
+
+.. code:: ipython3
+
+    import numpy
+    from mlprodict.onnx_conv import to_onnx
+    onx = to_onnx(km, X[:1].astype(numpy.float32))
+
+.. code:: ipython3
+
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M59d60e5a39fc4c6084f63cefe39b09b7-cont"><div id="M59d60e5a39fc4c6084f63cefe39b09b7" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  ranksep=0.25;\n  orientation=portrait;\n  size=None;\n\n  X [shape=box color=red label=\"X\nfloat((0, 20))\" fontsize=10];\n\n  label [shape=box color=green label=\"label\nint64((0,))\" fontsize=10];\n  scores [shape=box color=green label=\"scores\nfloat((0, 8))\" fontsize=10];\n\n  Ad_Addcst [shape=box label=\"Ad_Addcst\nfloat32((8,))\n[6.8420963 6.6405883 7.0102296 1.7996922 4.9986043 2.410957  1.7175628\n 1.8431604]\" fontsize=10];\n  Ge_Gemmcst [shape=box label=\"Ge_Gemmcst\nfloat32((8, 20))\n[[-1.56142503e-01  8.97120982e-02  5.41380569e-02 ...\" fontsize=10];\n  Mu_Mulcst [shape=box label=\"Mu_Mulcst\nfloat32((1,))\n[0.]\" fontsize=10];\n\n  Re_reduced0 [shape=box label=\"Re_reduced0\" fontsize=10];\n  Re_ReduceSumSquare [shape=box style=\"filled,rounded\" color=orange label=\"ReduceSumSquare\n(Re_ReduceSumSquare)\naxes=[1]\nkeepdims=1\" fontsize=10];\n  X -> Re_ReduceSumSquare;\n  Re_ReduceSumSquare -> Re_reduced0;\n\n  Mu_C0 [shape=box label=\"Mu_C0\" fontsize=10];\n  Mu_Mul [shape=box style=\"filled,rounded\" color=orange label=\"Mul\n(Mu_Mul)\" fontsize=10];\n  Re_reduced0 -> Mu_Mul;\n  Mu_Mulcst -> Mu_Mul;\n  Mu_Mul -> Mu_C0;\n\n  Ge_Y0 [shape=box label=\"Ge_Y0\" fontsize=10];\n  Ge_Gemm [shape=box style=\"filled,rounded\" color=orange label=\"Gemm\n(Ge_Gemm)\nalpha=-2.0\ntransB=1\" fontsize=10];\n  X -> Ge_Gemm;\n  Ge_Gemmcst -> Ge_Gemm;\n  Mu_C0 -> Ge_Gemm;\n  Ge_Gemm -> Ge_Y0;\n\n  Ad_C01 [shape=box label=\"Ad_C01\" fontsize=10];\n  Ad_Add [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add)\" fontsize=10];\n  Re_reduced0 -> Ad_Add;\n  Ge_Y0 -> Ad_Add;\n  Ad_Add -> Ad_C01;\n\n  Ad_C0 [shape=box label=\"Ad_C0\" fontsize=10];\n  Ad_Add1 [shape=box style=\"filled,rounded\" color=orange label=\"Add\n(Ad_Add1)\" fontsize=10];\n  Ad_Addcst -> Ad_Add1;\n  Ad_C01 -> Ad_Add1;\n  Ad_Add1 -> Ad_C0;\n\n  Ar_ArgMin [shape=box style=\"filled,rounded\" color=orange label=\"ArgMin\n(Ar_ArgMin)\naxis=1\nkeepdims=0\" fontsize=10];\n  Ad_C0 -> Ar_ArgMin;\n  Ar_ArgMin -> label;\n\n  Sq_Sqrt [shape=box style=\"filled,rounded\" color=orange label=\"Sqrt\n(Sq_Sqrt)\" fontsize=10];\n  Ad_C0 -> Sq_Sqrt;\n  Sq_Sqrt -> scores;\n}");
+    document.getElementById('M59d60e5a39fc4c6084f63cefe39b09b7').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Json
+~~~~
+
+Another way to look into a model.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(onx)
+    js = oinf.to_json()
+
+.. code:: ipython3
+
+    import json
+    from io import StringIO
+    from jyquickhelper import JSONJS
+    JSONJS(json.load(StringIO(oinf.to_json())))
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="c8bfdc91-695a-4c5f-87f5-ced7a944d37f" style="height: 100%; width:100%;"></div>
+    <script>
+
+            require(["https://rawgit.com/caldwell/renderjson/master/renderjson.js"], function() {
+            document.getElementById('c8bfdc91-695a-4c5f-87f5-ced7a944d37f').appendChild(renderjson({"producer_version": "1.9.dev", "producer_name": "skl2onnx", "doc_string": "", "model_version": 0, "domain": "ai.onnx", "ir_version": 7, "inputs": [{"name": "X", "type": {"tensor_type": {"elem_type": 1, "shape": {"dim": {"dim_value": 20}}}}}], "outputs": [{"name": "label", "type": {"tensor_type": {"elem_type": 7, "shape": {"dim": {}}}}}, {"name": "scores", "type": {"tensor_type": {"elem_type": 1, "shape": {"dim": {"dim_value": 8}}}}}], "initializers": {"Ad_Addcst": [6.842096328735352, 6.640588283538818, 7.010229587554932, 1.799692153930664, 4.9986042976379395, 2.410957098007202, 1.7175627946853638, 1.8431603908538818], "Ge_Gemmcst": [[-0.15614250302314758, 0.08971209824085236, 0.05413805693387985, 1.2894601821899414, -0.02947893925011158, 0.010273328050971031, 1.559543490409851, 0.07955942302942276, -0.03670130670070648, -0.06831776350736618, -0.03160196542739868, 0.044870879501104355, -0.007382499054074287, -0.03361813351511955, 0.11180518567562103, -0.004942443687468767, 0.1079426035284996, -1.630927324295044, -0.07179583609104156, -0.07129472494125366], [-1.4643968343734741, 0.03728868067264557, 0.0302373468875885, 0.0503617562353611, -0.015191069804131985, -0.0010860561160370708, 1.3572258949279785, 0.011194822378456593, -0.04968400299549103, -0.06093396246433258, -0.012070290744304657, 0.019685618579387665, -0.005544651765376329, 0.01922253519296646, 0.054683711379766464, 0.009211215190589428, 0.037103284150362015, 1.623145341873169, -0.04227569326758385, -0.030254226177930832], [0.34066808223724365, -0.07316707819700241, -0.029053213074803352, -1.3110004663467407, 0.005742031615227461, 0.04046446084976196, -1.7473061084747314, -0.028565282002091408, 0.030329126864671707, 0.051277387887239456, 0.010856864973902702, -0.024547042325139046, 0.023071739822626114, 0.01671985723078251, -0.031262703239917755, 0.022427095100283623, -0.1019616648554802, 1.4477444887161255, -0.006037967745214701, 0.027049915865063667], [-0.10761420428752899, -0.5687389373779297, 0.047426093369722366, 0.16299580037593842, 0.2604694664478302, -0.08039607107639313, 0.2752517759799957, -0.1329556107521057, -0.497700035572052, -0.016257526353001595, -0.41151514649391174, -0.15533463656902313, -0.030696261674165726, 0.3268052339553833, 0.10608943551778793, 0.603096067905426, -0.47464174032211304, -0.10451047122478485, -0.2719891667366028, -0.18365609645843506], [1.2660874128341675, -0.0431232787668705, -0.02856382168829441, -0.017440343275666237, 0.020280830562114716, 0.025364862754940987, -1.1446707248687744, -0.02751198038458824, 0.00981571152806282, 0.01389652956277132, 0.034720201045274734, 0.003527421737089753, 0.02749168686568737, -0.0006228830898180604, -0.004298731684684753, -0.015106352046132088, -0.060519035905599594, -1.4400075674057007, 0.0179237462580204, 0.021177146583795547], [-0.35065388679504395, -0.045007478445768356, -0.16990335285663605, 0.43367475271224976, -0.1972375363111496, -0.004362468142062426, 0.7895331978797913, -0.34395238757133484, 0.4341747462749481, 0.3751564621925354, 0.3411017656326294, -0.09662877768278122, 0.07338327169418335, -0.014970486052334309, -0.4992491602897644, -0.358038067817688, -0.2776113748550415, -0.20365376770496368, 0.42993080615997314, 0.3835015594959259], [-0.0037097230087965727, 0.1440972089767456, -0.37947967648506165, -0.17758150398731232, 0.3375777304172516, 0.4396274983882904, -0.19236408174037933, 0.7503358721733093, 0.0774589404463768, 0.05038851872086525, 0.2869609296321869, 0.35429808497428894, -0.06881746649742126, -0.4335789382457733, 0.1259443610906601, -0.16024045646190643, 0.12596802413463593, 0.2537723481655121, -0.04047779738903046, -0.28534388542175293], [0.13426555693149567, 0.4864915609359741, 0.4142190217971802, -0.25620517134666443, -0.37957730889320374, -0.44461795687675476, -0.4016421437263489, -0.34825798869132996, 0.033667318522930145, -0.36173108220100403, -0.2211400419473648, -0.15940217673778534, -0.07528318464756012, 0.08053095638751984, 0.08930937945842743, -0.10640890896320343, 0.6488555669784546, 0.2046305537223816, -0.008651397190988064, 0.16176460683345795]], "Mu_Mulcst": [0.0]}, "nodes": [{"name": "Re_ReduceSumSquare", "op_type": "ReduceSumSquare", "domain": "", "inputs": ["X"], "outputs": ["Re_reduced0"], "attributes": {"axes": {"ints": [1], "type": "INTS"}, "keepdims": {"i": 1, "type": "INT"}}}, {"name": "Mu_Mul", "op_type": "Mul", "domain": "", "inputs": ["Re_reduced0", "Mu_Mulcst"], "outputs": ["Mu_C0"], "attributes": {}}, {"name": "Ge_Gemm", "op_type": "Gemm", "domain": "", "inputs": ["X", "Ge_Gemmcst", "Mu_C0"], "outputs": ["Ge_Y0"], "attributes": {"alpha": {"f": -2.0, "type": "FLOAT"}, "transB": {"i": 1, "type": "INT"}}}, {"name": "Ad_Add", "op_type": "Add", "domain": "", "inputs": ["Re_reduced0", "Ge_Y0"], "outputs": ["Ad_C01"], "attributes": {}}, {"name": "Ad_Add1", "op_type": "Add", "domain": "", "inputs": ["Ad_Addcst", "Ad_C01"], "outputs": ["Ad_C0"], "attributes": {}}, {"name": "Ar_ArgMin", "op_type": "ArgMin", "domain": "", "inputs": ["Ad_C0"], "outputs": ["label"], "attributes": {"axis": {"i": 1, "type": "INT"}, "keepdims": {"i": 0, "type": "INT"}}}, {"name": "Sq_Sqrt", "op_type": "Sqrt", "domain": "", "inputs": ["Ad_C0"], "outputs": ["scores"], "attributes": {}}]}))
+            }); 
+    </script>
+
+
+
+
+Profiling
+~~~~~~~~~
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(onx, runtime="onnxruntime1",
+                         runtime_options={"enable_profiling": True})
+
+.. code:: ipython3
+
+    for i in range(0, 111):
+        oinf.run({"X": X.astype(numpy.float32)})
+
+.. code:: ipython3
+
+    df = oinf.get_profiling(as_df=True)
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>cat</th>
+          <th>pid</th>
+          <th>tid</th>
+          <th>dur</th>
+          <th>ts</th>
+          <th>ph</th>
+          <th>name</th>
+          <th>args_op_name</th>
+          <th>args_provider</th>
+          <th>args_graph_index</th>
+          <th>args_parameter_size</th>
+          <th>args_thread_scheduling_stats</th>
+          <th>args_exec_plan_index</th>
+          <th>args_activation_size</th>
+          <th>args_output_size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>596</td>
+          <td>12</td>
+          <td>X</td>
+          <td>model_loading_array</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>6925</td>
+          <td>670</td>
+          <td>X</td>
+          <td>session_initialization</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>1</td>
+          <td>34854</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_fence_before</td>
+          <td>ReduceSumSquare</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>2939</td>
+          <td>34869</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_kernel_time</td>
+          <td>ReduceSumSquare</td>
+          <td>CPUExecutionProvider</td>
+          <td>0</td>
+          <td>0</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>0</td>
+          <td>8000000</td>
+          <td>400000</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>37872</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_fence_after</td>
+          <td>ReduceSumSquare</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>...</th>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+        </tr>
+        <tr>
+          <th>2550</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>2394227</td>
+          <td>X</td>
+          <td>Ar_ArgMin_fence_before</td>
+          <td>ArgMin</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2551</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>3511</td>
+          <td>2394228</td>
+          <td>X</td>
+          <td>Ar_ArgMin_kernel_time</td>
+          <td>ArgMin</td>
+          <td>CPUExecutionProvider</td>
+          <td>5</td>
+          <td>0</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>5</td>
+          <td>3200000</td>
+          <td>800000</td>
+        </tr>
+        <tr>
+          <th>2552</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>2397761</td>
+          <td>X</td>
+          <td>Ar_ArgMin_fence_after</td>
+          <td>ArgMin</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2553</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>11774</td>
+          <td>2385990</td>
+          <td>X</td>
+          <td>SequentialExecutor::Execute</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2554</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>11789</td>
+          <td>2385982</td>
+          <td>X</td>
+          <td>model_run</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>2555 rows × 15 columns</p>
+    </div>
+
+
+
+.. code:: ipython3
+
+    import matplotlib.pyplot as plt
+    gr_dur = df[['dur', "args_op_name"]].groupby("args_op_name").sum().sort_values('dur')
+    gr_n = df[['dur', "args_op_name"]].groupby("args_op_name").count().sort_values('dur')
+    gr_n = gr_n.loc[gr_dur.index, :]
+    
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    gr_dur.plot.barh(ax=ax[0])
+    gr_n.plot.barh(ax=ax[1])
+    ax[0].set_title("duration")
+    ax[1].set_title("n occurences");
+
+
+
+.. image:: onnx_profile_ort_17_0.png
+
+
+.. code:: ipython3
+
+    gr2 = df.loc[(df.args_op_name == 'Add') & (df.dur > 10), ['dur', "name"]].groupby("name").sum().sort_values('dur')
+    gr2.plot.barh(figsize=(10, 4));
+
+
+
+.. image:: onnx_profile_ort_18_0.png
+
+
+onnxruntime
+~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from onnxruntime import InferenceSession, RunOptions, SessionOptions
+    so = SessionOptions()
+    so.enable_profiling = True
+    sess = InferenceSession(onx.SerializeToString(), so)
+
+.. code:: ipython3
+
+    for i in range(0, 111):
+        sess.run(None, {'X': X.astype(numpy.float32)}, )
+
+.. code:: ipython3
+
+    prof = sess.end_profiling()
+    prof
+
+
+
+
+.. parsed-literal::
+    'onnxruntime_profile__2021-05-13_13-58-59.json'
+
+
+
+.. code:: ipython3
+
+    with open(prof, "r") as f:
+        js = json.load(f)
+        
+    js[:3]
+
+
+
+
+.. parsed-literal::
+    [{'cat': 'Session',
+      'pid': 106368,
+      'tid': 299276,
+      'dur': 450,
+      'ts': 6,
+      'ph': 'X',
+      'name': 'model_loading_array',
+      'args': {}},
+     {'cat': 'Session',
+      'pid': 106368,
+      'tid': 299276,
+      'dur': 3068,
+      'ts': 498,
+      'ph': 'X',
+      'name': 'session_initialization',
+      'args': {}},
+     {'cat': 'Node',
+      'pid': 106368,
+      'tid': 299276,
+      'dur': 1,
+      'ts': 39069,
+      'ph': 'X',
+      'name': 'Re_ReduceSumSquare_fence_before',
+      'args': {'op_name': 'ReduceSumSquare'}}]
+
+
+
+.. code:: ipython3
+
+    from pandas import DataFrame
+    from mlprodict.onnxrt.ops_whole.session import OnnxWholeSession
+    
+    df = DataFrame(OnnxWholeSession.process_profiling(js))
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>cat</th>
+          <th>pid</th>
+          <th>tid</th>
+          <th>dur</th>
+          <th>ts</th>
+          <th>ph</th>
+          <th>name</th>
+          <th>args_op_name</th>
+          <th>args_provider</th>
+          <th>args_graph_index</th>
+          <th>args_parameter_size</th>
+          <th>args_thread_scheduling_stats</th>
+          <th>args_exec_plan_index</th>
+          <th>args_activation_size</th>
+          <th>args_output_size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>450</td>
+          <td>6</td>
+          <td>X</td>
+          <td>model_loading_array</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>3068</td>
+          <td>498</td>
+          <td>X</td>
+          <td>session_initialization</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>1</td>
+          <td>39069</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_fence_before</td>
+          <td>ReduceSumSquare</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>2804</td>
+          <td>39081</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_kernel_time</td>
+          <td>ReduceSumSquare</td>
+          <td>CPUExecutionProvider</td>
+          <td>0</td>
+          <td>0</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>0</td>
+          <td>8000000</td>
+          <td>400000</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>41947</td>
+          <td>X</td>
+          <td>Re_ReduceSumSquare_fence_after</td>
+          <td>ReduceSumSquare</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>...</th>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+        </tr>
+        <tr>
+          <th>2550</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>2530548</td>
+          <td>X</td>
+          <td>Ar_ArgMin_fence_before</td>
+          <td>ArgMin</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2551</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>3501</td>
+          <td>2530550</td>
+          <td>X</td>
+          <td>Ar_ArgMin_kernel_time</td>
+          <td>ArgMin</td>
+          <td>CPUExecutionProvider</td>
+          <td>5</td>
+          <td>0</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>5</td>
+          <td>3200000</td>
+          <td>800000</td>
+        </tr>
+        <tr>
+          <th>2552</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>2534074</td>
+          <td>X</td>
+          <td>Ar_ArgMin_fence_after</td>
+          <td>ArgMin</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2553</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>14679</td>
+          <td>2519397</td>
+          <td>X</td>
+          <td>SequentialExecutor::Execute</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2554</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>14701</td>
+          <td>2519386</td>
+          <td>X</td>
+          <td>model_run</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>2555 rows × 15 columns</p>
+    </div>
+
+
+
+Einsum: ``bsnh,btnh->bnts``
+---------------------------
+
+This section looks into the ONNX graph produces by the decomposition of
+an einsum equation into more simple ONNX operator (no einsum).
+
+Three implementations
+~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from mlprodict.testing.einsum import einsum as onx_einsum
+    from mlprodict.testing.einsum.einsum_fct import _einsum, enumerate_cached_einsum
+    from numpy import einsum as np_einsum
+
+First classic numpy.
+
+.. code:: ipython3
+
+    equation = "bsnh,btnh->bnts"
+    
+    N = 2
+    inputs = [numpy.random.randn(N, N, N, N).astype(numpy.float32),
+              numpy.random.randn(N, N, N, N).astype(numpy.float32)]
+    np_einsum(equation, *inputs)
+
+
+
+
+.. parsed-literal::
+    array([[[[-2.373884  , -0.63942796],
+             [ 1.0523143 ,  5.659873  ]],
+            [[ 2.589915  , -0.18050319],
+             [-0.6200199 ,  3.793615  ]]],
+    
+           [[[-0.37409338,  0.19822143],
+             [ 1.2049038 ,  3.1882448 ]],
+            [[-0.05218329,  0.87404007],
+             [ 0.12789296,  1.4745121 ]]]], dtype=float32)
+
+
+
+Then einsum executed by *onnxruntime*:
+
+.. code:: ipython3
+
+    onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=True, verbose=1, decompose=False)
+
+
+.. parsed-literal::
+    0.0026 best='sbhn,sthn->shtb': 100%|██████████| 121/121 [00:01<00:00, 85.29it/s]
+
+
+
+
+.. parsed-literal::
+
+    array([[[[-2.373884  , -0.63942796],
+             [ 1.0523144 ,  5.659873  ]],
+    
+            [[ 2.589915  , -0.18050319],
+             [-0.62002003,  3.793615  ]]],
+    
+    
+           [[[-0.37409338,  0.19822143],
+             [ 1.2049038 ,  3.1882448 ]],
+    
+            [[-0.05218329,  0.87404007],
+             [ 0.12789296,  1.474512  ]]]], dtype=float32)
+
+
+
+.. code:: ipython3
+
+    obj = _einsum(equation, runtime='onnxruntime1', optimize=True, verbose=1,
+                  decompose=False, dtype=inputs[0].dtype)
+
+.. code:: ipython3
+
+    %onnxview obj.onnx_
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Mebbaee26837341cfbbf77b5709dbf370-cont"><div id="Mebbaee26837341cfbbf77b5709dbf370" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  ranksep=0.25;\n  orientation=portrait;\n  size=None;\n\n  X0 [shape=box color=red label=\"X0\nfloat(('?',))\" fontsize=10];\n  X1 [shape=box color=red label=\"X1\nfloat(('?',))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat(('?',))\" fontsize=10];\n\n\n  Einsum [shape=box style=\"filled,rounded\" color=orange label=\"Einsum\n(Einsum)\nequation=b'sbhn,sthn->shtb'\" fontsize=10];\n  X0 -> Einsum;\n  X1 -> Einsum;\n  Einsum -> Y;\n}");
+    document.getElementById('Mebbaee26837341cfbbf77b5709dbf370').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+Same equation but decomposed.
+
+.. code:: ipython3
+
+    obj = _einsum(equation, runtime='onnxruntime1', optimize=True, verbose=1,
+                  decompose=True, dtype=inputs[0].dtype)
+
+
+.. parsed-literal::
+    0.0025 best='hsnt,hbnt->hnbs': 100%|██████████| 121/121 [00:03<00:00, 34.54it/s]
+
+
+.. code:: ipython3
+
+    %onnxview obj.onnx_
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="Medacf7b6ffb841369b675e4a239e01c8-cont"><div id="Medacf7b6ffb841369b675e4a239e01c8" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  ranksep=0.25;\n  orientation=portrait;\n  size=None;\n\n  X0 [shape=box color=red label=\"X0\nfloat((0, 0, 0, 0))\" fontsize=10];\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  einsum2620928203744_id_axes [shape=box label=\"einsum2620928203744_id_axes\nint64((1,))\n[0]\" fontsize=10];\n  einsum2620866308368_id_axes [shape=box label=\"einsum2620866308368_id_axes\nint64((1,))\n[3]\" fontsize=10];\n  einsum2620928193872_ba_batch_axes [shape=box label=\"einsum2620928193872_ba_batch_axes\nint64((2,))\n[0 1]\" fontsize=10];\n  einsum2620928193872_ba_sum_axes [shape=box label=\"einsum2620928193872_ba_sum_axes\nint64((1,))\n[4]\" fontsize=10];\n  einsum2620928193872_ba__1 [shape=box label=\"einsum2620928193872_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum2620928193872_ba_left_set [shape=box label=\"einsum2620928193872_ba_left_set\nint64((1,))\n[3]\" fontsize=10];\n  einsum2620928193872_ba_right_set [shape=box label=\"einsum2620928193872_ba_right_set\nint64((1,))\n[2]\" fontsize=10];\n  einsum2620928193872_ba_ones [shape=box label=\"einsum2620928193872_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum2620928151024_tr_axes [shape=box label=\"einsum2620928151024_tr_axes\nint64((1,))\n[4]\" fontsize=10];\n\n  einsum2620928203744_id [shape=box label=\"einsum2620928203744_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X0 -> Identity;\n  Identity -> einsum2620928203744_id;\n\n  einsum2620928204560_ex [shape=box label=\"einsum2620928204560_ex\" fontsize=10];\n  Unsqueeze0_2620928204560 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze0_2620928204560)\" fontsize=10];\n  einsum2620928203744_id -> Unsqueeze0_2620928204560;\n  einsum2620928203744_id_axes -> Unsqueeze0_2620928204560;\n  Unsqueeze0_2620928204560 -> einsum2620928204560_ex;\n\n  einsum2620928192816_tr [shape=box label=\"einsum2620928192816_tr\" fontsize=10];\n  Transpose13024_2620928192816 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose13024_2620928192816)\nperm=[1 3 0 2 4]\" fontsize=10];\n  einsum2620928204560_ex -> Transpose13024_2620928192816;\n  Transpose13024_2620928192816 -> einsum2620928192816_tr;\n\n  einsum2620866308368_id [shape=box label=\"einsum2620866308368_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X1 -> Identity1;\n  Identity1 -> einsum2620866308368_id;\n\n  einsum2620928202160_ex [shape=box label=\"einsum2620928202160_ex\" fontsize=10];\n  Unsqueeze3_2620928202160 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze3_2620928202160)\" fontsize=10];\n  einsum2620866308368_id -> Unsqueeze3_2620928202160;\n  einsum2620866308368_id_axes -> Unsqueeze3_2620928202160;\n  Unsqueeze3_2620928202160 -> einsum2620928202160_ex;\n\n  einsum2620928192768_tr [shape=box label=\"einsum2620928192768_tr\" fontsize=10];\n  Transpose02134_2620928192768 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose02134_2620928192768)\nperm=[0 2 1 3 4]\" fontsize=10];\n  einsum2620928202160_ex -> Transpose02134_2620928192768;\n  Transpose02134_2620928192768 -> einsum2620928192768_tr;\n\n  einsum2620928193872_ba_shape1 [shape=box label=\"einsum2620928193872_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum2620928192816_tr -> Shape;\n  Shape -> einsum2620928193872_ba_shape1;\n\n  einsum2620928193872_ba_shape2 [shape=box label=\"einsum2620928193872_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum2620928192768_tr -> Shape1;\n  Shape1 -> einsum2620928193872_ba_shape2;\n\n  einsum2620928193872_ba_dim0g [shape=box label=\"einsum2620928193872_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather;\n  einsum2620928193872_ba_batch_axes -> Gather;\n  Gather -> einsum2620928193872_ba_dim0g;\n\n  einsum2620928193872_ba_dim0bg [shape=box label=\"einsum2620928193872_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather1;\n  einsum2620928193872_ba_batch_axes -> Gather1;\n  Gather1 -> einsum2620928193872_ba_dim0bg;\n\n  einsum2620928193872_ba_dim0 [shape=box label=\"einsum2620928193872_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum2620928193872_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum2620928193872_ba_dim0;\n\n  einsum2620928193872_ba_dim0b [shape=box label=\"einsum2620928193872_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum2620928193872_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum2620928193872_ba_dim0b;\n\n  einsum2620928193872_ba_dim1 [shape=box label=\"einsum2620928193872_ba_dim1\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather12;\n  einsum2620928193872_ba_sum_axes -> Gather12;\n  Gather12 -> einsum2620928193872_ba_dim1;\n\n  einsum2620928193872_ba_dim2 [shape=box label=\"einsum2620928193872_ba_dim2\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather123;\n  einsum2620928193872_ba_sum_axes -> Gather123;\n  Gather123 -> einsum2620928193872_ba_dim2;\n\n  einsum2620928193872_ba_resh1 [shape=box label=\"einsum2620928193872_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_dim0 -> Concat;\n  einsum2620928193872_ba__1 -> Concat;\n  einsum2620928193872_ba_dim1 -> Concat;\n  Concat -> einsum2620928193872_ba_resh1;\n\n  einsum2620928193872_ba_resh2 [shape=box label=\"einsum2620928193872_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_dim0b -> Concat1;\n  einsum2620928193872_ba__1 -> Concat1;\n  einsum2620928193872_ba_dim2 -> Concat1;\n  Concat1 -> einsum2620928193872_ba_resh2;\n\n  einsum2620928193872_ba_aresh1 [shape=box label=\"einsum2620928193872_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum2620928192816_tr -> Reshape;\n  einsum2620928193872_ba_resh1 -> Reshape;\n  Reshape -> einsum2620928193872_ba_aresh1;\n\n  einsum2620928193872_ba_aresh2 [shape=box label=\"einsum2620928193872_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum2620928192768_tr -> Reshape1;\n  einsum2620928193872_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum2620928193872_ba_aresh2;\n\n  einsum2620928193872_ba_aresh2_tr [shape=box label=\"einsum2620928193872_ba_aresh2_tr\" fontsize=10];\n  Transpose021_2620928193872 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose021_2620928193872)\nperm=[0 2 1]\" fontsize=10];\n  einsum2620928193872_ba_aresh2 -> Transpose021_2620928193872;\n  Transpose021_2620928193872 -> einsum2620928193872_ba_aresh2_tr;\n\n  einsum2620928193872_ba_dot [shape=box label=\"einsum2620928193872_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum2620928193872_ba_aresh1 -> MatMul;\n  einsum2620928193872_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum2620928193872_ba_dot;\n\n  einsum2620928193872_ba_max_dim [shape=box label=\"einsum2620928193872_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum2620928193872_ba_dim0g -> Max;\n  einsum2620928193872_ba_dim0bg -> Max;\n  Max -> einsum2620928193872_ba_max_dim;\n\n  einsum2620928193872_ba_left_dim [shape=box label=\"einsum2620928193872_ba_left_dim\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather1234;\n  einsum2620928193872_ba_left_set -> Gather1234;\n  Gather1234 -> einsum2620928193872_ba_left_dim;\n\n  einsum2620928193872_ba_right_dim [shape=box label=\"einsum2620928193872_ba_right_dim\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather12345;\n  einsum2620928193872_ba_right_set -> Gather12345;\n  Gather12345 -> einsum2620928193872_ba_right_dim;\n\n  einsum2620928193872_ba_new_shape [shape=box label=\"einsum2620928193872_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_max_dim -> Concat12;\n  einsum2620928193872_ba_left_dim -> Concat12;\n  einsum2620928193872_ba_right_dim -> Concat12;\n  einsum2620928193872_ba_ones -> Concat12;\n  Concat12 -> einsum2620928193872_ba_new_shape;\n\n  einsum2620928193872_ba_final [shape=box label=\"einsum2620928193872_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum2620928193872_ba_dot -> Reshape12;\n  einsum2620928193872_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum2620928193872_ba_final;\n\n  einsum2620928151024_tr [shape=box label=\"einsum2620928151024_tr\" fontsize=10];\n  Transpose01324_2620928151024 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose01324_2620928151024)\nperm=[0 1 3 2 4]\" fontsize=10];\n  einsum2620928193872_ba_final -> Transpose01324_2620928151024;\n  Transpose01324_2620928151024 -> einsum2620928151024_tr;\n\n  einsum2620928194352_sq [shape=box label=\"einsum2620928194352_sq\" fontsize=10];\n  Squeeze4_2620928194352 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze4_2620928194352)\" fontsize=10];\n  einsum2620928151024_tr -> Squeeze4_2620928194352;\n  einsum2620928151024_tr_axes -> Squeeze4_2620928194352;\n  Squeeze4_2620928194352 -> einsum2620928194352_sq;\n\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  einsum2620928194352_sq -> Identity12;\n  Identity12 -> Y;\n}");
+    document.getElementById('Medacf7b6ffb841369b675e4a239e01c8').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=True, verbose=1)
+
+
+
+
+.. parsed-literal::
+    array([[[[-2.373884  , -0.63942796],
+             [ 1.0523144 ,  5.659873  ]],
+            [[ 2.589915  , -0.18050319],
+             [-0.62002003,  3.793615  ]]],
+    
+           [[[-0.37409338,  0.19822143],
+             [ 1.2049038 ,  3.1882448 ]],
+            [[-0.05218329,  0.87404007],
+             [ 0.12789296,  1.474512  ]]]], dtype=float32)
+
+
+
+First benchmark
+~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    N = 20
+    inputs = [numpy.random.randn(N, N, N, N).astype(numpy.float32),
+              numpy.random.randn(N, N, N, N).astype(numpy.float32)]
+
+*numpy.einsum*
+
+.. code:: ipython3
+
+    %timeit numpy.einsum(equation, *inputs)
+
+
+.. parsed-literal::
+    4.14 ms ± 350 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
+
+
+*onnxruntime einsum*
+
+.. code:: ipython3
+
+    %timeit onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=True, verbose=1, decompose=False)
+
+
+.. parsed-literal::
+    736 µs ± 11.2 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+*onnxruntime decomposed einsum*
+
+.. code:: ipython3
+
+    %timeit onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=True, verbose=1)
+
+
+.. parsed-literal::
+    525 µs ± 12.4 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+Let’s disable the optimization to see the difference. The optimization
+goes through all the permutation of the letters of the equation and
+compares the computation time to find the best one.
+
+.. code:: ipython3
+
+    %timeit onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=False, verbose=1, decompose=False)
+
+
+.. parsed-literal::
+    761 µs ± 46.2 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+It has no significant impact here but it has for the decomposition. The
+not optimized version is much slower.
+
+.. code:: ipython3
+
+    %timeit onx_einsum(equation, *inputs, runtime='onnxruntime1', optimize=False, verbose=1)
+
+
+.. parsed-literal::
+    1.41 ms ± 43.1 µs per loop (mean ± std. dev. of 7 runs, 1000 loops each)
+
+
+Profiling of the not optimized version
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Let’s profile the graph obtained with the decomposition.
+
+.. code:: ipython3
+
+    obj = _einsum(equation, runtime='onnxruntime1', optimize=False, verbose=1,
+                  decompose=True, dtype=inputs[0].dtype)
+    onx = obj.onnx_
+
+.. code:: ipython3
+
+    obj.equation, obj.equation_
+
+
+
+
+.. parsed-literal::
+    ('bsnh,btnh->bnts', 'bsnh,btnh->bnts')
+
+
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(onx, runtime="onnxruntime1",
+                         runtime_options={"enable_profiling": True})
+    
+    d_inputs = {'X0': inputs[0], 'X1': inputs[1]}
+    for i in range(0, 100):
+        oinf.run(d_inputs)
+        
+    df = oinf.get_profiling(as_df=True)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>cat</th>
+          <th>pid</th>
+          <th>tid</th>
+          <th>dur</th>
+          <th>ts</th>
+          <th>ph</th>
+          <th>name</th>
+          <th>args_op_name</th>
+          <th>args_provider</th>
+          <th>args_graph_index</th>
+          <th>args_parameter_size</th>
+          <th>args_thread_scheduling_stats</th>
+          <th>args_exec_plan_index</th>
+          <th>args_activation_size</th>
+          <th>args_output_size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>705</td>
+          <td>4</td>
+          <td>X</td>
+          <td>model_loading_array</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>7019</td>
+          <td>987</td>
+          <td>X</td>
+          <td>session_initialization</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>1</td>
+          <td>8320</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928306480_fence_before</td>
+          <td>Unsqueeze</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>4</td>
+          <td>8327</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928306480_kernel_time</td>
+          <td>Unsqueeze</td>
+          <td>CPUExecutionProvider</td>
+          <td>4</td>
+          <td>8</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>4</td>
+          <td>640000</td>
+          <td>640000</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>8372</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928306480_fence_after</td>
+          <td>Unsqueeze</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    import matplotlib.pyplot as plt
+    gr_dur = df[['dur', "args_op_name"]].groupby("args_op_name").sum().sort_values('dur')
+    gr_n = df[['dur', "args_op_name"]].groupby("args_op_name").count().sort_values('dur')
+    gr_n = gr_n.loc[gr_dur.index, :]
+    
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    gr_dur.plot.barh(ax=ax[0])
+    gr_n.plot.barh(ax=ax[1])
+    ax[0].set_title("duration - not optimized - %s" % obj.equation_)
+    ax[1].set_title("n occurences");
+
+
+
+.. image:: onnx_profile_ort_54_0.png
+
+
+Profiling of the optimized version
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    obj = _einsum(equation, runtime='onnxruntime1', optimize=True, verbose=1,
+                  decompose=True, dtype=inputs[0].dtype)
+    onx = obj.onnx_
+
+.. code:: ipython3
+
+    obj.equation, obj.equation_
+
+
+
+
+.. parsed-literal::
+    ('bsnh,btnh->bnts', 'hsnt,hbnt->hnbs')
+
+
+
+The second equation is the optimized equation.
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    oinf = OnnxInference(onx, runtime="onnxruntime1",
+                         runtime_options={"enable_profiling": True})
+    
+    d_inputs = {'X0': inputs[0], 'X1': inputs[1]}
+    for i in range(0, 100):
+        oinf.run(d_inputs)
+        
+    df = oinf.get_profiling(as_df=True)
+    df.head()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>cat</th>
+          <th>pid</th>
+          <th>tid</th>
+          <th>dur</th>
+          <th>ts</th>
+          <th>ph</th>
+          <th>name</th>
+          <th>args_op_name</th>
+          <th>args_provider</th>
+          <th>args_graph_index</th>
+          <th>args_parameter_size</th>
+          <th>args_thread_scheduling_stats</th>
+          <th>args_exec_plan_index</th>
+          <th>args_activation_size</th>
+          <th>args_output_size</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>1300</td>
+          <td>6</td>
+          <td>X</td>
+          <td>model_loading_array</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>Session</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>7330</td>
+          <td>1720</td>
+          <td>X</td>
+          <td>session_initialization</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>1</td>
+          <td>9376</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928202160_fence_before</td>
+          <td>Unsqueeze</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>4</td>
+          <td>9383</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928202160_kernel_time</td>
+          <td>Unsqueeze</td>
+          <td>CPUExecutionProvider</td>
+          <td>4</td>
+          <td>8</td>
+          <td>{'main_thread': {'thread_pool_name': 'session-...</td>
+          <td>4</td>
+          <td>640000</td>
+          <td>640000</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>Node</td>
+          <td>106368</td>
+          <td>299276</td>
+          <td>0</td>
+          <td>9422</td>
+          <td>X</td>
+          <td>Unsqueeze3_2620928202160_fence_after</td>
+          <td>Unsqueeze</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    gr_dur = df[['dur', "args_op_name"]].groupby("args_op_name").sum().sort_values('dur')
+    gr_n = df[['dur', "args_op_name"]].groupby("args_op_name").count().sort_values('dur')
+    gr_n = gr_n.loc[gr_dur.index, :]
+    
+    fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+    gr_dur.plot.barh(ax=ax[0])
+    gr_n.plot.barh(ax=ax[1])
+    ax[0].set_title("duration - optimized - %s" % obj.equation_)
+    ax[1].set_title("n occurences");
+
+
+
+.. image:: onnx_profile_ort_60_0.png
+
+
+onnxruntime was able to fuse MatMul with a transposition. That explains
+why it is faster.
+
+.. code:: ipython3
+
+    gr_dur = df[['dur', "args_op_name", "name"]].groupby(["args_op_name", "name"], as_index=False).sum().sort_values('dur')
+    gr_dur
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>args_op_name</th>
+          <th>name</th>
+          <th>dur</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>Concat</td>
+          <td>Concat12_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>24</th>
+          <td>Gather</td>
+          <td>Gather1_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>25</th>
+          <td>Gather</td>
+          <td>Gather1_fence_before</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>27</th>
+          <td>Gather</td>
+          <td>Gather_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>60</th>
+          <td>Transpose</td>
+          <td>Transpose02134_2620928192768_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>...</th>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+        </tr>
+        <tr>
+          <th>56</th>
+          <td>Squeeze</td>
+          <td>Squeeze4_2620928194352_kernel_time</td>
+          <td>4339</td>
+        </tr>
+        <tr>
+          <th>59</th>
+          <td>Transpose</td>
+          <td>Transpose01324_2620928151024_kernel_time</td>
+          <td>8661</td>
+        </tr>
+        <tr>
+          <th>62</th>
+          <td>Transpose</td>
+          <td>Transpose02134_2620928192768_kernel_time</td>
+          <td>11487</td>
+        </tr>
+        <tr>
+          <th>65</th>
+          <td>Transpose</td>
+          <td>Transpose13024_2620928192816_kernel_time</td>
+          <td>13598</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>FusedMatMul</td>
+          <td>MatMul_With_Transpose_kernel_time</td>
+          <td>23847</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>72 rows × 3 columns</p>
+    </div>
+
+
+
+.. code:: ipython3
+
+    gr_dur[gr_dur.args_op_name == "Transpose"]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>args_op_name</th>
+          <th>name</th>
+          <th>dur</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>60</th>
+          <td>Transpose</td>
+          <td>Transpose02134_2620928192768_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>57</th>
+          <td>Transpose</td>
+          <td>Transpose01324_2620928151024_fence_after</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>61</th>
+          <td>Transpose</td>
+          <td>Transpose02134_2620928192768_fence_before</td>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>58</th>
+          <td>Transpose</td>
+          <td>Transpose01324_2620928151024_fence_before</td>
+          <td>1</td>
+        </tr>
+        <tr>
+          <th>64</th>
+          <td>Transpose</td>
+          <td>Transpose13024_2620928192816_fence_before</td>
+          <td>1</td>
+        </tr>
+        <tr>
+          <th>63</th>
+          <td>Transpose</td>
+          <td>Transpose13024_2620928192816_fence_after</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>59</th>
+          <td>Transpose</td>
+          <td>Transpose01324_2620928151024_kernel_time</td>
+          <td>8661</td>
+        </tr>
+        <tr>
+          <th>62</th>
+          <td>Transpose</td>
+          <td>Transpose02134_2620928192768_kernel_time</td>
+          <td>11487</td>
+        </tr>
+        <tr>
+          <th>65</th>
+          <td>Transpose</td>
+          <td>Transpose13024_2620928192816_kernel_time</td>
+          <td>13598</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Let’s draw again the graph to see which transpose is is which.
+
+.. code:: ipython3
+
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M1047237934a84353913282c50cf06e41-cont"><div id="M1047237934a84353913282c50cf06e41" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  ranksep=0.25;\n  orientation=portrait;\n  size=None;\n\n  X0 [shape=box color=red label=\"X0\nfloat((0, 0, 0, 0))\" fontsize=10];\n  X1 [shape=box color=red label=\"X1\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  einsum2620928203744_id_axes [shape=box label=\"einsum2620928203744_id_axes\nint64((1,))\n[0]\" fontsize=10];\n  einsum2620866308368_id_axes [shape=box label=\"einsum2620866308368_id_axes\nint64((1,))\n[3]\" fontsize=10];\n  einsum2620928193872_ba_batch_axes [shape=box label=\"einsum2620928193872_ba_batch_axes\nint64((2,))\n[0 1]\" fontsize=10];\n  einsum2620928193872_ba_sum_axes [shape=box label=\"einsum2620928193872_ba_sum_axes\nint64((1,))\n[4]\" fontsize=10];\n  einsum2620928193872_ba__1 [shape=box label=\"einsum2620928193872_ba__1\nint64((1,))\n[-1]\" fontsize=10];\n  einsum2620928193872_ba_left_set [shape=box label=\"einsum2620928193872_ba_left_set\nint64((1,))\n[3]\" fontsize=10];\n  einsum2620928193872_ba_right_set [shape=box label=\"einsum2620928193872_ba_right_set\nint64((1,))\n[2]\" fontsize=10];\n  einsum2620928193872_ba_ones [shape=box label=\"einsum2620928193872_ba_ones\nint64((1,))\n[1]\" fontsize=10];\n  einsum2620928151024_tr_axes [shape=box label=\"einsum2620928151024_tr_axes\nint64((1,))\n[4]\" fontsize=10];\n\n  einsum2620928203744_id [shape=box label=\"einsum2620928203744_id\" fontsize=10];\n  Identity [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity)\" fontsize=10];\n  X0 -> Identity;\n  Identity -> einsum2620928203744_id;\n\n  einsum2620928204560_ex [shape=box label=\"einsum2620928204560_ex\" fontsize=10];\n  Unsqueeze0_2620928204560 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze0_2620928204560)\" fontsize=10];\n  einsum2620928203744_id -> Unsqueeze0_2620928204560;\n  einsum2620928203744_id_axes -> Unsqueeze0_2620928204560;\n  Unsqueeze0_2620928204560 -> einsum2620928204560_ex;\n\n  einsum2620928192816_tr [shape=box label=\"einsum2620928192816_tr\" fontsize=10];\n  Transpose13024_2620928192816 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose13024_2620928192816)\nperm=[1 3 0 2 4]\" fontsize=10];\n  einsum2620928204560_ex -> Transpose13024_2620928192816;\n  Transpose13024_2620928192816 -> einsum2620928192816_tr;\n\n  einsum2620866308368_id [shape=box label=\"einsum2620866308368_id\" fontsize=10];\n  Identity1 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity1)\" fontsize=10];\n  X1 -> Identity1;\n  Identity1 -> einsum2620866308368_id;\n\n  einsum2620928202160_ex [shape=box label=\"einsum2620928202160_ex\" fontsize=10];\n  Unsqueeze3_2620928202160 [shape=box style=\"filled,rounded\" color=orange label=\"Unsqueeze\n(Unsqueeze3_2620928202160)\" fontsize=10];\n  einsum2620866308368_id -> Unsqueeze3_2620928202160;\n  einsum2620866308368_id_axes -> Unsqueeze3_2620928202160;\n  Unsqueeze3_2620928202160 -> einsum2620928202160_ex;\n\n  einsum2620928192768_tr [shape=box label=\"einsum2620928192768_tr\" fontsize=10];\n  Transpose02134_2620928192768 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose02134_2620928192768)\nperm=[0 2 1 3 4]\" fontsize=10];\n  einsum2620928202160_ex -> Transpose02134_2620928192768;\n  Transpose02134_2620928192768 -> einsum2620928192768_tr;\n\n  einsum2620928193872_ba_shape1 [shape=box label=\"einsum2620928193872_ba_shape1\" fontsize=10];\n  Shape [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape)\" fontsize=10];\n  einsum2620928192816_tr -> Shape;\n  Shape -> einsum2620928193872_ba_shape1;\n\n  einsum2620928193872_ba_shape2 [shape=box label=\"einsum2620928193872_ba_shape2\" fontsize=10];\n  Shape1 [shape=box style=\"filled,rounded\" color=orange label=\"Shape\n(Shape1)\" fontsize=10];\n  einsum2620928192768_tr -> Shape1;\n  Shape1 -> einsum2620928193872_ba_shape2;\n\n  einsum2620928193872_ba_dim0g [shape=box label=\"einsum2620928193872_ba_dim0g\" fontsize=10];\n  Gather [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather;\n  einsum2620928193872_ba_batch_axes -> Gather;\n  Gather -> einsum2620928193872_ba_dim0g;\n\n  einsum2620928193872_ba_dim0bg [shape=box label=\"einsum2620928193872_ba_dim0bg\" fontsize=10];\n  Gather1 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather1;\n  einsum2620928193872_ba_batch_axes -> Gather1;\n  Gather1 -> einsum2620928193872_ba_dim0bg;\n\n  einsum2620928193872_ba_dim0 [shape=box label=\"einsum2620928193872_ba_dim0\" fontsize=10];\n  ReduceProd [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd)\nkeepdims=1\" fontsize=10];\n  einsum2620928193872_ba_dim0g -> ReduceProd;\n  ReduceProd -> einsum2620928193872_ba_dim0;\n\n  einsum2620928193872_ba_dim0b [shape=box label=\"einsum2620928193872_ba_dim0b\" fontsize=10];\n  ReduceProd1 [shape=box style=\"filled,rounded\" color=orange label=\"ReduceProd\n(ReduceProd1)\nkeepdims=1\" fontsize=10];\n  einsum2620928193872_ba_dim0bg -> ReduceProd1;\n  ReduceProd1 -> einsum2620928193872_ba_dim0b;\n\n  einsum2620928193872_ba_dim1 [shape=box label=\"einsum2620928193872_ba_dim1\" fontsize=10];\n  Gather12 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather12;\n  einsum2620928193872_ba_sum_axes -> Gather12;\n  Gather12 -> einsum2620928193872_ba_dim1;\n\n  einsum2620928193872_ba_dim2 [shape=box label=\"einsum2620928193872_ba_dim2\" fontsize=10];\n  Gather123 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather123)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather123;\n  einsum2620928193872_ba_sum_axes -> Gather123;\n  Gather123 -> einsum2620928193872_ba_dim2;\n\n  einsum2620928193872_ba_resh1 [shape=box label=\"einsum2620928193872_ba_resh1\" fontsize=10];\n  Concat [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_dim0 -> Concat;\n  einsum2620928193872_ba__1 -> Concat;\n  einsum2620928193872_ba_dim1 -> Concat;\n  Concat -> einsum2620928193872_ba_resh1;\n\n  einsum2620928193872_ba_resh2 [shape=box label=\"einsum2620928193872_ba_resh2\" fontsize=10];\n  Concat1 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat1)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_dim0b -> Concat1;\n  einsum2620928193872_ba__1 -> Concat1;\n  einsum2620928193872_ba_dim2 -> Concat1;\n  Concat1 -> einsum2620928193872_ba_resh2;\n\n  einsum2620928193872_ba_aresh1 [shape=box label=\"einsum2620928193872_ba_aresh1\" fontsize=10];\n  Reshape [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape)\" fontsize=10];\n  einsum2620928192816_tr -> Reshape;\n  einsum2620928193872_ba_resh1 -> Reshape;\n  Reshape -> einsum2620928193872_ba_aresh1;\n\n  einsum2620928193872_ba_aresh2 [shape=box label=\"einsum2620928193872_ba_aresh2\" fontsize=10];\n  Reshape1 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape1)\" fontsize=10];\n  einsum2620928192768_tr -> Reshape1;\n  einsum2620928193872_ba_resh2 -> Reshape1;\n  Reshape1 -> einsum2620928193872_ba_aresh2;\n\n  einsum2620928193872_ba_aresh2_tr [shape=box label=\"einsum2620928193872_ba_aresh2_tr\" fontsize=10];\n  Transpose021_2620928193872 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose021_2620928193872)\nperm=[0 2 1]\" fontsize=10];\n  einsum2620928193872_ba_aresh2 -> Transpose021_2620928193872;\n  Transpose021_2620928193872 -> einsum2620928193872_ba_aresh2_tr;\n\n  einsum2620928193872_ba_dot [shape=box label=\"einsum2620928193872_ba_dot\" fontsize=10];\n  MatMul [shape=box style=\"filled,rounded\" color=orange label=\"MatMul\n(MatMul)\" fontsize=10];\n  einsum2620928193872_ba_aresh1 -> MatMul;\n  einsum2620928193872_ba_aresh2_tr -> MatMul;\n  MatMul -> einsum2620928193872_ba_dot;\n\n  einsum2620928193872_ba_max_dim [shape=box label=\"einsum2620928193872_ba_max_dim\" fontsize=10];\n  Max [shape=box style=\"filled,rounded\" color=orange label=\"Max\n(Max)\" fontsize=10];\n  einsum2620928193872_ba_dim0g -> Max;\n  einsum2620928193872_ba_dim0bg -> Max;\n  Max -> einsum2620928193872_ba_max_dim;\n\n  einsum2620928193872_ba_left_dim [shape=box label=\"einsum2620928193872_ba_left_dim\" fontsize=10];\n  Gather1234 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather1234)\" fontsize=10];\n  einsum2620928193872_ba_shape1 -> Gather1234;\n  einsum2620928193872_ba_left_set -> Gather1234;\n  Gather1234 -> einsum2620928193872_ba_left_dim;\n\n  einsum2620928193872_ba_right_dim [shape=box label=\"einsum2620928193872_ba_right_dim\" fontsize=10];\n  Gather12345 [shape=box style=\"filled,rounded\" color=orange label=\"Gather\n(Gather12345)\" fontsize=10];\n  einsum2620928193872_ba_shape2 -> Gather12345;\n  einsum2620928193872_ba_right_set -> Gather12345;\n  Gather12345 -> einsum2620928193872_ba_right_dim;\n\n  einsum2620928193872_ba_new_shape [shape=box label=\"einsum2620928193872_ba_new_shape\" fontsize=10];\n  Concat12 [shape=box style=\"filled,rounded\" color=orange label=\"Concat\n(Concat12)\naxis=0\" fontsize=10];\n  einsum2620928193872_ba_max_dim -> Concat12;\n  einsum2620928193872_ba_left_dim -> Concat12;\n  einsum2620928193872_ba_right_dim -> Concat12;\n  einsum2620928193872_ba_ones -> Concat12;\n  Concat12 -> einsum2620928193872_ba_new_shape;\n\n  einsum2620928193872_ba_final [shape=box label=\"einsum2620928193872_ba_final\" fontsize=10];\n  Reshape12 [shape=box style=\"filled,rounded\" color=orange label=\"Reshape\n(Reshape12)\" fontsize=10];\n  einsum2620928193872_ba_dot -> Reshape12;\n  einsum2620928193872_ba_new_shape -> Reshape12;\n  Reshape12 -> einsum2620928193872_ba_final;\n\n  einsum2620928151024_tr [shape=box label=\"einsum2620928151024_tr\" fontsize=10];\n  Transpose01324_2620928151024 [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Transpose01324_2620928151024)\nperm=[0 1 3 2 4]\" fontsize=10];\n  einsum2620928193872_ba_final -> Transpose01324_2620928151024;\n  Transpose01324_2620928151024 -> einsum2620928151024_tr;\n\n  einsum2620928194352_sq [shape=box label=\"einsum2620928194352_sq\" fontsize=10];\n  Squeeze4_2620928194352 [shape=box style=\"filled,rounded\" color=orange label=\"Squeeze\n(Squeeze4_2620928194352)\" fontsize=10];\n  einsum2620928151024_tr -> Squeeze4_2620928194352;\n  einsum2620928151024_tr_axes -> Squeeze4_2620928194352;\n  Squeeze4_2620928194352 -> einsum2620928194352_sq;\n\n  Identity12 [shape=box style=\"filled,rounded\" color=orange label=\"Identity\n(Identity12)\" fontsize=10];\n  einsum2620928194352_sq -> Identity12;\n  Identity12 -> Y;\n}");
+    document.getElementById('M1047237934a84353913282c50cf06e41').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+The optimized looked into all permutations. We see that the letter
+ordering should be carefully chosen.
+
+.. code:: ipython3
+
+    import pandas
+    df = pandas.DataFrame(obj.timed_permutations_, columns=["time", "equation"])
+    df = df.sort_values('time')
+    df = df.set_index("equation")
+    ax = df.plot.barh(figsize=(8, 25))
+    ax.set_title("%s OPTIMIZED INTO %s" % (obj.equation, obj.equation_));
+
+
+
+.. image:: onnx_profile_ort_67_0.png

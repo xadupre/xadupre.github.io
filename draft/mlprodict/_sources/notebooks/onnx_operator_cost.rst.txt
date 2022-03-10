@@ -1,0 +1,6522 @@
+
+.. _onnxoperatorcostrst:
+
+===============================
+Infer operator computation cost
+===============================
+
+
+.. only:: html
+
+    **Links:** :download:`notebook <onnx_operator_cost.ipynb>`, :downloadlink:`html <onnx_operator_cost2html.html>`, :download:`PDF <onnx_operator_cost.pdf>`, :download:`python <onnx_operator_cost.py>`, :downloadlink:`slides <onnx_operator_cost.slides.html>`, :githublink:`GitHub|_doc/notebooks/onnx_operator_cost.ipynb|*`
+
+
+This notebooks explores a way to predict the cost of operator Transpose
+based on some features.
+
+.. code:: ipython3
+
+    from jyquickhelper import add_notebook_menu
+    add_notebook_menu()
+
+
+
+
+
+
+.. contents::
+    :local:
+
+
+
+
+
+.. code:: ipython3
+
+    %matplotlib inline
+
+.. code:: ipython3
+
+    %load_ext mlprodict
+
+ONNX graph and measures
+-----------------------
+
+.. code:: ipython3
+
+    import numpy
+    from skl2onnx.common.data_types import FloatTensorType
+    from skl2onnx.algebra.onnx_ops import OnnxTranspose
+    
+    
+    def create_onnx_graph(perm=(0, 1, 2, 3), target_opset=14):
+        tr = OnnxTranspose('X', perm=perm, output_names=['Y'], op_version=target_opset)
+        return tr.to_onnx({'X': FloatTensorType([None] * len(perm))})
+    
+    
+    onx = create_onnx_graph()
+    
+    %onnxview onx
+
+
+
+
+
+
+.. raw:: html
+
+    <div id="M3ef12c0ffd6a42aaaecd7ebd615d1b50-cont"><div id="M3ef12c0ffd6a42aaaecd7ebd615d1b50" style="width:100%;height:100%;"></div></div>
+    <script>
+
+    require(['http://www.xavierdupre.fr/js/vizjs/viz.js'], function() { var svgGraph = Viz("digraph{\n  nodesep=0.05;\n  ranksep=0.25;\n  size=None;\n  orientation=portrait;\n\n  X [shape=box color=red label=\"X\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n  Y [shape=box color=green label=\"Y\nfloat((0, 0, 0, 0))\" fontsize=10];\n\n\n  Tr_Transpose [shape=box style=\"filled,rounded\" color=orange label=\"Transpose\n(Tr_Transpose)\nperm=[0 1 2 3]\" fontsize=10];\n  X -> Tr_Transpose;\n  Tr_Transpose -> Y;\n}");
+    document.getElementById('M3ef12c0ffd6a42aaaecd7ebd615d1b50').innerHTML = svgGraph; });
+
+    </script>
+
+
+
+.. code:: ipython3
+
+    from mlprodict.onnxrt import OnnxInference
+    
+    onx = create_onnx_graph(perm=(1, 0, 3, 2))
+    oinf = OnnxInference(onx)
+    inputs = {'X': numpy.full((5, 6, 7, 8), 1, dtype=numpy.float32)}
+    res = oinf.run(inputs)['Y']
+    res.shape
+
+
+
+
+.. parsed-literal::
+    (6, 5, 8, 7)
+
+
+
+.. code:: ipython3
+
+    from onnxruntime import InferenceSession
+    sess = InferenceSession(onx.SerializeToString())
+    res = sess.run(None, inputs)[0]
+    res.shape
+
+
+
+
+.. parsed-literal::
+    (6, 5, 8, 7)
+
+
+
+.. code:: ipython3
+
+    from cpyquickhelper.numbers.speed_measure import measure_time
+    
+    def measure_time_onnx(sess, X, number=50, repeat=30):
+        inputs = {'X': X}
+        return measure_time(lambda: sess.run(None, inputs), context=dict(sess=sess, inputs=inputs),
+                            div_by_number=True, number=number, repeat=repeat)
+    
+    X = numpy.random.random((3, 224, 224, 4)).astype(numpy.float32)
+    measure_time_onnx(sess, X)
+
+
+
+
+.. parsed-literal::
+    {'average': 0.0024677738666666646,
+     'deviation': 0.00022911153911864325,
+     'min_exec': 0.0022292380000000023,
+     'max_exec': 0.003265080000000005,
+     'repeat': 30,
+     'number': 50,
+     'context_size': 232}
+
+
+
+Simulation to build a database
+------------------------------
+
+Many dimensions, many permutations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from itertools import permutations
+    from tqdm import tqdm
+    from pandas import DataFrame
+    
+    
+    def process_shape(shape, rnd=False, number=50, repeat=30, bar=True):
+        X = numpy.random.random(shape).astype(numpy.float32)
+        obs = []
+        perms = list(permutations(list(range(len(X.shape)))))
+        baseline = None
+        itergen = perms if (rnd or not bar) else tqdm(perms)
+        for perm in itergen:
+            if baseline is not None and rnd:
+                if random.randint(0, 4) != 0:
+                    continue
+            onx = create_onnx_graph(perm=perm)
+            sess = InferenceSession(onx.SerializeToString())
+            res = measure_time_onnx(sess, X, number=number, repeat=repeat)
+            res['perm'] = perm
+            res['shape'] = shape
+            if baseline is None:
+                baseline = res
+            res["ratio"] = res["average"] / baseline["average"]
+            res['dim'] = len(shape)
+            obs.append(res)
+        return DataFrame(obs).sort_values('average')
+    
+    dfs = []
+    df = process_shape((12, 13, 15, 18))
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 24/24 [00:04<00:00,  5.73it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>3</th>
+          <td>0.000044</td>
+          <td>0.000006</td>
+          <td>0.000039</td>
+          <td>0.000057</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 3, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.750316</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000048</td>
+          <td>0.000003</td>
+          <td>0.000045</td>
+          <td>0.000058</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.820821</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>0.000049</td>
+          <td>0.000003</td>
+          <td>0.000045</td>
+          <td>0.000062</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.823070</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.000049</td>
+          <td>0.000001</td>
+          <td>0.000048</td>
+          <td>0.000053</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.830604</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.000051</td>
+          <td>0.000004</td>
+          <td>0.000039</td>
+          <td>0.000062</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.861994</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000052</td>
+          <td>0.000005</td>
+          <td>0.000047</td>
+          <td>0.000073</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.889753</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0.000054</td>
+          <td>0.000006</td>
+          <td>0.000044</td>
+          <td>0.000067</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 0, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.909477</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000054</td>
+          <td>0.000007</td>
+          <td>0.000049</td>
+          <td>0.000081</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 1, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.922354</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>0.000057</td>
+          <td>0.000006</td>
+          <td>0.000046</td>
+          <td>0.000064</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 0, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.972198</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.000059</td>
+          <td>0.000019</td>
+          <td>0.000034</td>
+          <td>0.000093</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 2, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>1.000000</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.000092</td>
+          <td>0.000019</td>
+          <td>0.000053</td>
+          <td>0.000139</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 2, 3)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>1.557903</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.000136</td>
+          <td>0.000020</td>
+          <td>0.000119</td>
+          <td>0.000186</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.301556</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>0.000138</td>
+          <td>0.000023</td>
+          <td>0.000121</td>
+          <td>0.000181</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.336826</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.000138</td>
+          <td>0.000018</td>
+          <td>0.000118</td>
+          <td>0.000176</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.346118</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0.000140</td>
+          <td>0.000015</td>
+          <td>0.000124</td>
+          <td>0.000193</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 0, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.379168</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>0.000144</td>
+          <td>0.000019</td>
+          <td>0.000119</td>
+          <td>0.000196</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.443392</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>0.000145</td>
+          <td>0.000022</td>
+          <td>0.000123</td>
+          <td>0.000199</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.455098</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>0.000145</td>
+          <td>0.000017</td>
+          <td>0.000125</td>
+          <td>0.000196</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.456431</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0.000146</td>
+          <td>0.000015</td>
+          <td>0.000128</td>
+          <td>0.000184</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.473250</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.000150</td>
+          <td>0.000017</td>
+          <td>0.000127</td>
+          <td>0.000170</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.539817</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>0.000158</td>
+          <td>0.000021</td>
+          <td>0.000127</td>
+          <td>0.000192</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.684876</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.000164</td>
+          <td>0.000045</td>
+          <td>0.000124</td>
+          <td>0.000231</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.778193</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.000214</td>
+          <td>0.000060</td>
+          <td>0.000136</td>
+          <td>0.000295</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>3.627240</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.000215</td>
+          <td>0.000071</td>
+          <td>0.000143</td>
+          <td>0.000340</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>3.640132</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((43, 44, 45))
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 6/6 [00:01<00:00,  4.70it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>3</th>
+          <td>0.000073</td>
+          <td>0.000009</td>
+          <td>0.000062</td>
+          <td>0.000094</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 0)</td>
+          <td>(43, 44, 45)</td>
+          <td>0.985513</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.000074</td>
+          <td>0.000009</td>
+          <td>0.000065</td>
+          <td>0.000109</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 2)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.000000</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000077</td>
+          <td>0.000008</td>
+          <td>0.000069</td>
+          <td>0.000101</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 1)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.032759</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000097</td>
+          <td>0.000004</td>
+          <td>0.000083</td>
+          <td>0.000110</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 1)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.300915</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000113</td>
+          <td>0.000029</td>
+          <td>0.000061</td>
+          <td>0.000141</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 2)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.515711</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.000375</td>
+          <td>0.000121</td>
+          <td>0.000292</td>
+          <td>0.000750</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 0)</td>
+          <td>(43, 44, 45)</td>
+          <td>5.054301</td>
+          <td>3</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((3, 244, 244))
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 6/6 [00:01<00:00,  3.05it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>2</th>
+          <td>0.000100</td>
+          <td>0.000009</td>
+          <td>0.000090</td>
+          <td>0.000125</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 2)</td>
+          <td>(3, 244, 244)</td>
+          <td>0.955203</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.000105</td>
+          <td>0.000016</td>
+          <td>0.000078</td>
+          <td>0.000138</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 2)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.000000</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000123</td>
+          <td>0.000013</td>
+          <td>0.000108</td>
+          <td>0.000161</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 1)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.178827</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000124</td>
+          <td>0.000017</td>
+          <td>0.000108</td>
+          <td>0.000171</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 1)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.185666</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000151</td>
+          <td>0.000016</td>
+          <td>0.000136</td>
+          <td>0.000197</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 0)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.438446</td>
+          <td>3</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.000672</td>
+          <td>0.000083</td>
+          <td>0.000626</td>
+          <td>0.001030</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 0)</td>
+          <td>(3, 244, 244)</td>
+          <td>6.418195</td>
+          <td>3</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((3, 244, 244, 1))
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 24/24 [00:19<00:00,  1.26it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>4</th>
+          <td>0.000092</td>
+          <td>0.000008</td>
+          <td>0.000078</td>
+          <td>0.000107</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>0.859903</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.000107</td>
+          <td>0.000018</td>
+          <td>0.000084</td>
+          <td>0.000157</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 2, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.000000</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.000124</td>
+          <td>0.000068</td>
+          <td>0.000088</td>
+          <td>0.000323</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 2, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.162456</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.000126</td>
+          <td>0.000017</td>
+          <td>0.000107</td>
+          <td>0.000185</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.180996</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000130</td>
+          <td>0.000009</td>
+          <td>0.000120</td>
+          <td>0.000163</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 3, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.210077</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>0.000137</td>
+          <td>0.000047</td>
+          <td>0.000090</td>
+          <td>0.000250</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.276642</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000147</td>
+          <td>0.000017</td>
+          <td>0.000106</td>
+          <td>0.000175</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.369978</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0.000185</td>
+          <td>0.000017</td>
+          <td>0.000164</td>
+          <td>0.000246</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 0, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.725391</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.000189</td>
+          <td>0.000044</td>
+          <td>0.000142</td>
+          <td>0.000265</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.766905</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000201</td>
+          <td>0.000054</td>
+          <td>0.000121</td>
+          <td>0.000289</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 1, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.878802</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.000522</td>
+          <td>0.000061</td>
+          <td>0.000457</td>
+          <td>0.000733</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>4.874009</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.000533</td>
+          <td>0.000157</td>
+          <td>0.000456</td>
+          <td>0.001128</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>4.973916</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>0.000640</td>
+          <td>0.000189</td>
+          <td>0.000477</td>
+          <td>0.001289</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>5.980796</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0.000660</td>
+          <td>0.000106</td>
+          <td>0.000503</td>
+          <td>0.000860</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 0, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>6.167703</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.000692</td>
+          <td>0.000136</td>
+          <td>0.000529</td>
+          <td>0.001021</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>6.460759</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>0.000749</td>
+          <td>0.000206</td>
+          <td>0.000508</td>
+          <td>0.001324</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>6.996362</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>0.000754</td>
+          <td>0.000105</td>
+          <td>0.000633</td>
+          <td>0.000994</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 0, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>7.041007</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.000791</td>
+          <td>0.000264</td>
+          <td>0.000561</td>
+          <td>0.001386</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>7.389431</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>0.000818</td>
+          <td>0.000278</td>
+          <td>0.000625</td>
+          <td>0.001522</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>7.634646</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>0.000893</td>
+          <td>0.000212</td>
+          <td>0.000646</td>
+          <td>0.001477</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>8.339926</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.000944</td>
+          <td>0.000293</td>
+          <td>0.000581</td>
+          <td>0.001626</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>8.814785</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0.000976</td>
+          <td>0.000347</td>
+          <td>0.000584</td>
+          <td>0.001742</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>9.112243</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.001011</td>
+          <td>0.000337</td>
+          <td>0.000544</td>
+          <td>0.001810</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>9.437403</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>0.001128</td>
+          <td>0.000322</td>
+          <td>0.000629</td>
+          <td>0.001737</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>10.530182</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((1, 244, 244, 3))
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 24/24 [00:22<00:00,  1.07it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>8</th>
+          <td>0.000092</td>
+          <td>0.000014</td>
+          <td>0.000078</td>
+          <td>0.000132</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 0, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>0.753009</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.000098</td>
+          <td>0.000013</td>
+          <td>0.000083</td>
+          <td>0.000142</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 2, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>0.802808</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.000107</td>
+          <td>0.000018</td>
+          <td>0.000075</td>
+          <td>0.000137</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>0.873932</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000115</td>
+          <td>0.000015</td>
+          <td>0.000092</td>
+          <td>0.000147</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 3, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>0.940606</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.000122</td>
+          <td>0.000028</td>
+          <td>0.000094</td>
+          <td>0.000201</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 2, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>1.000000</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000194</td>
+          <td>0.000036</td>
+          <td>0.000160</td>
+          <td>0.000311</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>1.585479</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.000195</td>
+          <td>0.000019</td>
+          <td>0.000163</td>
+          <td>0.000258</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>1.598770</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>0.000235</td>
+          <td>0.000058</td>
+          <td>0.000172</td>
+          <td>0.000345</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>1.923654</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000408</td>
+          <td>0.000156</td>
+          <td>0.000229</td>
+          <td>0.000718</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 2, 1, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>3.345406</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.000513</td>
+          <td>0.000215</td>
+          <td>0.000300</td>
+          <td>0.001430</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>4.205477</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.000558</td>
+          <td>0.000131</td>
+          <td>0.000458</td>
+          <td>0.001023</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>4.572658</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.000604</td>
+          <td>0.000188</td>
+          <td>0.000471</td>
+          <td>0.001065</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>4.947937</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>0.000620</td>
+          <td>0.000142</td>
+          <td>0.000410</td>
+          <td>0.001121</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 0, 3)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>5.078387</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>0.000679</td>
+          <td>0.000097</td>
+          <td>0.000590</td>
+          <td>0.000928</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>5.561888</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.000710</td>
+          <td>0.000161</td>
+          <td>0.000620</td>
+          <td>0.001390</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>5.818089</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>0.000737</td>
+          <td>0.000240</td>
+          <td>0.000493</td>
+          <td>0.001174</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>6.040189</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.000824</td>
+          <td>0.000288</td>
+          <td>0.000515</td>
+          <td>0.001879</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>6.752663</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.000913</td>
+          <td>0.000216</td>
+          <td>0.000613</td>
+          <td>0.001410</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>7.476378</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0.000918</td>
+          <td>0.000328</td>
+          <td>0.000572</td>
+          <td>0.002079</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>7.521481</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0.001057</td>
+          <td>0.000609</td>
+          <td>0.000502</td>
+          <td>0.002702</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 3, 0, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>8.657076</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.001061</td>
+          <td>0.000612</td>
+          <td>0.000539</td>
+          <td>0.003790</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>8.693870</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>0.001212</td>
+          <td>0.000417</td>
+          <td>0.000719</td>
+          <td>0.002561</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>9.929308</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>0.001311</td>
+          <td>0.000505</td>
+          <td>0.000856</td>
+          <td>0.003377</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>10.739398</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>0.001433</td>
+          <td>0.000505</td>
+          <td>0.000721</td>
+          <td>0.002335</td>
+          <td>30</td>
+          <td>50</td>
+          <td>232</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>11.740772</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((3, 244, 244, 3), number=15, repeat=15)
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 24/24 [00:14<00:00,  1.62it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.001088</td>
+          <td>0.000085</td>
+          <td>0.000986</td>
+          <td>0.001291</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 1, 2, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.000000</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.001227</td>
+          <td>0.000088</td>
+          <td>0.001152</td>
+          <td>0.001474</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.128126</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>0.001277</td>
+          <td>0.000118</td>
+          <td>0.001079</td>
+          <td>0.001490</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.173721</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.001311</td>
+          <td>0.000320</td>
+          <td>0.001007</td>
+          <td>0.001925</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 0, 2, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.205182</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.001415</td>
+          <td>0.000307</td>
+          <td>0.001200</td>
+          <td>0.002498</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.300901</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.001426</td>
+          <td>0.000221</td>
+          <td>0.001191</td>
+          <td>0.001863</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 2, 3, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.311361</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.001510</td>
+          <td>0.000432</td>
+          <td>0.001132</td>
+          <td>0.002417</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.388068</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0.001552</td>
+          <td>0.000030</td>
+          <td>0.001500</td>
+          <td>0.001602</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 2, 0, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.427105</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.001724</td>
+          <td>0.000193</td>
+          <td>0.001470</td>
+          <td>0.002142</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.585155</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.001790</td>
+          <td>0.000191</td>
+          <td>0.001566</td>
+          <td>0.002238</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 2, 1, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>1.645717</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.002528</td>
+          <td>0.000154</td>
+          <td>0.002327</td>
+          <td>0.002983</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.324384</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>0.002571</td>
+          <td>0.000186</td>
+          <td>0.002383</td>
+          <td>0.002922</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.363443</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.002591</td>
+          <td>0.000253</td>
+          <td>0.002431</td>
+          <td>0.003403</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.381860</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.002698</td>
+          <td>0.000412</td>
+          <td>0.002346</td>
+          <td>0.003689</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.480308</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0.002806</td>
+          <td>0.000783</td>
+          <td>0.002147</td>
+          <td>0.004296</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.579517</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0.003212</td>
+          <td>0.000304</td>
+          <td>0.002773</td>
+          <td>0.003851</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 3, 0, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.953032</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>0.003228</td>
+          <td>0.000796</td>
+          <td>0.002071</td>
+          <td>0.004791</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 1, 0, 3)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.967523</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.003257</td>
+          <td>0.000287</td>
+          <td>0.002912</td>
+          <td>0.003739</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>2.994043</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>0.003574</td>
+          <td>0.000479</td>
+          <td>0.003028</td>
+          <td>0.005042</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>3.285842</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.003942</td>
+          <td>0.001860</td>
+          <td>0.002446</td>
+          <td>0.008241</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>3.624145</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>0.004249</td>
+          <td>0.001217</td>
+          <td>0.003175</td>
+          <td>0.008041</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>3.906361</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.004685</td>
+          <td>0.001343</td>
+          <td>0.002827</td>
+          <td>0.006868</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>4.307072</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>0.005539</td>
+          <td>0.002180</td>
+          <td>0.002991</td>
+          <td>0.009602</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>5.092422</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>0.005575</td>
+          <td>0.001930</td>
+          <td>0.002876</td>
+          <td>0.008157</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 3)</td>
+          <td>5.125597</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    df = process_shape((3, 244, 244, 6), number=15, repeat=15)
+    dfs.append(df)
+    df
+
+
+.. parsed-literal::
+    100%|██████████| 24/24 [00:34<00:00,  1.43s/it]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>1</th>
+          <td>0.002249</td>
+          <td>0.000144</td>
+          <td>0.002067</td>
+          <td>0.002627</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.606961</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.002711</td>
+          <td>0.000171</td>
+          <td>0.002458</td>
+          <td>0.002995</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 2, 3, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.731795</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.002773</td>
+          <td>0.000683</td>
+          <td>0.002260</td>
+          <td>0.004103</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.748578</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.002953</td>
+          <td>0.000677</td>
+          <td>0.002187</td>
+          <td>0.004132</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.797062</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.003232</td>
+          <td>0.000963</td>
+          <td>0.002303</td>
+          <td>0.005088</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 2, 1, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.872427</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.003363</td>
+          <td>0.000372</td>
+          <td>0.002883</td>
+          <td>0.004025</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 0, 2, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.907834</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0.003397</td>
+          <td>0.000237</td>
+          <td>0.002886</td>
+          <td>0.003846</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 2, 0, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.917011</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.003653</td>
+          <td>0.000874</td>
+          <td>0.002567</td>
+          <td>0.005244</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.986071</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>14</th>
+          <td>0.003697</td>
+          <td>0.000186</td>
+          <td>0.003495</td>
+          <td>0.004150</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 1, 0, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.997901</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>0</th>
+          <td>0.003705</td>
+          <td>0.000797</td>
+          <td>0.002111</td>
+          <td>0.005164</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 1, 2, 3)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.000000</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>18</th>
+          <td>0.003780</td>
+          <td>0.000882</td>
+          <td>0.002701</td>
+          <td>0.005402</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.020432</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.004938</td>
+          <td>0.000367</td>
+          <td>0.004532</td>
+          <td>0.005844</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.333061</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.005918</td>
+          <td>0.001085</td>
+          <td>0.004598</td>
+          <td>0.008312</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.597357</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>13</th>
+          <td>0.006106</td>
+          <td>0.000556</td>
+          <td>0.005619</td>
+          <td>0.007305</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.648325</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.006722</td>
+          <td>0.001807</td>
+          <td>0.005067</td>
+          <td>0.011245</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.814552</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>20</th>
+          <td>0.007071</td>
+          <td>0.000982</td>
+          <td>0.005454</td>
+          <td>0.008559</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.908667</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.007441</td>
+          <td>0.001732</td>
+          <td>0.006199</td>
+          <td>0.012169</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.008635</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>15</th>
+          <td>0.007815</td>
+          <td>0.001757</td>
+          <td>0.005932</td>
+          <td>0.010779</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.109489</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>16</th>
+          <td>0.008546</td>
+          <td>0.001384</td>
+          <td>0.005878</td>
+          <td>0.010614</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 3, 0, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.306951</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.010339</td>
+          <td>0.002789</td>
+          <td>0.005878</td>
+          <td>0.018301</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.790823</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>17</th>
+          <td>0.010677</td>
+          <td>0.001457</td>
+          <td>0.008504</td>
+          <td>0.014070</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.882191</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>23</th>
+          <td>0.012421</td>
+          <td>0.003052</td>
+          <td>0.007818</td>
+          <td>0.018106</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.352770</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.013432</td>
+          <td>0.004496</td>
+          <td>0.006536</td>
+          <td>0.021250</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.625680</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>19</th>
+          <td>0.014579</td>
+          <td>0.004026</td>
+          <td>0.007144</td>
+          <td>0.020739</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.935483</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Random cases
+~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    import random
+    
+    if False:  # comment out for more training data
+        for i in tqdm(range(0, 30)):
+            dim = random.randint(3, 5)
+            total = 1e8
+            while total > 1e6 or total < 0:
+                if dim == 3:
+                    shape = [random.randint(3, 64), random.randint(3, 224), random.randint(3, 64)]
+                elif dim == 4:
+                    shape = (
+                        [random.randint(3, 8)] + 
+                        [random.randint(16, 224) for d in range(2)] +
+                        [random.randint(16, 64)])
+                elif dim == 5:
+                    shape = (
+                        [random.randint(3, 8)] + 
+                        [random.randint(16, 32) for d in range(3)] +
+                        [random.randint(16, 64)])
+                else:
+                    raise NotImplementedError()
+                ashape = numpy.array(shape, dtype=numpy.float64)
+                total = numpy.prod(ashape)
+    
+            if total > 1000000:
+                number, repeat = 2, 2
+            elif total > 800000:
+                number, repeat = 3, 3
+            elif total > 500000:
+                number, repeat = 5, 5
+            elif total > 200000:
+                number, repeat = 7, 7
+            else:
+                number, repeat = 10, 10
+    
+            df = process_shape(tuple(shape), number=number, repeat=repeat, bar=False)
+            dfs.append(df)
+    
+            for i in range(len(shape)):
+                shape2 = shape.copy()
+                shape2[i] = 1
+                df = process_shape(tuple(shape), number=number, repeat=repeat, bar=False)
+                dfs.append(df)
+        
+    len(dfs)
+
+
+
+
+.. parsed-literal::
+    7
+
+
+
+.. code:: ipython3
+
+    import pandas
+    
+    data = pandas.concat(dfs, axis=0).reset_index(drop=True)
+    data.tail()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>repeat</th>
+          <th>number</th>
+          <th>context_size</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>127</th>
+          <td>0.010339</td>
+          <td>0.002789</td>
+          <td>0.005878</td>
+          <td>0.018301</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.790823</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>128</th>
+          <td>0.010677</td>
+          <td>0.001457</td>
+          <td>0.008504</td>
+          <td>0.014070</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.882191</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>129</th>
+          <td>0.012421</td>
+          <td>0.003052</td>
+          <td>0.007818</td>
+          <td>0.018106</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.352770</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>130</th>
+          <td>0.013432</td>
+          <td>0.004496</td>
+          <td>0.006536</td>
+          <td>0.021250</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.625680</td>
+          <td>4</td>
+        </tr>
+        <tr>
+          <th>131</th>
+          <td>0.014579</td>
+          <td>0.004026</td>
+          <td>0.007144</td>
+          <td>0.020739</td>
+          <td>15</td>
+          <td>15</td>
+          <td>232</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.935483</td>
+          <td>4</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    data.shape
+
+
+
+
+.. parsed-literal::
+    (132, 11)
+
+
+
+.. code:: ipython3
+
+    data[['dim', 'shape', 'ratio']].groupby(['dim', 'shape']).agg({'ratio': [min, max, numpy.mean, numpy.median]})
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead tr th {
+            text-align: left;
+        }
+
+        .dataframe thead tr:last-of-type th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr>
+          <th></th>
+          <th></th>
+          <th colspan="4" halign="left">ratio</th>
+        </tr>
+        <tr>
+          <th></th>
+          <th></th>
+          <th>min</th>
+          <th>max</th>
+          <th>mean</th>
+          <th>median</th>
+        </tr>
+        <tr>
+          <th>dim</th>
+          <th>shape</th>
+          <th></th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th rowspan="2" valign="top">3</th>
+          <th>(3, 244, 244)</th>
+          <td>0.955203</td>
+          <td>6.418195</td>
+          <td>2.029389</td>
+          <td>1.182247</td>
+        </tr>
+        <tr>
+          <th>(43, 44, 45)</th>
+          <td>0.985513</td>
+          <td>5.054301</td>
+          <td>1.814867</td>
+          <td>1.166837</td>
+        </tr>
+        <tr>
+          <th rowspan="5" valign="top">4</th>
+          <th>(1, 244, 244, 3)</th>
+          <td>0.753009</td>
+          <td>11.740772</td>
+          <td>5.023301</td>
+          <td>5.013162</td>
+        </tr>
+        <tr>
+          <th>(3, 244, 244, 1)</th>
+          <td>0.859903</td>
+          <td>10.530182</td>
+          <td>4.882680</td>
+          <td>5.477356</td>
+        </tr>
+        <tr>
+          <th>(3, 244, 244, 3)</th>
+          <td>1.000000</td>
+          <td>5.125597</td>
+          <td>2.481287</td>
+          <td>2.372651</td>
+        </tr>
+        <tr>
+          <th>(3, 244, 244, 6)</th>
+          <td>0.606961</td>
+          <td>3.935483</td>
+          <td>1.704169</td>
+          <td>1.465209</td>
+        </tr>
+        <tr>
+          <th>(12, 13, 15, 18)</th>
+          <td>0.750316</td>
+          <td>3.640132</td>
+          <td>1.866691</td>
+          <td>2.319191</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+features
+--------
+
+Computing the features
+~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    def _edit_distance(mot1, mot2):
+        dist = {(-1, -1): 0}
+        pred = {(-1, -1): None}
+        if len(mot1) == 0:
+            for j, d in enumerate(mot2):
+                dist[-1, j] = dist[-1, j - 1] + 1
+                pred[-1, j] = (-1, j - 1)
+                dist[j, -1] = dist[j - 1, -1] + 1
+                pred[j, -1] = (j - 1, -1)
+        for i, c in enumerate(mot1):
+            dist[i, -1] = dist[i - 1, -1] + 1
+            pred[i, -1] = (i - 1, -1)
+            dist[-1, i] = dist[-1, i - 1] + 1
+            pred[-1, i] = (-1, i - 1)
+            for j, d in enumerate(mot2):
+                opt = []
+                if (i - 1, j) in dist:
+                    x = dist[i - 1, j] + 1
+                    opt.append((x, (i - 1, j)))
+                if (i, j - 1) in dist:
+                    x = dist[i, j - 1] + 1
+                    opt.append((x, (i, j - 1)))
+                if (i - 1, j - 1) in dist:
+                    x = dist[i - 1, j - 1] + (1 if c != d else 0)
+                    opt.append((x, (i - 1, j - 1)))
+                mi = min(opt)
+                dist[i, j] = mi[0]
+                pred[i, j] = mi[1]
+    
+        return dist[len(mot1) - 1, len(mot2) - 1]
+    
+    _edit_distance("abdc", "cbda")
+
+
+
+
+.. parsed-literal::
+    2
+
+
+
+.. code:: ipython3
+
+    _edit_distance((0, 1, 2, 3), (0, 2, 1, 3))
+
+
+
+
+.. parsed-literal::
+    2
+
+
+
+.. code:: ipython3
+
+    from math import log
+    
+    
+    def _is_rotation(perm):
+        t = tuple(perm)
+        c = list(range(len(perm)))
+        for i in range(len(c)):
+            for k in range(len(c)):
+                c[k] = (k + i) % len(c)
+            if t == tuple(c):
+                return True
+        return False
+    
+    
+    def _relu(x, origin=0):
+        return origin if x < origin else x
+    
+    
+    def compute_features(shape, perm):    
+        total = numpy.prod(numpy.array(shape, dtype=numpy.int64))
+        
+        begin = 1
+        dbegin = 0
+        for i, p in enumerate(perm):
+            if p != i:
+                break
+            dbegin += 1
+            begin *= shape[i]
+            
+        end = 1
+        dend = 0
+        for i in range(len(perm)-1, -1, -1):
+            if perm[i] != i:
+                break
+            dend += 1
+            end *= shape[i]
+        
+        dis_cont = 0
+        for i in range(1, len(shape)):
+            if perm[i] != perm[i-1] + 1:
+                dis_cont += 1
+        
+        middle = max(1, int(total / (end * begin)))
+        feat = dict(size=total, begin=begin, end=end, middle=middle,
+                    dim=len(shape), discont=dis_cont)
+    
+        for c in [16, 32]:
+            feat["end%d" % c] = _relu(end, c)
+        
+        keys = list(feat)
+        for k in keys:
+            if k in {'dim', 'cpu', 'size'}:
+                continue
+            feat['r%s' % k] = float(feat[k] / total)
+        
+        for c in [2, 4, 8, 16, 32, 64]:
+            feat["iend%d" % c] = float(end >= c)
+            feat["ibegin%d" % c] = float(begin >= c)
+        
+        # feat['CST'] = 1
+        feat['CST_'] = -1
+        feat['dbegin'] = - dbegin
+        feat['dend'] = - dend
+        
+        keys = list(feat)
+        for k in keys:
+            if k.startswith('end') or k.startswith('begin'):
+                feat[k] = - feat[k]
+            elif k.startswith('rend') or k.startswith('rbegin'):
+                feat[k] = - feat[k]
+            elif k.startswith('iend') or k.startswith('ibegin'):
+                feat[k] = - feat[k]
+            elif k == "rdiscont":
+                feat[k] = - feat[k]
+    
+        idp = list(range(len(perm)))
+        feat["rot"] = -1 if _is_rotation(perm) else 0
+        feat["rev"] = 1 if perm == tuple(idp[::-1]) else 0
+        feat["edit"] = _edit_distance(idp, perm)
+        feat["redit"] = feat["edit"] / len(idp)
+        return feat
+    
+    
+    compute_features((3, 5, 7), (0, 1, 2))
+
+
+
+
+.. parsed-literal::
+    {'size': 105,
+     'begin': -105,
+     'end': -105,
+     'middle': 1,
+     'dim': 3,
+     'discont': 0,
+     'end16': -105,
+     'end32': -105,
+     'rbegin': -1.0,
+     'rend': -1.0,
+     'rmiddle': 0.009523809523809525,
+     'rdiscont': -0.0,
+     'rend16': -1.0,
+     'rend32': -1.0,
+     'iend2': -1.0,
+     'ibegin2': -1.0,
+     'iend4': -1.0,
+     'ibegin4': -1.0,
+     'iend8': -1.0,
+     'ibegin8': -1.0,
+     'iend16': -1.0,
+     'ibegin16': -1.0,
+     'iend32': -1.0,
+     'ibegin32': -1.0,
+     'iend64': -1.0,
+     'ibegin64': -1.0,
+     'CST_': -1,
+     'dbegin': -3,
+     'dend': -3,
+     'rot': -1,
+     'rev': 0,
+     'edit': 0,
+     'redit': 0.0}
+
+
+
+.. code:: ipython3
+
+    compute_features((3, 5, 7), (2, 1, 0))
+
+
+
+
+.. parsed-literal::
+    {'size': 105,
+     'begin': -1,
+     'end': -1,
+     'middle': 105,
+     'dim': 3,
+     'discont': 2,
+     'end16': -16,
+     'end32': -32,
+     'rbegin': -0.009523809523809525,
+     'rend': -0.009523809523809525,
+     'rmiddle': 1.0,
+     'rdiscont': -0.01904761904761905,
+     'rend16': -0.1523809523809524,
+     'rend32': -0.3047619047619048,
+     'iend2': -0.0,
+     'ibegin2': -0.0,
+     'iend4': -0.0,
+     'ibegin4': -0.0,
+     'iend8': -0.0,
+     'ibegin8': -0.0,
+     'iend16': -0.0,
+     'ibegin16': -0.0,
+     'iend32': -0.0,
+     'ibegin32': -0.0,
+     'iend64': -0.0,
+     'ibegin64': -0.0,
+     'CST_': -1,
+     'dbegin': 0,
+     'dend': 0,
+     'rot': 0,
+     'rev': 1,
+     'edit': 2,
+     'redit': 0.6666666666666666}
+
+
+
+.. code:: ipython3
+
+    compute_features((3, 5, 7), (1, 2, 0))
+
+
+
+
+.. parsed-literal::
+    {'size': 105,
+     'begin': -1,
+     'end': -1,
+     'middle': 105,
+     'dim': 3,
+     'discont': 1,
+     'end16': -16,
+     'end32': -32,
+     'rbegin': -0.009523809523809525,
+     'rend': -0.009523809523809525,
+     'rmiddle': 1.0,
+     'rdiscont': -0.009523809523809525,
+     'rend16': -0.1523809523809524,
+     'rend32': -0.3047619047619048,
+     'iend2': -0.0,
+     'ibegin2': -0.0,
+     'iend4': -0.0,
+     'ibegin4': -0.0,
+     'iend8': -0.0,
+     'ibegin8': -0.0,
+     'iend16': -0.0,
+     'ibegin16': -0.0,
+     'iend32': -0.0,
+     'ibegin32': -0.0,
+     'iend64': -0.0,
+     'ibegin64': -0.0,
+     'CST_': -1,
+     'dbegin': 0,
+     'dend': 0,
+     'rot': -1,
+     'rev': 0,
+     'edit': 2,
+     'redit': 0.6666666666666666}
+
+
+
+Computing the features for all simulations
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    def compute_features_dataframe(df):
+        
+        def merge(row):
+            feat = compute_features(row['shape'], row['perm'])
+            feat['yt'] = row['average']
+            feat['yr'] = row['ratio']
+            return feat
+        
+        rows = []
+        for i in tqdm(range(df.shape[0])):
+            rows.append(dict(shape=df.loc[i, "shape"], perm=df.loc[i, "perm"],
+                             average=df.loc[i, "average"], ratio=df.loc[i, "ratio"]))
+        obs = []
+        for row in tqdm(rows):
+            obs.append(merge(row))
+        return DataFrame(obs)
+    
+    fdata = compute_features_dataframe(data)
+    col_sort = list(sorted(fdata.columns))
+    fdata = fdata[col_sort]
+    fdata.tail()
+
+
+.. parsed-literal::
+    100%|██████████| 132/132 [00:00<00:00, 9459.22it/s]
+    100%|██████████| 132/132 [00:00<00:00, 3601.95it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>CST_</th>
+          <th>begin</th>
+          <th>dbegin</th>
+          <th>dend</th>
+          <th>dim</th>
+          <th>discont</th>
+          <th>edit</th>
+          <th>end</th>
+          <th>end16</th>
+          <th>end32</th>
+          <th>...</th>
+          <th>redit</th>
+          <th>rend</th>
+          <th>rend16</th>
+          <th>rend32</th>
+          <th>rev</th>
+          <th>rmiddle</th>
+          <th>rot</th>
+          <th>size</th>
+          <th>yr</th>
+          <th>yt</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>127</th>
+          <td>-1</td>
+          <td>-3</td>
+          <td>-1</td>
+          <td>0</td>
+          <td>4</td>
+          <td>3</td>
+          <td>2</td>
+          <td>-1</td>
+          <td>-16</td>
+          <td>-32</td>
+          <td>...</td>
+          <td>0.50</td>
+          <td>-9.331422e-07</td>
+          <td>-0.000015</td>
+          <td>-0.00003</td>
+          <td>0</td>
+          <td>0.333333</td>
+          <td>0</td>
+          <td>1071648</td>
+          <td>2.790823</td>
+          <td>0.010339</td>
+        </tr>
+        <tr>
+          <th>128</th>
+          <td>-1</td>
+          <td>-1</td>
+          <td>0</td>
+          <td>0</td>
+          <td>4</td>
+          <td>2</td>
+          <td>4</td>
+          <td>-1</td>
+          <td>-16</td>
+          <td>-32</td>
+          <td>...</td>
+          <td>1.00</td>
+          <td>-9.331422e-07</td>
+          <td>-0.000015</td>
+          <td>-0.00003</td>
+          <td>0</td>
+          <td>1.000000</td>
+          <td>0</td>
+          <td>1071648</td>
+          <td>2.882191</td>
+          <td>0.010677</td>
+        </tr>
+        <tr>
+          <th>129</th>
+          <td>-1</td>
+          <td>-1</td>
+          <td>0</td>
+          <td>0</td>
+          <td>4</td>
+          <td>3</td>
+          <td>4</td>
+          <td>-1</td>
+          <td>-16</td>
+          <td>-32</td>
+          <td>...</td>
+          <td>1.00</td>
+          <td>-9.331422e-07</td>
+          <td>-0.000015</td>
+          <td>-0.00003</td>
+          <td>1</td>
+          <td>1.000000</td>
+          <td>0</td>
+          <td>1071648</td>
+          <td>3.352770</td>
+          <td>0.012421</td>
+        </tr>
+        <tr>
+          <th>130</th>
+          <td>-1</td>
+          <td>-1</td>
+          <td>0</td>
+          <td>0</td>
+          <td>4</td>
+          <td>2</td>
+          <td>4</td>
+          <td>-1</td>
+          <td>-16</td>
+          <td>-32</td>
+          <td>...</td>
+          <td>1.00</td>
+          <td>-9.331422e-07</td>
+          <td>-0.000015</td>
+          <td>-0.00003</td>
+          <td>0</td>
+          <td>1.000000</td>
+          <td>0</td>
+          <td>1071648</td>
+          <td>3.625680</td>
+          <td>0.013432</td>
+        </tr>
+        <tr>
+          <th>131</th>
+          <td>-1</td>
+          <td>-1</td>
+          <td>0</td>
+          <td>0</td>
+          <td>4</td>
+          <td>3</td>
+          <td>3</td>
+          <td>-1</td>
+          <td>-16</td>
+          <td>-32</td>
+          <td>...</td>
+          <td>0.75</td>
+          <td>-9.331422e-07</td>
+          <td>-0.000015</td>
+          <td>-0.00003</td>
+          <td>0</td>
+          <td>1.000000</td>
+          <td>0</td>
+          <td>1071648</td>
+          <td>3.935483</td>
+          <td>0.014579</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>5 rows × 35 columns</p>
+    </div>
+
+
+
+correlations
+~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    fdata.corr()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>CST_</th>
+          <th>begin</th>
+          <th>dbegin</th>
+          <th>dend</th>
+          <th>dim</th>
+          <th>discont</th>
+          <th>edit</th>
+          <th>end</th>
+          <th>end16</th>
+          <th>end32</th>
+          <th>...</th>
+          <th>redit</th>
+          <th>rend</th>
+          <th>rend16</th>
+          <th>rend32</th>
+          <th>rev</th>
+          <th>rmiddle</th>
+          <th>rot</th>
+          <th>size</th>
+          <th>yr</th>
+          <th>yt</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>CST_</th>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>...</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+        </tr>
+        <tr>
+          <th>begin</th>
+          <td>NaN</td>
+          <td>1.000000</td>
+          <td>0.596816</td>
+          <td>0.596414</td>
+          <td>0.014118</td>
+          <td>0.404952</td>
+          <td>0.405175</td>
+          <td>0.999998</td>
+          <td>0.999998</td>
+          <td>0.999998</td>
+          <td>...</td>
+          <td>0.418022</td>
+          <td>0.681573</td>
+          <td>0.681573</td>
+          <td>0.681573</td>
+          <td>0.038216</td>
+          <td>0.256349</td>
+          <td>0.325594</td>
+          <td>-0.133581</td>
+          <td>0.127658</td>
+          <td>-0.008816</td>
+        </tr>
+        <tr>
+          <th>dbegin</th>
+          <td>NaN</td>
+          <td>0.596816</td>
+          <td>1.000000</td>
+          <td>0.676899</td>
+          <td>0.077162</td>
+          <td>0.486887</td>
+          <td>0.669598</td>
+          <td>0.596384</td>
+          <td>0.596374</td>
+          <td>0.596363</td>
+          <td>...</td>
+          <td>0.690333</td>
+          <td>0.831887</td>
+          <td>0.831895</td>
+          <td>0.831903</td>
+          <td>0.111636</td>
+          <td>0.605990</td>
+          <td>0.298090</td>
+          <td>0.016411</td>
+          <td>0.291318</td>
+          <td>0.139951</td>
+        </tr>
+        <tr>
+          <th>dend</th>
+          <td>NaN</td>
+          <td>0.596414</td>
+          <td>0.676899</td>
+          <td>1.000000</td>
+          <td>0.077162</td>
+          <td>0.486887</td>
+          <td>0.669598</td>
+          <td>0.596936</td>
+          <td>0.596907</td>
+          <td>0.596881</td>
+          <td>...</td>
+          <td>0.690333</td>
+          <td>0.833059</td>
+          <td>0.832975</td>
+          <td>0.832924</td>
+          <td>0.111636</td>
+          <td>0.623582</td>
+          <td>0.298090</td>
+          <td>0.016411</td>
+          <td>0.305489</td>
+          <td>0.155098</td>
+        </tr>
+        <tr>
+          <th>dim</th>
+          <td>NaN</td>
+          <td>0.014118</td>
+          <td>0.077162</td>
+          <td>0.077162</td>
+          <td>1.000000</td>
+          <td>0.305320</td>
+          <td>0.272614</td>
+          <td>0.014153</td>
+          <td>0.014145</td>
+          <td>0.014135</td>
+          <td>...</td>
+          <td>0.115902</td>
+          <td>0.160407</td>
+          <td>0.160417</td>
+          <td>0.160414</td>
+          <td>-0.160357</td>
+          <td>0.106693</td>
+          <td>0.240946</td>
+          <td>0.212685</td>
+          <td>0.138961</td>
+          <td>0.192305</td>
+        </tr>
+        <tr>
+          <th>discont</th>
+          <td>NaN</td>
+          <td>0.404952</td>
+          <td>0.486887</td>
+          <td>0.486887</td>
+          <td>0.305320</td>
+          <td>1.000000</td>
+          <td>0.531254</td>
+          <td>0.404971</td>
+          <td>0.404961</td>
+          <td>0.404948</td>
+          <td>...</td>
+          <td>0.504206</td>
+          <td>0.594219</td>
+          <td>0.594226</td>
+          <td>0.594223</td>
+          <td>0.150144</td>
+          <td>0.225854</td>
+          <td>0.823937</td>
+          <td>0.064937</td>
+          <td>0.388140</td>
+          <td>0.203342</td>
+        </tr>
+        <tr>
+          <th>edit</th>
+          <td>NaN</td>
+          <td>0.405175</td>
+          <td>0.669598</td>
+          <td>0.669598</td>
+          <td>0.272614</td>
+          <td>0.531254</td>
+          <td>1.000000</td>
+          <td>0.405223</td>
+          <td>0.405204</td>
+          <td>0.405189</td>
+          <td>...</td>
+          <td>0.984655</td>
+          <td>0.594688</td>
+          <td>0.594639</td>
+          <td>0.594619</td>
+          <td>0.208568</td>
+          <td>0.652532</td>
+          <td>0.338994</td>
+          <td>0.057981</td>
+          <td>0.464225</td>
+          <td>0.283262</td>
+        </tr>
+        <tr>
+          <th>end</th>
+          <td>NaN</td>
+          <td>0.999998</td>
+          <td>0.596384</td>
+          <td>0.596936</td>
+          <td>0.014153</td>
+          <td>0.404971</td>
+          <td>0.405223</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>...</td>
+          <td>0.418062</td>
+          <td>0.681565</td>
+          <td>0.681565</td>
+          <td>0.681565</td>
+          <td>0.038236</td>
+          <td>0.256479</td>
+          <td>0.325559</td>
+          <td>-0.133665</td>
+          <td>0.127730</td>
+          <td>-0.008844</td>
+        </tr>
+        <tr>
+          <th>end16</th>
+          <td>NaN</td>
+          <td>0.999998</td>
+          <td>0.596374</td>
+          <td>0.596907</td>
+          <td>0.014145</td>
+          <td>0.404961</td>
+          <td>0.405204</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>...</td>
+          <td>0.418044</td>
+          <td>0.681550</td>
+          <td>0.681550</td>
+          <td>0.681550</td>
+          <td>0.038231</td>
+          <td>0.256451</td>
+          <td>0.325557</td>
+          <td>-0.133671</td>
+          <td>0.127716</td>
+          <td>-0.008852</td>
+        </tr>
+        <tr>
+          <th>end32</th>
+          <td>NaN</td>
+          <td>0.999998</td>
+          <td>0.596363</td>
+          <td>0.596881</td>
+          <td>0.014135</td>
+          <td>0.404948</td>
+          <td>0.405189</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>...</td>
+          <td>0.418029</td>
+          <td>0.681533</td>
+          <td>0.681533</td>
+          <td>0.681533</td>
+          <td>0.038228</td>
+          <td>0.256430</td>
+          <td>0.325552</td>
+          <td>-0.133677</td>
+          <td>0.127707</td>
+          <td>-0.008859</td>
+        </tr>
+        <tr>
+          <th>ibegin16</th>
+          <td>NaN</td>
+          <td>0.488586</td>
+          <td>0.854056</td>
+          <td>0.553792</td>
+          <td>0.160800</td>
+          <td>0.476225</td>
+          <td>0.528132</td>
+          <td>0.487938</td>
+          <td>0.487930</td>
+          <td>0.487919</td>
+          <td>...</td>
+          <td>0.533981</td>
+          <td>0.715870</td>
+          <td>0.715889</td>
+          <td>0.715901</td>
+          <td>0.078215</td>
+          <td>0.522399</td>
+          <td>0.283800</td>
+          <td>0.037462</td>
+          <td>0.254352</td>
+          <td>0.136416</td>
+        </tr>
+        <tr>
+          <th>ibegin2</th>
+          <td>NaN</td>
+          <td>0.297779</td>
+          <td>0.792225</td>
+          <td>0.326418</td>
+          <td>0.080033</td>
+          <td>0.230393</td>
+          <td>0.539082</td>
+          <td>0.297285</td>
+          <td>0.297281</td>
+          <td>0.297277</td>
+          <td>...</td>
+          <td>0.548605</td>
+          <td>0.436111</td>
+          <td>0.436126</td>
+          <td>0.436148</td>
+          <td>0.128338</td>
+          <td>0.685605</td>
+          <td>0.049586</td>
+          <td>-0.027198</td>
+          <td>0.324851</td>
+          <td>0.109929</td>
+        </tr>
+        <tr>
+          <th>ibegin32</th>
+          <td>NaN</td>
+          <td>0.488586</td>
+          <td>0.854056</td>
+          <td>0.553792</td>
+          <td>0.160800</td>
+          <td>0.476225</td>
+          <td>0.528132</td>
+          <td>0.487938</td>
+          <td>0.487930</td>
+          <td>0.487919</td>
+          <td>...</td>
+          <td>0.533981</td>
+          <td>0.715870</td>
+          <td>0.715889</td>
+          <td>0.715901</td>
+          <td>0.078215</td>
+          <td>0.522399</td>
+          <td>0.283800</td>
+          <td>0.037462</td>
+          <td>0.254352</td>
+          <td>0.136416</td>
+        </tr>
+        <tr>
+          <th>ibegin4</th>
+          <td>NaN</td>
+          <td>0.420023</td>
+          <td>0.814178</td>
+          <td>0.474232</td>
+          <td>0.114432</td>
+          <td>0.388689</td>
+          <td>0.517951</td>
+          <td>0.419433</td>
+          <td>0.419424</td>
+          <td>0.419415</td>
+          <td>...</td>
+          <td>0.528284</td>
+          <td>0.615385</td>
+          <td>0.615471</td>
+          <td>0.615584</td>
+          <td>0.090985</td>
+          <td>0.594774</td>
+          <td>0.207651</td>
+          <td>0.116460</td>
+          <td>0.278810</td>
+          <td>0.179014</td>
+        </tr>
+        <tr>
+          <th>ibegin64</th>
+          <td>NaN</td>
+          <td>0.510659</td>
+          <td>0.869357</td>
+          <td>0.586430</td>
+          <td>0.083333</td>
+          <td>0.488512</td>
+          <td>0.533376</td>
+          <td>0.509999</td>
+          <td>0.509990</td>
+          <td>0.509979</td>
+          <td>...</td>
+          <td>0.555529</td>
+          <td>0.748243</td>
+          <td>0.748253</td>
+          <td>0.748257</td>
+          <td>0.074833</td>
+          <td>0.501069</td>
+          <td>0.307207</td>
+          <td>0.017724</td>
+          <td>0.243128</td>
+          <td>0.124459</td>
+        </tr>
+        <tr>
+          <th>ibegin8</th>
+          <td>NaN</td>
+          <td>0.420023</td>
+          <td>0.814178</td>
+          <td>0.474232</td>
+          <td>0.114432</td>
+          <td>0.388689</td>
+          <td>0.517951</td>
+          <td>0.419433</td>
+          <td>0.419424</td>
+          <td>0.419415</td>
+          <td>...</td>
+          <td>0.528284</td>
+          <td>0.615385</td>
+          <td>0.615471</td>
+          <td>0.615584</td>
+          <td>0.090985</td>
+          <td>0.594774</td>
+          <td>0.207651</td>
+          <td>0.116460</td>
+          <td>0.278810</td>
+          <td>0.179014</td>
+        </tr>
+        <tr>
+          <th>iend16</th>
+          <td>NaN</td>
+          <td>0.405858</td>
+          <td>0.452474</td>
+          <td>0.807989</td>
+          <td>0.181503</td>
+          <td>0.383654</td>
+          <td>0.517311</td>
+          <td>0.406614</td>
+          <td>0.406575</td>
+          <td>0.406542</td>
+          <td>...</td>
+          <td>0.513917</td>
+          <td>0.597165</td>
+          <td>0.597061</td>
+          <td>0.597069</td>
+          <td>0.094032</td>
+          <td>0.619928</td>
+          <td>0.191751</td>
+          <td>0.125689</td>
+          <td>0.307633</td>
+          <td>0.182267</td>
+        </tr>
+        <tr>
+          <th>iend2</th>
+          <td>NaN</td>
+          <td>0.297323</td>
+          <td>0.326418</td>
+          <td>0.792225</td>
+          <td>0.080033</td>
+          <td>0.230393</td>
+          <td>0.539082</td>
+          <td>0.297930</td>
+          <td>0.297895</td>
+          <td>0.297872</td>
+          <td>...</td>
+          <td>0.548605</td>
+          <td>0.437541</td>
+          <td>0.437398</td>
+          <td>0.437338</td>
+          <td>0.128338</td>
+          <td>0.724562</td>
+          <td>0.049586</td>
+          <td>-0.027198</td>
+          <td>0.337071</td>
+          <td>0.146321</td>
+        </tr>
+        <tr>
+          <th>iend32</th>
+          <td>NaN</td>
+          <td>0.468224</td>
+          <td>0.524298</td>
+          <td>0.841277</td>
+          <td>0.233408</td>
+          <td>0.465593</td>
+          <td>0.524167</td>
+          <td>0.469061</td>
+          <td>0.469029</td>
+          <td>0.468993</td>
+          <td>...</td>
+          <td>0.514805</td>
+          <td>0.688714</td>
+          <td>0.688640</td>
+          <td>0.688553</td>
+          <td>0.081511</td>
+          <td>0.544599</td>
+          <td>0.262448</td>
+          <td>0.049643</td>
+          <td>0.261930</td>
+          <td>0.139099</td>
+        </tr>
+        <tr>
+          <th>iend4</th>
+          <td>NaN</td>
+          <td>0.360597</td>
+          <td>0.400119</td>
+          <td>0.792963</td>
+          <td>0.141421</td>
+          <td>0.321878</td>
+          <td>0.519634</td>
+          <td>0.361290</td>
+          <td>0.361251</td>
+          <td>0.361222</td>
+          <td>...</td>
+          <td>0.521120</td>
+          <td>0.530594</td>
+          <td>0.530467</td>
+          <td>0.530439</td>
+          <td>0.105830</td>
+          <td>0.673384</td>
+          <td>0.136300</td>
+          <td>-0.039355</td>
+          <td>0.351151</td>
+          <td>0.127468</td>
+        </tr>
+        <tr>
+          <th>iend64</th>
+          <td>NaN</td>
+          <td>0.487959</td>
+          <td>0.553792</td>
+          <td>0.854056</td>
+          <td>0.160800</td>
+          <td>0.476225</td>
+          <td>0.528132</td>
+          <td>0.488816</td>
+          <td>0.488786</td>
+          <td>0.488752</td>
+          <td>...</td>
+          <td>0.533981</td>
+          <td>0.717677</td>
+          <td>0.717612</td>
+          <td>0.717534</td>
+          <td>0.078215</td>
+          <td>0.523746</td>
+          <td>0.283800</td>
+          <td>0.030938</td>
+          <td>0.255567</td>
+          <td>0.127728</td>
+        </tr>
+        <tr>
+          <th>iend8</th>
+          <td>NaN</td>
+          <td>0.405858</td>
+          <td>0.452474</td>
+          <td>0.807989</td>
+          <td>0.181503</td>
+          <td>0.383654</td>
+          <td>0.517311</td>
+          <td>0.406614</td>
+          <td>0.406575</td>
+          <td>0.406542</td>
+          <td>...</td>
+          <td>0.513917</td>
+          <td>0.597165</td>
+          <td>0.597061</td>
+          <td>0.597069</td>
+          <td>0.094032</td>
+          <td>0.619928</td>
+          <td>0.191751</td>
+          <td>0.125689</td>
+          <td>0.307633</td>
+          <td>0.182267</td>
+        </tr>
+        <tr>
+          <th>middle</th>
+          <td>NaN</td>
+          <td>0.126896</td>
+          <td>0.303868</td>
+          <td>0.319057</td>
+          <td>0.178317</td>
+          <td>0.152095</td>
+          <td>0.377874</td>
+          <td>0.126960</td>
+          <td>0.126947</td>
+          <td>0.126937</td>
+          <td>...</td>
+          <td>0.355980</td>
+          <td>0.186472</td>
+          <td>0.186669</td>
+          <td>0.186918</td>
+          <td>0.052991</td>
+          <td>0.467981</td>
+          <td>0.000903</td>
+          <td>0.728990</td>
+          <td>-0.008120</td>
+          <td>0.821357</td>
+        </tr>
+        <tr>
+          <th>rbegin</th>
+          <td>NaN</td>
+          <td>0.681576</td>
+          <td>0.832794</td>
+          <td>0.831933</td>
+          <td>0.160296</td>
+          <td>0.594171</td>
+          <td>0.594568</td>
+          <td>0.681564</td>
+          <td>0.681549</td>
+          <td>0.681532</td>
+          <td>...</td>
+          <td>0.613417</td>
+          <td>0.999992</td>
+          <td>0.999993</td>
+          <td>0.999993</td>
+          <td>0.056108</td>
+          <td>0.376357</td>
+          <td>0.477649</td>
+          <td>0.034328</td>
+          <td>0.187411</td>
+          <td>0.095471</td>
+        </tr>
+        <tr>
+          <th>rdiscont</th>
+          <td>NaN</td>
+          <td>-0.132163</td>
+          <td>-0.158903</td>
+          <td>-0.158903</td>
+          <td>-0.077379</td>
+          <td>-0.320270</td>
+          <td>-0.168278</td>
+          <td>-0.132191</td>
+          <td>-0.132195</td>
+          <td>-0.132192</td>
+          <td>...</td>
+          <td>-0.163660</td>
+          <td>-0.193464</td>
+          <td>-0.193106</td>
+          <td>-0.192632</td>
+          <td>-0.054527</td>
+          <td>-0.001602</td>
+          <td>-0.265672</td>
+          <td>0.551880</td>
+          <td>0.004517</td>
+          <td>0.386893</td>
+        </tr>
+        <tr>
+          <th>redit</th>
+          <td>NaN</td>
+          <td>0.418022</td>
+          <td>0.690333</td>
+          <td>0.690333</td>
+          <td>0.115902</td>
+          <td>0.504206</td>
+          <td>0.984655</td>
+          <td>0.418062</td>
+          <td>0.418044</td>
+          <td>0.418029</td>
+          <td>...</td>
+          <td>1.000000</td>
+          <td>0.613517</td>
+          <td>0.613466</td>
+          <td>0.613446</td>
+          <td>0.244134</td>
+          <td>0.655658</td>
+          <td>0.317106</td>
+          <td>0.024651</td>
+          <td>0.450928</td>
+          <td>0.256097</td>
+        </tr>
+        <tr>
+          <th>rend</th>
+          <td>NaN</td>
+          <td>0.681573</td>
+          <td>0.831887</td>
+          <td>0.833059</td>
+          <td>0.160407</td>
+          <td>0.594219</td>
+          <td>0.594688</td>
+          <td>0.681565</td>
+          <td>0.681550</td>
+          <td>0.681533</td>
+          <td>...</td>
+          <td>0.613517</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>0.999999</td>
+          <td>0.056153</td>
+          <td>0.376658</td>
+          <td>0.477579</td>
+          <td>0.034412</td>
+          <td>0.187551</td>
+          <td>0.095557</td>
+        </tr>
+        <tr>
+          <th>rend16</th>
+          <td>NaN</td>
+          <td>0.681573</td>
+          <td>0.831895</td>
+          <td>0.832975</td>
+          <td>0.160417</td>
+          <td>0.594226</td>
+          <td>0.594639</td>
+          <td>0.681565</td>
+          <td>0.681550</td>
+          <td>0.681533</td>
+          <td>...</td>
+          <td>0.613466</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>0.056129</td>
+          <td>0.376574</td>
+          <td>0.477613</td>
+          <td>0.034679</td>
+          <td>0.187559</td>
+          <td>0.095755</td>
+        </tr>
+        <tr>
+          <th>rend32</th>
+          <td>NaN</td>
+          <td>0.681573</td>
+          <td>0.831903</td>
+          <td>0.832924</td>
+          <td>0.160414</td>
+          <td>0.594223</td>
+          <td>0.594619</td>
+          <td>0.681565</td>
+          <td>0.681550</td>
+          <td>0.681533</td>
+          <td>...</td>
+          <td>0.613446</td>
+          <td>0.999999</td>
+          <td>1.000000</td>
+          <td>1.000000</td>
+          <td>0.056116</td>
+          <td>0.376557</td>
+          <td>0.477630</td>
+          <td>0.035005</td>
+          <td>0.187607</td>
+          <td>0.095996</td>
+        </tr>
+        <tr>
+          <th>rev</th>
+          <td>NaN</td>
+          <td>0.038216</td>
+          <td>0.111636</td>
+          <td>0.111636</td>
+          <td>-0.160357</td>
+          <td>0.150144</td>
+          <td>0.208568</td>
+          <td>0.038236</td>
+          <td>0.038231</td>
+          <td>0.038228</td>
+          <td>...</td>
+          <td>0.244134</td>
+          <td>0.056153</td>
+          <td>0.056129</td>
+          <td>0.056116</td>
+          <td>1.000000</td>
+          <td>0.180470</td>
+          <td>0.117200</td>
+          <td>-0.034106</td>
+          <td>0.218387</td>
+          <td>0.094260</td>
+        </tr>
+        <tr>
+          <th>rmiddle</th>
+          <td>NaN</td>
+          <td>0.256349</td>
+          <td>0.605990</td>
+          <td>0.623582</td>
+          <td>0.106693</td>
+          <td>0.225854</td>
+          <td>0.652532</td>
+          <td>0.256479</td>
+          <td>0.256451</td>
+          <td>0.256430</td>
+          <td>...</td>
+          <td>0.655658</td>
+          <td>0.376658</td>
+          <td>0.376574</td>
+          <td>0.376557</td>
+          <td>0.180470</td>
+          <td>1.000000</td>
+          <td>-0.064351</td>
+          <td>-0.013771</td>
+          <td>0.468925</td>
+          <td>0.195497</td>
+        </tr>
+        <tr>
+          <th>rot</th>
+          <td>NaN</td>
+          <td>0.325594</td>
+          <td>0.298090</td>
+          <td>0.298090</td>
+          <td>0.240946</td>
+          <td>0.823937</td>
+          <td>0.338994</td>
+          <td>0.325559</td>
+          <td>0.325557</td>
+          <td>0.325552</td>
+          <td>...</td>
+          <td>0.317106</td>
+          <td>0.477579</td>
+          <td>0.477613</td>
+          <td>0.477630</td>
+          <td>0.117200</td>
+          <td>-0.064351</td>
+          <td>1.000000</td>
+          <td>0.051246</td>
+          <td>0.243294</td>
+          <td>0.126195</td>
+        </tr>
+        <tr>
+          <th>size</th>
+          <td>NaN</td>
+          <td>-0.133581</td>
+          <td>0.016411</td>
+          <td>0.016411</td>
+          <td>0.212685</td>
+          <td>0.064937</td>
+          <td>0.057981</td>
+          <td>-0.133665</td>
+          <td>-0.133671</td>
+          <td>-0.133677</td>
+          <td>...</td>
+          <td>0.024651</td>
+          <td>0.034412</td>
+          <td>0.034679</td>
+          <td>0.035005</td>
+          <td>-0.034106</td>
+          <td>-0.013771</td>
+          <td>0.051246</td>
+          <td>1.000000</td>
+          <td>-0.236289</td>
+          <td>0.805926</td>
+        </tr>
+        <tr>
+          <th>yr</th>
+          <td>NaN</td>
+          <td>0.127658</td>
+          <td>0.291318</td>
+          <td>0.305489</td>
+          <td>0.138961</td>
+          <td>0.388140</td>
+          <td>0.464225</td>
+          <td>0.127730</td>
+          <td>0.127716</td>
+          <td>0.127707</td>
+          <td>...</td>
+          <td>0.450928</td>
+          <td>0.187551</td>
+          <td>0.187559</td>
+          <td>0.187607</td>
+          <td>0.218387</td>
+          <td>0.468925</td>
+          <td>0.243294</td>
+          <td>-0.236289</td>
+          <td>1.000000</td>
+          <td>-0.013907</td>
+        </tr>
+        <tr>
+          <th>yt</th>
+          <td>NaN</td>
+          <td>-0.008816</td>
+          <td>0.139951</td>
+          <td>0.155098</td>
+          <td>0.192305</td>
+          <td>0.203342</td>
+          <td>0.283262</td>
+          <td>-0.008844</td>
+          <td>-0.008852</td>
+          <td>-0.008859</td>
+          <td>...</td>
+          <td>0.256097</td>
+          <td>0.095557</td>
+          <td>0.095755</td>
+          <td>0.095996</td>
+          <td>0.094260</td>
+          <td>0.195497</td>
+          <td>0.126195</td>
+          <td>0.805926</td>
+          <td>-0.013907</td>
+          <td>1.000000</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>35 rows × 35 columns</p>
+    </div>
+
+
+
+.. code:: ipython3
+
+    fdata.corr()['yt']
+
+
+
+
+.. parsed-literal::
+    CST_             NaN
+    begin      -0.008816
+    dbegin      0.139951
+    dend        0.155098
+    dim         0.192305
+    discont     0.203342
+    edit        0.283262
+    end        -0.008844
+    end16      -0.008852
+    end32      -0.008859
+    ibegin16    0.136416
+    ibegin2     0.109929
+    ibegin32    0.136416
+    ibegin4     0.179014
+    ibegin64    0.124459
+    ibegin8     0.179014
+    iend16      0.182267
+    iend2       0.146321
+    iend32      0.139099
+    iend4       0.127468
+    iend64      0.127728
+    iend8       0.182267
+    middle      0.821357
+    rbegin      0.095471
+    rdiscont    0.386893
+    redit       0.256097
+    rend        0.095557
+    rend16      0.095755
+    rend32      0.095996
+    rev         0.094260
+    rmiddle     0.195497
+    rot         0.126195
+    size        0.805926
+    yr         -0.013907
+    yt          1.000000
+    Name: yt, dtype: float64
+
+
+
+We check the sign of the correlations of all features with *yt*. If it
+is positive, increasing the feature increases the processing time. We
+try to get only positive correlations. *end* is the flattened last
+dimensions left unchanged by the permutation. The bigger it is, the
+faster the transposition is. That’s why the function computing all
+features multiplies this number by ``-1`` to get a feature positively
+correlated to the processing time. *end16* is equal to *end* when
+``end<-16`` and ``-16`` when ``end>=-16``. This is a simplification of
+the cost of moving data from memory to cache L1. This cost is linear
+when the data to move is big enough, but almost constant for small
+chunks.
+
+Linear regression
+-----------------
+
+We choose a linear regression because the prediction are not limited.
+The training set does not include all configuration and surely does not
+include all possible high value the model may have to predict.
+
+The goal is not necessarily to predict the fastest permutation but to
+predict the processing time as the goal is to find the best combination
+of transpositions in a ONNX graph (einsum). The final goal is to predict
+which graphs optimizes a series of transpositions.
+
+The target could be the processing time or the logarithm of this time.
+However, making mistakes on small times is not an issue but errors on
+high processing time is not a good thing.
+
+We could also try to predict a ratio *transposition time /copy time* but
+it still gives more important to small matrix size.
+
+Many variables are correlated. Variables should be selected.
+
+Dataset
+~~~~~~~
+
+.. code:: ipython3
+
+    X = fdata.drop(["yt", "yr"], axis=1)
+    x_names = list(X.columns)
+    yt = fdata['yt'] * 1000
+
+.. code:: ipython3
+
+    numpy.mean(yt)
+
+
+
+
+.. parsed-literal::
+    1.8809171132996723
+
+
+
+Simple model
+~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from sklearn.linear_model import LinearRegression
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.pipeline import make_pipeline
+    from sklearn.metrics import r2_score, mean_absolute_error
+    
+    pipe = make_pipeline(StandardScaler(with_mean=False), LinearRegression(fit_intercept=False))
+    pipe.fit(X, yt)
+    model = pipe.steps[1][1]
+    coef = {k: v for k, v in zip(X.columns, model.coef_)}
+    coef['name'] = 'reg'
+    coef['intercept_'] = model.intercept_
+    pred = numpy.maximum(pipe.predict(X), 0)
+    coef['r2'] = r2_score(yt, pred)
+    coef['mae'] = mean_absolute_error(yt, pred)
+    coef['model'] = pipe
+    coefs = [coef]
+    coef["r2"], coef['mae']
+
+
+
+
+.. parsed-literal::
+    (0.8157414076410756, 0.6368865305095469)
+
+
+
+.. code:: ipython3
+
+    df = DataFrame([(k, v) for k, v in coef.items() if k not in {'name', 'model'}],
+                    columns=["feature", "value"]).set_index("feature")
+    df.plot(kind="bar", figsize=(14, 2));
+
+
+
+.. image:: onnx_operator_cost_42_0.png
+
+
+.. code:: ipython3
+
+    df
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>value</th>
+        </tr>
+        <tr>
+          <th>feature</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>CST_</th>
+          <td>-3.076618e+08</td>
+        </tr>
+        <tr>
+          <th>begin</th>
+          <td>-2.941725e+01</td>
+        </tr>
+        <tr>
+          <th>dbegin</th>
+          <td>-1.854147e-01</td>
+        </tr>
+        <tr>
+          <th>dend</th>
+          <td>-9.638954e-02</td>
+        </tr>
+        <tr>
+          <th>dim</th>
+          <td>-1.037599e-01</td>
+        </tr>
+        <tr>
+          <th>discont</th>
+          <td>5.204404e-01</td>
+        </tr>
+        <tr>
+          <th>edit</th>
+          <td>3.582481e-01</td>
+        </tr>
+        <tr>
+          <th>end</th>
+          <td>-1.046584e+12</td>
+        </tr>
+        <tr>
+          <th>end16</th>
+          <td>-2.278042e+10</td>
+        </tr>
+        <tr>
+          <th>end32</th>
+          <td>1.069321e+12</td>
+        </tr>
+        <tr>
+          <th>ibegin16</th>
+          <td>-3.713466e+00</td>
+        </tr>
+        <tr>
+          <th>ibegin2</th>
+          <td>1.439716e-02</td>
+        </tr>
+        <tr>
+          <th>ibegin32</th>
+          <td>3.784367e+00</td>
+        </tr>
+        <tr>
+          <th>ibegin4</th>
+          <td>-6.813416e+00</td>
+        </tr>
+        <tr>
+          <th>ibegin64</th>
+          <td>-7.576102e-02</td>
+        </tr>
+        <tr>
+          <th>ibegin8</th>
+          <td>6.927856e+00</td>
+        </tr>
+        <tr>
+          <th>iend16</th>
+          <td>2.028144e+07</td>
+        </tr>
+        <tr>
+          <th>iend2</th>
+          <td>8.225773e+06</td>
+        </tr>
+        <tr>
+          <th>iend32</th>
+          <td>4.322857e+07</td>
+        </tr>
+        <tr>
+          <th>iend4</th>
+          <td>1.097274e+07</td>
+        </tr>
+        <tr>
+          <th>iend64</th>
+          <td>1.996315e-01</td>
+        </tr>
+        <tr>
+          <th>iend8</th>
+          <td>2.028143e+07</td>
+        </tr>
+        <tr>
+          <th>middle</th>
+          <td>1.541218e+00</td>
+        </tr>
+        <tr>
+          <th>rbegin</th>
+          <td>4.940619e+01</td>
+        </tr>
+        <tr>
+          <th>rdiscont</th>
+          <td>7.614642e-01</td>
+        </tr>
+        <tr>
+          <th>redit</th>
+          <td>8.622710e-02</td>
+        </tr>
+        <tr>
+          <th>rend</th>
+          <td>6.615750e+02</td>
+        </tr>
+        <tr>
+          <th>rend16</th>
+          <td>3.459172e+02</td>
+        </tr>
+        <tr>
+          <th>rend32</th>
+          <td>-1.057057e+03</td>
+        </tr>
+        <tr>
+          <th>rev</th>
+          <td>1.537206e-01</td>
+        </tr>
+        <tr>
+          <th>rmiddle</th>
+          <td>-4.563712e-01</td>
+        </tr>
+        <tr>
+          <th>rot</th>
+          <td>7.771901e-02</td>
+        </tr>
+        <tr>
+          <th>size</th>
+          <td>1.295707e+00</td>
+        </tr>
+        <tr>
+          <th>intercept_</th>
+          <td>0.000000e+00</td>
+        </tr>
+        <tr>
+          <th>r2</th>
+          <td>8.157414e-01</td>
+        </tr>
+        <tr>
+          <th>mae</th>
+          <td>6.368865e-01</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Coefficients associated to features *end*, *end16* are almost opposed
+and it would better to get a model which keeps only one.
+
+Quantile Regression
+~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    from mlinsights.mlmodel import QuantileLinearRegression
+    pipe = make_pipeline(StandardScaler(with_mean=False), QuantileLinearRegression(fit_intercept=False))
+    pipe.fit(X, yt)
+    model = pipe.steps[1][1]
+    coef = {k: v for k, v in zip(X.columns, model.coef_)}
+    coef['name'] = 'med'
+    coef['intercept_'] = model.intercept_
+    pred = numpy.maximum(pipe.predict(X), 0)
+    coef['r2'] = r2_score(yt, pred)
+    coef['mae'] = mean_absolute_error(yt, pred)
+    coef['model'] = pipe
+    coefs.append(coef)
+    coef["r2"], coef['mae']
+
+
+
+
+.. parsed-literal::
+    (0.7924498414927943, 0.5679387557069854)
+
+
+
+.. code:: ipython3
+
+    DataFrame(coef.items(), columns=["feature", "value"]).set_index("feature")
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>value</th>
+        </tr>
+        <tr>
+          <th>feature</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>CST_</th>
+          <td>1433409.249051</td>
+        </tr>
+        <tr>
+          <th>begin</th>
+          <td>27.13405</td>
+        </tr>
+        <tr>
+          <th>dbegin</th>
+          <td>0.07931</td>
+        </tr>
+        <tr>
+          <th>dend</th>
+          <td>0.087576</td>
+        </tr>
+        <tr>
+          <th>dim</th>
+          <td>0.006919</td>
+        </tr>
+        <tr>
+          <th>discont</th>
+          <td>0.413378</td>
+        </tr>
+        <tr>
+          <th>edit</th>
+          <td>0.186032</td>
+        </tr>
+        <tr>
+          <th>end</th>
+          <td>4876069525.422424</td>
+        </tr>
+        <tr>
+          <th>end16</th>
+          <td>106134745.367844</td>
+        </tr>
+        <tr>
+          <th>end32</th>
+          <td>-4982003112.711292</td>
+        </tr>
+        <tr>
+          <th>ibegin16</th>
+          <td>0.129918</td>
+        </tr>
+        <tr>
+          <th>ibegin2</th>
+          <td>-0.069604</td>
+        </tr>
+        <tr>
+          <th>ibegin32</th>
+          <td>-0.221099</td>
+        </tr>
+        <tr>
+          <th>ibegin4</th>
+          <td>-0.045585</td>
+        </tr>
+        <tr>
+          <th>ibegin64</th>
+          <td>-0.1085</td>
+        </tr>
+        <tr>
+          <th>ibegin8</th>
+          <td>0.073031</td>
+        </tr>
+        <tr>
+          <th>iend16</th>
+          <td>-94492.918693</td>
+        </tr>
+        <tr>
+          <th>iend2</th>
+          <td>-38324.37475</td>
+        </tr>
+        <tr>
+          <th>iend32</th>
+          <td>-201401.795017</td>
+        </tr>
+        <tr>
+          <th>iend4</th>
+          <td>-51122.392443</td>
+        </tr>
+        <tr>
+          <th>iend64</th>
+          <td>0.15928</td>
+        </tr>
+        <tr>
+          <th>iend8</th>
+          <td>-94492.881923</td>
+        </tr>
+        <tr>
+          <th>middle</th>
+          <td>1.588707</td>
+        </tr>
+        <tr>
+          <th>rbegin</th>
+          <td>36.958438</td>
+        </tr>
+        <tr>
+          <th>rdiscont</th>
+          <td>0.375421</td>
+        </tr>
+        <tr>
+          <th>redit</th>
+          <td>0.071189</td>
+        </tr>
+        <tr>
+          <th>rend</th>
+          <td>4424.263222</td>
+        </tr>
+        <tr>
+          <th>rend16</th>
+          <td>-7664.018684</td>
+        </tr>
+        <tr>
+          <th>rend32</th>
+          <td>3202.681647</td>
+        </tr>
+        <tr>
+          <th>rev</th>
+          <td>0.08288</td>
+        </tr>
+        <tr>
+          <th>rmiddle</th>
+          <td>-0.207068</td>
+        </tr>
+        <tr>
+          <th>rot</th>
+          <td>-0.095643</td>
+        </tr>
+        <tr>
+          <th>size</th>
+          <td>0.938597</td>
+        </tr>
+        <tr>
+          <th>name</th>
+          <td>med</td>
+        </tr>
+        <tr>
+          <th>intercept_</th>
+          <td>0</td>
+        </tr>
+        <tr>
+          <th>r2</th>
+          <td>0.79245</td>
+        </tr>
+        <tr>
+          <th>mae</th>
+          <td>0.567939</td>
+        </tr>
+        <tr>
+          <th>model</th>
+          <td>(StandardScaler(with_mean=False), QuantileLine...</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Lasso
+~~~~~
+
+To select features.
+
+.. code:: ipython3
+
+    from sklearn.linear_model import Lasso
+    
+    scores = []
+    models = []
+    for a in tqdm([0.001, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1., 2.]):
+        alpha = a * 1.
+        pipe = make_pipeline(
+            StandardScaler(with_mean=False),
+            Lasso(alpha=alpha, fit_intercept=False, max_iter=5000))
+        pipe.fit(X, yt)
+        pred = numpy.maximum(pipe.predict(X), 0)
+        model = pipe.steps[1][1]
+        scores.append(dict(r2=r2_score(yt, pred), mae=mean_absolute_error(yt, pred),
+                           alpha=alpha, null=(numpy.abs(model.coef_) < 1e-6).sum(),
+                           n=len(model.coef_)))
+        models.append(pipe)
+        if alpha >= 0.01 and alpha <= 0.2:
+            coef = {k: v for k, v in zip(X.columns, pipe.steps[1][1].coef_)}
+            coef['name'] = "Lasso-%f" % alpha
+            coef['model'] = pipe
+            coef['r2'] = r2_score(yt, pred)
+            coef['mae'] = mean_absolute_error(yt, pred)
+            coefs.append(coef)
+        
+    DataFrame(scores)
+
+
+.. parsed-literal::
+    100%|██████████| 13/13 [00:00<00:00, 69.97it/s]
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>r2</th>
+          <th>mae</th>
+          <th>alpha</th>
+          <th>null</th>
+          <th>n</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.809704</td>
+          <td>0.629480</td>
+          <td>0.001</td>
+          <td>4</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.807546</td>
+          <td>0.629886</td>
+          <td>0.010</td>
+          <td>10</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.782541</td>
+          <td>0.676499</td>
+          <td>0.100</td>
+          <td>23</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.766911</td>
+          <td>0.680344</td>
+          <td>0.200</td>
+          <td>28</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.751546</td>
+          <td>0.703684</td>
+          <td>0.300</td>
+          <td>29</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>5</th>
+          <td>0.738223</td>
+          <td>0.742962</td>
+          <td>0.400</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>6</th>
+          <td>0.730937</td>
+          <td>0.735958</td>
+          <td>0.500</td>
+          <td>31</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>7</th>
+          <td>0.718437</td>
+          <td>0.758143</td>
+          <td>0.600</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>8</th>
+          <td>0.701329</td>
+          <td>0.800503</td>
+          <td>0.700</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>9</th>
+          <td>0.681590</td>
+          <td>0.848549</td>
+          <td>0.800</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>10</th>
+          <td>0.659218</td>
+          <td>0.898770</td>
+          <td>0.900</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>11</th>
+          <td>0.634218</td>
+          <td>0.949493</td>
+          <td>1.000</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+        <tr>
+          <th>12</th>
+          <td>0.239413</td>
+          <td>1.600542</td>
+          <td>2.000</td>
+          <td>30</td>
+          <td>33</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    coef = {k: v for k, v in zip(X.columns, models[1].steps[1][1].coef_)}
+    df = DataFrame(coef.items(), columns=["feature", "value"]).set_index("feature")
+    df.plot(kind="bar", figsize=(14, 2), title="alpha=%f" % scores[1]["alpha"]);
+
+
+
+.. image:: onnx_operator_cost_50_0.png
+
+
+.. code:: ipython3
+
+    coef = {k: v for k, v in zip(X.columns, models[2].steps[1][1].coef_)}
+    df = DataFrame(coef.items(), columns=["feature", "value"]).set_index("feature")
+    df.plot(kind="bar", figsize=(14, 2), title="alpha=%f" % scores[2]["alpha"]);
+
+
+
+.. image:: onnx_operator_cost_51_0.png
+
+
+Linear regression with positive weights
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    pipe = make_pipeline(StandardScaler(with_mean=False), LinearRegression(positive=True, fit_intercept=False))
+    pipe.fit(X, yt)
+    model = pipe.steps[1][1]
+    coef = {k: v for k, v in zip(X.columns, model.coef_)}
+    coef['name'] = 'pos'
+    coef['intercept_'] = model.intercept_
+    pred = numpy.maximum(pipe.predict(X), 0)
+    coef['r2'] = r2_score(yt, pred)
+    coef['mae'] = mean_absolute_error(yt, pred)
+    coef['model'] = pipe
+    coefs.append(coef)
+    coef["r2"], coef['mae']
+
+
+
+
+.. parsed-literal::
+    (0.7905447080626958, 0.6768663007518693)
+
+
+
+.. code:: ipython3
+
+    coef = {k: v for k, v in zip(X.columns, pipe.steps[1][1].coef_)}
+    df = DataFrame(coef.items(), columns=["feature", "value"]).set_index("feature")
+    df.plot(kind="bar", figsize=(14, 2), title="positive");
+
+
+
+.. image:: onnx_operator_cost_54_0.png
+
+
+Quantile regression with positive weights
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    pipe = make_pipeline(StandardScaler(with_mean=False), QuantileLinearRegression(positive=True, fit_intercept=False))
+    pipe.fit(X, yt)
+    model = pipe.steps[1][1]
+    coef = {k: v for k, v in zip(X.columns, model.coef_)}
+    coef['name'] = 'medpos'
+    coef['intercept_'] = model.intercept_
+    pred = numpy.maximum(pipe.predict(X), 0)
+    coef['r2'] = r2_score(yt, pred)
+    coef['mae'] = mean_absolute_error(yt, pred)
+    coef['model'] = pipe
+    coefs.append(coef)
+    coef["r2"], coef['mae']
+
+
+
+
+.. parsed-literal::
+    (0.752689515971656, 0.6468340444504788)
+
+
+
+.. code:: ipython3
+
+    coef = {k: v for k, v in zip(X.columns, pipe.steps[1][1].coef_)}
+    df = DataFrame(coef.items(), columns=["feature", "value"]).set_index("feature")
+    df.plot(kind="bar", figsize=(14, 2), title="positive");
+
+
+
+.. image:: onnx_operator_cost_57_0.png
+
+
+Summary
+~~~~~~~
+
+.. code:: ipython3
+
+    dfcoef = DataFrame(coefs)
+    dfcoef[::-1].T
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>6</th>
+          <th>5</th>
+          <th>4</th>
+          <th>3</th>
+          <th>2</th>
+          <th>1</th>
+          <th>0</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>CST_</th>
+          <td>0.829482</td>
+          <td>0.821048</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>1433409.249051</td>
+          <td>-307661768.128088</td>
+        </tr>
+        <tr>
+          <th>begin</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.03443</td>
+          <td>27.13405</td>
+          <td>-29.417247</td>
+        </tr>
+        <tr>
+          <th>dbegin</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.044705</td>
+          <td>0.07931</td>
+          <td>-0.185415</td>
+        </tr>
+        <tr>
+          <th>dend</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.087576</td>
+          <td>-0.09639</td>
+        </tr>
+        <tr>
+          <th>dim</th>
+          <td>0.023846</td>
+          <td>0.0</td>
+          <td>-0.014763</td>
+          <td>-0.030446</td>
+          <td>-0.120949</td>
+          <td>0.006919</td>
+          <td>-0.10376</td>
+        </tr>
+        <tr>
+          <th>discont</th>
+          <td>0.060636</td>
+          <td>0.056297</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.210421</td>
+          <td>0.413378</td>
+          <td>0.52044</td>
+        </tr>
+        <tr>
+          <th>edit</th>
+          <td>0.03823</td>
+          <td>0.094856</td>
+          <td>0.0</td>
+          <td>0.0418</td>
+          <td>0.396052</td>
+          <td>0.186032</td>
+          <td>0.358248</td>
+        </tr>
+        <tr>
+          <th>end</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.007053</td>
+          <td>4876069525.422424</td>
+          <td>-1046583604803.358887</td>
+        </tr>
+        <tr>
+          <th>end16</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.000036</td>
+          <td>106134745.367844</td>
+          <td>-22780416305.902706</td>
+        </tr>
+        <tr>
+          <th>end32</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.00004</td>
+          <td>-4982003112.711292</td>
+          <td>1069320839370.567505</td>
+        </tr>
+        <tr>
+          <th>ibegin16</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.066669</td>
+          <td>0.129918</td>
+          <td>-3.713466</td>
+        </tr>
+        <tr>
+          <th>ibegin2</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.02181</td>
+          <td>-0.069604</td>
+          <td>0.014397</td>
+        </tr>
+        <tr>
+          <th>ibegin32</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.0</td>
+          <td>-0.221099</td>
+          <td>3.784367</td>
+        </tr>
+        <tr>
+          <th>ibegin4</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.0</td>
+          <td>-0.045585</td>
+          <td>-6.813416</td>
+        </tr>
+        <tr>
+          <th>ibegin64</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.0</td>
+          <td>-0.1085</td>
+          <td>-0.075761</td>
+        </tr>
+        <tr>
+          <th>ibegin8</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.0</td>
+          <td>0.073031</td>
+          <td>6.927856</td>
+        </tr>
+        <tr>
+          <th>iend16</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.022416</td>
+          <td>-94492.918693</td>
+          <td>20281439.108194</td>
+        </tr>
+        <tr>
+          <th>iend2</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>0.0</td>
+          <td>-38324.37475</td>
+          <td>8225773.255917</td>
+        </tr>
+        <tr>
+          <th>iend32</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-201401.795017</td>
+          <td>43228573.054944</td>
+        </tr>
+        <tr>
+          <th>iend4</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.151081</td>
+          <td>-51122.392443</td>
+          <td>10972737.091606</td>
+        </tr>
+        <tr>
+          <th>iend64</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>0.15928</td>
+          <td>0.199631</td>
+        </tr>
+        <tr>
+          <th>iend8</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.08907</td>
+          <td>-94492.881923</td>
+          <td>20281426.580972</td>
+        </tr>
+        <tr>
+          <th>middle</th>
+          <td>1.101543</td>
+          <td>1.30347</td>
+          <td>1.290699</td>
+          <td>1.325916</td>
+          <td>1.466733</td>
+          <td>1.588707</td>
+          <td>1.541218</td>
+        </tr>
+        <tr>
+          <th>rbegin</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.020369</td>
+          <td>-0.28295</td>
+          <td>36.958438</td>
+          <td>49.406192</td>
+        </tr>
+        <tr>
+          <th>rdiscont</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.066385</td>
+          <td>0.375421</td>
+          <td>0.761464</td>
+        </tr>
+        <tr>
+          <th>redit</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>0.071189</td>
+          <td>0.086227</td>
+        </tr>
+        <tr>
+          <th>rend</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.007655</td>
+          <td>-0.007593</td>
+          <td>4424.263222</td>
+          <td>661.575013</td>
+        </tr>
+        <tr>
+          <th>rend16</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.003393</td>
+          <td>-0.010514</td>
+          <td>-7664.018684</td>
+          <td>345.917179</td>
+        </tr>
+        <tr>
+          <th>rend32</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.005349</td>
+          <td>-0.013172</td>
+          <td>3202.681647</td>
+          <td>-1057.05651</td>
+        </tr>
+        <tr>
+          <th>rev</th>
+          <td>0.026757</td>
+          <td>0.189909</td>
+          <td>0.013992</td>
+          <td>0.097585</td>
+          <td>0.142791</td>
+          <td>0.08288</td>
+          <td>0.153721</td>
+        </tr>
+        <tr>
+          <th>rmiddle</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>-0.0</td>
+          <td>-0.0</td>
+          <td>-0.324716</td>
+          <td>-0.207068</td>
+          <td>-0.456371</td>
+        </tr>
+        <tr>
+          <th>rot</th>
+          <td>0.009222</td>
+          <td>0.185687</td>
+          <td>0.108468</td>
+          <td>0.197021</td>
+          <td>0.108146</td>
+          <td>-0.095643</td>
+          <td>0.077719</td>
+        </tr>
+        <tr>
+          <th>size</th>
+          <td>1.100532</td>
+          <td>1.300222</td>
+          <td>1.099463</td>
+          <td>1.183553</td>
+          <td>1.22329</td>
+          <td>0.938597</td>
+          <td>1.295707</td>
+        </tr>
+        <tr>
+          <th>name</th>
+          <td>medpos</td>
+          <td>pos</td>
+          <td>Lasso-0.200000</td>
+          <td>Lasso-0.100000</td>
+          <td>Lasso-0.010000</td>
+          <td>med</td>
+          <td>reg</td>
+        </tr>
+        <tr>
+          <th>intercept_</th>
+          <td>0.0</td>
+          <td>0.0</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>NaN</td>
+          <td>0.0</td>
+          <td>0.0</td>
+        </tr>
+        <tr>
+          <th>r2</th>
+          <td>0.75269</td>
+          <td>0.790545</td>
+          <td>0.766911</td>
+          <td>0.782541</td>
+          <td>0.807546</td>
+          <td>0.79245</td>
+          <td>0.815741</td>
+        </tr>
+        <tr>
+          <th>mae</th>
+          <td>0.646834</td>
+          <td>0.676866</td>
+          <td>0.680344</td>
+          <td>0.676499</td>
+          <td>0.629886</td>
+          <td>0.567939</td>
+          <td>0.636887</td>
+        </tr>
+        <tr>
+          <th>model</th>
+          <td>(StandardScaler(with_mean=False), QuantileLine...</td>
+          <td>(StandardScaler(with_mean=False), LinearRegres...</td>
+          <td>(StandardScaler(with_mean=False), Lasso(alpha=...</td>
+          <td>(StandardScaler(with_mean=False), Lasso(alpha=...</td>
+          <td>(StandardScaler(with_mean=False), Lasso(alpha=...</td>
+          <td>(StandardScaler(with_mean=False), QuantileLine...</td>
+          <td>(StandardScaler(with_mean=False), LinearRegres...</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+.. code:: ipython3
+
+    dfcoef[["name", "r2", "mae"]].set_index('name').plot(kind="bar", title="performance accross models");
+
+
+
+.. image:: onnx_operator_cost_60_0.png
+
+
+.. code:: ipython3
+
+    import matplotlib.pyplot as plt
+    
+    dfp = dfcoef.drop(['name', 'model'], axis=1).T.drop([0, 1], axis=1).copy()
+    dfp.columns = dfcoef['name'][2:]
+    ax = dfp.plot(figsize=(14, 4), kind="line")
+    ax.set_xticks(numpy.arange(0, dfp.shape[0]))
+    ax.set_xticklabels(dfp.index)
+    plt.setp(ax.get_xticklabels(), rotation=45, horizontalalignment='right');
+
+
+
+.. image:: onnx_operator_cost_61_0.png
+
+
+Investigation
+-------------
+
+.. code:: ipython3
+
+    data_err = data.drop(["context_size", "repeat"], axis=1).copy()
+    data_err['predict'] = numpy.maximum(coefs[0]['model'].predict(X), 0) / 1000
+    data_err['err'] = (data_err['predict'] - data_err['average'])
+    data_err['abserr'] = numpy.abs(data_err['predict'] - data_err['average'])
+    data_err['rel'] = (data_err['predict'] - data_err['average']) / data_err['average']
+    s = data_err.sort_values('abserr')
+    pandas.concat([s.head(n=10), s.tail(n=10)])
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>number</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+          <th>predict</th>
+          <th>err</th>
+          <th>abserr</th>
+          <th>rel</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>28</th>
+          <td>0.000113</td>
+          <td>0.000029</td>
+          <td>0.000061</td>
+          <td>0.000141</td>
+          <td>50</td>
+          <td>(1, 0, 2)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.515711</td>
+          <td>3</td>
+          <td>0.000113</td>
+          <td>1.251063e-07</td>
+          <td>1.251063e-07</td>
+          <td>0.001111</td>
+        </tr>
+        <tr>
+          <th>55</th>
+          <td>0.000893</td>
+          <td>0.000212</td>
+          <td>0.000646</td>
+          <td>0.001477</td>
+          <td>50</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>8.339926</td>
+          <td>4</td>
+          <td>0.000893</td>
+          <td>-2.410649e-07</td>
+          <td>2.410649e-07</td>
+          <td>-0.000270</td>
+        </tr>
+        <tr>
+          <th>26</th>
+          <td>0.000077</td>
+          <td>0.000008</td>
+          <td>0.000069</td>
+          <td>0.000101</td>
+          <td>50</td>
+          <td>(0, 2, 1)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.032759</td>
+          <td>3</td>
+          <td>0.000077</td>
+          <td>4.172780e-07</td>
+          <td>4.172780e-07</td>
+          <td>0.005440</td>
+        </tr>
+        <tr>
+          <th>39</th>
+          <td>0.000126</td>
+          <td>0.000017</td>
+          <td>0.000107</td>
+          <td>0.000185</td>
+          <td>50</td>
+          <td>(2, 0, 1, 3)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.180996</td>
+          <td>4</td>
+          <td>0.000115</td>
+          <td>-1.179187e-05</td>
+          <td>1.179187e-05</td>
+          <td>-0.093246</td>
+        </tr>
+        <tr>
+          <th>66</th>
+          <td>0.000195</td>
+          <td>0.000019</td>
+          <td>0.000163</td>
+          <td>0.000258</td>
+          <td>50</td>
+          <td>(0, 3, 1, 2)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>1.598770</td>
+          <td>4</td>
+          <td>0.000210</td>
+          <td>1.510728e-05</td>
+          <td>1.510728e-05</td>
+          <td>0.077417</td>
+        </tr>
+        <tr>
+          <th>50</th>
+          <td>0.000692</td>
+          <td>0.000136</td>
+          <td>0.000529</td>
+          <td>0.001021</td>
+          <td>50</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>6.460759</td>
+          <td>4</td>
+          <td>0.000709</td>
+          <td>1.714180e-05</td>
+          <td>1.714180e-05</td>
+          <td>0.024778</td>
+        </tr>
+        <tr>
+          <th>76</th>
+          <td>0.000824</td>
+          <td>0.000288</td>
+          <td>0.000515</td>
+          <td>0.001879</td>
+          <td>50</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(1, 244, 244, 3)</td>
+          <td>6.752663</td>
+          <td>4</td>
+          <td>0.000843</td>
+          <td>1.902846e-05</td>
+          <td>1.902846e-05</td>
+          <td>0.023087</td>
+        </tr>
+        <tr>
+          <th>54</th>
+          <td>0.000818</td>
+          <td>0.000278</td>
+          <td>0.000625</td>
+          <td>0.001522</td>
+          <td>50</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>7.634646</td>
+          <td>4</td>
+          <td>0.000843</td>
+          <td>2.572773e-05</td>
+          <td>2.572773e-05</td>
+          <td>0.031471</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000048</td>
+          <td>0.000003</td>
+          <td>0.000045</td>
+          <td>0.000058</td>
+          <td>50</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.820821</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-4.837787e-05</td>
+          <td>4.837787e-05</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000049</td>
+          <td>0.000003</td>
+          <td>0.000045</td>
+          <td>0.000062</td>
+          <td>50</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>0.823070</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-4.851040e-05</td>
+          <td>4.851040e-05</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>120</th>
+          <td>0.005918</td>
+          <td>0.001085</td>
+          <td>0.004598</td>
+          <td>0.008312</td>
+          <td>15</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.597357</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>2.341673e-03</td>
+          <td>2.341673e-03</td>
+          <td>0.395716</td>
+        </tr>
+        <tr>
+          <th>128</th>
+          <td>0.010677</td>
+          <td>0.001457</td>
+          <td>0.008504</td>
+          <td>0.014070</td>
+          <td>15</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.882191</td>
+          <td>4</td>
+          <td>0.008132</td>
+          <td>-2.545011e-03</td>
+          <td>2.545011e-03</td>
+          <td>-0.238356</td>
+        </tr>
+        <tr>
+          <th>121</th>
+          <td>0.006106</td>
+          <td>0.000556</td>
+          <td>0.005619</td>
+          <td>0.007305</td>
+          <td>15</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.648325</td>
+          <td>4</td>
+          <td>0.008700</td>
+          <td>2.593662e-03</td>
+          <td>2.593662e-03</td>
+          <td>0.424746</td>
+        </tr>
+        <tr>
+          <th>118</th>
+          <td>0.003780</td>
+          <td>0.000882</td>
+          <td>0.002701</td>
+          <td>0.005402</td>
+          <td>15</td>
+          <td>(3, 0, 1, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.020432</td>
+          <td>4</td>
+          <td>0.006488</td>
+          <td>2.707333e-03</td>
+          <td>2.707333e-03</td>
+          <td>0.716171</td>
+        </tr>
+        <tr>
+          <th>115</th>
+          <td>0.003653</td>
+          <td>0.000874</td>
+          <td>0.002567</td>
+          <td>0.005244</td>
+          <td>15</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>0.986071</td>
+          <td>4</td>
+          <td>0.006488</td>
+          <td>2.834624e-03</td>
+          <td>2.834624e-03</td>
+          <td>0.775972</td>
+        </tr>
+        <tr>
+          <th>129</th>
+          <td>0.012421</td>
+          <td>0.003052</td>
+          <td>0.007818</td>
+          <td>0.018106</td>
+          <td>15</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.352770</td>
+          <td>4</td>
+          <td>0.009386</td>
+          <td>-3.034652e-03</td>
+          <td>3.034652e-03</td>
+          <td>-0.244323</td>
+        </tr>
+        <tr>
+          <th>119</th>
+          <td>0.004938</td>
+          <td>0.000367</td>
+          <td>0.004532</td>
+          <td>0.005844</td>
+          <td>15</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.333061</td>
+          <td>4</td>
+          <td>0.008700</td>
+          <td>3.761588e-03</td>
+          <td>3.761588e-03</td>
+          <td>0.761694</td>
+        </tr>
+        <tr>
+          <th>127</th>
+          <td>0.010339</td>
+          <td>0.002789</td>
+          <td>0.005878</td>
+          <td>0.018301</td>
+          <td>15</td>
+          <td>(0, 3, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.790823</td>
+          <td>4</td>
+          <td>0.005271</td>
+          <td>-5.068171e-03</td>
+          <td>5.068171e-03</td>
+          <td>-0.490205</td>
+        </tr>
+        <tr>
+          <th>130</th>
+          <td>0.013432</td>
+          <td>0.004496</td>
+          <td>0.006536</td>
+          <td>0.021250</td>
+          <td>15</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.625680</td>
+          <td>4</td>
+          <td>0.008132</td>
+          <td>-5.299336e-03</td>
+          <td>5.299336e-03</td>
+          <td>-0.394540</td>
+        </tr>
+        <tr>
+          <th>131</th>
+          <td>0.014579</td>
+          <td>0.004026</td>
+          <td>0.007144</td>
+          <td>0.020739</td>
+          <td>15</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.935483</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>-6.320138e-03</td>
+          <td>6.320138e-03</td>
+          <td>-0.433499</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+All big errors are negative. The model seems to give a lower value for
+all big errors. These errors may be outliers, the processor was busy
+doing something else at that time.
+
+.. code:: ipython3
+
+    s = data_err.sort_values('predict')
+    pandas.concat([s.head(n=10), s.tail(n=10)])
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>average</th>
+          <th>deviation</th>
+          <th>min_exec</th>
+          <th>max_exec</th>
+          <th>number</th>
+          <th>perm</th>
+          <th>shape</th>
+          <th>ratio</th>
+          <th>dim</th>
+          <th>predict</th>
+          <th>err</th>
+          <th>abserr</th>
+          <th>rel</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>20</th>
+          <td>0.000158</td>
+          <td>0.000021</td>
+          <td>0.000127</td>
+          <td>0.000192</td>
+          <td>50</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.684876</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-0.000158</td>
+          <td>0.000158</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>42</th>
+          <td>0.000147</td>
+          <td>0.000017</td>
+          <td>0.000106</td>
+          <td>0.000175</td>
+          <td>50</td>
+          <td>(0, 1, 3, 2)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.369978</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-0.000147</td>
+          <td>0.000147</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>34</th>
+          <td>0.000151</td>
+          <td>0.000016</td>
+          <td>0.000136</td>
+          <td>0.000197</td>
+          <td>50</td>
+          <td>(1, 2, 0)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.438446</td>
+          <td>3</td>
+          <td>0.000000</td>
+          <td>-0.000151</td>
+          <td>0.000151</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>33</th>
+          <td>0.000124</td>
+          <td>0.000017</td>
+          <td>0.000108</td>
+          <td>0.000171</td>
+          <td>50</td>
+          <td>(2, 0, 1)</td>
+          <td>(3, 244, 244)</td>
+          <td>1.185666</td>
+          <td>3</td>
+          <td>0.000000</td>
+          <td>-0.000124</td>
+          <td>0.000124</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>44</th>
+          <td>0.000189</td>
+          <td>0.000044</td>
+          <td>0.000142</td>
+          <td>0.000265</td>
+          <td>50</td>
+          <td>(1, 2, 3, 0)</td>
+          <td>(3, 244, 244, 1)</td>
+          <td>1.766905</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-0.000189</td>
+          <td>0.000189</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>27</th>
+          <td>0.000097</td>
+          <td>0.000004</td>
+          <td>0.000083</td>
+          <td>0.000110</td>
+          <td>50</td>
+          <td>(2, 0, 1)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.300915</td>
+          <td>3</td>
+          <td>0.000000</td>
+          <td>-0.000097</td>
+          <td>0.000097</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>25</th>
+          <td>0.000074</td>
+          <td>0.000009</td>
+          <td>0.000065</td>
+          <td>0.000109</td>
+          <td>50</td>
+          <td>(0, 1, 2)</td>
+          <td>(43, 44, 45)</td>
+          <td>1.000000</td>
+          <td>3</td>
+          <td>0.000000</td>
+          <td>-0.000074</td>
+          <td>0.000074</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>24</th>
+          <td>0.000073</td>
+          <td>0.000009</td>
+          <td>0.000062</td>
+          <td>0.000094</td>
+          <td>50</td>
+          <td>(1, 2, 0)</td>
+          <td>(43, 44, 45)</td>
+          <td>0.985513</td>
+          <td>3</td>
+          <td>0.000000</td>
+          <td>-0.000073</td>
+          <td>0.000073</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>22</th>
+          <td>0.000214</td>
+          <td>0.000060</td>
+          <td>0.000136</td>
+          <td>0.000295</td>
+          <td>50</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>3.627240</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-0.000214</td>
+          <td>0.000214</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>21</th>
+          <td>0.000164</td>
+          <td>0.000045</td>
+          <td>0.000124</td>
+          <td>0.000231</td>
+          <td>50</td>
+          <td>(3, 1, 2, 0)</td>
+          <td>(12, 13, 15, 18)</td>
+          <td>2.778193</td>
+          <td>4</td>
+          <td>0.000000</td>
+          <td>-0.000164</td>
+          <td>0.000164</td>
+          <td>-1.000000</td>
+        </tr>
+        <tr>
+          <th>128</th>
+          <td>0.010677</td>
+          <td>0.001457</td>
+          <td>0.008504</td>
+          <td>0.014070</td>
+          <td>15</td>
+          <td>(2, 3, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.882191</td>
+          <td>4</td>
+          <td>0.008132</td>
+          <td>-0.002545</td>
+          <td>0.002545</td>
+          <td>-0.238356</td>
+        </tr>
+        <tr>
+          <th>130</th>
+          <td>0.013432</td>
+          <td>0.004496</td>
+          <td>0.006536</td>
+          <td>0.021250</td>
+          <td>15</td>
+          <td>(3, 2, 0, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.625680</td>
+          <td>4</td>
+          <td>0.008132</td>
+          <td>-0.005299</td>
+          <td>0.005299</td>
+          <td>-0.394540</td>
+        </tr>
+        <tr>
+          <th>122</th>
+          <td>0.006722</td>
+          <td>0.001807</td>
+          <td>0.005067</td>
+          <td>0.011245</td>
+          <td>15</td>
+          <td>(1, 3, 2, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.814552</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>0.001537</td>
+          <td>0.001537</td>
+          <td>0.228654</td>
+        </tr>
+        <tr>
+          <th>125</th>
+          <td>0.007815</td>
+          <td>0.001757</td>
+          <td>0.005932</td>
+          <td>0.010779</td>
+          <td>15</td>
+          <td>(2, 1, 3, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>2.109489</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>0.000444</td>
+          <td>0.000444</td>
+          <td>0.056871</td>
+        </tr>
+        <tr>
+          <th>120</th>
+          <td>0.005918</td>
+          <td>0.001085</td>
+          <td>0.004598</td>
+          <td>0.008312</td>
+          <td>15</td>
+          <td>(1, 0, 3, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.597357</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>0.002342</td>
+          <td>0.002342</td>
+          <td>0.395716</td>
+        </tr>
+        <tr>
+          <th>123</th>
+          <td>0.007071</td>
+          <td>0.000982</td>
+          <td>0.005454</td>
+          <td>0.008559</td>
+          <td>15</td>
+          <td>(3, 1, 0, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.908667</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>0.001188</td>
+          <td>0.001188</td>
+          <td>0.168070</td>
+        </tr>
+        <tr>
+          <th>131</th>
+          <td>0.014579</td>
+          <td>0.004026</td>
+          <td>0.007144</td>
+          <td>0.020739</td>
+          <td>15</td>
+          <td>(3, 0, 2, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.935483</td>
+          <td>4</td>
+          <td>0.008259</td>
+          <td>-0.006320</td>
+          <td>0.006320</td>
+          <td>-0.433499</td>
+        </tr>
+        <tr>
+          <th>121</th>
+          <td>0.006106</td>
+          <td>0.000556</td>
+          <td>0.005619</td>
+          <td>0.007305</td>
+          <td>15</td>
+          <td>(2, 0, 3, 1)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.648325</td>
+          <td>4</td>
+          <td>0.008700</td>
+          <td>0.002594</td>
+          <td>0.002594</td>
+          <td>0.424746</td>
+        </tr>
+        <tr>
+          <th>119</th>
+          <td>0.004938</td>
+          <td>0.000367</td>
+          <td>0.004532</td>
+          <td>0.005844</td>
+          <td>15</td>
+          <td>(1, 3, 0, 2)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>1.333061</td>
+          <td>4</td>
+          <td>0.008700</td>
+          <td>0.003762</td>
+          <td>0.003762</td>
+          <td>0.761694</td>
+        </tr>
+        <tr>
+          <th>129</th>
+          <td>0.012421</td>
+          <td>0.003052</td>
+          <td>0.007818</td>
+          <td>0.018106</td>
+          <td>15</td>
+          <td>(3, 2, 1, 0)</td>
+          <td>(3, 244, 244, 6)</td>
+          <td>3.352770</td>
+          <td>4</td>
+          <td>0.009386</td>
+          <td>-0.003035</td>
+          <td>0.003035</td>
+          <td>-0.244323</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Correlation between predictors
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code:: ipython3
+
+    cc = DataFrame(dict([(c['name'], numpy.maximum(c['model'].predict(X), 0)) for c in coefs]))
+    cc['yt'] = yt
+    cc
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>reg</th>
+          <th>med</th>
+          <th>Lasso-0.010000</th>
+          <th>Lasso-0.100000</th>
+          <th>Lasso-0.200000</th>
+          <th>pos</th>
+          <th>medpos</th>
+          <th>yt</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>0</th>
+          <td>0.298789</td>
+          <td>0.052436</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.044222</td>
+        </tr>
+        <tr>
+          <th>1</th>
+          <td>0.000000</td>
+          <td>0.071575</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.048378</td>
+        </tr>
+        <tr>
+          <th>2</th>
+          <td>0.000000</td>
+          <td>0.048393</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.048510</td>
+        </tr>
+        <tr>
+          <th>3</th>
+          <td>0.000000</td>
+          <td>0.048393</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.048954</td>
+        </tr>
+        <tr>
+          <th>4</th>
+          <td>0.248089</td>
+          <td>0.050781</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.000000</td>
+          <td>0.050805</td>
+        </tr>
+        <tr>
+          <th>...</th>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+          <td>...</td>
+        </tr>
+        <tr>
+          <th>127</th>
+          <td>5.270700</td>
+          <td>4.177012</td>
+          <td>4.917105</td>
+          <td>4.615490</td>
+          <td>4.464429</td>
+          <td>4.837032</td>
+          <td>4.251381</td>
+          <td>10.338870</td>
+        </tr>
+        <tr>
+          <th>128</th>
+          <td>8.132342</td>
+          <td>7.354799</td>
+          <td>8.107191</td>
+          <td>7.646966</td>
+          <td>7.334861</td>
+          <td>7.858363</td>
+          <td>6.706548</td>
+          <td>10.677354</td>
+        </tr>
+        <tr>
+          <th>129</th>
+          <td>9.386005</td>
+          <td>8.186190</td>
+          <td>8.991256</td>
+          <td>8.082431</td>
+          <td>7.397300</td>
+          <td>8.771040</td>
+          <td>6.896204</td>
+          <td>12.420657</td>
+        </tr>
+        <tr>
+          <th>130</th>
+          <td>8.132342</td>
+          <td>7.354799</td>
+          <td>8.107191</td>
+          <td>7.646966</td>
+          <td>7.334861</td>
+          <td>7.858363</td>
+          <td>6.706548</td>
+          <td>13.431679</td>
+        </tr>
+        <tr>
+          <th>131</th>
+          <td>8.259236</td>
+          <td>7.561004</td>
+          <td>7.962160</td>
+          <td>7.605605</td>
+          <td>7.334861</td>
+          <td>7.829728</td>
+          <td>6.738972</td>
+          <td>14.579374</td>
+        </tr>
+      </tbody>
+    </table>
+    <p>132 rows × 8 columns</p>
+    </div>
+
+
+
+.. code:: ipython3
+
+    cc.corr()
+
+
+
+
+
+
+.. raw:: html
+
+    <div>
+    <style scoped>
+        .dataframe tbody tr th:only-of-type {
+            vertical-align: middle;
+        }
+
+        .dataframe tbody tr th {
+            vertical-align: top;
+        }
+
+        .dataframe thead th {
+            text-align: right;
+        }
+    </style>
+    <table border="1" class="dataframe">
+      <thead>
+        <tr style="text-align: right;">
+          <th></th>
+          <th>reg</th>
+          <th>med</th>
+          <th>Lasso-0.010000</th>
+          <th>Lasso-0.100000</th>
+          <th>Lasso-0.200000</th>
+          <th>pos</th>
+          <th>medpos</th>
+          <th>yt</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>reg</th>
+          <td>1.000000</td>
+          <td>0.994124</td>
+          <td>0.996922</td>
+          <td>0.985715</td>
+          <td>0.979826</td>
+          <td>0.988323</td>
+          <td>0.980433</td>
+          <td>0.903528</td>
+        </tr>
+        <tr>
+          <th>med</th>
+          <td>0.994124</td>
+          <td>1.000000</td>
+          <td>0.995863</td>
+          <td>0.989990</td>
+          <td>0.987374</td>
+          <td>0.990341</td>
+          <td>0.988401</td>
+          <td>0.894833</td>
+        </tr>
+        <tr>
+          <th>Lasso-0.010000</th>
+          <td>0.996922</td>
+          <td>0.995863</td>
+          <td>1.000000</td>
+          <td>0.992689</td>
+          <td>0.987930</td>
+          <td>0.994420</td>
+          <td>0.988358</td>
+          <td>0.899384</td>
+        </tr>
+        <tr>
+          <th>Lasso-0.100000</th>
+          <td>0.985715</td>
+          <td>0.989990</td>
+          <td>0.992689</td>
+          <td>1.000000</td>
+          <td>0.998564</td>
+          <td>0.998756</td>
+          <td>0.997985</td>
+          <td>0.886902</td>
+        </tr>
+        <tr>
+          <th>Lasso-0.200000</th>
+          <td>0.979826</td>
+          <td>0.987374</td>
+          <td>0.987930</td>
+          <td>0.998564</td>
+          <td>1.000000</td>
+          <td>0.995092</td>
+          <td>0.999385</td>
+          <td>0.880614</td>
+        </tr>
+        <tr>
+          <th>pos</th>
+          <td>0.988323</td>
+          <td>0.990341</td>
+          <td>0.994420</td>
+          <td>0.998756</td>
+          <td>0.995092</td>
+          <td>1.000000</td>
+          <td>0.995169</td>
+          <td>0.890093</td>
+        </tr>
+        <tr>
+          <th>medpos</th>
+          <td>0.980433</td>
+          <td>0.988401</td>
+          <td>0.988358</td>
+          <td>0.997985</td>
+          <td>0.999385</td>
+          <td>0.995169</td>
+          <td>1.000000</td>
+          <td>0.881208</td>
+        </tr>
+        <tr>
+          <th>yt</th>
+          <td>0.903528</td>
+          <td>0.894833</td>
+          <td>0.899384</td>
+          <td>0.886902</td>
+          <td>0.880614</td>
+          <td>0.890093</td>
+          <td>0.881208</td>
+          <td>1.000000</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+
+
+Standalone predictions
+----------------------
+
+.. code:: ipython3
+
+    def get_coef(pipe, names):
+        c1 = pipe.steps[0][-1].scale_
+        c2 = pipe.steps[1][-1].coef_
+        return dict(zip(names, c2 / c1))
+    
+    
+    get_coef(coefs[-1]["model"], X.columns)
+
+
+
+
+.. parsed-literal::
+    {'CST_': 0.829481835464256,
+     'begin': 0.0,
+     'dbegin': 0.0,
+     'dend': 0.0,
+     'dim': 0.08294721851224843,
+     'discont': 0.07025394222472751,
+     'edit': 0.03782977428195987,
+     'end': 0.0,
+     'end16': 0.0,
+     'end32': 0.0,
+     'ibegin16': 0.0,
+     'ibegin2': 0.0,
+     'ibegin32': 0.0,
+     'ibegin4': 0.0,
+     'ibegin64': 0.0,
+     'ibegin8': 0.0,
+     'iend16': 0.0,
+     'iend2': 0.0,
+     'iend32': 0.0,
+     'iend4': 0.0,
+     'iend64': 0.0,
+     'iend8': 0.0,
+     'middle': 3.42896339670081e-06,
+     'rbegin': 0.0,
+     'rdiscont': 0.0,
+     'redit': 0.0,
+     'rend': 0.0,
+     'rend16': 0.0,
+     'rend32': 0.0,
+     'rev': 0.11940214295823245,
+     'rmiddle': 0.0,
+     'rot': 0.023189032947793925,
+     'size': 3.021302183272755e-06}
+
+
+
+.. code:: ipython3
+
+    def predict(coefs, shape, perm):
+        feat = compute_features(shape, perm)
+        res = 0
+        for k, v in feat.items():
+            res += v * coefs[k]
+        return res / 1000
+    
+    
+    def predict_model(model, shape, perm, names):
+        feat = compute_features(shape, perm)
+        a = numpy.zeros((1, len(names)), dtype=numpy.float64)
+        for i, n in enumerate(names):
+            a[0, i] = feat[n]
+        return model.predict(a) / 1000
+        
+    
+    coef = get_coef(coefs[-1]["model"], X.columns)
+    (predict(coef, (3, 224, 224, 6), (3, 0, 1, 2)), 
+     predict_model(coefs[-1]["model"], (3, 224, 224, 6), (3, 0, 1, 2), X.columns))
+
+
+
+
+.. parsed-literal::
+    (0.005450704959759156, array([0.0054507]))
