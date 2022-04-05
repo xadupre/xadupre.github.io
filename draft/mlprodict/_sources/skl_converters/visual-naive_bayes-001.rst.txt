@@ -24,7 +24,7 @@ method `predict_proba` matches output .
 +-----------------------------+----------+
 | skl_nlin                    | 1        |
 +-----------------------------+----------+
-| onx_size                    | 1857     |
+| onx_size                    | 1859     |
 +-----------------------------+----------+
 | onx_nnodes                  | 22       |
 +-----------------------------+----------+
@@ -40,11 +40,11 @@ method `predict_proba` matches output .
 +-----------------------------+----------+
 | onx_producer_name           | skl2onnx |
 +-----------------------------+----------+
-| onx_producer_version        | 1.11     |
-+-----------------------------+----------+
-| onx_ai.onnx.ml              | 1        |
+| onx_producer_version        | 1.11.1   |
 +-----------------------------+----------+
 | onx_                        | 13       |
++-----------------------------+----------+
+| onx_ai.onnx.ml              | 1        |
 +-----------------------------+----------+
 | onx_op_Cast                 | 4        |
 +-----------------------------+----------+
@@ -52,7 +52,7 @@ method `predict_proba` matches output .
 +-----------------------------+----------+
 | onx_op_Reshape              | 2        |
 +-----------------------------+----------+
-| onx_size_optim              | 1857     |
+| onx_size_optim              | 1859     |
 +-----------------------------+----------+
 | onx_nnodes_optim            | 22       |
 +-----------------------------+----------+
@@ -75,10 +75,10 @@ method `predict_proba` matches output .
 .. gdot::
 
         digraph{
-      nodesep=0.05;
       ranksep=0.25;
-      size=7;
+      nodesep=0.05;
       orientation=portrait;
+      size=7;
 
       X [shape=box color=red label="X\nfloat((0, 4))" fontsize=10];
 
@@ -106,16 +106,21 @@ method `predict_proba` matches output .
       threshold -> Greater;
       Greater -> condition;
 
-      cast_values [shape=box label="cast_values" fontsize=10];
-      Cast [shape=box style="filled,rounded" color=orange label="Cast\n(Cast)\nto=1" fontsize=10];
-      condition -> Cast;
-      Cast -> cast_values;
-
       sub_result [shape=box label="sub_result" fontsize=10];
       Sub [shape=box style="filled,rounded" color=orange label="Sub\n(Sub)" fontsize=10];
       constant -> Sub;
       exp_result -> Sub;
       Sub -> sub_result;
+
+      cast_values [shape=box label="cast_values" fontsize=10];
+      Cast [shape=box style="filled,rounded" color=orange label="Cast\n(Cast)\nto=1" fontsize=10];
+      condition -> Cast;
+      Cast -> cast_values;
+
+      neg_prob [shape=box label="neg_prob" fontsize=10];
+      Log [shape=box style="filled,rounded" color=orange label="Log\n(Log)" fontsize=10];
+      sub_result -> Log;
+      Log -> neg_prob;
 
       binarised_input [shape=box label="binarised_input" fontsize=10];
       Add [shape=box style="filled,rounded" color=orange label="Add\n(Add)" fontsize=10];
@@ -123,22 +128,17 @@ method `predict_proba` matches output .
       cast_values -> Add;
       Add -> binarised_input;
 
-      neg_prob [shape=box label="neg_prob" fontsize=10];
-      Log [shape=box style="filled,rounded" color=orange label="Log\n(Log)" fontsize=10];
-      sub_result -> Log;
-      Log -> neg_prob;
+      difference_matrix [shape=box label="difference_matrix" fontsize=10];
+      Sub1 [shape=box style="filled,rounded" color=orange label="Sub\n(Sub1)" fontsize=10];
+      feature_log_prob -> Sub1;
+      neg_prob -> Sub1;
+      Sub1 -> difference_matrix;
 
       sum_neg_prob [shape=box label="sum_neg_prob" fontsize=10];
       ReduceSum [shape=box style="filled,rounded" color=orange label="ReduceSum\n(ReduceSum)" fontsize=10];
       neg_prob -> ReduceSum;
       axis -> ReduceSum;
       ReduceSum -> sum_neg_prob;
-
-      difference_matrix [shape=box label="difference_matrix" fontsize=10];
-      Sub1 [shape=box style="filled,rounded" color=orange label="Sub\n(Sub1)" fontsize=10];
-      feature_log_prob -> Sub1;
-      neg_prob -> Sub1;
-      Sub1 -> difference_matrix;
 
       dot_prod [shape=box label="dot_prod" fontsize=10];
       MatMul [shape=box style="filled,rounded" color=orange label="MatMul\n(MatMul)" fontsize=10];
@@ -168,28 +168,28 @@ method `predict_proba` matches output .
       sum_result -> ReduceLogSumExp;
       ReduceLogSumExp -> reduce_log_sum_exp_result;
 
-      reshaped_log_prob [shape=box label="reshaped_log_prob" fontsize=10];
-      Reshape [shape=box style="filled,rounded" color=orange label="Reshape\n(Reshape)" fontsize=10];
-      reduce_log_sum_exp_result -> Reshape;
-      shape_tensor -> Reshape;
-      Reshape -> reshaped_log_prob;
-
       array_feature_extractor_result [shape=box label="array_feature_extractor_result" fontsize=10];
       ArrayFeatureExtractor [shape=box style="filled,rounded" color=orange label="ArrayFeatureExtractor\n(ArrayFeatureExtractor)" fontsize=10];
       classes -> ArrayFeatureExtractor;
       argmax_output -> ArrayFeatureExtractor;
       ArrayFeatureExtractor -> array_feature_extractor_result;
 
-      log_prob [shape=box label="log_prob" fontsize=10];
-      Sub2 [shape=box style="filled,rounded" color=orange label="Sub\n(Sub2)" fontsize=10];
-      sum_result -> Sub2;
-      reshaped_log_prob -> Sub2;
-      Sub2 -> log_prob;
+      reshaped_log_prob [shape=box label="reshaped_log_prob" fontsize=10];
+      Reshape [shape=box style="filled,rounded" color=orange label="Reshape\n(Reshape)" fontsize=10];
+      reduce_log_sum_exp_result -> Reshape;
+      shape_tensor -> Reshape;
+      Reshape -> reshaped_log_prob;
 
       cast2_result [shape=box label="cast2_result" fontsize=10];
       Cast1 [shape=box style="filled,rounded" color=orange label="Cast\n(Cast1)\nto=1" fontsize=10];
       array_feature_extractor_result -> Cast1;
       Cast1 -> cast2_result;
+
+      log_prob [shape=box label="log_prob" fontsize=10];
+      Sub2 [shape=box style="filled,rounded" color=orange label="Sub\n(Sub2)" fontsize=10];
+      sum_result -> Sub2;
+      reshaped_log_prob -> Sub2;
+      Sub2 -> log_prob;
 
       reshaped_result [shape=box label="reshaped_result" fontsize=10];
       Reshape1 [shape=box style="filled,rounded" color=orange label="Reshape\n(Reshape1)" fontsize=10];
