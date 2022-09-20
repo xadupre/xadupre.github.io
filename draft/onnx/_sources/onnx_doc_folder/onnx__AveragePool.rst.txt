@@ -1,0 +1,1144 @@
+
+.. _l-onnx-doc-AveragePool:
+
+===========
+AveragePool
+===========
+
+.. contents::
+    :local:
+
+
+.. _l-onnx-op-averagepool-11:
+AveragePool - 11
+================
+**Version**
+* **name**: `AveragePool (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool>`_
+* **domain**: **main**
+* **since_version**: **11**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 11**.
+
+**Summary**
+
+AveragePool consumes an input tensor X and applies average pooling across
+the tensor according to kernel sizes, stride sizes, and pad lengths.
+average pooling consisting of computing the average on all values of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output tensor Y for further processing. The output spatial shape will be following:
+::
+
+    output_spatial_shape[i] = floor((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+or
+::
+
+    output_spatial_shape[i] = ceil((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+if ceil_mode is enabled
+
+::
+
+    * pad_shape[i] is sum of pads along axis i
+
+`auto_pad` is a DEPRECATED attribute. If you are using them currently, the output spatial shape will be following:
+::
+
+    VALID: output_spatial_shape[i] = ceil((input_spatial_shape[i] - kernel_spatial_shape[i] + 1) / strides_spatial_shape[i])
+    SAME_UPPER or SAME_LOWER: output_spatial_shape[i] = ceil(input_spatial_shape[i] / strides_spatial_shape[i])
+
+And pad shape will be following if `SAME_UPPER` or `SAME_LOWER`:
+::
+
+    pad_shape[i] = (output_spatial_shape[i] - 1) * strides_spatial_shape[i] + kernel_spatial_shape[i] - input_spatial_shape[i]
+
+The output of each pooling window is divided by the number of elements (exclude pad when attribute count_include_pad is zero).
+
+**Attributes**
+* **auto_pad**:
+  auto_pad must be either NOTSET, SAME_UPPER, SAME_LOWER or VALID.
+  Where default value is NOTSET, which means explicit padding is used.
+  SAME_UPPER or SAME_LOWER mean pad the input so that `output_shape[i]
+  = ceil(input_shape[i] / strides[i])` for each axis `i`. The padding
+  is split between the two sides equally or almost equally (depending
+  on whether it is even or odd). In case the padding is an odd number,
+  the extra padding is added at the end for SAME_UPPER and at the
+  beginning for SAME_LOWER.
+* **ceil_mode**:
+  Whether to use ceil or floor (default) to compute the output shape.
+* **count_include_pad**:
+  Whether include pad pixels when calculating values for the edges.
+  Default is 0, doesn't count include pad.
+* **kernel_shape** (required):
+  The size of the kernel along each axis.
+* **pads**:
+  Padding for the beginning and ending along each spatial axis, it can
+  take any value greater than or equal to 0. The value represent the
+  number of pixels added to the beginning and end part of the
+  corresponding axis. `pads` format should be as follow [x1_begin,
+  x2_begin...x1_end, x2_end,...], where xi_begin the number of pixels
+  added at the beginning of axis `i` and xi_end, the number of pixels
+  added at the end of axis `i`. This attribute cannot be used
+  simultaneously with auto_pad attribute. If not present, the padding
+  defaults to 0 along start and end of each spatial axis.
+* **strides**:
+  Stride along each spatial axis. If not present, the stride defaults
+  to 1 along each spatial axis.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T**:
+  Input data tensor from the previous operator; dimensions for image
+  case are (N x C x H x W), where N is the batch size, C is the number
+  of channels, and H and W are the height and the width of the data.
+  For non image case, the dimensions are in the form of (N x C x D1 x
+  D2 ... Dn), where N is the batch size. Optionally, if dimension
+  denotation is in effect, the operation expects the input data tensor
+  to arrive with the dimension denotation of [DATA_BATCH,
+  DATA_CHANNEL, DATA_FEATURE, DATA_FEATURE ...].
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T**:
+  Output data tensor from average or max pooling across the input
+  tensor. Dimensions will vary based on various kernel, stride, and
+  pad sizes. Floor value of the dimension is used
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+
+**Examples**
+
+**_averagepool_2d_precomputed_pads**
+::
+    """
+    input_shape: [1, 1, 5, 5]
+    output_shape: [1, 1, 5, 5]
+    pad_shape: [4, 4] -> [2, 2, 2, 2] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[5, 5],
+        pads=[2, 2, 2, 2],
+    )
+    x = np.array(
+        [
+            [
+                [
+                    [1, 2, 3, 4, 5],
+                    [6, 7, 8, 9, 10],
+                    [11, 12, 13, 14, 15],
+                    [16, 17, 18, 19, 20],
+                    [21, 22, 23, 24, 25],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+    y = np.array(
+        [
+            [
+                [
+                    [7, 7.5, 8, 8.5, 9],
+                    [9.5, 10, 10.5, 11, 11.5],
+                    [12, 12.5, 13, 13.5, 14],
+                    [14.5, 15, 15.5, 16, 16.5],
+                    [17, 17.5, 18, 18.5, 19],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+
+    expect(
+        node, inputs=[x], outputs=[y], name="test_averagepool_2d_precomputed_pads"
+    )
+
+**_averagepool_2d_precomputed_pads_count_include_pad**
+::
+    """
+    input_shape: [1, 1, 5, 5]
+    output_shape: [1, 1, 5, 5]
+    pad_shape: [4, 4] -> [2, 2, 2, 2] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[5, 5],
+        pads=[2, 2, 2, 2],
+        count_include_pad=1,
+    )
+    x = np.array(
+        [
+            [
+                [
+                    [1, 2, 3, 4, 5],
+                    [6, 7, 8, 9, 10],
+                    [11, 12, 13, 14, 15],
+                    [16, 17, 18, 19, 20],
+                    [21, 22, 23, 24, 25],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+    y = np.array(
+        [
+            [
+                [
+                    [2.5200, 3.6000, 4.8000, 4.0800, 3.2400],
+                    [4.5600, 6.4000, 8.4000, 7.0400, 5.5200],
+                    [7.2000, 10.0000, 13.0000, 10.8000, 8.4000],
+                    [6.9600, 9.6000, 12.4000, 10.2400, 7.9200],
+                    [6.1200, 8.4000, 10.8000, 8.8800, 6.8400],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_averagepool_2d_precomputed_pads_count_include_pad",
+    )
+
+**_averagepool_2d_precomputed_strides**
+::
+    """
+    input_shape: [1, 1, 5, 5]
+    output_shape: [1, 1, 2, 2]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2, 2],
+        strides=[2, 2],
+    )
+    x = np.array(
+        [
+            [
+                [
+                    [1, 2, 3, 4, 5],
+                    [6, 7, 8, 9, 10],
+                    [11, 12, 13, 14, 15],
+                    [16, 17, 18, 19, 20],
+                    [21, 22, 23, 24, 25],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+    y = np.array([[[[4, 6], [14, 16]]]]).astype(np.float32)
+
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_averagepool_2d_precomputed_strides",
+    )
+
+**_averagepool_2d_precomputed_same_upper**
+::
+    """
+    input_shape: [1, 1, 5, 5]
+    output_shape: [1, 1, 3, 3]
+    pad_shape: [2, 2] -> [1, 1, 1, 1] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[3, 3],
+        strides=[2, 2],
+        auto_pad="SAME_UPPER",
+    )
+    x = np.array(
+        [
+            [
+                [
+                    [1, 2, 3, 4, 5],
+                    [6, 7, 8, 9, 10],
+                    [11, 12, 13, 14, 15],
+                    [16, 17, 18, 19, 20],
+                    [21, 22, 23, 24, 25],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+    y = np.array([[[[4, 5.5, 7], [11.5, 13, 14.5], [19, 20.5, 22]]]]).astype(
+        np.float32
+    )
+
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_averagepool_2d_precomputed_same_upper",
+    )
+
+**_averagepool_1d_default**
+::
+    """
+    input_shape: [1, 3, 32]
+    output_shape: [1, 3, 31]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2],
+    )
+    x = np.random.randn(1, 3, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = [2]
+    strides = [1]
+    out_shape = get_output_shape("VALID", x_shape[2:], kernel_shape, strides)
+    padded = x
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, [0], "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_1d_default")
+
+**_averagepool_2d_default**
+::
+    """
+    input_shape: [1, 3, 32, 32]
+    output_shape: [1, 3, 31, 31]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2, 2],
+    )
+    x = np.random.randn(1, 3, 32, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (2, 2)
+    strides = (1, 1)
+    out_shape = get_output_shape("VALID", x_shape[2:], kernel_shape, strides)
+    padded = x
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, (0, 0), "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_default")
+
+**_averagepool_3d_default**
+::
+    """
+    input_shape: [1, 3, 32, 32, 32]
+    output_shape: [1, 3, 31, 31, 31]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2, 2, 2],
+    )
+    x = np.random.randn(1, 3, 32, 32, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = [2, 2, 2]
+    strides = [1, 1, 1]
+    out_shape = get_output_shape("VALID", x_shape[2:], kernel_shape, strides)
+    padded = x
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, [0, 0, 0], "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_3d_default")
+
+**_averagepool_2d_same_upper**
+::
+    """
+    input_shape: [1, 3, 32, 32]
+    output_shape: [1, 3, 32, 32]
+    pad_shape: [1, 1] -> [0, 1, 0, 1] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2, 2],
+        auto_pad="SAME_UPPER",
+    )
+    x = np.random.randn(1, 3, 32, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (2, 2)
+    strides = (1, 1)
+    out_shape = get_output_shape("SAME_UPPER", x_shape[2:], kernel_shape, strides)
+    pad_shape = get_pad_shape(
+        "SAME_UPPER", x_shape[2:], kernel_shape, strides, out_shape
+    )
+    pad_top = pad_shape[0] // 2
+    pad_bottom = pad_shape[0] - pad_top
+    pad_left = pad_shape[1] // 2
+    pad_right = pad_shape[1] - pad_left
+    padded = np.pad(
+        x,
+        ((0, 0), (0, 0), (pad_top, pad_bottom), (pad_left, pad_right)),
+        mode="constant",
+        constant_values=np.nan,
+    )
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, pad_shape, "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_same_upper")
+
+**_averagepool_2d_same_lower**
+::
+    """
+    input_shape: [1, 3, 32, 32]
+    output_shape: [1, 3, 32, 32]
+    pad_shape: [1, 1] -> [1, 0, 1, 0] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[2, 2],
+        auto_pad="SAME_LOWER",
+    )
+    x = np.random.randn(1, 3, 32, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (2, 2)
+    strides = (1, 1)
+    out_shape = get_output_shape("SAME_LOWER", x_shape[2:], kernel_shape, strides)
+    pad_shape = get_pad_shape(
+        "SAME_LOWER", x_shape[2:], kernel_shape, strides, out_shape
+    )
+    pad_bottom = pad_shape[0] // 2
+    pad_top = pad_shape[0] - pad_bottom
+    pad_right = pad_shape[1] // 2
+    pad_left = pad_shape[1] - pad_right
+    padded = np.pad(
+        x,
+        ((0, 0), (0, 0), (pad_top, pad_bottom), (pad_left, pad_right)),
+        mode="constant",
+        constant_values=np.nan,
+    )
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, pad_shape, "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_same_lower")
+
+**_averagepool_2d_pads**
+::
+    """
+    input_shape: [1, 3, 28, 28]
+    output_shape: [1, 3, 30, 30]
+    pad_shape: [4, 4] -> [2, 2, 2, 2] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[3, 3],
+        pads=[2, 2, 2, 2],
+    )
+    x = np.random.randn(1, 3, 28, 28).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (3, 3)
+    strides = (1, 1)
+    pad_bottom = 2
+    pad_top = 2
+    pad_right = 2
+    pad_left = 2
+    pad_shape = [pad_top + pad_bottom, pad_left + pad_right]
+    out_shape = get_output_shape(
+        "VALID", np.add(x_shape[2:], pad_shape), kernel_shape, strides
+    )
+    padded = np.pad(
+        x,
+        ((0, 0), (0, 0), (pad_top, pad_bottom), (pad_left, pad_right)),
+        mode="constant",
+        constant_values=np.nan,
+    )
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, pad_shape, "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_pads")
+
+**_averagepool_2d_pads_count_include_pad**
+::
+    """
+    input_shape: [1, 3, 28, 28]
+    output_shape: [1, 3, 30, 30]
+    pad_shape: [4, 4] -> [2, 2, 2, 2] by axis
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[3, 3],
+        pads=[2, 2, 2, 2],
+        count_include_pad=1,
+    )
+    x = np.random.randn(1, 3, 28, 28).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (3, 3)
+    strides = (1, 1)
+    pad_bottom = 2
+    pad_top = 2
+    pad_right = 2
+    pad_left = 2
+    pad_shape = [pad_top + pad_bottom, pad_left + pad_right]
+    out_shape = get_output_shape(
+        "VALID", np.add(x_shape[2:], pad_shape), kernel_shape, strides
+    )
+    padded = np.pad(
+        x,
+        ((0, 0), (0, 0), (pad_top, pad_bottom), (pad_left, pad_right)),
+        mode="constant",
+        constant_values=0,
+    )
+    y = pool(
+        padded,
+        x_shape,
+        kernel_shape,
+        strides,
+        out_shape,
+        pad_shape,
+        "AVG",
+        count_include_pad=1,
+    )
+
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_averagepool_2d_pads_count_include_pad",
+    )
+
+**_averagepool_2d_strides**
+::
+    """
+    input_shape: [1, 3, 32, 32]
+    output_shape: [1, 3, 10, 10]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[5, 5],
+        strides=[3, 3],
+    )
+    x = np.random.randn(1, 3, 32, 32).astype(np.float32)
+    x_shape = np.shape(x)
+    kernel_shape = (5, 5)
+    strides = (3, 3)
+    out_shape = get_output_shape("VALID", x_shape[2:], kernel_shape, strides)
+    padded = x
+    y = pool(padded, x_shape, kernel_shape, strides, out_shape, (0, 0), "AVG")
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_strides")
+
+**_averagepool_2d_ceil**
+::
+    """
+    input_shape: [1, 1, 4, 4]
+    output_shape: [1, 1, 2, 2]
+    """
+    node = onnx.helper.make_node(
+        "AveragePool",
+        inputs=["x"],
+        outputs=["y"],
+        kernel_shape=[3, 3],
+        strides=[2, 2],
+        ceil_mode=True,
+    )
+    x = np.array(
+        [
+            [
+                [
+                    [1, 2, 3, 4],
+                    [5, 6, 7, 8],
+                    [9, 10, 11, 12],
+                    [13, 14, 15, 16],
+                ]
+            ]
+        ]
+    ).astype(np.float32)
+    y = np.array([[[[6, 7.5], [12, 13.5]]]]).astype(np.float32)
+
+    expect(node, inputs=[x], outputs=[y], name="test_averagepool_2d_ceil")
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to13__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to13__0">f</a></td><td class="diff_header" id="from13_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td><td class="diff_next"><a href="#difflib_chg_to13__0">f</a></td><td class="diff_header" id="to13_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td><td class="diff_next"></td><td class="diff_header" id="to13_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td><td class="diff_next"></td><td class="diff_header" id="to13_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to13_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to13_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_6">6</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to13_6">6</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_7">7</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_7">7</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td><td class="diff_next"></td><td class="diff_header" id="to13_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_9">9</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_9">9</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_10">10</td><td nowrap="nowrap">or</td><td class="diff_next"></td><td class="diff_header" id="to13_10">10</td><td nowrap="nowrap">or</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_11">11</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to13_11">11</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_12">12</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_12">12</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_13">13</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td><td class="diff_next"></td><td class="diff_header" id="to13_13">13</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_14">14</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_14">14</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_15">15</td><td nowrap="nowrap">if&nbsp;ceil_mode&nbsp;is&nbsp;enabled</td><td class="diff_next"></td><td class="diff_header" id="to13_15">15</td><td nowrap="nowrap">if&nbsp;ceil_mode&nbsp;is&nbsp;enabled</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_16">16</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_16">16</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_17">17</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to13_17">17</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_18">18</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_18">18</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_19">19</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td><td class="diff_next"></td><td class="diff_header" id="to13_19">19</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_20">20</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_20">20</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_21">21</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to13_21">21</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_22">22</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to13_22">22</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_23">23</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_23">23</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to13_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to13_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_26">26</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_26">26</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_27">27</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td><td class="diff_next"></td><td class="diff_header" id="to13_27">27</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_28">28</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to13_28">28</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_29">29</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_29">29</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td><td class="diff_next"></td><td class="diff_header" id="to13_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_31">31</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_31">31</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_32">32</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;(exclude&nbsp;pad&nbsp;when&nbsp;attribute&nbsp;count_include_pad&nbsp;is&nbsp;zero).</td><td class="diff_next"></td><td class="diff_header" id="to13_32">32</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;(exclude&nbsp;pad&nbsp;when&nbsp;attribute&nbsp;count_include_pad&nbsp;is&nbsp;zero).</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to13__0"></td><td class="diff_header" id="from13_33">33</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_33">33</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_34">34</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to13_34">34</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_35">35</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td><td class="diff_next"></td><td class="diff_header" id="to13_35">35</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td><td class="diff_next"></td><td class="diff_header" id="to13_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td><td class="diff_next"></td><td class="diff_header" id="to13_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to13__1">n</a></td><td class="diff_header" id="from13_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that<span class="diff_sub">&nbsp;the</span>&nbsp;output</td><td class="diff_next"><a href="#difflib_chg_to13__1">n</a></td><td class="diff_header" id="to13_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that&nbsp;output<span class="diff_add">_shape[i]</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_39">39</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;spatial&nbsp;size&nbsp;match&nbsp;the&nbsp;input.In&nbsp;case&nbsp;of&nbsp;odd&nbsp;number&nbsp;add&nbsp;the&nbsp;extra</span></td><td class="diff_next"></td><td class="diff_header" id="to13_39">39</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;=&nbsp;ceil(input_shape[i]&nbsp;/&nbsp;strides[i])&nbsp;for&nbsp;each&nbsp;axis&nbsp;i.&nbsp;The&nbsp;padding</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_40">40</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;padding&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the&nbsp;beginning&nbsp;for</span></td><td class="diff_next"></td><td class="diff_header" id="to13_40">40</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;is&nbsp;split&nbsp;between&nbsp;the&nbsp;two&nbsp;sides&nbsp;equally&nbsp;or&nbsp;almost&nbsp;equally&nbsp;(depending</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_41">41</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;SAME_LOWER.&nbsp;VALID&nbsp;mean&nbsp;no&nbsp;padding.</span></td><td class="diff_next"></td><td class="diff_header" id="to13_41">41</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;on&nbsp;whether&nbsp;it&nbsp;is&nbsp;even&nbsp;or&nbsp;odd).&nbsp;In&nbsp;case&nbsp;the&nbsp;padding&nbsp;is&nbsp;an&nbsp;odd&nbsp;number,</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_42">42</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;the&nbsp;extra&nbsp;padding&nbsp;is&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_43">43</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;beginning&nbsp;for&nbsp;SAME_LOWER.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_42">42</td><td nowrap="nowrap">*&nbsp;**ceil_mode**:</td><td class="diff_next"></td><td class="diff_header" id="to13_44">44</td><td nowrap="nowrap">*&nbsp;**ceil_mode**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;to&nbsp;use&nbsp;ceil&nbsp;or&nbsp;floor&nbsp;(default)&nbsp;to&nbsp;compute&nbsp;the&nbsp;output&nbsp;shape.</td><td class="diff_next"></td><td class="diff_header" id="to13_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;to&nbsp;use&nbsp;ceil&nbsp;or&nbsp;floor&nbsp;(default)&nbsp;to&nbsp;compute&nbsp;the&nbsp;output&nbsp;shape.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_44">44</td><td nowrap="nowrap">*&nbsp;**count_include_pad**:</td><td class="diff_next"></td><td class="diff_header" id="to13_46">46</td><td nowrap="nowrap">*&nbsp;**count_include_pad**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;include&nbsp;pad&nbsp;pixels&nbsp;when&nbsp;calculating&nbsp;values&nbsp;for&nbsp;the&nbsp;edges.</td><td class="diff_next"></td><td class="diff_header" id="to13_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;include&nbsp;pad&nbsp;pixels&nbsp;when&nbsp;calculating&nbsp;values&nbsp;for&nbsp;the&nbsp;edges.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;0,&nbsp;doesn't&nbsp;count&nbsp;include&nbsp;pad.</td><td class="diff_next"></td><td class="diff_header" id="to13_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;0,&nbsp;doesn't&nbsp;count&nbsp;include&nbsp;pad.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_47">47</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td><td class="diff_next"></td><td class="diff_header" id="to13_49">49</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to13_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_49">49</td><td nowrap="nowrap">*&nbsp;**pads**:</td><td class="diff_next"></td><td class="diff_header" id="to13_51">51</td><td nowrap="nowrap">*&nbsp;**pads**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td><td class="diff_next"></td><td class="diff_header" id="to13_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to13_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to13_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td><td class="diff_next"></td><td class="diff_header" id="to13_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to13_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to13__1"></td><td class="diff_header" id="from13_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to13_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to13_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td><td class="diff_next"></td><td class="diff_header" id="to13_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to13_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_59">59</td><td nowrap="nowrap">*&nbsp;**strides**:</td><td class="diff_next"></td><td class="diff_header" id="to13_61">61</td><td nowrap="nowrap">*&nbsp;**strides**:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to13__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to13__top">t</a></td><td class="diff_header" id="to13_62">62</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Stride&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;stride&nbsp;defaults</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;<span class="diff_sub">S</span>t<span class="diff_chg">ride</span>&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to13_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;t<span class="diff_chg">o&nbsp;1</span>&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_61">61</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_64">64</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_62">62</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to13_65">65</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_63">63</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_66">66</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_64">64</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to13_67">67</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td><td class="diff_next"></td><td class="diff_header" id="to13_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td><td class="diff_next"></td><td class="diff_header" id="to13_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to13_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td><td class="diff_next"></td><td class="diff_header" id="to13_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td><td class="diff_next"></td><td class="diff_header" id="to13_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td><td class="diff_next"></td><td class="diff_header" id="to13_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td><td class="diff_next"></td><td class="diff_header" id="to13_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td><td class="diff_next"></td><td class="diff_header" id="to13_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_73">73</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_76">76</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_74">74</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to13_77">77</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_75">75</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_78">78</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_76">76</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to13_79">79</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td><td class="diff_next"></td><td class="diff_header" id="to13_80">80</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td><td class="diff_next"></td><td class="diff_header" id="to13_81">81</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to13_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_80">80</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to13_83">83</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_81">81</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to13_84">84</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_82">82</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to13_85">85</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to13_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to13_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td><td class="diff_next"></td><td class="diff_header" id="to13_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to13_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from13_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to13_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-averagepool-10:
+AveragePool - 10
+================
+**Version**
+* **name**: `AveragePool (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool>`_
+* **domain**: **main**
+* **since_version**: **10**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 10**.
+
+**Summary**
+
+AveragePool consumes an input tensor X and applies average pooling across
+the tensor according to kernel sizes, stride sizes, and pad lengths.
+average pooling consisting of computing the average on all values of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output tensor Y for further processing. The output spatial shape will be following:
+::
+
+    output_spatial_shape[i] = floor((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+or
+::
+
+    output_spatial_shape[i] = ceil((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+if ceil_mode is enabled
+
+::
+
+    * pad_shape[i] is sum of pads along axis i
+
+`auto_pad` is a DEPRECATED attribute. If you are using them currently, the output spatial shape will be following:
+::
+
+    VALID: output_spatial_shape[i] = ceil((input_spatial_shape[i] - kernel_spatial_shape[i] + 1) / strides_spatial_shape[i])
+    SAME_UPPER or SAME_LOWER: output_spatial_shape[i] = ceil(input_spatial_shape[i] / strides_spatial_shape[i])
+
+And pad shape will be following if `SAME_UPPER` or `SAME_LOWER`:
+::
+
+    pad_shape[i] = (output_spatial_shape[i] - 1) * strides_spatial_shape[i] + kernel_spatial_shape[i] - input_spatial_shape[i]
+
+The output of each pooling window is divided by the number of elements (exclude pad when attribute count_include_pad is zero).
+
+**Attributes**
+* **auto_pad**:
+  auto_pad must be either NOTSET, SAME_UPPER, SAME_LOWER or VALID.
+  Where default value is NOTSET, which means explicit padding is used.
+  SAME_UPPER or SAME_LOWER mean pad the input so that the output
+  spatial size match the input.In case of odd number add the extra
+  padding at the end for SAME_UPPER and at the beginning for
+  SAME_LOWER. VALID mean no padding.
+* **ceil_mode**:
+  Whether to use ceil or floor (default) to compute the output shape.
+* **count_include_pad**:
+  Whether include pad pixels when calculating values for the edges.
+  Default is 0, doesn't count include pad.
+* **kernel_shape** (required):
+  The size of the kernel along each axis.
+* **pads**:
+  Padding for the beginning and ending along each spatial axis, it can
+  take any value greater than or equal to 0. The value represent the
+  number of pixels added to the beginning and end part of the
+  corresponding axis. `pads` format should be as follow [x1_begin,
+  x2_begin...x1_end, x2_end,...], where xi_begin the number of pixels
+  added at the beginning of axis `i` and xi_end, the number of pixels
+  added at the end of axis `i`. This attribute cannot be used
+  simultaneously with auto_pad attribute. If not present, the padding
+  defaults to 0 along start and end of each spatial axis.
+* **strides**:
+  Stride along each spatial axis.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T**:
+  Input data tensor from the previous operator; dimensions for image
+  case are (N x C x H x W), where N is the batch size, C is the number
+  of channels, and H and W are the height and the width of the data.
+  For non image case, the dimensions are in the form of (N x C x D1 x
+  D2 ... Dn), where N is the batch size. Optionally, if dimension
+  denotation is in effect, the operation expects the input data tensor
+  to arrive with the dimension denotation of [DATA_BATCH,
+  DATA_CHANNEL, DATA_FEATURE, DATA_FEATURE ...].
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T**:
+  Output data tensor from average or max pooling across the input
+  tensor. Dimensions will vary based on various kernel, stride, and
+  pad sizes. Floor value of the dimension is used
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to14__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to14__0">f</a></td><td class="diff_header" id="from14_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td><td class="diff_next"><a href="#difflib_chg_to14__0">f</a></td><td class="diff_header" id="to14_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td><td class="diff_next"></td><td class="diff_header" id="to14_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td><td class="diff_next"></td><td class="diff_header" id="to14_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to14__0"></td><td class="diff_header" id="from14_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to14_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to14_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_6">6</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to14_6">6</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_7">7</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_7">7</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td><td class="diff_next"></td><td class="diff_header" id="to14_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to14__1">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to14__1">n</a></td><td class="diff_header" id="to14_9">9</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_10">10</td><td nowrap="nowrap"><span class="diff_add">or</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_11">11</td><td nowrap="nowrap"><span class="diff_add">::</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_12">12</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_13">13</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_14">14</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_15">15</td><td nowrap="nowrap"><span class="diff_add">if&nbsp;ceil_mode&nbsp;is&nbsp;enabled</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_16">16</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_17">17</td><td nowrap="nowrap"><span class="diff_add">::</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_9">9</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_18">18</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_10">10</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td><td class="diff_next"></td><td class="diff_header" id="to14_19">19</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_11">11</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_20">20</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_12">12</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to14_21">21</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_13">13</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to14_22">22</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_14">14</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_23">23</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_15">15</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to14_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_16">16</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to14_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_17">17</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_26">26</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_18">18</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td><td class="diff_next"></td><td class="diff_header" id="to14_27">27</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_19">19</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to14_28">28</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_20">20</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_29">29</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td><td class="diff_next"></td><td class="diff_header" id="to14_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_22">22</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_31">31</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_23">23</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;(exclude&nbsp;pad&nbsp;when&nbsp;attribute&nbsp;count_include_pad&nbsp;is&nbsp;zero).</td><td class="diff_next"></td><td class="diff_header" id="to14_32">32</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;(exclude&nbsp;pad&nbsp;when&nbsp;attribute&nbsp;count_include_pad&nbsp;is&nbsp;zero).</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_24">24</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_33">33</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_25">25</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to14_34">34</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_26">26</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td><td class="diff_next"></td><td class="diff_header" id="to14_35">35</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td><td class="diff_next"></td><td class="diff_header" id="to14_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to14__1"></td><td class="diff_header" id="from14_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td><td class="diff_next"></td><td class="diff_header" id="to14_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that&nbsp;the&nbsp;output</td><td class="diff_next"></td><td class="diff_header" id="to14_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that&nbsp;the&nbsp;output</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;size&nbsp;match&nbsp;the&nbsp;input.In&nbsp;case&nbsp;of&nbsp;odd&nbsp;number&nbsp;add&nbsp;the&nbsp;extra</td><td class="diff_next"></td><td class="diff_header" id="to14_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;size&nbsp;match&nbsp;the&nbsp;input.In&nbsp;case&nbsp;of&nbsp;odd&nbsp;number&nbsp;add&nbsp;the&nbsp;extra</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;padding&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the&nbsp;beginning&nbsp;for</td><td class="diff_next"></td><td class="diff_header" id="to14_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;padding&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the&nbsp;beginning&nbsp;for</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_LOWER.&nbsp;VALID&nbsp;mean&nbsp;no&nbsp;padding.</td><td class="diff_next"></td><td class="diff_header" id="to14_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_LOWER.&nbsp;VALID&nbsp;mean&nbsp;no&nbsp;padding.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to14__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to14__top">t</a></td><td class="diff_header" id="to14_42">42</td><td nowrap="nowrap"><span class="diff_add">*&nbsp;**ceil_mode**:</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_43">43</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Whether&nbsp;to&nbsp;use&nbsp;ceil&nbsp;or&nbsp;floor&nbsp;(default)&nbsp;to&nbsp;compute&nbsp;the&nbsp;output&nbsp;shape.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_33">33</td><td nowrap="nowrap">*&nbsp;**count_include_pad**:</td><td class="diff_next"></td><td class="diff_header" id="to14_44">44</td><td nowrap="nowrap">*&nbsp;**count_include_pad**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_34">34</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;include&nbsp;pad&nbsp;pixels&nbsp;when&nbsp;calculating&nbsp;values&nbsp;for&nbsp;the&nbsp;edges.</td><td class="diff_next"></td><td class="diff_header" id="to14_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;Whether&nbsp;include&nbsp;pad&nbsp;pixels&nbsp;when&nbsp;calculating&nbsp;values&nbsp;for&nbsp;the&nbsp;edges.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_35">35</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;0,&nbsp;doesn't&nbsp;count&nbsp;include&nbsp;pad.</td><td class="diff_next"></td><td class="diff_header" id="to14_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;0,&nbsp;doesn't&nbsp;count&nbsp;include&nbsp;pad.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_36">36</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td><td class="diff_next"></td><td class="diff_header" id="to14_47">47</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to14_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_38">38</td><td nowrap="nowrap">*&nbsp;**pads**:</td><td class="diff_next"></td><td class="diff_header" id="to14_49">49</td><td nowrap="nowrap">*&nbsp;**pads**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td><td class="diff_next"></td><td class="diff_header" id="to14_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to14_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to14_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td><td class="diff_next"></td><td class="diff_header" id="to14_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to14_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to14_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to14_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td><td class="diff_next"></td><td class="diff_header" id="to14_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to14_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_48">48</td><td nowrap="nowrap">*&nbsp;**strides**:</td><td class="diff_next"></td><td class="diff_header" id="to14_59">59</td><td nowrap="nowrap">*&nbsp;**strides**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;Stride&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to14_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;Stride&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_50">50</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_61">61</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_51">51</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to14_62">62</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_52">52</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_63">63</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_53">53</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to14_64">64</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td><td class="diff_next"></td><td class="diff_header" id="to14_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td><td class="diff_next"></td><td class="diff_header" id="to14_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to14_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td><td class="diff_next"></td><td class="diff_header" id="to14_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td><td class="diff_next"></td><td class="diff_header" id="to14_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td><td class="diff_next"></td><td class="diff_header" id="to14_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td><td class="diff_next"></td><td class="diff_header" id="to14_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td><td class="diff_next"></td><td class="diff_header" id="to14_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_62">62</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_73">73</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_63">63</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to14_74">74</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_64">64</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_75">75</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_65">65</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to14_76">76</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td><td class="diff_next"></td><td class="diff_header" id="to14_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td><td class="diff_next"></td><td class="diff_header" id="to14_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to14_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_69">69</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to14_80">80</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_70">70</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to14_81">81</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_71">71</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to14_82">82</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to14_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to14_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td><td class="diff_next"></td><td class="diff_header" id="to14_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to14_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from14_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to14_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-averagepool-7:
+AveragePool - 7
+===============
+**Version**
+* **name**: `AveragePool (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool>`_
+* **domain**: **main**
+* **since_version**: **7**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 7**.
+
+**Summary**
+
+AveragePool consumes an input tensor X and applies average pooling across
+the tensor according to kernel sizes, stride sizes, and pad lengths.
+average pooling consisting of computing the average on all values of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output tensor Y for further processing. The output spatial shape will be following:
+::
+
+    output_spatial_shape[i] = floor((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+    * pad_shape[i] is sum of pads along axis i
+
+`auto_pad` is a DEPRECATED attribute. If you are using them currently, the output spatial shape will be following:
+::
+
+    VALID: output_spatial_shape[i] = ceil((input_spatial_shape[i] - kernel_spatial_shape[i] + 1) / strides_spatial_shape[i])
+    SAME_UPPER or SAME_LOWER: output_spatial_shape[i] = ceil(input_spatial_shape[i] / strides_spatial_shape[i])
+
+And pad shape will be following if `SAME_UPPER` or `SAME_LOWER`:
+::
+
+    pad_shape[i] = (output_spatial_shape[i] - 1) * strides_spatial_shape[i] + kernel_spatial_shape[i] - input_spatial_shape[i]
+
+The output of each pooling window is divided by the number of elements (exclude pad when attribute count_include_pad is zero).
+
+**Attributes**
+* **auto_pad**:
+  auto_pad must be either NOTSET, SAME_UPPER, SAME_LOWER or VALID.
+  Where default value is NOTSET, which means explicit padding is used.
+  SAME_UPPER or SAME_LOWER mean pad the input so that the output
+  spatial size match the input.In case of odd number add the extra
+  padding at the end for SAME_UPPER and at the beginning for
+  SAME_LOWER. VALID mean no padding.
+* **count_include_pad**:
+  Whether include pad pixels when calculating values for the edges.
+  Default is 0, doesn't count include pad.
+* **kernel_shape** (required):
+  The size of the kernel along each axis.
+* **pads**:
+  Padding for the beginning and ending along each spatial axis, it can
+  take any value greater than or equal to 0. The value represent the
+  number of pixels added to the beginning and end part of the
+  corresponding axis. `pads` format should be as follow [x1_begin,
+  x2_begin...x1_end, x2_end,...], where xi_begin the number of pixels
+  added at the beginning of axis `i` and xi_end, the number of pixels
+  added at the end of axis `i`. This attribute cannot be used
+  simultaneously with auto_pad attribute. If not present, the padding
+  defaults to 0 along start and end of each spatial axis.
+* **strides**:
+  Stride along each spatial axis.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T**:
+  Input data tensor from the previous operator; dimensions for image
+  case are (N x C x H x W), where N is the batch size, C is the number
+  of channels, and H and W are the height and the width of the data.
+  For non image case, the dimensions are in the form of (N x C x D1 x
+  D2 ... Dn), where N is the batch size. Optionally, if dimension
+  denotation is in effect, the operation expects the input data tensor
+  to arrive with the dimension denotation of [DATA_BATCH,
+  DATA_CHANNEL, DATA_FEATURE, DATA_FEATURE ...].
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T**:
+  Output data tensor from average or max pooling across the input
+  tensor. Dimensions will vary based on various kernel, stride, and
+  pad sizes. Floor value of the dimension is used
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to15__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to15__0">f</a></td><td class="diff_header" id="from15_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td><td class="diff_next"><a href="#difflib_chg_to15__0">f</a></td><td class="diff_header" id="to15_1">1</td><td nowrap="nowrap">AveragePool&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;applies&nbsp;average&nbsp;pooling&nbsp;across</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td><td class="diff_next"></td><td class="diff_header" id="to15_2">2</td><td nowrap="nowrap">the&nbsp;tensor&nbsp;according&nbsp;to&nbsp;kernel&nbsp;sizes,&nbsp;stride&nbsp;sizes,&nbsp;and&nbsp;pad&nbsp;lengths.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td><td class="diff_next"></td><td class="diff_header" id="to15_3">3</td><td nowrap="nowrap">average&nbsp;pooling&nbsp;consisting&nbsp;of&nbsp;computing&nbsp;the&nbsp;average&nbsp;on&nbsp;all&nbsp;values&nbsp;of&nbsp;a</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to15_4">4</td><td nowrap="nowrap">subset&nbsp;of&nbsp;the&nbsp;input&nbsp;tensor&nbsp;according&nbsp;to&nbsp;the&nbsp;kernel&nbsp;size&nbsp;and&nbsp;downsampling&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to15_5">5</td><td nowrap="nowrap">data&nbsp;into&nbsp;the&nbsp;output&nbsp;tensor&nbsp;Y&nbsp;for&nbsp;further&nbsp;processing.&nbsp;The&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_6">6</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to15_6">6</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_7">7</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_7">7</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td><td class="diff_next"></td><td class="diff_header" id="to15_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;floor((input_spatial_shape[i]&nbsp;+&nbsp;pad_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i])&nbsp;/&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;1)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_9">9</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_9">9</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_10">10</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td><td class="diff_next"></td><td class="diff_header" id="to15_10">10</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;*&nbsp;pad_shape[i]&nbsp;is&nbsp;sum&nbsp;of&nbsp;pads&nbsp;along&nbsp;axis&nbsp;i</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_11">11</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_11">11</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_12">12</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td><td class="diff_next"></td><td class="diff_header" id="to15_12">12</td><td nowrap="nowrap">auto_pad&nbsp;is&nbsp;a&nbsp;DEPRECATED&nbsp;attribute.&nbsp;If&nbsp;you&nbsp;are&nbsp;using&nbsp;them&nbsp;currently,&nbsp;the&nbsp;output&nbsp;spatial&nbsp;shape&nbsp;will&nbsp;be&nbsp;following:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_13">13</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to15_13">13</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_14">14</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_14">14</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_15">15</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to15_15">15</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;VALID:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil((input_spatial_shape[i]&nbsp;-&nbsp;kernel_spatial_shape[i]&nbsp;+&nbsp;1)&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_16">16</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td><td class="diff_next"></td><td class="diff_header" id="to15_16">16</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:&nbsp;output_spatial_shape[i]&nbsp;=&nbsp;ceil(input_spatial_shape[i]&nbsp;/&nbsp;strides_spatial_shape[i])</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_17">17</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_17">17</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to15__0"></td><td class="diff_header" id="from15_18">18</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td><td class="diff_next"></td><td class="diff_header" id="to15_18">18</td><td nowrap="nowrap">And&nbsp;pad&nbsp;shape&nbsp;will&nbsp;be&nbsp;following&nbsp;if&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_19">19</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to15_19">19</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_20">20</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_20">20</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td><td class="diff_next"></td><td class="diff_header" id="to15_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;pad_shape[i]&nbsp;=&nbsp;(output_spatial_shape[i]&nbsp;-&nbsp;1)&nbsp;*&nbsp;strides_spatial_shape[i]&nbsp;+&nbsp;kernel_spatial_shape[i]&nbsp;-&nbsp;input_spatial_shape[i]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_22">22</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_22">22</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to15__1">n</a></td><td class="diff_header" id="from15_23">23</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;exclude&nbsp;pad.</td><td class="diff_next"><a href="#difflib_chg_to15__1">n</a></td><td class="diff_header" id="to15_23">23</td><td nowrap="nowrap">The&nbsp;output&nbsp;of&nbsp;each&nbsp;pooling&nbsp;window&nbsp;is&nbsp;divided&nbsp;by&nbsp;the&nbsp;number&nbsp;of&nbsp;elements&nbsp;<span class="diff_add">(</span>exclude&nbsp;pad<span class="diff_add">&nbsp;when&nbsp;attribute&nbsp;count_include_pad&nbsp;is&nbsp;zero)</span>.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_24">24</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_24">24</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_25">25</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to15_25">25</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_26">26</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td><td class="diff_next"></td><td class="diff_header" id="to15_26">26</td><td nowrap="nowrap">*&nbsp;**auto_pad**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td><td class="diff_next"></td><td class="diff_header" id="to15_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;auto_pad&nbsp;must&nbsp;be&nbsp;either&nbsp;NOTSET,&nbsp;SAME_UPPER,&nbsp;SAME_LOWER&nbsp;or&nbsp;VALID.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to15__1"></td><td class="diff_header" id="from15_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td><td class="diff_next"></td><td class="diff_header" id="to15_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;Where&nbsp;default&nbsp;value&nbsp;is&nbsp;NOTSET,&nbsp;which&nbsp;means&nbsp;explicit&nbsp;padding&nbsp;is&nbsp;used.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that&nbsp;the&nbsp;output</td><td class="diff_next"></td><td class="diff_header" id="to15_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_UPPER&nbsp;or&nbsp;SAME_LOWER&nbsp;mean&nbsp;pad&nbsp;the&nbsp;input&nbsp;so&nbsp;that&nbsp;the&nbsp;output</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;size&nbsp;match&nbsp;the&nbsp;input.In&nbsp;case&nbsp;of&nbsp;odd&nbsp;number&nbsp;add&nbsp;the&nbsp;extra</td><td class="diff_next"></td><td class="diff_header" id="to15_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;size&nbsp;match&nbsp;the&nbsp;input.In&nbsp;case&nbsp;of&nbsp;odd&nbsp;number&nbsp;add&nbsp;the&nbsp;extra</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;padding&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the&nbsp;beginning&nbsp;for</td><td class="diff_next"></td><td class="diff_header" id="to15_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;padding&nbsp;at&nbsp;the&nbsp;end&nbsp;for&nbsp;SAME_UPPER&nbsp;and&nbsp;at&nbsp;the&nbsp;beginning&nbsp;for</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_LOWER.&nbsp;VALID&nbsp;mean&nbsp;no&nbsp;padding.</td><td class="diff_next"></td><td class="diff_header" id="to15_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;SAME_LOWER.&nbsp;VALID&nbsp;mean&nbsp;no&nbsp;padding.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to15__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to15__top">t</a></td><td class="diff_header" id="to15_33">33</td><td nowrap="nowrap"><span class="diff_add">*&nbsp;**count_include_pad**:</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_34">34</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Whether&nbsp;include&nbsp;pad&nbsp;pixels&nbsp;when&nbsp;calculating&nbsp;values&nbsp;for&nbsp;the&nbsp;edges.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_35">35</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Default&nbsp;is&nbsp;0,&nbsp;doesn't&nbsp;count&nbsp;include&nbsp;pad.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_33">33</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td><td class="diff_next"></td><td class="diff_header" id="to15_36">36</td><td nowrap="nowrap">*&nbsp;**kernel_shape**&nbsp;(required):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_34">34</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to15_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;size&nbsp;of&nbsp;the&nbsp;kernel&nbsp;along&nbsp;each&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_35">35</td><td nowrap="nowrap">*&nbsp;**pads**:</td><td class="diff_next"></td><td class="diff_header" id="to15_38">38</td><td nowrap="nowrap">*&nbsp;**pads**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td><td class="diff_next"></td><td class="diff_header" id="to15_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;Padding&nbsp;for&nbsp;the&nbsp;beginning&nbsp;and&nbsp;ending&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis,&nbsp;it&nbsp;can</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to15_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;take&nbsp;any&nbsp;value&nbsp;greater&nbsp;than&nbsp;or&nbsp;equal&nbsp;to&nbsp;0.&nbsp;The&nbsp;value&nbsp;represent&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to15_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;number&nbsp;of&nbsp;pixels&nbsp;added&nbsp;to&nbsp;the&nbsp;beginning&nbsp;and&nbsp;end&nbsp;part&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td><td class="diff_next"></td><td class="diff_header" id="to15_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;axis.&nbsp;pads&nbsp;format&nbsp;should&nbsp;be&nbsp;as&nbsp;follow&nbsp;[x1_begin,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to15_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;x2_begin...x1_end,&nbsp;x2_end,...],&nbsp;where&nbsp;xi_begin&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td><td class="diff_next"></td><td class="diff_header" id="to15_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;beginning&nbsp;of&nbsp;axis&nbsp;i&nbsp;and&nbsp;xi_end,&nbsp;the&nbsp;number&nbsp;of&nbsp;pixels</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to15_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;added&nbsp;at&nbsp;the&nbsp;end&nbsp;of&nbsp;axis&nbsp;i.&nbsp;This&nbsp;attribute&nbsp;cannot&nbsp;be&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td><td class="diff_next"></td><td class="diff_header" id="to15_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;simultaneously&nbsp;with&nbsp;auto_pad&nbsp;attribute.&nbsp;If&nbsp;not&nbsp;present,&nbsp;the&nbsp;padding</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to15_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;defaults&nbsp;to&nbsp;0&nbsp;along&nbsp;start&nbsp;and&nbsp;end&nbsp;of&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_45">45</td><td nowrap="nowrap">*&nbsp;**strides**:</td><td class="diff_next"></td><td class="diff_header" id="to15_48">48</td><td nowrap="nowrap">*&nbsp;**strides**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;Stride&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td><td class="diff_next"></td><td class="diff_header" id="to15_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;Stride&nbsp;along&nbsp;each&nbsp;spatial&nbsp;axis.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_47">47</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_50">50</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_48">48</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to15_51">51</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_49">49</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_52">52</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_50">50</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to15_53">53</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td><td class="diff_next"></td><td class="diff_header" id="to15_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;dimensions&nbsp;for&nbsp;image</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td><td class="diff_next"></td><td class="diff_header" id="to15_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;case&nbsp;are&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;H&nbsp;x&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to15_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td><td class="diff_next"></td><td class="diff_header" id="to15_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;For&nbsp;non&nbsp;image&nbsp;case,&nbsp;the&nbsp;dimensions&nbsp;are&nbsp;in&nbsp;the&nbsp;form&nbsp;of&nbsp;(N&nbsp;x&nbsp;C&nbsp;x&nbsp;D1&nbsp;x</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td><td class="diff_next"></td><td class="diff_header" id="to15_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;D2&nbsp;...&nbsp;Dn),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size.&nbsp;Optionally,&nbsp;if&nbsp;dimension</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td><td class="diff_next"></td><td class="diff_header" id="to15_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;denotation&nbsp;is&nbsp;in&nbsp;effect,&nbsp;the&nbsp;operation&nbsp;expects&nbsp;the&nbsp;input&nbsp;data&nbsp;tensor</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td><td class="diff_next"></td><td class="diff_header" id="to15_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;to&nbsp;arrive&nbsp;with&nbsp;the&nbsp;dimension&nbsp;denotation&nbsp;of&nbsp;[DATA_BATCH,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td><td class="diff_next"></td><td class="diff_header" id="to15_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;DATA_CHANNEL,&nbsp;DATA_FEATURE,&nbsp;DATA_FEATURE&nbsp;...].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_59">59</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_62">62</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_60">60</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to15_63">63</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_61">61</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_64">64</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_62">62</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to15_65">65</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td><td class="diff_next"></td><td class="diff_header" id="to15_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;Output&nbsp;data&nbsp;tensor&nbsp;from&nbsp;average&nbsp;or&nbsp;max&nbsp;pooling&nbsp;across&nbsp;the&nbsp;input</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_64">64</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td><td class="diff_next"></td><td class="diff_header" id="to15_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;tensor.&nbsp;Dimensions&nbsp;will&nbsp;vary&nbsp;based&nbsp;on&nbsp;various&nbsp;kernel,&nbsp;stride,&nbsp;and</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td><td class="diff_next"></td><td class="diff_header" id="to15_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;pad&nbsp;sizes.&nbsp;Floor&nbsp;value&nbsp;of&nbsp;the&nbsp;dimension&nbsp;is&nbsp;used</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_66">66</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to15_69">69</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_67">67</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to15_70">70</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_68">68</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to15_71">71</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to15_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to15_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td><td class="diff_next"></td><td class="diff_header" id="to15_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to15_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from15_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to15_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-averagepool-1:
+AveragePool - 1
+===============
+**Version**
+* **name**: `AveragePool (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#AveragePool>`_
+* **domain**: **main**
+* **since_version**: **1**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 1**.
+
+**Summary**
+
+AveragePool consumes an input tensor X and applies average pooling across
+the tensor according to kernel sizes, stride sizes, and pad lengths.
+average pooling consisting of computing the average on all values of a
+subset of the input tensor according to the kernel size and downsampling the
+data into the output tensor Y for further processing. The output spatial shape will be following:
+::
+
+    output_spatial_shape[i] = floor((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
+
+    * pad_shape[i] is sum of pads along axis i
+
+`auto_pad` is a DEPRECATED attribute. If you are using them currently, the output spatial shape will be following:
+::
+
+    VALID: output_spatial_shape[i] = ceil((input_spatial_shape[i] - kernel_spatial_shape[i] + 1) / strides_spatial_shape[i])
+    SAME_UPPER or SAME_LOWER: output_spatial_shape[i] = ceil(input_spatial_shape[i] / strides_spatial_shape[i])
+
+And pad shape will be following if `SAME_UPPER` or `SAME_LOWER`:
+::
+
+    pad_shape[i] = (output_spatial_shape[i] - 1) * strides_spatial_shape[i] + kernel_spatial_shape[i] - input_spatial_shape[i]
+
+The output of each pooling window is divided by the number of elements exclude pad.
+
+**Attributes**
+* **auto_pad**:
+  auto_pad must be either NOTSET, SAME_UPPER, SAME_LOWER or VALID.
+  Where default value is NOTSET, which means explicit padding is used.
+  SAME_UPPER or SAME_LOWER mean pad the input so that the output
+  spatial size match the input.In case of odd number add the extra
+  padding at the end for SAME_UPPER and at the beginning for
+  SAME_LOWER. VALID mean no padding.
+* **kernel_shape** (required):
+  The size of the kernel along each axis.
+* **pads**:
+  Padding for the beginning and ending along each spatial axis, it can
+  take any value greater than or equal to 0. The value represent the
+  number of pixels added to the beginning and end part of the
+  corresponding axis. `pads` format should be as follow [x1_begin,
+  x2_begin...x1_end, x2_end,...], where xi_begin the number of pixels
+  added at the beginning of axis `i` and xi_end, the number of pixels
+  added at the end of axis `i`. This attribute cannot be used
+  simultaneously with auto_pad attribute. If not present, the padding
+  defaults to 0 along start and end of each spatial axis.
+* **strides**:
+  Stride along each spatial axis.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T**:
+  Input data tensor from the previous operator; dimensions for image
+  case are (N x C x H x W), where N is the batch size, C is the number
+  of channels, and H and W are the height and the width of the data.
+  For non image case, the dimensions are in the form of (N x C x D1 x
+  D2 ... Dn), where N is the batch size. Optionally, if dimension
+  denotation is in effect, the operation expects the input data tensor
+  to arrive with the dimension denotation of [DATA_BATCH,
+  DATA_CHANNEL, DATA_FEATURE, DATA_FEATURE ...].
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T**:
+  Output data tensor from average or max pooling across the input
+  tensor. Dimensions will vary based on various kernel, stride, and
+  pad sizes. Floor value of the dimension is used
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.

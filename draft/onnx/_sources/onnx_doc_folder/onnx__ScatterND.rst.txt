@@ -1,0 +1,1024 @@
+
+.. _l-onnx-doc-ScatterND:
+
+=========
+ScatterND
+=========
+
+.. contents::
+    :local:
+
+
+.. _l-onnx-op-scatternd-18:
+ScatterND - 18
+==============
+**Version**
+* **name**: `ScatterND (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#ScatterND>`_
+* **domain**: **main**
+* **since_version**: **18**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 18**.
+
+**Summary**
+
+ScatterND takes three inputs `data` tensor of rank r >= 1, `indices` tensor of rank q >= 1,
+and `updates` tensor of rank q + r - indices.shape[-1] - 1. The output of the operation
+is produced by creating a copy of the input `data`, and then updating its value to values
+specified by `updates` at specific index positions specified by `indices`. Its output shape
+is the same as the shape of `data`. Note that `indices` should not have duplicate entries.
+That is, two or more `updates` for the same index-location is not supported.
+
+`indices` is an integer tensor. Let k denote indices.shape[-1], the last dimension in the shape of `indices`.
+ `indices` is treated as a (q-1)-dimensional tensor of k-tuples, where each k-tuple is a partial-index into `data`.
+Hence, k can be a value at most the rank of `data`. When k equals rank(data), each update entry specifies an
+update to a single element of the tensor. When k is less than rank(data) each update entry specifies an
+update to a slice of the tensor.
+
+`updates` is treated as a (q-1)-dimensional tensor of replacement-slice-values. Thus, the
+first (q-1) dimensions of updates.shape must match the first (q-1) dimensions of indices.shape.
+The remaining dimensions of `updates` correspond to the dimensions of the
+replacement-slice-values. Each replacement-slice-value is a (r-k) dimensional tensor,
+corresponding to the trailing (r-k) dimensions of `data`.  Thus, the shape of `updates`
+must equal indices.shape[0:q-1] ++ data.shape[k:r-1], where ++ denotes the concatenation
+of shapes.
+
+The `output` is calculated via the following equation:
+
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] = updates[idx]
+
+The order of iteration in the above loop is not specified.
+In particular, indices should not have duplicate entries: that is, if idx1 != idx2, then indices[idx1] != indices[idx2].
+This ensures that the output value does not depend on the iteration order.
+
+`reduction` allows specification of an optional reduction operation, which is applied to all values in `updates`
+tensor into `output` at the specified `indices`.
+In cases where `reduction` is set to "none", indices should not have duplicate entries: that is, if idx1 != idx2,
+then indices[idx1] != indices[idx2]. This ensures that the output value does not depend on the iteration order.
+When `reduction` is set to some reduction function `f`, `output` is calculated as follows:
+
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] = f(output[indices[idx]], updates[idx])
+
+where the `f` is +/*/max/min as specified.
+
+This operator is the inverse of GatherND.
+
+(Opset 18 change): Adds max/min to the set of allowed reduction ops.
+
+Example 1:
+::
+
+      data    = [1, 2, 3, 4, 5, 6, 7, 8]
+      indices = [[4], [3], [1], [7]]
+      updates = [9, 10, 11, 12]
+      output  = [1, 11, 3, 10, 9, 6, 7, 12]
+
+Example 2:
+::
+
+      data    = [[[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+      indices = [[0], [2]]
+      updates = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]]]
+      output  = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+
+**Attributes**
+* **reduction**:
+  Type of reduction to apply: none (default), add, mul, max, min.
+  'none': no reduction applied. 'add':  reduction using the addition
+  operation. 'mul':  reduction using the addition operation. 'max':
+  reduction using the maximum operation.'min': reduction using the
+  minimum operation.
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+* **indices** (heterogeneous) - **tensor(int64)**:
+  Tensor of rank q >= 1.
+* **updates** (heterogeneous) - **T**:
+  Tensor of rank q + r - indices_shape[-1] - 1.
+
+**Outputs**
+
+* **output** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+
+**Type Constraints**
+* **T** in (
+  tensor(bfloat16),
+  tensor(bool),
+  tensor(complex128),
+  tensor(complex64),
+  tensor(double),
+  tensor(float),
+  tensor(float16),
+  tensor(int16),
+  tensor(int32),
+  tensor(int64),
+  tensor(int8),
+  tensor(string),
+  tensor(uint16),
+  tensor(uint32),
+  tensor(uint64),
+  tensor(uint8)
+  ):
+  Constrain input and output types to any tensor type.
+
+**Examples**
+
+**_scatternd**
+::
+    node = onnx.helper.make_node(
+        "ScatterND",
+        inputs=["data", "indices", "updates"],
+        outputs=["y"],
+    )
+    data = np.array(
+        [
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+        ],
+        dtype=np.float32,
+    )
+    indices = np.array([[0], [2]], dtype=np.int64)
+    updates = np.array(
+        [
+            [[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+            [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+        ],
+        dtype=np.float32,
+    )
+    # Expecting output as np.array(
+    #    [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+    #     [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+    #     [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+    #     [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=np.float32)
+    output = scatter_nd_impl(data, indices, updates)
+    expect(
+        node,
+        inputs=[data, indices, updates],
+        outputs=[output],
+        name="test_scatternd",
+    )
+
+**_scatternd_add**
+::
+    node = onnx.helper.make_node(
+        "ScatterND",
+        inputs=["data", "indices", "updates"],
+        outputs=["y"],
+        reduction="add",
+    )
+    data = np.array(
+        [
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+        ],
+        dtype=np.float32,
+    )
+    indices = np.array([[0], [0]], dtype=np.int64)
+    updates = np.array(
+        [
+            [[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+            [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+        ],
+        dtype=np.float32,
+    )
+    # Expecting output as np.array(
+    #    [[[7, 8, 9, 10], [13, 14, 15, 16], [18, 17, 16, 15], [16, 15, 14, 13]],
+    #     [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+    #     [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+    #     [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=np.float32)
+    output = scatter_nd_impl(data, indices, updates, reduction="add")
+    expect(
+        node,
+        inputs=[data, indices, updates],
+        outputs=[output],
+        name="test_scatternd_add",
+    )
+
+**_scatternd_multiply**
+::
+    node = onnx.helper.make_node(
+        "ScatterND",
+        inputs=["data", "indices", "updates"],
+        outputs=["y"],
+        reduction="mul",
+    )
+    data = np.array(
+        [
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+        ],
+        dtype=np.float32,
+    )
+    indices = np.array([[0], [0]], dtype=np.int64)
+    updates = np.array(
+        [
+            [[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+            [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+        ],
+        dtype=np.float32,
+    )
+    # Expecting output as np.array(
+    #    [[[5, 10, 15, 20], [60, 72, 84, 96], [168, 147, 126, 105], [128, 96, 64, 32]],
+    #     [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+    #     [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+    #     [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=np.float32)
+    output = scatter_nd_impl(data, indices, updates, reduction="mul")
+    expect(
+        node,
+        inputs=[data, indices, updates],
+        outputs=[output],
+        name="test_scatternd_multiply",
+    )
+
+**_scatternd_max**
+::
+    node = onnx.helper.make_node(
+        "ScatterND",
+        inputs=["data", "indices", "updates"],
+        outputs=["y"],
+        reduction="max",
+    )
+    data = np.array(
+        [
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+        ],
+        dtype=np.float32,
+    )
+    indices = np.array([[0], [0]], dtype=np.int64)
+    updates = np.array(
+        [
+            [[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+            [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+        ],
+        dtype=np.float32,
+    )
+    # Expecting output as np.array(
+    #    [[[5, 5, 5, 5], [6, 6, 7, 8], [8, 7, 7, 7], [8, 8 ,8, 8]],
+    #     [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+    #     [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+    #     [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=np.float32)
+    output = scatter_nd_impl(data, indices, updates, reduction="max")
+    expect(
+        node,
+        inputs=[data, indices, updates],
+        outputs=[output],
+        name="test_scatternd_max",
+    )
+
+**_scatternd_min**
+::
+    node = onnx.helper.make_node(
+        "ScatterND",
+        inputs=["data", "indices", "updates"],
+        outputs=["y"],
+        reduction="min",
+    )
+    data = np.array(
+        [
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+            [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+        ],
+        dtype=np.float32,
+    )
+    indices = np.array([[0], [0]], dtype=np.int64)
+    updates = np.array(
+        [
+            [[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+            [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+        ],
+        dtype=np.float32,
+    )
+    # Expecting output as np.array(
+    #    [[[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 3, 2, 1]],
+    #     [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+    #     [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+    #     [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]], dtype=np.float32)
+    output = scatter_nd_impl(data, indices, updates, reduction="min")
+    expect(
+        node,
+        inputs=[data, indices, updates],
+        outputs=[output],
+        name="test_scatternd_min",
+    )
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to202__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__0">f</a></td><td class="diff_header" id="from202_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td><td class="diff_next"><a href="#difflib_chg_to202__0">f</a></td><td class="diff_header" id="to202_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__0"></td><td class="diff_header" id="from202_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td><td class="diff_next"></td><td class="diff_header" id="to202_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td><td class="diff_next"></td><td class="diff_header" id="to202_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td><td class="diff_next"></td><td class="diff_header" id="to202_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td><td class="diff_next"></td><td class="diff_header" id="to202_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td><td class="diff_next"></td><td class="diff_header" id="to202_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__1">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__1">n</a></td><td class="diff_header" id="to202_7">7</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__1"></td><td class="diff_header" id="from202_7">7</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td><td class="diff_next"></td><td class="diff_header" id="to202_8">8</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_8">8</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to202_9">9</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_9">9</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to202_10">10</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_10">10</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to202_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td><td class="diff_next"></td><td class="diff_header" id="to202_12">12</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__2">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__2">n</a></td><td class="diff_header" id="to202_13">13</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_12">12</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to202_14">14</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_13">13</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td><td class="diff_next"></td><td class="diff_header" id="to202_15">15</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__2"></td><td class="diff_header" id="from202_14">14</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to202_16">16</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_15">15</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td><td class="diff_next"></td><td class="diff_header" id="to202_17">17</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__3"></td><td class="diff_header" id="from202_16">16</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td><td class="diff_next"></td><td class="diff_header" id="to202_18">18</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_17">17</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td><td class="diff_next"></td><td class="diff_header" id="to202_19">19</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_18">18</td><td nowrap="nowrap">of&nbsp;shapes.</td><td class="diff_next"></td><td class="diff_header" id="to202_20">20</td><td nowrap="nowrap">of&nbsp;shapes.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__3">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__3">n</a></td><td class="diff_header" id="to202_21">21</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_19">19</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td><td class="diff_next"></td><td class="diff_header" id="to202_22">22</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__4"><a href="#difflib_chg_to202__4">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__4">n</a></td><td class="diff_header" id="to202_23">23</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_20">20</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td><td class="diff_next"></td><td class="diff_header" id="to202_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td><td class="diff_next"></td><td class="diff_header" id="to202_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_22">22</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td><td class="diff_next"></td><td class="diff_header" id="to202_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__5"></td><td class="diff_header" id="from202_23">23</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td><td class="diff_next"></td><td class="diff_header" id="to202_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__5">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__5">n</a></td><td class="diff_header" id="to202_28">28</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_24">24</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td><td class="diff_next"></td><td class="diff_header" id="to202_29">29</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_25">25</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td><td class="diff_next"></td><td class="diff_header" id="to202_30">30</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_26">26</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td><td class="diff_next"></td><td class="diff_header" id="to202_31">31</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__6"><a href="#difflib_chg_to202__6">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__6">n</a></td><td class="diff_header" id="to202_32">32</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_27">27</td><td nowrap="nowrap">reduction&nbsp;allows&nbsp;specification&nbsp;of&nbsp;an&nbsp;optional&nbsp;reduction&nbsp;operation,&nbsp;which&nbsp;is&nbsp;applied&nbsp;to&nbsp;all&nbsp;values&nbsp;in&nbsp;updates</td><td class="diff_next"></td><td class="diff_header" id="to202_33">33</td><td nowrap="nowrap">reduction&nbsp;allows&nbsp;specification&nbsp;of&nbsp;an&nbsp;optional&nbsp;reduction&nbsp;operation,&nbsp;which&nbsp;is&nbsp;applied&nbsp;to&nbsp;all&nbsp;values&nbsp;in&nbsp;updates</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_28">28</td><td nowrap="nowrap">tensor&nbsp;into&nbsp;output&nbsp;at&nbsp;the&nbsp;specified&nbsp;indices.</td><td class="diff_next"></td><td class="diff_header" id="to202_34">34</td><td nowrap="nowrap">tensor&nbsp;into&nbsp;output&nbsp;at&nbsp;the&nbsp;specified&nbsp;indices.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_29">29</td><td nowrap="nowrap">In&nbsp;cases&nbsp;where&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"none",&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,</td><td class="diff_next"></td><td class="diff_header" id="to202_35">35</td><td nowrap="nowrap">In&nbsp;cases&nbsp;where&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"none",&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_30">30</td><td nowrap="nowrap">then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].&nbsp;This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td><td class="diff_next"></td><td class="diff_header" id="to202_36">36</td><td nowrap="nowrap">then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].&nbsp;This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__7"><a href="#difflib_chg_to202__7">n</a></td><td class="diff_header" id="from202_31">31</td><td nowrap="nowrap">When&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;<span class="diff_chg">"a</span>d<span class="diff_chg">d"</span>,&nbsp;output&nbsp;is&nbsp;calculated&nbsp;as&nbsp;follows:</td><td class="diff_next"><a href="#difflib_chg_to202__7">n</a></td><td class="diff_header" id="to202_37">37</td><td nowrap="nowrap">When&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;<span class="diff_chg">some&nbsp;re</span>d<span class="diff_chg">uction&nbsp;function&nbsp;f</span>,&nbsp;output&nbsp;is&nbsp;calculated&nbsp;as&nbsp;follows:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_38">38</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td><td class="diff_next"></td><td class="diff_header" id="to202_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_33">33</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td><td class="diff_next"></td><td class="diff_header" id="to202_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_34">34</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td><td class="diff_next"></td><td class="diff_header" id="to202_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__8">n</a></td><td class="diff_header" id="from202_35">35</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;<span class="diff_sub">+</span>=&nbsp;updates[idx]</td><td class="diff_next"><a href="#difflib_chg_to202__8">n</a></td><td class="diff_header" id="to202_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=<span class="diff_add">&nbsp;f(output[indices[idx]],</span>&nbsp;updates[idx]<span class="diff_add">)</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_36">36</td><td nowrap="nowrap"><span class="diff_sub">When&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"mul",&nbsp;output&nbsp;is&nbsp;calculated&nbsp;as&nbsp;follows:</span></td><td class="diff_next"></td><td class="diff_header" id="to202_43">43</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__8"></td><td class="diff_header" id="from202_37">37</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</span></td><td class="diff_next"></td><td class="diff_header" id="to202_44">44</td><td nowrap="nowrap"><span class="diff_add">where&nbsp;the&nbsp;f&nbsp;is&nbsp;+/*/max/min&nbsp;as&nbsp;specified.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_38">38</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</span></td><td class="diff_next"></td><td class="diff_header" id="to202_45">45</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_39">39</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</span></td><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_40">40</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;*=&nbsp;updates[idx]</span></td><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_41">41</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td><td class="diff_next"></td><td class="diff_header" id="to202_46">46</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__9">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to202__9">n</a></td><td class="diff_header" id="to202_47">47</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_48">48</td><td nowrap="nowrap"><span class="diff_add">(Opset&nbsp;18&nbsp;change):&nbsp;Adds&nbsp;max/min&nbsp;to&nbsp;the&nbsp;set&nbsp;of&nbsp;allowed&nbsp;reduction&nbsp;ops.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_49">49</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_42">42</td><td nowrap="nowrap">Example&nbsp;1:</td><td class="diff_next"></td><td class="diff_header" id="to202_50">50</td><td nowrap="nowrap">Example&nbsp;1:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_43">43</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to202_51">51</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_44">44</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_52">52</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td><td class="diff_next"></td><td class="diff_header" id="to202_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td><td class="diff_next"></td><td class="diff_header" id="to202_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to202_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to202_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_49">49</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_57">57</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_50">50</td><td nowrap="nowrap">Example&nbsp;2:</td><td class="diff_next"></td><td class="diff_header" id="to202_58">58</td><td nowrap="nowrap">Example&nbsp;2:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_51">51</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to202_59">59</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_52">52</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_60">60</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to202_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to202_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to202_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to202_64">64</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td><td class="diff_next"></td><td class="diff_header" id="to202_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to202_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td><td class="diff_next"></td><td class="diff_header" id="to202_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to202_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to202_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to202__9"></td><td class="diff_header" id="from202_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td><td class="diff_next"></td><td class="diff_header" id="to202_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to202_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_64">64</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_72">72</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_65">65</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to202_73">73</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_66">66</td><td nowrap="nowrap">*&nbsp;**reduction**:</td><td class="diff_next"></td><td class="diff_header" id="to202_74">74</td><td nowrap="nowrap">*&nbsp;**reduction**:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to202__top">t</a></td><td class="diff_header" id="from202_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;Type&nbsp;of&nbsp;reduction&nbsp;to&nbsp;apply:&nbsp;none&nbsp;(default),&nbsp;add,&nbsp;mul.<span class="diff_sub">&nbsp;'none':&nbsp;no</span></td><td class="diff_next"><a href="#difflib_chg_to202__top">t</a></td><td class="diff_header" id="to202_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;Type&nbsp;of&nbsp;reduction&nbsp;to&nbsp;apply:&nbsp;none&nbsp;(default),&nbsp;add,&nbsp;mul<span class="diff_add">,&nbsp;max,&nbsp;min</span>.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;reduction&nbsp;applied.&nbsp;'add':&nbsp;&nbsp;reduction&nbsp;using&nbsp;the&nbsp;addition<span class="diff_sub">&nbsp;operation.</span></td><td class="diff_next"></td><td class="diff_header" id="to202_76">76</td><td nowrap="nowrap">&nbsp;<span class="diff_add">&nbsp;'none':&nbsp;no</span>&nbsp;reduction&nbsp;applied.&nbsp;'add':&nbsp;&nbsp;reduction&nbsp;using&nbsp;the&nbsp;addition</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_69">69</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;&nbsp;'mul':&nbsp;reduction&nbsp;using&nbsp;the&nbsp;multiplication&nbsp;operation.</span></td><td class="diff_next"></td><td class="diff_header" id="to202_77">77</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;operation.&nbsp;'mul':&nbsp;&nbsp;reduction&nbsp;using&nbsp;the&nbsp;addition&nbsp;operation.&nbsp;'max':</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_78">78</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;reduction&nbsp;using&nbsp;the&nbsp;maximum&nbsp;operation.'min':&nbsp;reduction&nbsp;using&nbsp;the</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_79">79</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;minimum&nbsp;operation.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_70">70</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_80">80</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_71">71</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to202_81">81</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_72">72</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_82">82</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_73">73</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to202_83">83</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to202_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_75">75</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td><td class="diff_next"></td><td class="diff_header" id="to202_85">85</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to202_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_77">77</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to202_87">87</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to202_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_79">79</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_89">89</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_80">80</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to202_90">90</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_81">81</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_91">91</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_82">82</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to202_92">92</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to202_93">93</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_84">84</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to202_94">94</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_85">85</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to202_95">95</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_86">86</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to202_96">96</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bfloat16),</td><td class="diff_next"></td><td class="diff_header" id="to202_97">97</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bfloat16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td><td class="diff_next"></td><td class="diff_header" id="to202_98">98</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td><td class="diff_next"></td><td class="diff_header" id="to202_99">99</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td><td class="diff_next"></td><td class="diff_header" id="to202_100">100</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_91">91</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to202_101">101</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_92">92</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to202_102">102</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_93">93</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td><td class="diff_next"></td><td class="diff_header" id="to202_103">103</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_94">94</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td><td class="diff_next"></td><td class="diff_header" id="to202_104">104</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_95">95</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td><td class="diff_next"></td><td class="diff_header" id="to202_105">105</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_96">96</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td><td class="diff_next"></td><td class="diff_header" id="to202_106">106</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_97">97</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td><td class="diff_next"></td><td class="diff_header" id="to202_107">107</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_98">98</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td><td class="diff_next"></td><td class="diff_header" id="to202_108">108</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_99">99</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td><td class="diff_next"></td><td class="diff_header" id="to202_109">109</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_100">100</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td><td class="diff_next"></td><td class="diff_header" id="to202_110">110</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_101">101</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td><td class="diff_next"></td><td class="diff_header" id="to202_111">111</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_102">102</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td><td class="diff_next"></td><td class="diff_header" id="to202_112">112</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_103">103</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to202_113">113</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from202_104">104</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td><td class="diff_next"></td><td class="diff_header" id="to202_114">114</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-scatternd-16:
+ScatterND - 16
+==============
+**Version**
+* **name**: `ScatterND (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#ScatterND>`_
+* **domain**: **main**
+* **since_version**: **16**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 16**.
+
+**Summary**
+
+ScatterND takes three inputs `data` tensor of rank r >= 1, `indices` tensor of rank q >= 1,
+and `updates` tensor of rank q + r - indices.shape[-1] - 1. The output of the operation
+is produced by creating a copy of the input `data`, and then updating its value to values
+specified by `updates` at specific index positions specified by `indices`. Its output shape
+is the same as the shape of `data`. Note that `indices` should not have duplicate entries.
+That is, two or more `updates` for the same index-location is not supported.
+`indices` is an integer tensor. Let k denote indices.shape[-1], the last dimension in the shape of `indices`.
+ `indices` is treated as a (q-1)-dimensional tensor of k-tuples, where each k-tuple is a partial-index into `data`.
+Hence, k can be a value at most the rank of `data`. When k equals rank(data), each update entry specifies an
+update to a single element of the tensor. When k is less than rank(data) each update entry specifies an
+update to a slice of the tensor.
+`updates` is treated as a (q-1)-dimensional tensor of replacement-slice-values. Thus, the
+first (q-1) dimensions of updates.shape must match the first (q-1) dimensions of indices.shape.
+The remaining dimensions of `updates` correspond to the dimensions of the
+replacement-slice-values. Each replacement-slice-value is a (r-k) dimensional tensor,
+corresponding to the trailing (r-k) dimensions of `data`.  Thus, the shape of `updates`
+must equal indices.shape[0:q-1] ++ data.shape[k:r-1], where ++ denotes the concatenation
+of shapes.
+The `output` is calculated via the following equation:
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] = updates[idx]
+The order of iteration in the above loop is not specified.
+In particular, indices should not have duplicate entries: that is, if idx1 != idx2, then indices[idx1] != indices[idx2].
+This ensures that the output value does not depend on the iteration order.
+`reduction` allows specification of an optional reduction operation, which is applied to all values in `updates`
+tensor into `output` at the specified `indices`.
+In cases where `reduction` is set to "none", indices should not have duplicate entries: that is, if idx1 != idx2,
+then indices[idx1] != indices[idx2]. This ensures that the output value does not depend on the iteration order.
+When `reduction` is set to "add", `output` is calculated as follows:
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] += updates[idx]
+When `reduction` is set to "mul", `output` is calculated as follows:
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] *= updates[idx]
+This operator is the inverse of GatherND.
+Example 1:
+::
+
+      data    = [1, 2, 3, 4, 5, 6, 7, 8]
+      indices = [[4], [3], [1], [7]]
+      updates = [9, 10, 11, 12]
+      output  = [1, 11, 3, 10, 9, 6, 7, 12]
+
+Example 2:
+::
+
+      data    = [[[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+      indices = [[0], [2]]
+      updates = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]]]
+      output  = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+
+**Attributes**
+* **reduction**:
+  Type of reduction to apply: none (default), add, mul. 'none': no
+  reduction applied. 'add':  reduction using the addition operation.
+  'mul': reduction using the multiplication operation.
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+* **indices** (heterogeneous) - **tensor(int64)**:
+  Tensor of rank q >= 1.
+* **updates** (heterogeneous) - **T**:
+  Tensor of rank q + r - indices_shape[-1] - 1.
+
+**Outputs**
+
+* **output** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+
+**Type Constraints**
+* **T** in (
+  tensor(bfloat16),
+  tensor(bool),
+  tensor(complex128),
+  tensor(complex64),
+  tensor(double),
+  tensor(float),
+  tensor(float16),
+  tensor(int16),
+  tensor(int32),
+  tensor(int64),
+  tensor(int8),
+  tensor(string),
+  tensor(uint16),
+  tensor(uint32),
+  tensor(uint64),
+  tensor(uint8)
+  ):
+  Constrain input and output types to any tensor type.
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to203__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__0">f</a></td><td class="diff_header" id="from203_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td><td class="diff_next"><a href="#difflib_chg_to203__0">f</a></td><td class="diff_header" id="to203_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__0"></td><td class="diff_header" id="from203_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td><td class="diff_next"></td><td class="diff_header" id="to203_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td><td class="diff_next"></td><td class="diff_header" id="to203_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td><td class="diff_next"></td><td class="diff_header" id="to203_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td><td class="diff_next"></td><td class="diff_header" id="to203_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td><td class="diff_next"></td><td class="diff_header" id="to203_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__1">n</a></td><td class="diff_header" id="from203_7">7</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__1">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__1"></td><td class="diff_header" id="from203_8">8</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td><td class="diff_next"></td><td class="diff_header" id="to203_7">7</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_9">9</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to203_8">8</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_10">10</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to203_9">9</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to203_10">10</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_12">12</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td><td class="diff_next"></td><td class="diff_header" id="to203_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__2">n</a></td><td class="diff_header" id="from203_13">13</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__2">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_14">14</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to203_12">12</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_15">15</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td><td class="diff_next"></td><td class="diff_header" id="to203_13">13</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__2"></td><td class="diff_header" id="from203_16">16</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to203_14">14</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_17">17</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td><td class="diff_next"></td><td class="diff_header" id="to203_15">15</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__3"></td><td class="diff_header" id="from203_18">18</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td><td class="diff_next"></td><td class="diff_header" id="to203_16">16</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_19">19</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td><td class="diff_next"></td><td class="diff_header" id="to203_17">17</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_20">20</td><td nowrap="nowrap">of&nbsp;shapes.</td><td class="diff_next"></td><td class="diff_header" id="to203_18">18</td><td nowrap="nowrap">of&nbsp;shapes.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__3">n</a></td><td class="diff_header" id="from203_21">21</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__3">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_22">22</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td><td class="diff_next"></td><td class="diff_header" id="to203_19">19</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__4"><a href="#difflib_chg_to203__4">n</a></td><td class="diff_header" id="from203_23">23</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__4">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td><td class="diff_next"></td><td class="diff_header" id="to203_20">20</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td><td class="diff_next"></td><td class="diff_header" id="to203_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td><td class="diff_next"></td><td class="diff_header" id="to203_22">22</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__5"></td><td class="diff_header" id="from203_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td><td class="diff_next"></td><td class="diff_header" id="to203_23">23</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__5">n</a></td><td class="diff_header" id="from203_28">28</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__5">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_29">29</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td><td class="diff_next"></td><td class="diff_header" id="to203_24">24</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_30">30</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td><td class="diff_next"></td><td class="diff_header" id="to203_25">25</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_31">31</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td><td class="diff_next"></td><td class="diff_header" id="to203_26">26</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__6">n</a></td><td class="diff_header" id="from203_32">32</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__6">n</a></td><td class="diff_header" id="to203_27">27</td><td nowrap="nowrap"><span class="diff_add">reduction&nbsp;allows&nbsp;specification&nbsp;of&nbsp;an&nbsp;optional&nbsp;reduction&nbsp;operation,&nbsp;which&nbsp;is&nbsp;applied&nbsp;to&nbsp;all&nbsp;values&nbsp;in&nbsp;updates</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_28">28</td><td nowrap="nowrap"><span class="diff_add">tensor&nbsp;into&nbsp;output&nbsp;at&nbsp;the&nbsp;specified&nbsp;indices.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_29">29</td><td nowrap="nowrap"><span class="diff_add">In&nbsp;cases&nbsp;where&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"none",&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_30">30</td><td nowrap="nowrap"><span class="diff_add">then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].&nbsp;This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_31">31</td><td nowrap="nowrap"><span class="diff_add">When&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"add",&nbsp;output&nbsp;is&nbsp;calculated&nbsp;as&nbsp;follows:</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_32">32</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_33">33</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_34">34</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_35">35</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;+=&nbsp;updates[idx]</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_36">36</td><td nowrap="nowrap"><span class="diff_add">When&nbsp;reduction&nbsp;is&nbsp;set&nbsp;to&nbsp;"mul",&nbsp;output&nbsp;is&nbsp;calculated&nbsp;as&nbsp;follows:</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__6"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_37">37</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_38">38</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_39">39</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_40">40</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;*=&nbsp;updates[idx]</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_33">33</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td><td class="diff_next"></td><td class="diff_header" id="to203_41">41</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__7">n</a></td><td class="diff_header" id="from203_34">34</td><td nowrap="nowrap"><span class="diff_sub">&nbsp;</span></td><td class="diff_next"><a href="#difflib_chg_to203__7">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_35">35</td><td nowrap="nowrap">Example&nbsp;1:</td><td class="diff_next"></td><td class="diff_header" id="to203_42">42</td><td nowrap="nowrap">Example&nbsp;1:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_36">36</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to203_43">43</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_37">37</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_44">44</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td><td class="diff_next"></td><td class="diff_header" id="to203_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td><td class="diff_next"></td><td class="diff_header" id="to203_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to203_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to203_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_42">42</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_49">49</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_43">43</td><td nowrap="nowrap">Example&nbsp;2:</td><td class="diff_next"></td><td class="diff_header" id="to203_50">50</td><td nowrap="nowrap">Example&nbsp;2:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_44">44</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to203_51">51</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_45">45</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_52">52</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to203_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to203_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to203_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to203_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td><td class="diff_next"></td><td class="diff_header" id="to203_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to203_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to203__7"></td><td class="diff_header" id="from203_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td><td class="diff_next"></td><td class="diff_header" id="to203_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to203_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to203_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td><td class="diff_next"></td><td class="diff_header" id="to203_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to203_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to203__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to203__top">t</a></td><td class="diff_header" id="to203_64">64</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_65">65</td><td nowrap="nowrap"><span class="diff_add">**Attributes**</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_66">66</td><td nowrap="nowrap"><span class="diff_add">*&nbsp;**reduction**:</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_67">67</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Type&nbsp;of&nbsp;reduction&nbsp;to&nbsp;apply:&nbsp;none&nbsp;(default),&nbsp;add,&nbsp;mul.&nbsp;'none':&nbsp;no</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_68">68</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;reduction&nbsp;applied.&nbsp;'add':&nbsp;&nbsp;reduction&nbsp;using&nbsp;the&nbsp;addition&nbsp;operation.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_69">69</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;'mul':&nbsp;reduction&nbsp;using&nbsp;the&nbsp;multiplication&nbsp;operation.</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_57">57</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_70">70</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_58">58</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to203_71">71</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_59">59</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_72">72</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_60">60</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to203_73">73</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to203_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_62">62</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td><td class="diff_next"></td><td class="diff_header" id="to203_75">75</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to203_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_64">64</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to203_77">77</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to203_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_66">66</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_79">79</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_67">67</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to203_80">80</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_68">68</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_81">81</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_69">69</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to203_82">82</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to203_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_71">71</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to203_84">84</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_72">72</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to203_85">85</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_73">73</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to203_86">86</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bfloat16),</td><td class="diff_next"></td><td class="diff_header" id="to203_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bfloat16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td><td class="diff_next"></td><td class="diff_header" id="to203_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td><td class="diff_next"></td><td class="diff_header" id="to203_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td><td class="diff_next"></td><td class="diff_header" id="to203_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to203_91">91</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to203_92">92</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_80">80</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td><td class="diff_next"></td><td class="diff_header" id="to203_93">93</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_81">81</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td><td class="diff_next"></td><td class="diff_header" id="to203_94">94</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td><td class="diff_next"></td><td class="diff_header" id="to203_95">95</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td><td class="diff_next"></td><td class="diff_header" id="to203_96">96</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td><td class="diff_next"></td><td class="diff_header" id="to203_97">97</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td><td class="diff_next"></td><td class="diff_header" id="to203_98">98</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td><td class="diff_next"></td><td class="diff_header" id="to203_99">99</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td><td class="diff_next"></td><td class="diff_header" id="to203_100">100</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td><td class="diff_next"></td><td class="diff_header" id="to203_101">101</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td><td class="diff_next"></td><td class="diff_header" id="to203_102">102</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to203_103">103</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from203_91">91</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td><td class="diff_next"></td><td class="diff_header" id="to203_104">104</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-scatternd-13:
+ScatterND - 13
+==============
+**Version**
+* **name**: `ScatterND (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#ScatterND>`_
+* **domain**: **main**
+* **since_version**: **13**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 13**.
+
+**Summary**
+
+ScatterND takes three inputs `data` tensor of rank r >= 1, `indices` tensor of rank q >= 1,
+and `updates` tensor of rank q + r - indices.shape[-1] - 1. The output of the operation
+is produced by creating a copy of the input `data`, and then updating its value to values
+specified by `updates` at specific index positions specified by `indices`. Its output shape
+is the same as the shape of `data`. Note that `indices` should not have duplicate entries.
+That is, two or more `updates` for the same index-location is not supported.
+
+`indices` is an integer tensor. Let k denote indices.shape[-1], the last dimension in the shape of `indices`.
+ `indices` is treated as a (q-1)-dimensional tensor of k-tuples, where each k-tuple is a partial-index into `data`.
+Hence, k can be a value at most the rank of `data`. When k equals rank(data), each update entry specifies an
+update to a single element of the tensor. When k is less than rank(data) each update entry specifies an
+update to a slice of the tensor.
+
+`updates` is treated as a (q-1)-dimensional tensor of replacement-slice-values. Thus, the
+first (q-1) dimensions of updates.shape must match the first (q-1) dimensions of indices.shape.
+The remaining dimensions of `updates` correspond to the dimensions of the
+replacement-slice-values. Each replacement-slice-value is a (r-k) dimensional tensor,
+corresponding to the trailing (r-k) dimensions of `data`.  Thus, the shape of `updates`
+must equal indices.shape[0:q-1] ++ data.shape[k:r-1], where ++ denotes the concatenation
+of shapes.
+
+The `output` is calculated via the following equation:
+
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] = updates[idx]
+
+The order of iteration in the above loop is not specified.
+In particular, indices should not have duplicate entries: that is, if idx1 != idx2, then indices[idx1] != indices[idx2].
+This ensures that the output value does not depend on the iteration order.
+
+This operator is the inverse of GatherND.
+
+Example 1:
+::
+
+      data    = [1, 2, 3, 4, 5, 6, 7, 8]
+      indices = [[4], [3], [1], [7]]
+      updates = [9, 10, 11, 12]
+      output  = [1, 11, 3, 10, 9, 6, 7, 12]
+
+Example 2:
+::
+
+      data    = [[[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+      indices = [[0], [2]]
+      updates = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]]]
+      output  = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+* **indices** (heterogeneous) - **tensor(int64)**:
+  Tensor of rank q >= 1.
+* **updates** (heterogeneous) - **T**:
+  Tensor of rank q + r - indices_shape[-1] - 1.
+
+**Outputs**
+
+* **output** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+
+**Type Constraints**
+* **T** in (
+  tensor(bfloat16),
+  tensor(bool),
+  tensor(complex128),
+  tensor(complex64),
+  tensor(double),
+  tensor(float),
+  tensor(float16),
+  tensor(int16),
+  tensor(int32),
+  tensor(int64),
+  tensor(int8),
+  tensor(string),
+  tensor(uint16),
+  tensor(uint32),
+  tensor(uint64),
+  tensor(uint8)
+  ):
+  Constrain input and output types to any tensor type.
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to204__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to204__0">f</a></td><td class="diff_header" id="from204_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td><td class="diff_next"><a href="#difflib_chg_to204__0">f</a></td><td class="diff_header" id="to204_1">1</td><td nowrap="nowrap">ScatterND&nbsp;takes&nbsp;three&nbsp;inputs&nbsp;data&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1,&nbsp;indices&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td><td class="diff_next"></td><td class="diff_header" id="to204_2">2</td><td nowrap="nowrap">and&nbsp;updates&nbsp;tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices.shape[-1]&nbsp;-&nbsp;1.&nbsp;The&nbsp;output&nbsp;of&nbsp;the&nbsp;operation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td><td class="diff_next"></td><td class="diff_header" id="to204_3">3</td><td nowrap="nowrap">is&nbsp;produced&nbsp;by&nbsp;creating&nbsp;a&nbsp;copy&nbsp;of&nbsp;the&nbsp;input&nbsp;data,&nbsp;and&nbsp;then&nbsp;updating&nbsp;its&nbsp;value&nbsp;to&nbsp;values</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td><td class="diff_next"></td><td class="diff_header" id="to204_4">4</td><td nowrap="nowrap">specified&nbsp;by&nbsp;updates&nbsp;at&nbsp;specific&nbsp;index&nbsp;positions&nbsp;specified&nbsp;by&nbsp;indices.&nbsp;Its&nbsp;output&nbsp;shape</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td><td class="diff_next"></td><td class="diff_header" id="to204_5">5</td><td nowrap="nowrap">is&nbsp;the&nbsp;same&nbsp;as&nbsp;the&nbsp;shape&nbsp;of&nbsp;data.&nbsp;Note&nbsp;that&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td><td class="diff_next"></td><td class="diff_header" id="to204_6">6</td><td nowrap="nowrap">That&nbsp;is,&nbsp;two&nbsp;or&nbsp;more&nbsp;updates&nbsp;for&nbsp;the&nbsp;same&nbsp;index-location&nbsp;is&nbsp;not&nbsp;supported.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_7">7</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_7">7</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_8">8</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td><td class="diff_next"></td><td class="diff_header" id="to204_8">8</td><td nowrap="nowrap">indices&nbsp;is&nbsp;an&nbsp;integer&nbsp;tensor.&nbsp;Let&nbsp;k&nbsp;denote&nbsp;indices.shape[-1],&nbsp;the&nbsp;last&nbsp;dimension&nbsp;in&nbsp;the&nbsp;shape&nbsp;of&nbsp;indices.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_9">9</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to204_9">9</td><td nowrap="nowrap">&nbsp;indices&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;k-tuples,&nbsp;where&nbsp;each&nbsp;k-tuple&nbsp;is&nbsp;a&nbsp;partial-index&nbsp;into&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_10">10</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to204_10">10</td><td nowrap="nowrap">Hence,&nbsp;k&nbsp;can&nbsp;be&nbsp;a&nbsp;value&nbsp;at&nbsp;most&nbsp;the&nbsp;rank&nbsp;of&nbsp;data.&nbsp;When&nbsp;k&nbsp;equals&nbsp;rank(data),&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td><td class="diff_next"></td><td class="diff_header" id="to204_11">11</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;single&nbsp;element&nbsp;of&nbsp;the&nbsp;tensor.&nbsp;When&nbsp;k&nbsp;is&nbsp;less&nbsp;than&nbsp;rank(data)&nbsp;each&nbsp;update&nbsp;entry&nbsp;specifies&nbsp;an</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_12">12</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td><td class="diff_next"></td><td class="diff_header" id="to204_12">12</td><td nowrap="nowrap">update&nbsp;to&nbsp;a&nbsp;slice&nbsp;of&nbsp;the&nbsp;tensor.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_13">13</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_13">13</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_14">14</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to204_14">14</td><td nowrap="nowrap">updates&nbsp;is&nbsp;treated&nbsp;as&nbsp;a&nbsp;(q-1)-dimensional&nbsp;tensor&nbsp;of&nbsp;replacement-slice-values.&nbsp;Thus,&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_15">15</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td><td class="diff_next"></td><td class="diff_header" id="to204_15">15</td><td nowrap="nowrap">first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;updates.shape&nbsp;must&nbsp;match&nbsp;the&nbsp;first&nbsp;(q-1)&nbsp;dimensions&nbsp;of&nbsp;indices.shape.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_16">16</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to204_16">16</td><td nowrap="nowrap">The&nbsp;remaining&nbsp;dimensions&nbsp;of&nbsp;updates&nbsp;correspond&nbsp;to&nbsp;the&nbsp;dimensions&nbsp;of&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_17">17</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td><td class="diff_next"></td><td class="diff_header" id="to204_17">17</td><td nowrap="nowrap">replacement-slice-values.&nbsp;Each&nbsp;replacement-slice-value&nbsp;is&nbsp;a&nbsp;(r-k)&nbsp;dimensional&nbsp;tensor,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_18">18</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td><td class="diff_next"></td><td class="diff_header" id="to204_18">18</td><td nowrap="nowrap">corresponding&nbsp;to&nbsp;the&nbsp;trailing&nbsp;(r-k)&nbsp;dimensions&nbsp;of&nbsp;data.&nbsp;&nbsp;Thus,&nbsp;the&nbsp;shape&nbsp;of&nbsp;updates</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_19">19</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td><td class="diff_next"></td><td class="diff_header" id="to204_19">19</td><td nowrap="nowrap">must&nbsp;equal&nbsp;indices.shape[0:q-1]&nbsp;++&nbsp;data.shape[k:r-1],&nbsp;where&nbsp;++&nbsp;denotes&nbsp;the&nbsp;concatenation</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_20">20</td><td nowrap="nowrap">of&nbsp;shapes.</td><td class="diff_next"></td><td class="diff_header" id="to204_20">20</td><td nowrap="nowrap">of&nbsp;shapes.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_21">21</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_21">21</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_22">22</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td><td class="diff_next"></td><td class="diff_header" id="to204_22">22</td><td nowrap="nowrap">The&nbsp;output&nbsp;is&nbsp;calculated&nbsp;via&nbsp;the&nbsp;following&nbsp;equation:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_23">23</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_23">23</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td><td class="diff_next"></td><td class="diff_header" id="to204_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;=&nbsp;np.copy(data)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td><td class="diff_next"></td><td class="diff_header" id="to204_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;update_indices&nbsp;=&nbsp;indices.shape[:-1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td><td class="diff_next"></td><td class="diff_header" id="to204_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;idx&nbsp;in&nbsp;np.ndindex(update_indices):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td><td class="diff_next"></td><td class="diff_header" id="to204_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output[indices[idx]]&nbsp;=&nbsp;updates[idx]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_28">28</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_28">28</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_29">29</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td><td class="diff_next"></td><td class="diff_header" id="to204_29">29</td><td nowrap="nowrap">The&nbsp;order&nbsp;of&nbsp;iteration&nbsp;in&nbsp;the&nbsp;above&nbsp;loop&nbsp;is&nbsp;not&nbsp;specified.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_30">30</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td><td class="diff_next"></td><td class="diff_header" id="to204_30">30</td><td nowrap="nowrap">In&nbsp;particular,&nbsp;indices&nbsp;should&nbsp;not&nbsp;have&nbsp;duplicate&nbsp;entries:&nbsp;that&nbsp;is,&nbsp;if&nbsp;idx1&nbsp;!=&nbsp;idx2,&nbsp;then&nbsp;indices[idx1]&nbsp;!=&nbsp;indices[idx2].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_31">31</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td><td class="diff_next"></td><td class="diff_header" id="to204_31">31</td><td nowrap="nowrap">This&nbsp;ensures&nbsp;that&nbsp;the&nbsp;output&nbsp;value&nbsp;does&nbsp;not&nbsp;depend&nbsp;on&nbsp;the&nbsp;iteration&nbsp;order.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_32">32</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_32">32</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_33">33</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td><td class="diff_next"></td><td class="diff_header" id="to204_33">33</td><td nowrap="nowrap">This&nbsp;operator&nbsp;is&nbsp;the&nbsp;inverse&nbsp;of&nbsp;GatherND.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_34">34</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_34">34</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_35">35</td><td nowrap="nowrap">Example&nbsp;1:</td><td class="diff_next"></td><td class="diff_header" id="to204_35">35</td><td nowrap="nowrap">Example&nbsp;1:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_36">36</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to204_36">36</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_37">37</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_37">37</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td><td class="diff_next"></td><td class="diff_header" id="to204_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4,&nbsp;5,&nbsp;6,&nbsp;7,&nbsp;8]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td><td class="diff_next"></td><td class="diff_header" id="to204_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[4],&nbsp;[3],&nbsp;[1],&nbsp;[7]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to204_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[9,&nbsp;10,&nbsp;11,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td><td class="diff_next"></td><td class="diff_header" id="to204_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[1,&nbsp;11,&nbsp;3,&nbsp;10,&nbsp;9,&nbsp;6,&nbsp;7,&nbsp;12]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_42">42</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_42">42</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_43">43</td><td nowrap="nowrap">Example&nbsp;2:</td><td class="diff_next"></td><td class="diff_header" id="to204_43">43</td><td nowrap="nowrap">Example&nbsp;2:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_44">44</td><td nowrap="nowrap">::</td><td class="diff_next"></td><td class="diff_header" id="to204_44">44</td><td nowrap="nowrap">::</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_45">45</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_45">45</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to204_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;data&nbsp;&nbsp;&nbsp;&nbsp;=&nbsp;[[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to204_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to204_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to204_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td><td class="diff_next"></td><td class="diff_header" id="to204_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;indices&nbsp;=&nbsp;[[0],&nbsp;[2]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to204_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;updates&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td><td class="diff_next"></td><td class="diff_header" id="to204_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td><td class="diff_next"></td><td class="diff_header" id="to204_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;output&nbsp;&nbsp;=&nbsp;[[[5,&nbsp;5,&nbsp;5,&nbsp;5],&nbsp;[6,&nbsp;6,&nbsp;6,&nbsp;6],&nbsp;[7,&nbsp;7,&nbsp;7,&nbsp;7],&nbsp;[8,&nbsp;8,&nbsp;8,&nbsp;8]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td><td class="diff_next"></td><td class="diff_header" id="to204_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8],&nbsp;[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td><td class="diff_next"></td><td class="diff_header" id="to204_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[1,&nbsp;1,&nbsp;1,&nbsp;1],&nbsp;[2,&nbsp;2,&nbsp;2,&nbsp;2],&nbsp;[3,&nbsp;3,&nbsp;3,&nbsp;3],&nbsp;[4,&nbsp;4,&nbsp;4,&nbsp;4]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td><td class="diff_next"></td><td class="diff_header" id="to204_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[8,&nbsp;7,&nbsp;6,&nbsp;5],&nbsp;[4,&nbsp;3,&nbsp;2,&nbsp;1],&nbsp;[1,&nbsp;2,&nbsp;3,&nbsp;4],&nbsp;[5,&nbsp;6,&nbsp;7,&nbsp;8]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_57">57</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_57">57</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_58">58</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to204_58">58</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_59">59</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_59">59</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_60">60</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to204_60">60</td><td nowrap="nowrap">*&nbsp;**data**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to204_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_62">62</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td><td class="diff_next"></td><td class="diff_header" id="to204_62">62</td><td nowrap="nowrap">*&nbsp;**indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**tensor(int64)**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to204_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_64">64</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to204_64">64</td><td nowrap="nowrap">*&nbsp;**updates**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to204_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;q&nbsp;+&nbsp;r&nbsp;-&nbsp;indices_shape[-1]&nbsp;-&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_66">66</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_66">66</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_67">67</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to204_67">67</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_68">68</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_68">68</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to204__0"></td><td class="diff_header" id="from204_69">69</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to204_69">69</td><td nowrap="nowrap">*&nbsp;**output**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td><td class="diff_next"></td><td class="diff_header" id="to204_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;Tensor&nbsp;of&nbsp;rank&nbsp;r&nbsp;&gt;=&nbsp;1.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_71">71</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to204_71">71</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_72">72</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to204_72">72</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_73">73</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to204_73">73</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to204__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to204__top">t</a></td><td class="diff_header" id="to204_74">74</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;tensor(bfloat16),</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td><td class="diff_next"></td><td class="diff_header" id="to204_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(bool),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td><td class="diff_next"></td><td class="diff_header" id="to204_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex128),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td><td class="diff_next"></td><td class="diff_header" id="to204_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(complex64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to204_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to204_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td><td class="diff_next"></td><td class="diff_header" id="to204_80">80</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_80">80</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td><td class="diff_next"></td><td class="diff_header" id="to204_81">81</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_81">81</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td><td class="diff_next"></td><td class="diff_header" id="to204_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td><td class="diff_next"></td><td class="diff_header" id="to204_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_83">83</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td><td class="diff_next"></td><td class="diff_header" id="to204_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int8),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td><td class="diff_next"></td><td class="diff_header" id="to204_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(string),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td><td class="diff_next"></td><td class="diff_header" id="to204_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint16),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td><td class="diff_next"></td><td class="diff_header" id="to204_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td><td class="diff_next"></td><td class="diff_header" id="to204_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint64),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_88">88</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td><td class="diff_next"></td><td class="diff_header" id="to204_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(uint8)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to204_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from204_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td><td class="diff_next"></td><td class="diff_header" id="to204_91">91</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;any&nbsp;tensor&nbsp;type.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-scatternd-11:
+ScatterND - 11
+==============
+**Version**
+* **name**: `ScatterND (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#ScatterND>`_
+* **domain**: **main**
+* **since_version**: **11**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 11**.
+
+**Summary**
+
+ScatterND takes three inputs `data` tensor of rank r >= 1, `indices` tensor of rank q >= 1,
+and `updates` tensor of rank q + r - indices.shape[-1] - 1. The output of the operation
+is produced by creating a copy of the input `data`, and then updating its value to values
+specified by `updates` at specific index positions specified by `indices`. Its output shape
+is the same as the shape of `data`. Note that `indices` should not have duplicate entries.
+That is, two or more `updates` for the same index-location is not supported.
+
+`indices` is an integer tensor. Let k denote indices.shape[-1], the last dimension in the shape of `indices`.
+ `indices` is treated as a (q-1)-dimensional tensor of k-tuples, where each k-tuple is a partial-index into `data`.
+Hence, k can be a value at most the rank of `data`. When k equals rank(data), each update entry specifies an
+update to a single element of the tensor. When k is less than rank(data) each update entry specifies an
+update to a slice of the tensor.
+
+`updates` is treated as a (q-1)-dimensional tensor of replacement-slice-values. Thus, the
+first (q-1) dimensions of updates.shape must match the first (q-1) dimensions of indices.shape.
+The remaining dimensions of `updates` correspond to the dimensions of the
+replacement-slice-values. Each replacement-slice-value is a (r-k) dimensional tensor,
+corresponding to the trailing (r-k) dimensions of `data`.  Thus, the shape of `updates`
+must equal indices.shape[0:q-1] ++ data.shape[k:r-1], where ++ denotes the concatenation
+of shapes.
+
+The `output` is calculated via the following equation:
+
+    output = np.copy(data)
+    update_indices = indices.shape[:-1]
+    for idx in np.ndindex(update_indices):
+        output[indices[idx]] = updates[idx]
+
+The order of iteration in the above loop is not specified.
+In particular, indices should not have duplicate entries: that is, if idx1 != idx2, then indices[idx1] != indices[idx2].
+This ensures that the output value does not depend on the iteration order.
+
+This operator is the inverse of GatherND.
+
+Example 1:
+::
+
+      data    = [1, 2, 3, 4, 5, 6, 7, 8]
+      indices = [[4], [3], [1], [7]]
+      updates = [9, 10, 11, 12]
+      output  = [1, 11, 3, 10, 9, 6, 7, 12]
+
+Example 2:
+::
+
+      data    = [[[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+      indices = [[0], [2]]
+      updates = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]]]
+      output  = [[[5, 5, 5, 5], [6, 6, 6, 6], [7, 7, 7, 7], [8, 8, 8, 8]],
+                 [[1, 2, 3, 4], [5, 6, 7, 8], [8, 7, 6, 5], [4, 3, 2, 1]],
+                 [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3], [4, 4, 4, 4]],
+                 [[8, 7, 6, 5], [4, 3, 2, 1], [1, 2, 3, 4], [5, 6, 7, 8]]]
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+* **indices** (heterogeneous) - **tensor(int64)**:
+  Tensor of rank q >= 1.
+* **updates** (heterogeneous) - **T**:
+  Tensor of rank q + r - indices_shape[-1] - 1.
+
+**Outputs**
+
+* **output** (heterogeneous) - **T**:
+  Tensor of rank r >= 1.
+
+**Type Constraints**
+* **T** in (
+  tensor(bool),
+  tensor(complex128),
+  tensor(complex64),
+  tensor(double),
+  tensor(float),
+  tensor(float16),
+  tensor(int16),
+  tensor(int32),
+  tensor(int64),
+  tensor(int8),
+  tensor(string),
+  tensor(uint16),
+  tensor(uint32),
+  tensor(uint64),
+  tensor(uint8)
+  ):
+  Constrain input and output types to any tensor type.

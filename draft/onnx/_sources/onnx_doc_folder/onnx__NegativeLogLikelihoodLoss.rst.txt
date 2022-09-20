@@ -1,0 +1,932 @@
+
+.. _l-onnx-doc-NegativeLogLikelihoodLoss:
+
+=========================
+NegativeLogLikelihoodLoss
+=========================
+
+.. contents::
+    :local:
+
+
+.. _l-onnx-op-negativeloglikelihoodloss-13:
+NegativeLogLikelihoodLoss - 13
+==============================
+**Version**
+* **name**: `NegativeLogLikelihoodLoss (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#NegativeLogLikelihoodLoss>`_
+* **domain**: **main**
+* **since_version**: **13**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 13**.
+
+**Summary**
+
+A NegativeLogLikelihoodLoss operator computes (weighted) negative log likelihood loss.
+Its "input" tensor has the shape of (N, C, d1, d2, ..., dk) where k >= 0.
+The "input" tensor contains log-probabilities for input[n, :, d_1, d_2,..., d_k] being in a class of [0, C).
+The operator's "target" input tensor has the shape of (N, d1, d2, ..., dk). It encodes class labels (one of C classes)
+or it may contain a special value (indicated by an attribute ignore_index) for N x d1 x d2 x ... x dk samples.
+The loss value for input[n, :, d_1, d_2,...d_k] being classified as class c = target[n][d_1][d_2]...[d_k] is computed as:
+
+    loss[n][d_1][d_2]...[d_k] = -input[n][c][d_1][d_2]...[d_k].
+
+When an optional "weight" is provided, the sample loss is calculated as:
+
+    loss[n][d_1][d_2]...[d_k] = -input[n][c][d_1][d_2]...[d_k] * weight[c].
+
+loss is zero for the case when target-value equals ignore_index.
+
+    loss[n][d_1][d_2]...[d_k] = 0, when target[n][d_1][d_2]...[d_k] = ignore_index
+
+If "reduction" attribute is set to "none", the operator's output will be the above loss with shape (N, d1, d2, ..., dk).
+If "reduction" attribute is set to "mean" (the default attribute value), the output loss is (weight) averaged:
+
+    mean(loss), if "weight" is not provided,
+
+or if weight is provided,
+
+    sum(loss) / sum(weight[target[n][d_1][d_2]...[d_k]]]), for all samples.
+
+If "reduction" attribute is set to "sum", the output is a scalar:
+    sum(loss).
+
+See also https://pytorch.org/docs/stable/nn.html#torch.nn.NLLLoss.
+
+Example 1:
+
+    // negative log likelihood loss, "none" reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+             [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+
+    loss = np.zeros((N, d1))
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1]
+
+    // print(loss)
+    // [[-3. -2.]
+    //  [-0. -2.]]
+
+Example 2:
+
+    // weighted negative log likelihood loss, sum reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+            [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+    weight = [0.2, 0.3, 0.1]
+    loss = np.zeros((N, d1))
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1] * weight[c]
+
+    loss = np.sum(loss)
+    // print(loss)
+    // -1.1
+
+Example 3:
+
+    // weighted negative log likelihood loss, mean reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+            [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+    weight = [0.2, 0.3, 0.1]
+    loss = np.zeros((N, d1))
+    weight_total = 0
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1] * weight[c]
+            weight_total = weight_total + weight[c]
+
+    loss = np.sum(loss) / weight_total
+    // print(loss)
+    // -1.57
+
+**Attributes**
+* **ignore_index**:
+  Specifies a target value that is ignored and does not contribute to
+  the input gradient. It's an optional value.
+* **reduction**:
+  Type of reduction to apply to loss: none, sum, mean (default).
+  'none': the output is the loss for each sample. 'sum': the output
+  will be summed. 'mean': the sum of the output will be divided by the
+  sum of applied weights.
+
+**Inputs**
+Between 2 and 3 inputs.
+
+* **input** (heterogeneous) - **T**:
+  Input tensor of shape (N, C) or (N, C, d1, d2, ..., dk).
+* **target** (heterogeneous) - **Tind**:
+  Target tensor of shape (N) or (N, d1, d2, ..., dk). Target element
+  value shall be in range of [0, C). If ignore_index is specified, it
+  may have a value outside [0, C) and the target values should either
+  be in the range [0, C) or have the value ignore_index.
+* **weight** (optional, heterogeneous) - **T**:
+  Optional rescaling weight tensor. If given, it has to be a tensor of
+  size C. Otherwise, it is treated as if having all ones.
+
+**Outputs**
+
+* **loss** (heterogeneous) - **T**:
+  The negative log likelihood loss
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input, weight, and output types to floating-point tensors.
+* **Tind** in (
+  tensor(int32),
+  tensor(int64)
+  ):
+  Constrain target to integer types
+
+**Examples**
+
+**_input_shape_is_NC**
+::
+    reduction = "none"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C = 3, 5
+    np.random.seed(0)
+    input = np.random.rand(N, C).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N,)).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NC",
+    )
+
+**_input_shape_is_NCd1d2**
+::
+    reduction = "none"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2",
+    )
+
+**_input_shape_is_NCd1d2_reduction_mean**
+::
+    reduction = "mean"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_reduction_mean",
+    )
+
+**_input_shape_is_NCd1d2_reduction_sum**
+::
+    reduction = "sum"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_reduction_sum",
+    )
+
+**_input_shape_is_NCd1d2_with_weight**
+::
+    reduction = "none"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_with_weight",
+    )
+
+**_input_shape_is_NCd1d2_with_weight_reduction_mean**
+::
+    reduction = "mean"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_with_weight_reduction_mean",
+    )
+
+**_input_shape_is_NCd1d2_with_weight_reduction_sum**
+::
+    reduction = "sum"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_with_weight_reduction_sum",
+    )
+
+**_input_shape_is_NCd1d2_with_weight_reduction_sum_ii**
+::
+    reduction = "sum"
+    ignore_index = np.int64(0)
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+    target[0][0][0] = np.int64(0)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_with_weight_reduction_sum_ii",
+    )
+
+**_input_shape_is_NCd1d2_no_weight_reduction_mean_ii**
+::
+    reduction = "mean"
+    ignore_index = np.int64(1)
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, dim1, dim2 = 3, 5, 6, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2)).astype(np.int64)
+    target[0][0][0] = np.int64(1)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2_no_weight_reduction_mean_ii",
+    )
+
+**_input_shape_is_NCd1**
+::
+    reduction = "mean"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, d1 = 3, 5, 2
+    np.random.seed(0)
+    input = np.random.rand(N, C, d1).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, d1)).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1",
+    )
+
+**_input_shape_is_NCd1_weight**
+::
+    reduction = "mean"
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, d1 = 3, 5, 2
+    np.random.seed(0)
+    input = np.random.rand(N, C, d1).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, d1)).astype(np.int64)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1_weight",
+    )
+
+**_input_shape_is_NCd1_ii**
+::
+    reduction = "mean"
+    ignore_index = np.int64(1)
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, d1 = 3, 5, 2
+    np.random.seed(0)
+    input = np.random.rand(N, C, d1).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, d1)).astype(np.int64)
+    target[0][0] = np.int64(1)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=None, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1_ii",
+    )
+
+**_input_shape_is_NCd1_weight_ii**
+::
+    reduction = "mean"
+    ignore_index = np.int64(1)
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, d1 = 3, 5, 2
+    np.random.seed(0)
+    input = np.random.rand(N, C, d1).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, d1)).astype(np.int64)
+    target[0][0] = np.int64(1)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1_weight_ii",
+    )
+
+**_input_shape_is_NCd1d2d3d4d5_mean_weight**
+::
+    reduction = "mean"
+
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2, dim3, dim4, dim5 = 3, 5, 6, 6, 5, 3, 4
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2, dim3, dim4, dim5).astype(np.float32)
+    target = np.random.randint(
+        0, high=C, size=(N, dim1, dim2, dim3, dim4, dim5)
+    ).astype(np.int64)
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2d3d4d5_mean_weight",
+    )
+
+**_input_shape_is_NCd1d2d3d4d5_none_no_weight**
+::
+    reduction = "none"
+
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+    )
+
+    N, C, dim1, dim2, dim3, dim4, dim5 = 3, 5, 6, 6, 5, 3, 4
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2, dim3, dim4, dim5).astype(np.float32)
+    target = np.random.randint(
+        0, high=C, size=(N, dim1, dim2, dim3, dim4, dim5)
+    ).astype(np.int64)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, reduction=reduction
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2d3d4d5_none_no_weight",
+    )
+
+**_input_shape_is_NCd1_mean_weight_negative_ii**
+::
+    reduction = "mean"
+    ignore_index = np.int64(-1)
+
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, dim1 = 3, 5, 6
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1)).astype(np.int64)
+    target[0][0] = -1
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1_mean_weight_negative_ii",
+    )
+
+**_input_shape_is_NCd1d2d3_none_no_weight_negative_ii**
+::
+    reduction = "none"
+    ignore_index = np.int64(-5)
+
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C, dim1, dim2, dim3 = 3, 5, 6, 6, 5
+    np.random.seed(0)
+    input = np.random.rand(N, C, dim1, dim2, dim3).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N, dim1, dim2, dim3)).astype(
+        np.int64
+    )
+    target[0][0][0][0] = -5
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2d3_none_no_weight_negative_ii",
+    )
+
+**_input_shape_is_NCd1d2d3_sum_weight_high_ii**
+::
+    reduction = "sum"
+    ignore_index = np.int64(10)
+
+    node = onnx.helper.make_node(
+        "NegativeLogLikelihoodLoss",
+        inputs=["input", "target", "weight"],
+        outputs=["loss"],
+        reduction=reduction,
+        ignore_index=ignore_index,
+    )
+
+    N, C = 3, 5
+    np.random.seed(0)
+    input = np.random.rand(N, C).astype(np.float32)
+    target = np.random.randint(0, high=C, size=(N)).astype(np.int64)
+    target[0] = 10
+    weight = np.random.rand(C).astype(np.float32)
+
+    negative_log_likelihood_loss = compute_negative_log_likelihood_loss(
+        input, target, weight=weight, reduction=reduction, ignore_index=ignore_index
+    )
+
+    expect(
+        node,
+        inputs=[input, target, weight],
+        outputs=[negative_log_likelihood_loss],
+        name="test_nllloss_NCd1d2d3_sum_weight_high_ii",
+    )
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to139__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__0">f</a></td><td class="diff_header" id="from139_1">1</td><td nowrap="nowrap">A&nbsp;NegativeLogLikelihoodLoss&nbsp;operator&nbsp;computes&nbsp;(weighted)&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss.</td><td class="diff_next"><a href="#difflib_chg_to139__0">f</a></td><td class="diff_header" id="to139_1">1</td><td nowrap="nowrap">A&nbsp;NegativeLogLikelihoodLoss&nbsp;operator&nbsp;computes&nbsp;(weighted)&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__0"></td><td class="diff_header" id="from139_2">2</td><td nowrap="nowrap">Its&nbsp;"input"&nbsp;tensor&nbsp;has&nbsp;the&nbsp;shape&nbsp;of&nbsp;(N,&nbsp;C,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk)&nbsp;where&nbsp;k&nbsp;&gt;=&nbsp;0.</td><td class="diff_next"></td><td class="diff_header" id="to139_2">2</td><td nowrap="nowrap">Its&nbsp;"input"&nbsp;tensor&nbsp;has&nbsp;the&nbsp;shape&nbsp;of&nbsp;(N,&nbsp;C,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk)&nbsp;where&nbsp;k&nbsp;&gt;=&nbsp;0.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_3">3</td><td nowrap="nowrap">The&nbsp;"input"&nbsp;tensor&nbsp;contains&nbsp;log-probabilities&nbsp;for&nbsp;input[n,&nbsp;:,&nbsp;d_1,&nbsp;d_2,...,&nbsp;d_k]&nbsp;being&nbsp;in&nbsp;a&nbsp;class&nbsp;of&nbsp;[0,&nbsp;C).</td><td class="diff_next"></td><td class="diff_header" id="to139_3">3</td><td nowrap="nowrap">The&nbsp;"input"&nbsp;tensor&nbsp;contains&nbsp;log-probabilities&nbsp;for&nbsp;input[n,&nbsp;:,&nbsp;d_1,&nbsp;d_2,...,&nbsp;d_k]&nbsp;being&nbsp;in&nbsp;a&nbsp;class&nbsp;of&nbsp;[0,&nbsp;C).</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__1"></td><td class="diff_header" id="from139_4">4</td><td nowrap="nowrap">The&nbsp;operator's&nbsp;"target"&nbsp;input&nbsp;tensor&nbsp;has&nbsp;the&nbsp;shape&nbsp;of&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).&nbsp;It&nbsp;encodes&nbsp;class&nbsp;labels&nbsp;(one&nbsp;of&nbsp;C&nbsp;classes)</td><td class="diff_next"></td><td class="diff_header" id="to139_4">4</td><td nowrap="nowrap">The&nbsp;operator's&nbsp;"target"&nbsp;input&nbsp;tensor&nbsp;has&nbsp;the&nbsp;shape&nbsp;of&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).&nbsp;It&nbsp;encodes&nbsp;class&nbsp;labels&nbsp;(one&nbsp;of&nbsp;C&nbsp;classes)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_5">5</td><td nowrap="nowrap">or&nbsp;it&nbsp;may&nbsp;contain&nbsp;a&nbsp;special&nbsp;value&nbsp;(indicated&nbsp;by&nbsp;an&nbsp;attribute&nbsp;ignore_index)&nbsp;for&nbsp;N&nbsp;x&nbsp;d1&nbsp;x&nbsp;d2&nbsp;x&nbsp;...&nbsp;x&nbsp;dk&nbsp;samples.</td><td class="diff_next"></td><td class="diff_header" id="to139_5">5</td><td nowrap="nowrap">or&nbsp;it&nbsp;may&nbsp;contain&nbsp;a&nbsp;special&nbsp;value&nbsp;(indicated&nbsp;by&nbsp;an&nbsp;attribute&nbsp;ignore_index)&nbsp;for&nbsp;N&nbsp;x&nbsp;d1&nbsp;x&nbsp;d2&nbsp;x&nbsp;...&nbsp;x&nbsp;dk&nbsp;samples.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__2"></td><td class="diff_header" id="from139_6">6</td><td nowrap="nowrap">The&nbsp;loss&nbsp;value&nbsp;for&nbsp;input[n,&nbsp;:,&nbsp;d_1,&nbsp;d_2,...d_k]&nbsp;being&nbsp;classified&nbsp;as&nbsp;class&nbsp;c&nbsp;=&nbsp;target[n][d_1][d_2]...[d_k]&nbsp;is&nbsp;computed&nbsp;as:</td><td class="diff_next"></td><td class="diff_header" id="to139_6">6</td><td nowrap="nowrap">The&nbsp;loss&nbsp;value&nbsp;for&nbsp;input[n,&nbsp;:,&nbsp;d_1,&nbsp;d_2,...d_k]&nbsp;being&nbsp;classified&nbsp;as&nbsp;class&nbsp;c&nbsp;=&nbsp;target[n][d_1][d_2]...[d_k]&nbsp;is&nbsp;computed&nbsp;as:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__1">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__1">n</a></td><td class="diff_header" id="to139_7">7</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__3"></td><td class="diff_header" id="from139_7">7</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;-input[n][c][d_1][d_2]...[d_k].</td><td class="diff_next"></td><td class="diff_header" id="to139_8">8</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;-input[n][c][d_1][d_2]...[d_k].</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__2">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__2">n</a></td><td class="diff_header" id="to139_9">9</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_8">8</td><td nowrap="nowrap">When&nbsp;an&nbsp;optional&nbsp;"weight"&nbsp;is&nbsp;provided,&nbsp;the&nbsp;sample&nbsp;loss&nbsp;is&nbsp;calculated&nbsp;as:</td><td class="diff_next"></td><td class="diff_header" id="to139_10">10</td><td nowrap="nowrap">When&nbsp;an&nbsp;optional&nbsp;"weight"&nbsp;is&nbsp;provided,&nbsp;the&nbsp;sample&nbsp;loss&nbsp;is&nbsp;calculated&nbsp;as:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__3">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__3">n</a></td><td class="diff_header" id="to139_11">11</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__4"></td><td class="diff_header" id="from139_9">9</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;-input[n][c][d_1][d_2]...[d_k]&nbsp;*&nbsp;weight[c].</td><td class="diff_next"></td><td class="diff_header" id="to139_12">12</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;-input[n][c][d_1][d_2]...[d_k]&nbsp;*&nbsp;weight[c].</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__4">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__4">n</a></td><td class="diff_header" id="to139_13">13</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_10">10</td><td nowrap="nowrap">loss&nbsp;is&nbsp;zero&nbsp;for&nbsp;the&nbsp;case&nbsp;when&nbsp;target-value&nbsp;equals&nbsp;ignore_index.</td><td class="diff_next"></td><td class="diff_header" id="to139_14">14</td><td nowrap="nowrap">loss&nbsp;is&nbsp;zero&nbsp;for&nbsp;the&nbsp;case&nbsp;when&nbsp;target-value&nbsp;equals&nbsp;ignore_index.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__5"></td><td class="diff_header" id="from139_11">11</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_15">15</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_12">12</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;0,&nbsp;when&nbsp;target[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;ignore_index</td><td class="diff_next"></td><td class="diff_header" id="to139_16">16</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;0,&nbsp;when&nbsp;target[n][d_1][d_2]...[d_k]&nbsp;=&nbsp;ignore_index</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__6"><a href="#difflib_chg_to139__5">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__5">n</a></td><td class="diff_header" id="to139_17">17</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_13">13</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"none",&nbsp;the&nbsp;operator's&nbsp;output&nbsp;will&nbsp;be&nbsp;the&nbsp;above&nbsp;loss&nbsp;with&nbsp;shape&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).</td><td class="diff_next"></td><td class="diff_header" id="to139_18">18</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"none",&nbsp;the&nbsp;operator's&nbsp;output&nbsp;will&nbsp;be&nbsp;the&nbsp;above&nbsp;loss&nbsp;with&nbsp;shape&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__7"></td><td class="diff_header" id="from139_14">14</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"mean"&nbsp;(the&nbsp;default&nbsp;attribute&nbsp;value),&nbsp;the&nbsp;output&nbsp;loss&nbsp;is&nbsp;(weight)&nbsp;averaged:</td><td class="diff_next"></td><td class="diff_header" id="to139_19">19</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"mean"&nbsp;(the&nbsp;default&nbsp;attribute&nbsp;value),&nbsp;the&nbsp;output&nbsp;loss&nbsp;is&nbsp;(weight)&nbsp;averaged:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__6">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__6">n</a></td><td class="diff_header" id="to139_20">20</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__8"></td><td class="diff_header" id="from139_15">15</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;mean(loss),&nbsp;if&nbsp;"weight"&nbsp;is&nbsp;not&nbsp;provided,</td><td class="diff_next"></td><td class="diff_header" id="to139_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;mean(loss),&nbsp;if&nbsp;"weight"&nbsp;is&nbsp;not&nbsp;provided,</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__7">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__7">n</a></td><td class="diff_header" id="to139_22">22</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_16">16</td><td nowrap="nowrap">or&nbsp;if&nbsp;weight&nbsp;is&nbsp;provided,</td><td class="diff_next"></td><td class="diff_header" id="to139_23">23</td><td nowrap="nowrap">or&nbsp;if&nbsp;weight&nbsp;is&nbsp;provided,</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__9"><a href="#difflib_chg_to139__8">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__8">n</a></td><td class="diff_header" id="to139_24">24</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_17">17</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;sum(loss)&nbsp;/&nbsp;sum(weight[target[n][d_1][d_2]...[d_k]]]),&nbsp;for&nbsp;all&nbsp;samples.</td><td class="diff_next"></td><td class="diff_header" id="to139_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;sum(loss)&nbsp;/&nbsp;sum(weight[target[n][d_1][d_2]...[d_k]]]),&nbsp;for&nbsp;all&nbsp;samples.</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__10"><a href="#difflib_chg_to139__9">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__9">n</a></td><td class="diff_header" id="to139_26">26</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_18">18</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"sum",&nbsp;the&nbsp;output&nbsp;is&nbsp;a&nbsp;scalar:</td><td class="diff_next"></td><td class="diff_header" id="to139_27">27</td><td nowrap="nowrap">If&nbsp;"reduction"&nbsp;attribute&nbsp;is&nbsp;set&nbsp;to&nbsp;"sum",&nbsp;the&nbsp;output&nbsp;is&nbsp;a&nbsp;scalar:</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__11"></td><td class="diff_header" id="from139_19">19</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;sum(loss).</td><td class="diff_next"></td><td class="diff_header" id="to139_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;sum(loss).</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__10">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__10">n</a></td><td class="diff_header" id="to139_29">29</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_20">20</td><td nowrap="nowrap">See&nbsp;also&nbsp;https://pytorch.org/docs/stable/nn.html#torch.nn.NLLLoss.</td><td class="diff_next"></td><td class="diff_header" id="to139_30">30</td><td nowrap="nowrap">See&nbsp;also&nbsp;https://pytorch.org/docs/stable/nn.html#torch.nn.NLLLoss.</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__11">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__11">n</a></td><td class="diff_header" id="to139_31">31</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_21">21</td><td nowrap="nowrap">Example&nbsp;1:</td><td class="diff_next"></td><td class="diff_header" id="to139_32">32</td><td nowrap="nowrap">Example&nbsp;1:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__12">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__12">n</a></td><td class="diff_header" id="to139_33">33</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__12"></td><td class="diff_header" id="from139_22">22</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;"none"&nbsp;reduction</td><td class="diff_next"></td><td class="diff_header" id="to139_34">34</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;"none"&nbsp;reduction</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_23">23</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td><td class="diff_next"></td><td class="diff_header" id="to139_35">35</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td><td class="diff_next"></td><td class="diff_header" id="to139_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td><td class="diff_next"></td><td class="diff_header" id="to139_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td><td class="diff_next"></td><td class="diff_header" id="to139_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__13">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__13">n</a></td><td class="diff_header" id="to139_39">39</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__13"></td><td class="diff_header" id="from139_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td><td class="diff_next"></td><td class="diff_header" id="to139_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td><td class="diff_next"></td><td class="diff_header" id="to139_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td><td class="diff_next"></td><td class="diff_header" id="to139_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td><td class="diff_next"></td><td class="diff_header" id="to139_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__14"></td><td class="diff_header" id="from139_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]</td><td class="diff_next"></td><td class="diff_header" id="to139_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__14">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__14">n</a></td><td class="diff_header" id="to139_45">45</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__15"></td><td class="diff_header" id="from139_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td><td class="diff_next"></td><td class="diff_header" id="to139_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_33">33</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;[[-3.&nbsp;-2.]</td><td class="diff_next"></td><td class="diff_header" id="to139_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;[[-3.&nbsp;-2.]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_34">34</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;&nbsp;[-0.&nbsp;-2.]]</td><td class="diff_next"></td><td class="diff_header" id="to139_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;&nbsp;[-0.&nbsp;-2.]]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__15">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__15">n</a></td><td class="diff_header" id="to139_49">49</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_35">35</td><td nowrap="nowrap">Example&nbsp;2:</td><td class="diff_next"></td><td class="diff_header" id="to139_50">50</td><td nowrap="nowrap">Example&nbsp;2:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__16">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__16">n</a></td><td class="diff_header" id="to139_51">51</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;weighted&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;sum&nbsp;reduction</td><td class="diff_next"></td><td class="diff_header" id="to139_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;weighted&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;sum&nbsp;reduction</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td><td class="diff_next"></td><td class="diff_header" id="to139_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td><td class="diff_next"></td><td class="diff_header" id="to139_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td><td class="diff_next"></td><td class="diff_header" id="to139_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_40">40</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td><td class="diff_next"></td><td class="diff_header" id="to139_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight&nbsp;=&nbsp;[0.2,&nbsp;0.3,&nbsp;0.1]</td><td class="diff_next"></td><td class="diff_header" id="to139_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight&nbsp;=&nbsp;[0.2,&nbsp;0.3,&nbsp;0.1]</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__16"></td><td class="diff_header" id="from139_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td><td class="diff_next"></td><td class="diff_header" id="to139_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td><td class="diff_next"></td><td class="diff_header" id="to139_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td><td class="diff_next"></td><td class="diff_header" id="to139_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td><td class="diff_next"></td><td class="diff_header" id="to139_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__17"></td><td class="diff_header" id="from139_46">46</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]&nbsp;*&nbsp;weight[c]</td><td class="diff_next"></td><td class="diff_header" id="to139_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]&nbsp;*&nbsp;weight[c]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__17">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__17">n</a></td><td class="diff_header" id="to139_63">63</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__18"></td><td class="diff_header" id="from139_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.sum(loss)</td><td class="diff_next"></td><td class="diff_header" id="to139_64">64</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.sum(loss)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td><td class="diff_next"></td><td class="diff_header" id="to139_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;-1.1</td><td class="diff_next"></td><td class="diff_header" id="to139_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;-1.1</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__18">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__18">n</a></td><td class="diff_header" id="to139_67">67</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_50">50</td><td nowrap="nowrap">Example&nbsp;3:</td><td class="diff_next"></td><td class="diff_header" id="to139_68">68</td><td nowrap="nowrap">Example&nbsp;3:</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__19">n</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__19">n</a></td><td class="diff_header" id="to139_69">69</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;weighted&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;mean&nbsp;reduction</td><td class="diff_next"></td><td class="diff_header" id="to139_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;weighted&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss,&nbsp;mean&nbsp;reduction</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_52">52</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td><td class="diff_next"></td><td class="diff_header" id="to139_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;N,&nbsp;C,&nbsp;d1&nbsp;=&nbsp;2,&nbsp;3,&nbsp;2</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td><td class="diff_next"></td><td class="diff_header" id="to139_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;input&nbsp;=&nbsp;[[[1.0,&nbsp;2.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[3.0,&nbsp;2.0]],</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td><td class="diff_next"></td><td class="diff_header" id="to139_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;[[0.0,&nbsp;1.0],&nbsp;[2.0,&nbsp;2.0],&nbsp;[1.0,&nbsp;2]]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td><td class="diff_next"></td><td class="diff_header" id="to139_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;target&nbsp;=&nbsp;[[2,&nbsp;1],&nbsp;[0,&nbsp;2]]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_56">56</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight&nbsp;=&nbsp;[0.2,&nbsp;0.3,&nbsp;0.1]</td><td class="diff_next"></td><td class="diff_header" id="to139_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight&nbsp;=&nbsp;[0.2,&nbsp;0.3,&nbsp;0.1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_57">57</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td><td class="diff_next"></td><td class="diff_header" id="to139_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.zeros((N,&nbsp;d1))</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_58">58</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight_total&nbsp;=&nbsp;0</td><td class="diff_next"></td><td class="diff_header" id="to139_77">77</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;weight_total&nbsp;=&nbsp;0</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to139__19"></td><td class="diff_header" id="from139_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td><td class="diff_next"></td><td class="diff_header" id="to139_78">78</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;n&nbsp;in&nbsp;range(N):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td><td class="diff_next"></td><td class="diff_header" id="to139_79">79</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;for&nbsp;d_1&nbsp;in&nbsp;range(d1):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td><td class="diff_next"></td><td class="diff_header" id="to139_80">80</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;c&nbsp;=&nbsp;target[n][d_1]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]&nbsp;*&nbsp;weight[c]</td><td class="diff_next"></td><td class="diff_header" id="to139_81">81</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loss[n][d_1]&nbsp;=&nbsp;-input[n][c][d_1]&nbsp;*&nbsp;weight[c]</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;weight_total&nbsp;=&nbsp;weight_total&nbsp;+&nbsp;weight[c]</td><td class="diff_next"></td><td class="diff_header" id="to139_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;weight_total&nbsp;=&nbsp;weight_total&nbsp;+&nbsp;weight[c]</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to139__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to139__top">t</a></td><td class="diff_header" id="to139_83">83</td><td nowrap="nowrap"><span class="diff_add">&nbsp;</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_64">64</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.sum(loss)&nbsp;/&nbsp;weight_total</td><td class="diff_next"></td><td class="diff_header" id="to139_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;loss&nbsp;=&nbsp;np.sum(loss)&nbsp;/&nbsp;weight_total</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td><td class="diff_next"></td><td class="diff_header" id="to139_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;print(loss)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;-1.57</td><td class="diff_next"></td><td class="diff_header" id="to139_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;&nbsp;&nbsp;//&nbsp;-1.57</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_67">67</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_87">87</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_68">68</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to139_88">88</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_69">69</td><td nowrap="nowrap">*&nbsp;**ignore_index**:</td><td class="diff_next"></td><td class="diff_header" id="to139_89">89</td><td nowrap="nowrap">*&nbsp;**ignore_index**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_70">70</td><td nowrap="nowrap">&nbsp;&nbsp;Specifies&nbsp;a&nbsp;target&nbsp;value&nbsp;that&nbsp;is&nbsp;ignored&nbsp;and&nbsp;does&nbsp;not&nbsp;contribute&nbsp;to</td><td class="diff_next"></td><td class="diff_header" id="to139_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;Specifies&nbsp;a&nbsp;target&nbsp;value&nbsp;that&nbsp;is&nbsp;ignored&nbsp;and&nbsp;does&nbsp;not&nbsp;contribute&nbsp;to</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;the&nbsp;input&nbsp;gradient.&nbsp;It's&nbsp;an&nbsp;optional&nbsp;value.</td><td class="diff_next"></td><td class="diff_header" id="to139_91">91</td><td nowrap="nowrap">&nbsp;&nbsp;the&nbsp;input&nbsp;gradient.&nbsp;It's&nbsp;an&nbsp;optional&nbsp;value.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_72">72</td><td nowrap="nowrap">*&nbsp;**reduction**:</td><td class="diff_next"></td><td class="diff_header" id="to139_92">92</td><td nowrap="nowrap">*&nbsp;**reduction**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;Type&nbsp;of&nbsp;reduction&nbsp;to&nbsp;apply&nbsp;to&nbsp;loss:&nbsp;none,&nbsp;sum,&nbsp;mean&nbsp;(default).</td><td class="diff_next"></td><td class="diff_header" id="to139_93">93</td><td nowrap="nowrap">&nbsp;&nbsp;Type&nbsp;of&nbsp;reduction&nbsp;to&nbsp;apply&nbsp;to&nbsp;loss:&nbsp;none,&nbsp;sum,&nbsp;mean&nbsp;(default).</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_74">74</td><td nowrap="nowrap">&nbsp;&nbsp;'none':&nbsp;the&nbsp;output&nbsp;is&nbsp;the&nbsp;loss&nbsp;for&nbsp;each&nbsp;sample.&nbsp;'sum':&nbsp;the&nbsp;output</td><td class="diff_next"></td><td class="diff_header" id="to139_94">94</td><td nowrap="nowrap">&nbsp;&nbsp;'none':&nbsp;the&nbsp;output&nbsp;is&nbsp;the&nbsp;loss&nbsp;for&nbsp;each&nbsp;sample.&nbsp;'sum':&nbsp;the&nbsp;output</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_75">75</td><td nowrap="nowrap">&nbsp;&nbsp;will&nbsp;be&nbsp;summed.&nbsp;'mean':&nbsp;the&nbsp;sum&nbsp;of&nbsp;the&nbsp;output&nbsp;will&nbsp;be&nbsp;divided&nbsp;by&nbsp;the</td><td class="diff_next"></td><td class="diff_header" id="to139_95">95</td><td nowrap="nowrap">&nbsp;&nbsp;will&nbsp;be&nbsp;summed.&nbsp;'mean':&nbsp;the&nbsp;sum&nbsp;of&nbsp;the&nbsp;output&nbsp;will&nbsp;be&nbsp;divided&nbsp;by&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_76">76</td><td nowrap="nowrap">&nbsp;&nbsp;sum&nbsp;of&nbsp;applied&nbsp;weights.</td><td class="diff_next"></td><td class="diff_header" id="to139_96">96</td><td nowrap="nowrap">&nbsp;&nbsp;sum&nbsp;of&nbsp;applied&nbsp;weights.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_77">77</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_97">97</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_78">78</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to139_98">98</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_79">79</td><td nowrap="nowrap">Between&nbsp;2&nbsp;and&nbsp;3&nbsp;inputs.</td><td class="diff_next"></td><td class="diff_header" id="to139_99">99</td><td nowrap="nowrap">Between&nbsp;2&nbsp;and&nbsp;3&nbsp;inputs.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_80">80</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_100">100</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_81">81</td><td nowrap="nowrap">*&nbsp;**input**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to139_101">101</td><td nowrap="nowrap">*&nbsp;**input**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_82">82</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(N,&nbsp;C)&nbsp;or&nbsp;(N,&nbsp;C,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).</td><td class="diff_next"></td><td class="diff_header" id="to139_102">102</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(N,&nbsp;C)&nbsp;or&nbsp;(N,&nbsp;C,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_83">83</td><td nowrap="nowrap">*&nbsp;**target**&nbsp;(heterogeneous)&nbsp;-&nbsp;**Tind**:</td><td class="diff_next"></td><td class="diff_header" id="to139_103">103</td><td nowrap="nowrap">*&nbsp;**target**&nbsp;(heterogeneous)&nbsp;-&nbsp;**Tind**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_84">84</td><td nowrap="nowrap">&nbsp;&nbsp;Target&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(N)&nbsp;or&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).&nbsp;Target&nbsp;element</td><td class="diff_next"></td><td class="diff_header" id="to139_104">104</td><td nowrap="nowrap">&nbsp;&nbsp;Target&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(N)&nbsp;or&nbsp;(N,&nbsp;d1,&nbsp;d2,&nbsp;...,&nbsp;dk).&nbsp;Target&nbsp;element</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_85">85</td><td nowrap="nowrap">&nbsp;&nbsp;value&nbsp;shall&nbsp;be&nbsp;in&nbsp;range&nbsp;of&nbsp;[0,&nbsp;C).&nbsp;If&nbsp;ignore_index&nbsp;is&nbsp;specified,&nbsp;it</td><td class="diff_next"></td><td class="diff_header" id="to139_105">105</td><td nowrap="nowrap">&nbsp;&nbsp;value&nbsp;shall&nbsp;be&nbsp;in&nbsp;range&nbsp;of&nbsp;[0,&nbsp;C).&nbsp;If&nbsp;ignore_index&nbsp;is&nbsp;specified,&nbsp;it</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_86">86</td><td nowrap="nowrap">&nbsp;&nbsp;may&nbsp;have&nbsp;a&nbsp;value&nbsp;outside&nbsp;[0,&nbsp;C)&nbsp;and&nbsp;the&nbsp;target&nbsp;values&nbsp;should&nbsp;either</td><td class="diff_next"></td><td class="diff_header" id="to139_106">106</td><td nowrap="nowrap">&nbsp;&nbsp;may&nbsp;have&nbsp;a&nbsp;value&nbsp;outside&nbsp;[0,&nbsp;C)&nbsp;and&nbsp;the&nbsp;target&nbsp;values&nbsp;should&nbsp;either</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_87">87</td><td nowrap="nowrap">&nbsp;&nbsp;be&nbsp;in&nbsp;the&nbsp;range&nbsp;[0,&nbsp;C)&nbsp;or&nbsp;have&nbsp;the&nbsp;value&nbsp;ignore_index.</td><td class="diff_next"></td><td class="diff_header" id="to139_107">107</td><td nowrap="nowrap">&nbsp;&nbsp;be&nbsp;in&nbsp;the&nbsp;range&nbsp;[0,&nbsp;C)&nbsp;or&nbsp;have&nbsp;the&nbsp;value&nbsp;ignore_index.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_88">88</td><td nowrap="nowrap">*&nbsp;**weight**&nbsp;(optional,&nbsp;heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to139_108">108</td><td nowrap="nowrap">*&nbsp;**weight**&nbsp;(optional,&nbsp;heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_89">89</td><td nowrap="nowrap">&nbsp;&nbsp;Optional&nbsp;rescaling&nbsp;weight&nbsp;tensor.&nbsp;If&nbsp;given,&nbsp;it&nbsp;has&nbsp;to&nbsp;be&nbsp;a&nbsp;tensor&nbsp;of</td><td class="diff_next"></td><td class="diff_header" id="to139_109">109</td><td nowrap="nowrap">&nbsp;&nbsp;Optional&nbsp;rescaling&nbsp;weight&nbsp;tensor.&nbsp;If&nbsp;given,&nbsp;it&nbsp;has&nbsp;to&nbsp;be&nbsp;a&nbsp;tensor&nbsp;of</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_90">90</td><td nowrap="nowrap">&nbsp;&nbsp;size&nbsp;C.&nbsp;Otherwise,&nbsp;it&nbsp;is&nbsp;treated&nbsp;as&nbsp;if&nbsp;having&nbsp;all&nbsp;ones.</td><td class="diff_next"></td><td class="diff_header" id="to139_110">110</td><td nowrap="nowrap">&nbsp;&nbsp;size&nbsp;C.&nbsp;Otherwise,&nbsp;it&nbsp;is&nbsp;treated&nbsp;as&nbsp;if&nbsp;having&nbsp;all&nbsp;ones.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_91">91</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_111">111</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_92">92</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to139_112">112</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_93">93</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_113">113</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_94">94</td><td nowrap="nowrap">*&nbsp;**loss**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td><td class="diff_next"></td><td class="diff_header" id="to139_114">114</td><td nowrap="nowrap">*&nbsp;**loss**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_95">95</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss</td><td class="diff_next"></td><td class="diff_header" id="to139_115">115</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;negative&nbsp;log&nbsp;likelihood&nbsp;loss</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_96">96</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to139_116">116</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_97">97</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to139_117">117</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_98">98</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to139_118">118</td><td nowrap="nowrap">*&nbsp;**T**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_99">99</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to139_119">119</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_100">100</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to139_120">120</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_101">101</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td><td class="diff_next"></td><td class="diff_header" id="to139_121">121</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_102">102</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to139_122">122</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_103">103</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input,&nbsp;weight,&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;floating-point&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to139_123">123</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;input,&nbsp;weight,&nbsp;and&nbsp;output&nbsp;types&nbsp;to&nbsp;floating-point&nbsp;tensors.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_104">104</td><td nowrap="nowrap">*&nbsp;**Tind**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to139_124">124</td><td nowrap="nowrap">*&nbsp;**Tind**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_105">105</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td><td class="diff_next"></td><td class="diff_header" id="to139_125">125</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int32),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_106">106</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64)</td><td class="diff_next"></td><td class="diff_header" id="to139_126">126</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_107">107</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to139_127">127</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from139_108">108</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;target&nbsp;to&nbsp;integer&nbsp;types</td><td class="diff_next"></td><td class="diff_header" id="to139_128">128</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;target&nbsp;to&nbsp;integer&nbsp;types</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-negativeloglikelihoodloss-12:
+NegativeLogLikelihoodLoss - 12
+==============================
+**Version**
+* **name**: `NegativeLogLikelihoodLoss (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#NegativeLogLikelihoodLoss>`_
+* **domain**: **main**
+* **since_version**: **12**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 12**.
+
+**Summary**
+
+A NegativeLogLikelihoodLoss operator computes (weighted) negative log likelihood loss.
+Its "input" tensor has the shape of (N, C, d1, d2, ..., dk) where k >= 0.
+The "input" tensor contains log-probabilities for input[n, :, d_1, d_2,..., d_k] being in a class of [0, C).
+The operator's "target" input tensor has the shape of (N, d1, d2, ..., dk). It encodes class labels (one of C classes)
+or it may contain a special value (indicated by an attribute ignore_index) for N x d1 x d2 x ... x dk samples.
+The loss value for input[n, :, d_1, d_2,...d_k] being classified as class c = target[n][d_1][d_2]...[d_k] is computed as:
+    loss[n][d_1][d_2]...[d_k] = -input[n][c][d_1][d_2]...[d_k].
+When an optional "weight" is provided, the sample loss is calculated as:
+    loss[n][d_1][d_2]...[d_k] = -input[n][c][d_1][d_2]...[d_k] * weight[c].
+loss is zero for the case when target-value equals ignore_index.
+
+    loss[n][d_1][d_2]...[d_k] = 0, when target[n][d_1][d_2]...[d_k] = ignore_index
+If "reduction" attribute is set to "none", the operator's output will be the above loss with shape (N, d1, d2, ..., dk).
+If "reduction" attribute is set to "mean" (the default attribute value), the output loss is (weight) averaged:
+    mean(loss), if "weight" is not provided,
+or if weight is provided,
+    sum(loss) / sum(weight[target[n][d_1][d_2]...[d_k]]]), for all samples.
+If "reduction" attribute is set to "sum", the output is a scalar:
+    sum(loss).
+See also https://pytorch.org/docs/stable/nn.html#torch.nn.NLLLoss.
+Example 1:
+    // negative log likelihood loss, "none" reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+             [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+    loss = np.zeros((N, d1))
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1]
+    // print(loss)
+    // [[-3. -2.]
+    //  [-0. -2.]]
+Example 2:
+    // weighted negative log likelihood loss, sum reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+            [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+    weight = [0.2, 0.3, 0.1]
+    loss = np.zeros((N, d1))
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1] * weight[c]
+    loss = np.sum(loss)
+    // print(loss)
+    // -1.1
+Example 3:
+    // weighted negative log likelihood loss, mean reduction
+    N, C, d1 = 2, 3, 2
+    input = [[[1.0, 2.0], [2.0, 2.0], [3.0, 2.0]],
+            [[0.0, 1.0], [2.0, 2.0], [1.0, 2]]]
+    target = [[2, 1], [0, 2]]
+    weight = [0.2, 0.3, 0.1]
+    loss = np.zeros((N, d1))
+    weight_total = 0
+    for n in range(N):
+        for d_1 in range(d1):
+            c = target[n][d_1]
+            loss[n][d_1] = -input[n][c][d_1] * weight[c]
+            weight_total = weight_total + weight[c]
+    loss = np.sum(loss) / weight_total
+    // print(loss)
+    // -1.57
+
+**Attributes**
+* **ignore_index**:
+  Specifies a target value that is ignored and does not contribute to
+  the input gradient. It's an optional value.
+* **reduction**:
+  Type of reduction to apply to loss: none, sum, mean (default).
+  'none': the output is the loss for each sample. 'sum': the output
+  will be summed. 'mean': the sum of the output will be divided by the
+  sum of applied weights.
+
+**Inputs**
+Between 2 and 3 inputs.
+
+* **input** (heterogeneous) - **T**:
+  Input tensor of shape (N, C) or (N, C, d1, d2, ..., dk).
+* **target** (heterogeneous) - **Tind**:
+  Target tensor of shape (N) or (N, d1, d2, ..., dk). Target element
+  value shall be in range of [0, C). If ignore_index is specified, it
+  may have a value outside [0, C) and the target values should either
+  be in the range [0, C) or have the value ignore_index.
+* **weight** (optional, heterogeneous) - **T**:
+  Optional rescaling weight tensor. If given, it has to be a tensor of
+  size C. Otherwise, it is treated as if having all ones.
+
+**Outputs**
+
+* **loss** (heterogeneous) - **T**:
+  The negative log likelihood loss
+
+**Type Constraints**
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input, weight, and output types to floating-point tensors.
+* **Tind** in (
+  tensor(int32),
+  tensor(int64)
+  ):
+  Constrain target to integer types

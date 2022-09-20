@@ -1,0 +1,382 @@
+
+.. _l-onnx-doc-RoiAlign:
+
+========
+RoiAlign
+========
+
+.. contents::
+    :local:
+
+
+.. _l-onnx-op-roialign-16:
+RoiAlign - 16
+=============
+**Version**
+* **name**: `RoiAlign (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#RoiAlign>`_
+* **domain**: **main**
+* **since_version**: **16**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 16**.
+
+**Summary**
+
+Region of Interest (RoI) align operation described in the
+[Mask R-CNN paper](https://arxiv.org/abs/1703.06870).
+RoiAlign consumes an input tensor X and region of interests (rois)
+to apply pooling across each RoI; it produces a 4-D tensor of shape
+(num_rois, C, output_height, output_width).
+
+RoiAlign is proposed to avoid the misalignment by removing
+quantizations while converting from original image into feature
+map and from feature map into RoI feature; in each ROI bin,
+the value of the sampled locations are computed directly
+through bilinear interpolation.
+
+**Attributes**
+* **coordinate_transformation_mode**:
+  Allowed values are 'half_pixel' and 'output_half_pixel'. Use the
+  value 'half_pixel' to pixel shift the input coordinates by -0.5 (the
+  recommended behavior). Use the value 'output_half_pixel' to omit the
+  pixel shift for the input (use this for a backward-compatible
+  behavior).
+* **mode**:
+  The pooling method. Two modes are supported: 'avg' and 'max'.
+  Default is 'avg'.
+* **output_height**:
+  default 1; Pooled output Y's height.
+* **output_width**:
+  default 1; Pooled output Y's width.
+* **sampling_ratio**:
+  Number of sampling points in the interpolation grid used to compute
+  the output value of each pooled output bin. If > 0, then exactly
+  sampling_ratio x sampling_ratio grid points are used. If == 0, then
+  an adaptive number of grid points are used (computed as
+  ceil(roi_width / output_width), and likewise for height). Default is
+  0.
+* **spatial_scale**:
+  Multiplicative spatial scale factor to translate ROI coordinates
+  from their input spatial scale to the scale used when pooling, i.e.,
+  spatial scale of the input feature map X relative to the input
+  image. E.g.; default is 1.0f.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T1**:
+  Input data tensor from the previous operator; 4-D feature map of
+  shape (N, C, H, W), where N is the batch size, C is the number of
+  channels, and H and W are the height and the width of the data.
+* **rois** (heterogeneous) - **T1**:
+  RoIs (Regions of Interest) to pool over; rois is 2-D input of shape
+  (num_rois, 4) given as [[x1, y1, x2, y2], ...]. The RoIs'
+  coordinates are in the coordinate system of the input image. Each
+  coordinate set has a 1:1 correspondence with the 'batch_indices'
+  input.
+* **batch_indices** (heterogeneous) - **T2**:
+  1-D tensor of shape (num_rois,) with each element denoting the index
+  of the corresponding image in the batch.
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T1**:
+  RoI pooled output, 4-D tensor of shape (num_rois, C, output_height,
+  output_width). The r-th batch element Y[r-1] is a pooled feature map
+  corresponding to the r-th RoI X[r-1].
+
+**Type Constraints**
+* **T1** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain types to float tensors.
+* **T2** in (
+  tensor(int64)
+  ):
+  Constrain types to int tensors.
+
+**Examples**
+
+**_roialign_aligned_false**
+::
+    node = onnx.helper.make_node(
+        "RoiAlign",
+        inputs=["X", "rois", "batch_indices"],
+        outputs=["Y"],
+        spatial_scale=1.0,
+        output_height=5,
+        output_width=5,
+        sampling_ratio=2,
+        coordinate_transformation_mode="output_half_pixel",
+    )
+
+    X, batch_indices, rois = get_roi_align_input_values()
+    # (num_rois, C, output_height, output_width)
+    Y = np.array(
+        [
+            [
+                [
+                    [0.4664, 0.4466, 0.3405, 0.5688, 0.6068],
+                    [0.3714, 0.4296, 0.3835, 0.5562, 0.3510],
+                    [0.2768, 0.4883, 0.5222, 0.5528, 0.4171],
+                    [0.4713, 0.4844, 0.6904, 0.4920, 0.8774],
+                    [0.6239, 0.7125, 0.6289, 0.3355, 0.3495],
+                ]
+            ],
+            [
+                [
+                    [0.3022, 0.4305, 0.4696, 0.3978, 0.5423],
+                    [0.3656, 0.7050, 0.5165, 0.3172, 0.7015],
+                    [0.2912, 0.5059, 0.6476, 0.6235, 0.8299],
+                    [0.5916, 0.7389, 0.7048, 0.8372, 0.8893],
+                    [0.6227, 0.6153, 0.7097, 0.6154, 0.4585],
+                ]
+            ],
+            [
+                [
+                    [0.2384, 0.3379, 0.3717, 0.6100, 0.7601],
+                    [0.3767, 0.3785, 0.7147, 0.9243, 0.9727],
+                    [0.5749, 0.5826, 0.5709, 0.7619, 0.8770],
+                    [0.5355, 0.2566, 0.2141, 0.2796, 0.3600],
+                    [0.4365, 0.3504, 0.2887, 0.3661, 0.2349],
+                ]
+            ],
+        ],
+        dtype=np.float32,
+    )
+
+    expect(
+        node,
+        inputs=[X, rois, batch_indices],
+        outputs=[Y],
+        name="test_roialign_aligned_false",
+    )
+
+**_roialign_aligned_true**
+::
+    node = onnx.helper.make_node(
+        "RoiAlign",
+        inputs=["X", "rois", "batch_indices"],
+        outputs=["Y"],
+        spatial_scale=1.0,
+        output_height=5,
+        output_width=5,
+        sampling_ratio=2,
+        coordinate_transformation_mode="half_pixel",
+    )
+
+    X, batch_indices, rois = get_roi_align_input_values()
+    # (num_rois, C, output_height, output_width)
+    Y = np.array(
+        [
+            [
+                [
+                    [0.5178, 0.3434, 0.3229, 0.4474, 0.6344],
+                    [0.4031, 0.5366, 0.4428, 0.4861, 0.4023],
+                    [0.2512, 0.4002, 0.5155, 0.6954, 0.3465],
+                    [0.3350, 0.4601, 0.5881, 0.3439, 0.6849],
+                    [0.4932, 0.7141, 0.8217, 0.4719, 0.4039],
+                ]
+            ],
+            [
+                [
+                    [0.3070, 0.2187, 0.3337, 0.4880, 0.4870],
+                    [0.1871, 0.4914, 0.5561, 0.4192, 0.3686],
+                    [0.1433, 0.4608, 0.5971, 0.5310, 0.4982],
+                    [0.2788, 0.4386, 0.6022, 0.7000, 0.7524],
+                    [0.5774, 0.7024, 0.7251, 0.7338, 0.8163],
+                ]
+            ],
+            [
+                [
+                    [0.2393, 0.4075, 0.3379, 0.2525, 0.4743],
+                    [0.3671, 0.2702, 0.4105, 0.6419, 0.8308],
+                    [0.5556, 0.4543, 0.5564, 0.7502, 0.9300],
+                    [0.6626, 0.5617, 0.4813, 0.4954, 0.6663],
+                    [0.6636, 0.3721, 0.2056, 0.1928, 0.2478],
+                ]
+            ],
+        ],
+        dtype=np.float32,
+    )
+
+    expect(
+        node,
+        inputs=[X, rois, batch_indices],
+        outputs=[Y],
+        name="test_roialign_aligned_true",
+    )
+
+**Differences**
+
+.. raw:: html
+
+        <table class="diff" id="difflib_chg_to194__top"
+               cellspacing="0" cellpadding="0" rules="groups" >
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+            <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+
+            <tbody>
+                <tr><td class="diff_next"><a href="#difflib_chg_to194__0">f</a></td><td class="diff_header" id="from194_1">1</td><td nowrap="nowrap">Region&nbsp;of&nbsp;Interest&nbsp;(RoI)&nbsp;align&nbsp;operation&nbsp;described&nbsp;in&nbsp;the</td><td class="diff_next"><a href="#difflib_chg_to194__0">f</a></td><td class="diff_header" id="to194_1">1</td><td nowrap="nowrap">Region&nbsp;of&nbsp;Interest&nbsp;(RoI)&nbsp;align&nbsp;operation&nbsp;described&nbsp;in&nbsp;the</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_2">2</td><td nowrap="nowrap">[Mask&nbsp;R-CNN&nbsp;paper](https://arxiv.org/abs/1703.06870).</td><td class="diff_next"></td><td class="diff_header" id="to194_2">2</td><td nowrap="nowrap">[Mask&nbsp;R-CNN&nbsp;paper](https://arxiv.org/abs/1703.06870).</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_3">3</td><td nowrap="nowrap">RoiAlign&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;region&nbsp;of&nbsp;interests&nbsp;(rois)</td><td class="diff_next"></td><td class="diff_header" id="to194_3">3</td><td nowrap="nowrap">RoiAlign&nbsp;consumes&nbsp;an&nbsp;input&nbsp;tensor&nbsp;X&nbsp;and&nbsp;region&nbsp;of&nbsp;interests&nbsp;(rois)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_4">4</td><td nowrap="nowrap">to&nbsp;apply&nbsp;pooling&nbsp;across&nbsp;each&nbsp;RoI;&nbsp;it&nbsp;produces&nbsp;a&nbsp;4-D&nbsp;tensor&nbsp;of&nbsp;shape</td><td class="diff_next"></td><td class="diff_header" id="to194_4">4</td><td nowrap="nowrap">to&nbsp;apply&nbsp;pooling&nbsp;across&nbsp;each&nbsp;RoI;&nbsp;it&nbsp;produces&nbsp;a&nbsp;4-D&nbsp;tensor&nbsp;of&nbsp;shape</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_5">5</td><td nowrap="nowrap">(num_rois,&nbsp;C,&nbsp;output_height,&nbsp;output_width).</td><td class="diff_next"></td><td class="diff_header" id="to194_5">5</td><td nowrap="nowrap">(num_rois,&nbsp;C,&nbsp;output_height,&nbsp;output_width).</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_6">6</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_6">6</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_7">7</td><td nowrap="nowrap">RoiAlign&nbsp;is&nbsp;proposed&nbsp;to&nbsp;avoid&nbsp;the&nbsp;misalignment&nbsp;by&nbsp;removing</td><td class="diff_next"></td><td class="diff_header" id="to194_7">7</td><td nowrap="nowrap">RoiAlign&nbsp;is&nbsp;proposed&nbsp;to&nbsp;avoid&nbsp;the&nbsp;misalignment&nbsp;by&nbsp;removing</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_8">8</td><td nowrap="nowrap">quantizations&nbsp;while&nbsp;converting&nbsp;from&nbsp;original&nbsp;image&nbsp;into&nbsp;feature</td><td class="diff_next"></td><td class="diff_header" id="to194_8">8</td><td nowrap="nowrap">quantizations&nbsp;while&nbsp;converting&nbsp;from&nbsp;original&nbsp;image&nbsp;into&nbsp;feature</td></tr>
+                <tr><td class="diff_next" id="difflib_chg_to194__0"></td><td class="diff_header" id="from194_9">9</td><td nowrap="nowrap">map&nbsp;and&nbsp;from&nbsp;feature&nbsp;map&nbsp;into&nbsp;RoI&nbsp;feature;&nbsp;in&nbsp;each&nbsp;ROI&nbsp;bin,</td><td class="diff_next"></td><td class="diff_header" id="to194_9">9</td><td nowrap="nowrap">map&nbsp;and&nbsp;from&nbsp;feature&nbsp;map&nbsp;into&nbsp;RoI&nbsp;feature;&nbsp;in&nbsp;each&nbsp;ROI&nbsp;bin,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_10">10</td><td nowrap="nowrap">the&nbsp;value&nbsp;of&nbsp;the&nbsp;sampled&nbsp;locations&nbsp;are&nbsp;computed&nbsp;directly</td><td class="diff_next"></td><td class="diff_header" id="to194_10">10</td><td nowrap="nowrap">the&nbsp;value&nbsp;of&nbsp;the&nbsp;sampled&nbsp;locations&nbsp;are&nbsp;computed&nbsp;directly</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_11">11</td><td nowrap="nowrap">through&nbsp;bilinear&nbsp;interpolation.</td><td class="diff_next"></td><td class="diff_header" id="to194_11">11</td><td nowrap="nowrap">through&nbsp;bilinear&nbsp;interpolation.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_12">12</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_12">12</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_13">13</td><td nowrap="nowrap">**Attributes**</td><td class="diff_next"></td><td class="diff_header" id="to194_13">13</td><td nowrap="nowrap">**Attributes**</td></tr>
+                <tr><td class="diff_next"><a href="#difflib_chg_to194__top">t</a></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"><a href="#difflib_chg_to194__top">t</a></td><td class="diff_header" id="to194_14">14</td><td nowrap="nowrap"><span class="diff_add">*&nbsp;**coordinate_transformation_mode**:</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_15">15</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;Allowed&nbsp;values&nbsp;are&nbsp;'half_pixel'&nbsp;and&nbsp;'output_half_pixel'.&nbsp;Use&nbsp;the</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_16">16</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;value&nbsp;'half_pixel'&nbsp;to&nbsp;pixel&nbsp;shift&nbsp;the&nbsp;input&nbsp;coordinates&nbsp;by&nbsp;-0.5&nbsp;(the</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_17">17</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;recommended&nbsp;behavior).&nbsp;Use&nbsp;the&nbsp;value&nbsp;'output_half_pixel'&nbsp;to&nbsp;omit&nbsp;the</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_18">18</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;pixel&nbsp;shift&nbsp;for&nbsp;the&nbsp;input&nbsp;(use&nbsp;this&nbsp;for&nbsp;a&nbsp;backward-compatible</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header"></td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_19">19</td><td nowrap="nowrap"><span class="diff_add">&nbsp;&nbsp;behavior).</span></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_14">14</td><td nowrap="nowrap">*&nbsp;**mode**:</td><td class="diff_next"></td><td class="diff_header" id="to194_20">20</td><td nowrap="nowrap">*&nbsp;**mode**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_15">15</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;pooling&nbsp;method.&nbsp;Two&nbsp;modes&nbsp;are&nbsp;supported:&nbsp;'avg'&nbsp;and&nbsp;'max'.</td><td class="diff_next"></td><td class="diff_header" id="to194_21">21</td><td nowrap="nowrap">&nbsp;&nbsp;The&nbsp;pooling&nbsp;method.&nbsp;Two&nbsp;modes&nbsp;are&nbsp;supported:&nbsp;'avg'&nbsp;and&nbsp;'max'.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_16">16</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;'avg'.</td><td class="diff_next"></td><td class="diff_header" id="to194_22">22</td><td nowrap="nowrap">&nbsp;&nbsp;Default&nbsp;is&nbsp;'avg'.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_17">17</td><td nowrap="nowrap">*&nbsp;**output_height**:</td><td class="diff_next"></td><td class="diff_header" id="to194_23">23</td><td nowrap="nowrap">*&nbsp;**output_height**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_18">18</td><td nowrap="nowrap">&nbsp;&nbsp;default&nbsp;1;&nbsp;Pooled&nbsp;output&nbsp;Y's&nbsp;height.</td><td class="diff_next"></td><td class="diff_header" id="to194_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;default&nbsp;1;&nbsp;Pooled&nbsp;output&nbsp;Y's&nbsp;height.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_19">19</td><td nowrap="nowrap">*&nbsp;**output_width**:</td><td class="diff_next"></td><td class="diff_header" id="to194_25">25</td><td nowrap="nowrap">*&nbsp;**output_width**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_20">20</td><td nowrap="nowrap">&nbsp;&nbsp;default&nbsp;1;&nbsp;Pooled&nbsp;output&nbsp;Y's&nbsp;width.</td><td class="diff_next"></td><td class="diff_header" id="to194_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;default&nbsp;1;&nbsp;Pooled&nbsp;output&nbsp;Y's&nbsp;width.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_21">21</td><td nowrap="nowrap">*&nbsp;**sampling_ratio**:</td><td class="diff_next"></td><td class="diff_header" id="to194_27">27</td><td nowrap="nowrap">*&nbsp;**sampling_ratio**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_22">22</td><td nowrap="nowrap">&nbsp;&nbsp;Number&nbsp;of&nbsp;sampling&nbsp;points&nbsp;in&nbsp;the&nbsp;interpolation&nbsp;grid&nbsp;used&nbsp;to&nbsp;compute</td><td class="diff_next"></td><td class="diff_header" id="to194_28">28</td><td nowrap="nowrap">&nbsp;&nbsp;Number&nbsp;of&nbsp;sampling&nbsp;points&nbsp;in&nbsp;the&nbsp;interpolation&nbsp;grid&nbsp;used&nbsp;to&nbsp;compute</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_23">23</td><td nowrap="nowrap">&nbsp;&nbsp;the&nbsp;output&nbsp;value&nbsp;of&nbsp;each&nbsp;pooled&nbsp;output&nbsp;bin.&nbsp;If&nbsp;&gt;&nbsp;0,&nbsp;then&nbsp;exactly</td><td class="diff_next"></td><td class="diff_header" id="to194_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;the&nbsp;output&nbsp;value&nbsp;of&nbsp;each&nbsp;pooled&nbsp;output&nbsp;bin.&nbsp;If&nbsp;&gt;&nbsp;0,&nbsp;then&nbsp;exactly</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_24">24</td><td nowrap="nowrap">&nbsp;&nbsp;sampling_ratio&nbsp;x&nbsp;sampling_ratio&nbsp;grid&nbsp;points&nbsp;are&nbsp;used.&nbsp;If&nbsp;==&nbsp;0,&nbsp;then</td><td class="diff_next"></td><td class="diff_header" id="to194_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;sampling_ratio&nbsp;x&nbsp;sampling_ratio&nbsp;grid&nbsp;points&nbsp;are&nbsp;used.&nbsp;If&nbsp;==&nbsp;0,&nbsp;then</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_25">25</td><td nowrap="nowrap">&nbsp;&nbsp;an&nbsp;adaptive&nbsp;number&nbsp;of&nbsp;grid&nbsp;points&nbsp;are&nbsp;used&nbsp;(computed&nbsp;as</td><td class="diff_next"></td><td class="diff_header" id="to194_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;an&nbsp;adaptive&nbsp;number&nbsp;of&nbsp;grid&nbsp;points&nbsp;are&nbsp;used&nbsp;(computed&nbsp;as</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_26">26</td><td nowrap="nowrap">&nbsp;&nbsp;ceil(roi_width&nbsp;/&nbsp;output_width),&nbsp;and&nbsp;likewise&nbsp;for&nbsp;height).&nbsp;Default&nbsp;is</td><td class="diff_next"></td><td class="diff_header" id="to194_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;ceil(roi_width&nbsp;/&nbsp;output_width),&nbsp;and&nbsp;likewise&nbsp;for&nbsp;height).&nbsp;Default&nbsp;is</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_27">27</td><td nowrap="nowrap">&nbsp;&nbsp;0.</td><td class="diff_next"></td><td class="diff_header" id="to194_33">33</td><td nowrap="nowrap">&nbsp;&nbsp;0.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_28">28</td><td nowrap="nowrap">*&nbsp;**spatial_scale**:</td><td class="diff_next"></td><td class="diff_header" id="to194_34">34</td><td nowrap="nowrap">*&nbsp;**spatial_scale**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_29">29</td><td nowrap="nowrap">&nbsp;&nbsp;Multiplicative&nbsp;spatial&nbsp;scale&nbsp;factor&nbsp;to&nbsp;translate&nbsp;ROI&nbsp;coordinates</td><td class="diff_next"></td><td class="diff_header" id="to194_35">35</td><td nowrap="nowrap">&nbsp;&nbsp;Multiplicative&nbsp;spatial&nbsp;scale&nbsp;factor&nbsp;to&nbsp;translate&nbsp;ROI&nbsp;coordinates</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_30">30</td><td nowrap="nowrap">&nbsp;&nbsp;from&nbsp;their&nbsp;input&nbsp;spatial&nbsp;scale&nbsp;to&nbsp;the&nbsp;scale&nbsp;used&nbsp;when&nbsp;pooling,&nbsp;i.e.,</td><td class="diff_next"></td><td class="diff_header" id="to194_36">36</td><td nowrap="nowrap">&nbsp;&nbsp;from&nbsp;their&nbsp;input&nbsp;spatial&nbsp;scale&nbsp;to&nbsp;the&nbsp;scale&nbsp;used&nbsp;when&nbsp;pooling,&nbsp;i.e.,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_31">31</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;scale&nbsp;of&nbsp;the&nbsp;input&nbsp;feature&nbsp;map&nbsp;X&nbsp;relative&nbsp;to&nbsp;the&nbsp;input</td><td class="diff_next"></td><td class="diff_header" id="to194_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;spatial&nbsp;scale&nbsp;of&nbsp;the&nbsp;input&nbsp;feature&nbsp;map&nbsp;X&nbsp;relative&nbsp;to&nbsp;the&nbsp;input</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_32">32</td><td nowrap="nowrap">&nbsp;&nbsp;image.&nbsp;E.g.;&nbsp;default&nbsp;is&nbsp;1.0f.</td><td class="diff_next"></td><td class="diff_header" id="to194_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;image.&nbsp;E.g.;&nbsp;default&nbsp;is&nbsp;1.0f.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_33">33</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_39">39</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_34">34</td><td nowrap="nowrap">**Inputs**</td><td class="diff_next"></td><td class="diff_header" id="to194_40">40</td><td nowrap="nowrap">**Inputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_35">35</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_41">41</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_36">36</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td><td class="diff_next"></td><td class="diff_header" id="to194_42">42</td><td nowrap="nowrap">*&nbsp;**X**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_37">37</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;4-D&nbsp;feature&nbsp;map&nbsp;of</td><td class="diff_next"></td><td class="diff_header" id="to194_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;Input&nbsp;data&nbsp;tensor&nbsp;from&nbsp;the&nbsp;previous&nbsp;operator;&nbsp;4-D&nbsp;feature&nbsp;map&nbsp;of</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_38">38</td><td nowrap="nowrap">&nbsp;&nbsp;shape&nbsp;(N,&nbsp;C,&nbsp;H,&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number&nbsp;of</td><td class="diff_next"></td><td class="diff_header" id="to194_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;shape&nbsp;(N,&nbsp;C,&nbsp;H,&nbsp;W),&nbsp;where&nbsp;N&nbsp;is&nbsp;the&nbsp;batch&nbsp;size,&nbsp;C&nbsp;is&nbsp;the&nbsp;number&nbsp;of</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_39">39</td><td nowrap="nowrap">&nbsp;&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td><td class="diff_next"></td><td class="diff_header" id="to194_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;channels,&nbsp;and&nbsp;H&nbsp;and&nbsp;W&nbsp;are&nbsp;the&nbsp;height&nbsp;and&nbsp;the&nbsp;width&nbsp;of&nbsp;the&nbsp;data.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_40">40</td><td nowrap="nowrap">*&nbsp;**rois**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td><td class="diff_next"></td><td class="diff_header" id="to194_46">46</td><td nowrap="nowrap">*&nbsp;**rois**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_41">41</td><td nowrap="nowrap">&nbsp;&nbsp;RoIs&nbsp;(Regions&nbsp;of&nbsp;Interest)&nbsp;to&nbsp;pool&nbsp;over;&nbsp;rois&nbsp;is&nbsp;2-D&nbsp;input&nbsp;of&nbsp;shape</td><td class="diff_next"></td><td class="diff_header" id="to194_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;RoIs&nbsp;(Regions&nbsp;of&nbsp;Interest)&nbsp;to&nbsp;pool&nbsp;over;&nbsp;rois&nbsp;is&nbsp;2-D&nbsp;input&nbsp;of&nbsp;shape</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_42">42</td><td nowrap="nowrap">&nbsp;&nbsp;(num_rois,&nbsp;4)&nbsp;given&nbsp;as&nbsp;[[x1,&nbsp;y1,&nbsp;x2,&nbsp;y2],&nbsp;...].&nbsp;The&nbsp;RoIs'</td><td class="diff_next"></td><td class="diff_header" id="to194_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;(num_rois,&nbsp;4)&nbsp;given&nbsp;as&nbsp;[[x1,&nbsp;y1,&nbsp;x2,&nbsp;y2],&nbsp;...].&nbsp;The&nbsp;RoIs'</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_43">43</td><td nowrap="nowrap">&nbsp;&nbsp;coordinates&nbsp;are&nbsp;in&nbsp;the&nbsp;coordinate&nbsp;system&nbsp;of&nbsp;the&nbsp;input&nbsp;image.&nbsp;Each</td><td class="diff_next"></td><td class="diff_header" id="to194_49">49</td><td nowrap="nowrap">&nbsp;&nbsp;coordinates&nbsp;are&nbsp;in&nbsp;the&nbsp;coordinate&nbsp;system&nbsp;of&nbsp;the&nbsp;input&nbsp;image.&nbsp;Each</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_44">44</td><td nowrap="nowrap">&nbsp;&nbsp;coordinate&nbsp;set&nbsp;has&nbsp;a&nbsp;1:1&nbsp;correspondence&nbsp;with&nbsp;the&nbsp;'batch_indices'</td><td class="diff_next"></td><td class="diff_header" id="to194_50">50</td><td nowrap="nowrap">&nbsp;&nbsp;coordinate&nbsp;set&nbsp;has&nbsp;a&nbsp;1:1&nbsp;correspondence&nbsp;with&nbsp;the&nbsp;'batch_indices'</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_45">45</td><td nowrap="nowrap">&nbsp;&nbsp;input.</td><td class="diff_next"></td><td class="diff_header" id="to194_51">51</td><td nowrap="nowrap">&nbsp;&nbsp;input.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_46">46</td><td nowrap="nowrap">*&nbsp;**batch_indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T2**:</td><td class="diff_next"></td><td class="diff_header" id="to194_52">52</td><td nowrap="nowrap">*&nbsp;**batch_indices**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T2**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_47">47</td><td nowrap="nowrap">&nbsp;&nbsp;1-D&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(num_rois,)&nbsp;with&nbsp;each&nbsp;element&nbsp;denoting&nbsp;the&nbsp;index</td><td class="diff_next"></td><td class="diff_header" id="to194_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;1-D&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(num_rois,)&nbsp;with&nbsp;each&nbsp;element&nbsp;denoting&nbsp;the&nbsp;index</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_48">48</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;the&nbsp;corresponding&nbsp;image&nbsp;in&nbsp;the&nbsp;batch.</td><td class="diff_next"></td><td class="diff_header" id="to194_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;of&nbsp;the&nbsp;corresponding&nbsp;image&nbsp;in&nbsp;the&nbsp;batch.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_49">49</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_55">55</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_50">50</td><td nowrap="nowrap">**Outputs**</td><td class="diff_next"></td><td class="diff_header" id="to194_56">56</td><td nowrap="nowrap">**Outputs**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_51">51</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_57">57</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_52">52</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td><td class="diff_next"></td><td class="diff_header" id="to194_58">58</td><td nowrap="nowrap">*&nbsp;**Y**&nbsp;(heterogeneous)&nbsp;-&nbsp;**T1**:</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_53">53</td><td nowrap="nowrap">&nbsp;&nbsp;RoI&nbsp;pooled&nbsp;output,&nbsp;4-D&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(num_rois,&nbsp;C,&nbsp;output_height,</td><td class="diff_next"></td><td class="diff_header" id="to194_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;RoI&nbsp;pooled&nbsp;output,&nbsp;4-D&nbsp;tensor&nbsp;of&nbsp;shape&nbsp;(num_rois,&nbsp;C,&nbsp;output_height,</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_54">54</td><td nowrap="nowrap">&nbsp;&nbsp;output_width).&nbsp;The&nbsp;r-th&nbsp;batch&nbsp;element&nbsp;Y[r-1]&nbsp;is&nbsp;a&nbsp;pooled&nbsp;feature&nbsp;map</td><td class="diff_next"></td><td class="diff_header" id="to194_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;output_width).&nbsp;The&nbsp;r-th&nbsp;batch&nbsp;element&nbsp;Y[r-1]&nbsp;is&nbsp;a&nbsp;pooled&nbsp;feature&nbsp;map</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_55">55</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;to&nbsp;the&nbsp;r-th&nbsp;RoI&nbsp;X[r-1].</td><td class="diff_next"></td><td class="diff_header" id="to194_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;corresponding&nbsp;to&nbsp;the&nbsp;r-th&nbsp;RoI&nbsp;X[r-1].</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_56">56</td><td nowrap="nowrap"></td><td class="diff_next"></td><td class="diff_header" id="to194_62">62</td><td nowrap="nowrap"></td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_57">57</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td><td class="diff_next"></td><td class="diff_header" id="to194_63">63</td><td nowrap="nowrap">**Type&nbsp;Constraints**</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_58">58</td><td nowrap="nowrap">*&nbsp;**T1**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to194_64">64</td><td nowrap="nowrap">*&nbsp;**T1**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_59">59</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td><td class="diff_next"></td><td class="diff_header" id="to194_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(double),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_60">60</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td><td class="diff_next"></td><td class="diff_header" id="to194_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float),</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_61">61</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td><td class="diff_next"></td><td class="diff_header" id="to194_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(float16)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_62">62</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to194_68">68</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_63">63</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to194_69">69</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;types&nbsp;to&nbsp;float&nbsp;tensors.</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_64">64</td><td nowrap="nowrap">*&nbsp;**T2**&nbsp;in&nbsp;(</td><td class="diff_next"></td><td class="diff_header" id="to194_70">70</td><td nowrap="nowrap">*&nbsp;**T2**&nbsp;in&nbsp;(</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_65">65</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64)</td><td class="diff_next"></td><td class="diff_header" id="to194_71">71</td><td nowrap="nowrap">&nbsp;&nbsp;tensor(int64)</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_66">66</td><td nowrap="nowrap">&nbsp;&nbsp;):</td><td class="diff_next"></td><td class="diff_header" id="to194_72">72</td><td nowrap="nowrap">&nbsp;&nbsp;):</td></tr>
+                <tr><td class="diff_next"></td><td class="diff_header" id="from194_67">67</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;types&nbsp;to&nbsp;int&nbsp;tensors.</td><td class="diff_next"></td><td class="diff_header" id="to194_73">73</td><td nowrap="nowrap">&nbsp;&nbsp;Constrain&nbsp;types&nbsp;to&nbsp;int&nbsp;tensors.</td></tr>
+            </tbody>
+        </table>
+
+.. _l-onnx-op-roialign-10:
+RoiAlign - 10
+=============
+**Version**
+* **name**: `RoiAlign (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#RoiAlign>`_
+* **domain**: **main**
+* **since_version**: **10**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 10**.
+
+**Summary**
+
+Region of Interest (RoI) align operation described in the
+[Mask R-CNN paper](https://arxiv.org/abs/1703.06870).
+RoiAlign consumes an input tensor X and region of interests (rois)
+to apply pooling across each RoI; it produces a 4-D tensor of shape
+(num_rois, C, output_height, output_width).
+
+RoiAlign is proposed to avoid the misalignment by removing
+quantizations while converting from original image into feature
+map and from feature map into RoI feature; in each ROI bin,
+the value of the sampled locations are computed directly
+through bilinear interpolation.
+
+**Attributes**
+* **mode**:
+  The pooling method. Two modes are supported: 'avg' and 'max'.
+  Default is 'avg'.
+* **output_height**:
+  default 1; Pooled output Y's height.
+* **output_width**:
+  default 1; Pooled output Y's width.
+* **sampling_ratio**:
+  Number of sampling points in the interpolation grid used to compute
+  the output value of each pooled output bin. If > 0, then exactly
+  sampling_ratio x sampling_ratio grid points are used. If == 0, then
+  an adaptive number of grid points are used (computed as
+  ceil(roi_width / output_width), and likewise for height). Default is
+  0.
+* **spatial_scale**:
+  Multiplicative spatial scale factor to translate ROI coordinates
+  from their input spatial scale to the scale used when pooling, i.e.,
+  spatial scale of the input feature map X relative to the input
+  image. E.g.; default is 1.0f.
+
+**Inputs**
+
+* **X** (heterogeneous) - **T1**:
+  Input data tensor from the previous operator; 4-D feature map of
+  shape (N, C, H, W), where N is the batch size, C is the number of
+  channels, and H and W are the height and the width of the data.
+* **rois** (heterogeneous) - **T1**:
+  RoIs (Regions of Interest) to pool over; rois is 2-D input of shape
+  (num_rois, 4) given as [[x1, y1, x2, y2], ...]. The RoIs'
+  coordinates are in the coordinate system of the input image. Each
+  coordinate set has a 1:1 correspondence with the 'batch_indices'
+  input.
+* **batch_indices** (heterogeneous) - **T2**:
+  1-D tensor of shape (num_rois,) with each element denoting the index
+  of the corresponding image in the batch.
+
+**Outputs**
+
+* **Y** (heterogeneous) - **T1**:
+  RoI pooled output, 4-D tensor of shape (num_rois, C, output_height,
+  output_width). The r-th batch element Y[r-1] is a pooled feature map
+  corresponding to the r-th RoI X[r-1].
+
+**Type Constraints**
+* **T1** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain types to float tensors.
+* **T2** in (
+  tensor(int64)
+  ):
+  Constrain types to int tensors.
