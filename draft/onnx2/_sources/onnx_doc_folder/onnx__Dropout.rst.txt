@@ -1,0 +1,669 @@
+
+.. _l-onnx-doc-Dropout:
+
+=======
+Dropout
+=======
+
+.. contents::
+    :local:
+
+
+.. _l-onnx-op-dropout-13:
+
+Dropout - 13
+============
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **13**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 13**.
+
+**Summary**
+
+Dropout takes an input floating-point tensor, an optional input ratio (floating-point scalar) and an optional input training_mode (boolean scalar). It produces two tensor outputs,
+output (floating-point tensor) and mask (optional `Tensor<bool>`). If `training_mode` is true then the output Y will be a random dropout;
+Note that this Dropout scales the masked input data by the following equation, so to convert the trained model into inference mode,
+the user can simply not pass `training_mode` input or set it to false.
+::
+
+    output = scale * data * mask,
+
+where
+::
+
+    scale = 1. / (1. - ratio).
+
+This operator has **optional** inputs/outputs. See `ONNX <https://github.com/onnx/onnx/blob/master/docs/IR.md>`_ for more details about the representation of optional arguments. An empty string may be used in the place of an actual argument's name to indicate a missing argument. Trailing optional arguments (those not followed by an argument that is present) may also be simply omitted.
+
+**Attributes**
+
+* **seed**:
+  (Optional) Seed to the random generator, if not specified we will
+  auto generate one.
+
+**Inputs**
+
+Between 1 and 3 inputs.
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+* **ratio** (optional, heterogeneous) - **T1**:
+  The ratio of random dropout, with value in [0, 1). If this input was
+  not set, or if it was set to 0, the output would be a simple copy of
+  the input. If it's non-zero, output will be a random dropout of the
+  scaled input, which is typically the case during training. It is an
+  optional value, if not specified it will default to 0.5.
+* **training_mode** (optional, heterogeneous) - **T2**:
+  If set to true then it indicates dropout is being used for training.
+  It is an optional value hence unless specified explicitly, it is
+  false. If it is false, ratio is ignored and the operation mimics
+  inference mode where nothing will be dropped from the input data and
+  if mask is requested as output it will contain all ones.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T2**:
+  The output mask.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(bfloat16),
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+* **T1** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input 'ratio' types to float tensors.
+* **T2** in (
+  tensor(bool)
+  ):
+  Constrain output 'mask' types to boolean tensors.
+
+**Examples**
+
+**_default**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node("Dropout", inputs=["x"], outputs=["y"], seed=seed)
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    y = dropout(x)
+    expect(node, inputs=[x], outputs=[y], name="test_dropout_default")
+
+**_default_ratio**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r"], outputs=["y"], seed=seed
+    )
+
+    r = np.float32(0.1)
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    y = dropout(x, r)
+    expect(node, inputs=[x, r], outputs=[y], name="test_dropout_default_ratio")
+
+**_default_mask**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x"], outputs=["y", "z"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    y, z = dropout(x, return_mask=True)
+    expect(node, inputs=[x], outputs=[y, z], name="test_dropout_default_mask")
+
+**_default_mask_ratio**
+
+::
+
+    import numpy as np
+    import onnx
+
+        seed = np.int64(0)
+        node = onnx.helper.make_node(
+            "Dropout", inputs=["x", "r"], outputs=["y", "z"], seed=seed
+        )
+
+        r = np.float32(0.1)
+        x = np.random.randn(3, 4, 5).astype(np.float32)
+        y, z = dropout(x, r, return_mask=True)
+        expect(
+            node, inputs=[x, r], outputs=[y, z], name="test_dropout_default_mask_ratio"
+        )
+
+    # Training tests.
+
+**_training_default**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r", "t"], outputs=["y"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    r = np.float32(0.5)
+    t = np.bool_(True)
+    y = dropout(x, r, training_mode=t)
+    expect(
+        node, inputs=[x, r, t], outputs=[y], name="test_training_dropout_default"
+    )
+
+**_training_default_ratio_mask**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r", "t"], outputs=["y", "z"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    r = np.float32(0.5)
+    t = np.bool_(True)
+    y, z = dropout(x, r, training_mode=t, return_mask=True)
+    expect(
+        node,
+        inputs=[x, r, t],
+        outputs=[y, z],
+        name="test_training_dropout_default_mask",
+    )
+
+**_training**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r", "t"], outputs=["y"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    r = np.float32(0.75)
+    t = np.bool_(True)
+    y = dropout(x, r, training_mode=t)
+    expect(node, inputs=[x, r, t], outputs=[y], name="test_training_dropout")
+
+**_training_ratio_mask**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r", "t"], outputs=["y", "z"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    r = np.float32(0.75)
+    t = np.bool_(True)
+    y, z = dropout(x, r, training_mode=t, return_mask=True)
+    expect(
+        node, inputs=[x, r, t], outputs=[y, z], name="test_training_dropout_mask"
+    )
+
+**_training_default_zero_ratio**
+
+::
+
+    import numpy as np
+    import onnx
+
+    seed = np.int64(0)
+    node = onnx.helper.make_node(
+        "Dropout", inputs=["x", "r", "t"], outputs=["y"], seed=seed
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    r = np.float32(0.0)
+    t = np.bool_(True)
+    y = dropout(x, r, training_mode=t)
+    expect(
+        node, inputs=[x, r, t], outputs=[y], name="test_training_dropout_zero_ratio"
+    )
+
+**_training_default_zero_ratio_mask**
+
+::
+
+    import numpy as np
+    import onnx
+
+        seed = np.int64(0)
+        node = onnx.helper.make_node(
+            "Dropout", inputs=["x", "r", "t"], outputs=["y", "z"], seed=seed
+        )
+
+        x = np.random.randn(3, 4, 5).astype(np.float32)
+        r = np.float32(0.0)
+        t = np.bool_(True)
+        y, z = dropout(x, r, training_mode=t, return_mask=True)
+        expect(
+            node,
+            inputs=[x, r, t],
+            outputs=[y, z],
+            name="test_training_dropout_zero_ratio_mask",
+        )
+
+    # Old dropout tests
+
+**_default_old**
+
+::
+
+    import numpy as np
+    import onnx
+
+    node = onnx.helper.make_node(
+        "Dropout",
+        inputs=["x"],
+        outputs=["y"],
+    )
+
+    x = np.array([-1, 0, 1]).astype(np.float32)
+    y = x
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_dropout_default_old",
+        opset_imports=[helper.make_opsetid("", 11)],
+    )
+
+**_random_old**
+
+::
+
+    import numpy as np
+    import onnx
+
+    node = onnx.helper.make_node(
+        "Dropout",
+        inputs=["x"],
+        outputs=["y"],
+        ratio=0.2,
+    )
+
+    x = np.random.randn(3, 4, 5).astype(np.float32)
+    y = x
+    expect(
+        node,
+        inputs=[x],
+        outputs=[y],
+        name="test_dropout_random_old",
+        opset_imports=[helper.make_opsetid("", 11)],
+    )
+
+.. toctree::
+    text_diff_Dropout_12_13
+
+.. _l-onnx-op-dropout-12:
+
+Dropout - 12
+============
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **12**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 12**.
+
+**Summary**
+
+Dropout takes an input floating-point tensor, an optional input ratio (floating-point scalar) and an optional input training_mode (boolean scalar). It produces two tensor outputs,
+output (floating-point tensor) and mask (optional `Tensor<bool>`). If `training_mode` is true then the output Y will be a random dropout;
+Note that this Dropout scales the masked input data by the following equation, so to convert the trained model into inference mode,
+the user can simply not pass `training_mode` input or set it to false.
+::
+
+    output = scale * data * mask,
+
+where
+::
+
+    scale = 1. / (1. - ratio).
+
+This operator has **optional** inputs/outputs. See `ONNX <https://github.com/onnx/onnx/blob/master/docs/IR.md>`_ for more details about the representation of optional arguments. An empty string may be used in the place of an actual argument's name to indicate a missing argument. Trailing optional arguments (those not followed by an argument that is present) may also be simply omitted.
+
+**Attributes**
+
+* **seed**:
+  (Optional) Seed to the random generator, if not specified we will
+  auto generate one.
+
+**Inputs**
+
+Between 1 and 3 inputs.
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+* **ratio** (optional, heterogeneous) - **T1**:
+  The ratio of random dropout, with value in [0, 1). If this input was
+  not set, or if it was set to 0, the output would be a simple copy of
+  the input. If it's non-zero, output will be a random dropout of the
+  scaled input, which is typically the case during training. It is an
+  optional value, if not specified it will default to 0.5.
+* **training_mode** (optional, heterogeneous) - **T2**:
+  If set to true then it indicates dropout is being used for training.
+  It is an optional value hence unless specified explicitly, it is
+  false. If it is false, ratio is ignored and the operation mimics
+  inference mode where nothing will be dropped from the input data and
+  if mask is requested as output it will contain all ones.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T2**:
+  The output mask.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+* **T1** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input 'ratio' types to float tensors.
+* **T2** in (
+  tensor(bool)
+  ):
+  Constrain output 'mask' types to boolean tensors.
+
+.. toctree::
+    text_diff_Dropout_10_12
+
+.. _l-onnx-op-dropout-10:
+
+Dropout - 10
+============
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **10**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 10**.
+
+**Summary**
+
+Dropout takes one input floating tensor and produces two tensor outputs,
+output (floating tensor) and mask (`Tensor<bool>`). Depending on whether it is
+in test mode or not, the output Y will either be a random dropout, or a simple
+copy of the input. Note that our implementation of Dropout does scaling in
+the training phase, so during testing nothing needs to be done.
+This operator has **optional** inputs/outputs. See `ONNX <https://github.com/onnx/onnx/blob/master/docs/IR.md>`_ for more details about the representation of optional arguments. An empty string may be used in the place of an actual argument's name to indicate a missing argument. Trailing optional arguments (those not followed by an argument that is present) may also be simply omitted.
+
+**Attributes**
+
+* **ratio**:
+  The ratio of random dropout
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T1**:
+  The output mask.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+* **T1** in (
+  tensor(bool)
+  ):
+  Constrain output mask types to boolean tensors.
+
+.. toctree::
+    text_diff_Dropout_7_10
+
+.. _l-onnx-op-dropout-7:
+
+Dropout - 7
+===========
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **7**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 7**.
+
+**Summary**
+
+Dropout takes one input data (Tensor<float>) and produces two Tensor outputs,
+output (Tensor<float>) and mask (Tensor<bool>). Depending on whether it is in
+test mode or not, the output Y will either be a random dropout, or a simple
+copy of the input. Note that our implementation of Dropout does scaling in
+the training phase, so during testing nothing needs to be done.
+This operator has **optional** inputs/outputs. See `ONNX <https://github.com/onnx/onnx/blob/master/docs/IR.md>`_ for more details about the representation of optional arguments. An empty string may be used in the place of an actual argument's name to indicate a missing argument. Trailing optional arguments (those not followed by an argument that is present) may also be simply omitted.
+
+**Attributes**
+
+* **ratio**:
+  The ratio of random dropout
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T**:
+  The output mask.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+
+.. toctree::
+    text_diff_Dropout_6_7
+
+.. _l-onnx-op-dropout-6:
+
+Dropout - 6
+===========
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **6**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: True
+
+This version of the operator has been available
+**since version 6**.
+
+**Summary**
+
+Dropout takes one input data (Tensor<float>) and produces two Tensor outputs,
+output (Tensor<float>) and mask (Tensor<bool>). Depending on whether it is in
+test mode or not, the output Y will either be a random dropout, or a simple
+copy of the input. Note that our implementation of Dropout does scaling in
+the training phase, so during testing nothing needs to be done.
+
+**Attributes**
+
+* **is_test**:
+  (int, default 0) if nonzero, run dropout in test mode where the
+  output is simply Y = X.
+* **ratio**:
+  (float, default 0.5) the ratio of random dropout
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T**:
+  The output mask. If is_test is nonzero, this output is not filled.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
+
+.. toctree::
+    text_diff_Dropout_1_6
+
+.. _l-onnx-op-dropout-1:
+
+Dropout - 1
+===========
+
+**Version**
+
+* **name**: `Dropout (GitHub) <https://github.com/onnx/onnx/blob/main/docs/Operators.md#Dropout>`_
+* **domain**: **main**
+* **since_version**: **1**
+* **function**: False
+* **support_level**: SupportType.COMMON
+* **shape inference**: False
+
+This version of the operator has been available
+**since version 1**.
+
+**Summary**
+
+Dropout takes one input data (Tensor<float>) and produces two Tensor outputs,
+output (Tensor<float>) and mask (Tensor<bool>). Depending on whether it is in
+test mode or not, the output Y will either be a random dropout, or a simple
+copy of the input. Note that our implementation of Dropout does scaling in
+the training phase, so during testing nothing needs to be done.
+
+**Attributes**
+
+* **consumed_inputs**:
+  legacy optimization attribute.
+* **is_test**:
+  (int, default 0) if nonzero, run dropout in test mode where the
+  output is simply Y = X.
+* **ratio**:
+  (float, default 0.5) the ratio of random dropout
+
+**Inputs**
+
+* **data** (heterogeneous) - **T**:
+  The input data as Tensor.
+
+**Outputs**
+
+Between 1 and 2 outputs.
+
+* **output** (heterogeneous) - **T**:
+  The output.
+* **mask** (optional, heterogeneous) - **T**:
+  The output mask. If is_test is nonzero, this output is not filled.
+
+**Type Constraints**
+
+* **T** in (
+  tensor(double),
+  tensor(float),
+  tensor(float16)
+  ):
+  Constrain input and output types to float tensors.
