@@ -1,0 +1,80 @@
+name: Build my-own-accelerator documentation
+
+# Manually triggered workflow only. Only the repository owner (xadupre) is
+# allowed to actually run the build; any other actor will see the job skipped.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/my-own-accelerator to build"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish documentation.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v4
+        with:
+          path: site
+
+      - name: Checkout my-own-accelerator
+        uses: actions/checkout@v4
+        with:
+          repository: xadupre/my-own-accelerator
+          ref: ${{ inputs.ref }}
+          path: my-own-accelerator
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install graphviz
+        uses: ts-graphviz/setup-graphviz@v2
+
+      - name: Install my-own-accelerator with doc dependencies
+        working-directory: my-own-accelerator
+        run: |
+          pip install -e ".[docs]"
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Build documentation
+        working-directory: my-own-accelerator
+        run: |
+          sphinx-build -b html docs docs/_build/html -j auto
+
+      - name: Copy documentation into site/docs/my-own-accelerator
+        run: |
+          rm -rf site/docs/my-own-accelerator
+          mkdir -p site/docs/my-own-accelerator
+          cp -r my-own-accelerator/docs/_build/html/. site/docs/my-own-accelerator/
+          # Disable Jekyll so that files/folders starting with "_" are served by GitHub Pages.
+          touch site/docs/my-own-accelerator/.nojekyll
+
+      - name: Commit and push updated documentation
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/my-own-accelerator
+          if git diff --cached --quiet; then
+            echo "No documentation changes to commit."
+          else
+            built_sha="$(git -C ../my-own-accelerator rev-parse HEAD)"
+            git commit -m "Update my-own-accelerator documentation (from ${built_sha})"
+            git push
+          fi
