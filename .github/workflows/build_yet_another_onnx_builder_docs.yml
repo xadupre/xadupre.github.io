@@ -1,0 +1,91 @@
+name: Build yet-another-onnx-builder documentation
+
+# Manually triggered workflow only. Only the repository owner (xadupre) is
+# allowed to actually run the build; any other actor will see the job skipped.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/yet-another-onnx-builder to build"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish documentation.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v4
+        with:
+          path: site
+
+      - name: Checkout yet-another-onnx-builder
+        uses: actions/checkout@v4
+        with:
+          repository: xadupre/yet-another-onnx-builder
+          ref: ${{ inputs.ref }}
+          path: yet-another-onnx-builder
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install graphviz
+        uses: ts-graphviz/setup-graphviz@v2
+
+      - name: Install pandoc
+        run: sudo apt-get install -y pandoc
+
+      - name: Install nightly torch
+        run: |
+          pip install --pre --upgrade torch torchvision torchaudio \
+            --index-url https://download.pytorch.org/whl/nightly/cpu
+
+      - name: Install yet-another-onnx-builder with doc dependencies
+        working-directory: yet-another-onnx-builder
+        run: |
+          pip install -e ".[category_encoders,docs,imblearn,lightgbm,op-db,polars,sklearn,sksurv,spox,statsmodels,tensorflow,torch,transformers,xgboost]"
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Build documentation
+        working-directory: yet-another-onnx-builder
+        run: |
+          UNITTEST_GOING=0 sphinx-build -b html \
+            -D "sphinx_gallery_conf.filename_pattern=/tensorflow/" \
+            docs docs/_build/html -j 1
+          UNITTEST_GOING=0 sphinx-build -b html docs docs/_build/html -j auto
+
+      - name: Copy documentation into site/docs/yet-another-onnx-builder
+        run: |
+          rm -rf site/docs/yet-another-onnx-builder
+          mkdir -p site/docs/yet-another-onnx-builder
+          cp -r yet-another-onnx-builder/docs/_build/html/. site/docs/yet-another-onnx-builder/
+          # Disable Jekyll so that files/folders starting with "_" are served by GitHub Pages.
+          touch site/docs/yet-another-onnx-builder/.nojekyll
+
+      - name: Commit and push updated documentation
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/yet-another-onnx-builder
+          if git diff --cached --quiet; then
+            echo "No documentation changes to commit."
+          else
+            built_sha="$(git -C ../yet-another-onnx-builder rev-parse HEAD)"
+            git commit -m "Update yet-another-onnx-builder documentation (from ${built_sha})"
+            git push
+          fi
