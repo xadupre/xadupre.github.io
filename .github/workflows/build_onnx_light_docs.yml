@@ -38,6 +38,16 @@ jobs:
           repository: xadupre/onnx-light
           ref: ${{ inputs.ref }}
           path: onnx-light
+          # Use a personal access token with write access to xadupre/onnx-light
+          # if available, so that the ``cache_data/`` directory produced by the
+          # documentation build (see ``docs/ci_durations.rst``) can be pushed
+          # back to the onnx-light repository. When the secret is not set the
+          # default ``GITHUB_TOKEN`` is used and the cache_data push step below
+          # is skipped.
+          token: ${{ secrets.ONNX_LIGHT_PUSH_TOKEN || github.token }}
+          # Full history so we can rebase on top of concurrent commits when
+          # pushing the updated cache_data/ directory.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -116,7 +126,57 @@ jobs:
 
       - name: Build documentation
         working-directory: onnx-light
+        env:
+          # Persist the ci_durations REST API cache inside the onnx-light
+          # checkout (see ``docs/ci_durations.rst``) so it can be committed
+          # and reused across documentation builds.
+          ONNX_LIGHT_DOCS_CACHE_IN_REPO: "1"
+          # ``ci_durations.rst`` resolves the in-repo cache root via
+          # ``GITHUB_WORKSPACE`` (falling back to ``os.getcwd()``). On this
+          # workflow ``GITHUB_WORKSPACE`` points at the xadupre.github.io
+          # checkout, not at the onnx-light one, so override it here.
+          GITHUB_WORKSPACE: ${{ github.workspace }}/onnx-light
         run: python -m sphinx docs dist/html -j 4
+
+      - name: Commit and push onnx-light cache_data
+        # Only push the regenerated cache_data/ when:
+        #  * a personal access token with write access to xadupre/onnx-light
+        #    was provided as the ``ONNX_LIGHT_PUSH_TOKEN`` secret, and
+        #  * the documentation was built from the ``main`` branch (pushing
+        #    back to a tag or commit SHA does not make sense).
+        if: ${{ secrets.ONNX_LIGHT_PUSH_TOKEN != '' && inputs.ref == 'main' }}
+        working-directory: onnx-light
+        run: |
+          if [ ! -d cache_data ]; then
+            echo "No cache_data/ directory produced by the documentation build."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data
+          if git diff --cached --quiet; then
+            echo "No cache_data changes to commit."
+            exit 0
+          fi
+          git commit -m "Update ci_durations cache_data"
+          branch="${{ inputs.ref }}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            if git push origin "HEAD:${branch}"; then
+              echo "Push succeeded on attempt ${i}."
+              exit 0
+            fi
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push cache_data after ${attempts} attempts." >&2
+          exit 1
 
       - name: Copy documentation into site/docs/onnx-light
         run: |
