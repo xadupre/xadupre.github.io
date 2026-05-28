@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light pull request statistics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 55vh;
+  min-height: 320px;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
+.summary {
+  width: 100%;
+  max-width: 1100px;
+  margin-bottom: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+  display: none;
+}
+.summary.visible { display: block; }
+.summary h2 { margin: 0 0 0.5em; font-size: 1em; color: #c9d1d9; }
+.summary .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6em;
+}
+.summary .cell {
+  background: rgba(13, 17, 23, 0.6);
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+}
+.summary .cell .k { font-size: 0.75em; color: #8b949e; }
+.summary .cell .v { font-size: 1.2em; color: #c9d1d9; font-family: monospace; }
+.last-observations {
+  width: 100%;
+  max-width: 1100px;
+  margin-top: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+}
+.last-observations h2 {
+  margin: 0 0 0.5em;
+  font-size: 1em;
+  color: #c9d1d9;
+}
+.last-observations .table-scroll { overflow-x: auto; }
+.last-observations table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.last-observations th, .last-observations td {
+  text-align: left;
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  white-space: nowrap;
+}
+.last-observations th { color: #8b949e; font-weight: normal; }
+.last-observations td { color: #c9d1d9; font-family: monospace; }
+.last-observations td.title { white-space: normal; font-family: sans-serif; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; pull request statistics</h1>
+</header>
+<div id="message" class="message info"></div>
+<div id="summary" class="summary">
+  <h2>Summary</h2>
+  <div class="grid">
+    <div class="cell"><div class="k">total merged PRs</div><div class="v" id="sumTotal">0</div></div>
+    <div class="cell"><div class="k">merged by Copilot</div><div class="v" id="sumCopilot">0</div></div>
+    <div class="cell"><div class="k">total commits</div><div class="v" id="sumCommits">0</div></div>
+    <div class="cell"><div class="k">total comments</div><div class="v" id="sumComments">0</div></div>
+  </div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">merged pull requests per week (Copilot vs other authors)</h2>
+  <div class="chart-container"><canvas id="chartPerWeek"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">cumulative merged pull requests</h2>
+  <div class="chart-container"><canvas id="chartCumulative"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">average commits and comments per PR (weekly)</h2>
+  <div class="chart-container"><canvas id="chartActivity"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div id="lastObservations" class="last-observations" style="display:none;">
+  <h2>Last 10 merged pull requests</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>merged_at</th>
+          <th>#</th>
+          <th>author</th>
+          <th>title</th>
+          <th>commits</th>
+          <th>comments</th>
+          <th>copilot commits</th>
+          <th>copilot comments</th>
+        </tr>
+      </thead>
+      <tbody id="lastObservationsBody"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const CSV_URL = "../../cache_data/onnx-light/pr_stats.csv";
+const REPO = "onnx-light";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+  for (const id of ["chartPerWeek", "chartCumulative", "chartActivity"]) {
+    const el = document.getElementById(id);
+    if (el && el.parentElement) el.parentElement.style.display = "none";
+  }
+}
+
+// Minimal CSV parser that handles double-quoted fields (titles may contain commas).
+function parseCSV(text) {
+  const rows = [];
+  let i = 0;
+  let field = "";
+  let row = [];
+  let inQuotes = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ""; i++; continue; }
+    if (c === '\n' || c === '\r') {
+      if (field.length || row.length) { row.push(field); rows.push(row); }
+      field = ""; row = [];
+      if (c === '\r' && text[i + 1] === '\n') i += 2; else i++;
+      continue;
+    }
+    field += c; i++;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  if (rows.length === 0) return [];
+  const header = rows.shift();
+  const idx = {
+    pr_number: header.indexOf("pr_number"),
+    title: header.indexOf("title"),
+    author: header.indexOf("author"),
+    merged_at: header.indexOf("merged_at"),
+    commits: header.indexOf("commits"),
+    comments: header.indexOf("comments"),
+    copilot_comments: header.indexOf("copilot_comments"),
+    copilot_commits: header.indexOf("copilot_commits"),
+  };
+  return rows.map(cols => ({
+    pr_number: cols[idx.pr_number],
+    title: cols[idx.title] || "",
+    author: cols[idx.author] || "",
+    merged_at: cols[idx.merged_at],
+    commits: Number(cols[idx.commits]) || 0,
+    comments: Number(cols[idx.comments]) || 0,
+    copilot_comments: Number(cols[idx.copilot_comments]) || 0,
+    copilot_commits: Number(cols[idx.copilot_commits]) || 0,
+    mergedDate: cols[idx.merged_at] ? new Date(cols[idx.merged_at]) : null,
+  })).filter(r => r.merged_at && r.mergedDate && !isNaN(r.mergedDate.getTime()));
+}
+
+function isCopilotAuthor(login) {
+  return !!login && login.toLowerCase().indexOf("copilot") !== -1;
+}
+
+// Floor a Date to the Monday of its ISO week (UTC).
+function weekStart(d) {
+  const utc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = utc.getUTCDay(); // 0=Sun ... 6=Sat
+  const diff = (day + 6) % 7; // days since Monday
+  utc.setUTCDate(utc.getUTCDate() - diff);
+  return utc;
+}
+
+function isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function aggregateWeekly(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const wk = weekStart(r.mergedDate);
+    const key = isoDate(wk);
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = {
+        week: wk, copilot: 0, other: 0,
+        commits: 0, comments: 0, count: 0,
+      };
+      map.set(key, bucket);
+    }
+    if (isCopilotAuthor(r.author)) bucket.copilot += 1;
+    else bucket.other += 1;
+    bucket.commits += r.commits;
+    bucket.comments += r.comments;
+    bucket.count += 1;
+  }
+  return Array.from(map.values()).sort((a, b) => a.week - b.week);
+}
+
+const PALETTE = {
+  copilot: "#d2a8ff",
+  other: "#58a6ff",
+  total: "#3fb950",
+  commits: "#f78166",
+  comments: "#79c0ff",
+};
+
+const COMMON_OPTIONS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "nearest", intersect: false },
+  plugins: {
+    legend: { labels: { color: "#c9d1d9" } },
+    zoom: {
+      pan: { enabled: true, mode: "xy" },
+      zoom: {
+        wheel: { enabled: true },
+        pinch: { enabled: true },
+        mode: "xy",
+      },
+    },
+  },
+};
+
+function axisX(label) {
+  return {
+    type: "time",
+    time: { unit: "week", tooltipFormat: "yyyy-MM-dd" },
+    title: { display: true, text: label || "week starting (Mon, UTC)", color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+  };
+}
+
+function axisY(label) {
+  return {
+    title: { display: true, text: label, color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9", precision: 0 },
+    grid: { color: "rgba(139,148,158,0.25)" },
+    beginAtZero: true,
+  };
+}
+
+fetch(CSV_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No PR statistics available yet for " + REPO + ". " +
+        "The CSV file has not been generated yet \u2014 it will appear once the " +
+        "scheduled job records its first merged pull request.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  })
+  .then(text => {
+    if (text === null) return;
+    const rows = parseCSV(text);
+    if (rows.length === 0) {
+      showMessage(
+        "No merged pull requests have been recorded yet for " + REPO + ".",
+        "info"
+      );
+      return;
+    }
+
+    // Summary cards.
+    let total = rows.length;
+    let copilot = 0, commits = 0, comments = 0;
+    for (const r of rows) {
+      if (isCopilotAuthor(r.author)) copilot += 1;
+      commits += r.commits;
+      comments += r.comments;
+    }
+    document.getElementById("sumTotal").textContent = String(total);
+    document.getElementById("sumCopilot").textContent =
+      String(copilot) + " (" + (total ? Math.round(100 * copilot / total) : 0) + "%)";
+    document.getElementById("sumCommits").textContent = String(commits);
+    document.getElementById("sumComments").textContent = String(comments);
+    document.getElementById("summary").classList.add("visible");
+
+    // Last 10 table.
+    const lastTen = rows.slice().sort((a, b) => b.mergedDate - a.mergedDate).slice(0, 10);
+    const tbody = document.getElementById("lastObservationsBody");
+    for (const r of lastTen) {
+      const tr = document.createElement("tr");
+      const fields = [
+        r.merged_at, "#" + r.pr_number, r.author, r.title,
+        r.commits, r.comments, r.copilot_commits, r.copilot_comments,
+      ];
+      fields.forEach((v, i) => {
+        const td = document.createElement("td");
+        td.textContent = v;
+        if (i === 3) td.className = "title";
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    }
+    if (lastTen.length > 0) {
+      document.getElementById("lastObservations").style.display = "block";
+    }
+
+    // Weekly aggregation.
+    const weekly = aggregateWeekly(rows);
+    const weeks = weekly.map(b => b.week);
+
+    // Chart 1: stacked bar per week.
+    const charts = [];
+    charts.push(new Chart(document.getElementById("chartPerWeek").getContext("2d"), {
+      type: "bar",
+      data: {
+        labels: weeks,
+        datasets: [
+          {
+            label: "Copilot",
+            data: weekly.map(b => b.copilot),
+            backgroundColor: PALETTE.copilot,
+            borderColor: PALETTE.copilot,
+            stack: "prs",
+          },
+          {
+            label: "other authors",
+            data: weekly.map(b => b.other),
+            backgroundColor: PALETTE.other,
+            borderColor: PALETTE.other,
+            stack: "prs",
+          },
+        ],
+      },
+      options: Object.assign({}, COMMON_OPTIONS, {
+        scales: {
+          x: Object.assign({}, axisX(), { stacked: true }),
+          y: Object.assign({}, axisY("merged PRs"), { stacked: true }),
+        },
+      }),
+    }));
+
+    // Chart 2: cumulative line.
+    let cumCopilot = 0, cumOther = 0;
+    const cumCopilotData = [];
+    const cumOtherData = [];
+    const cumTotalData = [];
+    for (const b of weekly) {
+      cumCopilot += b.copilot;
+      cumOther += b.other;
+      cumCopilotData.push({ x: b.week, y: cumCopilot });
+      cumOtherData.push({ x: b.week, y: cumOther });
+      cumTotalData.push({ x: b.week, y: cumCopilot + cumOther });
+    }
+    charts.push(new Chart(document.getElementById("chartCumulative").getContext("2d"), {
+      type: "line",
+      data: {
+        datasets: [
+          {
+            label: "total",
+            data: cumTotalData,
+            borderColor: PALETTE.total,
+            backgroundColor: PALETTE.total,
+            tension: 0.15,
+            pointRadius: 2,
+          },
+          {
+            label: "Copilot",
+            data: cumCopilotData,
+            borderColor: PALETTE.copilot,
+            backgroundColor: PALETTE.copilot,
+            tension: 0.15,
+            pointRadius: 2,
+          },
+          {
+            label: "other authors",
+            data: cumOtherData,
+            borderColor: PALETTE.other,
+            backgroundColor: PALETTE.other,
+            tension: 0.15,
+            pointRadius: 2,
+          },
+        ],
+      },
+      options: Object.assign({}, COMMON_OPTIONS, {
+        parsing: false,
+        scales: { x: axisX(), y: axisY("cumulative merged PRs") },
+      }),
+    }));
+
+    // Chart 3: average commits/comments per PR per week.
+    const avgCommits = weekly.map(b => ({
+      x: b.week, y: b.count ? b.commits / b.count : 0,
+    }));
+    const avgComments = weekly.map(b => ({
+      x: b.week, y: b.count ? b.comments / b.count : 0,
+    }));
+    charts.push(new Chart(document.getElementById("chartActivity").getContext("2d"), {
+      type: "line",
+      data: {
+        datasets: [
+          {
+            label: "avg commits / PR",
+            data: avgCommits,
+            borderColor: PALETTE.commits,
+            backgroundColor: PALETTE.commits,
+            tension: 0.15,
+            pointRadius: 2,
+          },
+          {
+            label: "avg comments / PR",
+            data: avgComments,
+            borderColor: PALETTE.comments,
+            backgroundColor: PALETTE.comments,
+            tension: 0.15,
+            pointRadius: 2,
+          },
+        ],
+      },
+      options: Object.assign({}, COMMON_OPTIONS, {
+        parsing: false,
+        scales: {
+          x: axisX(),
+          y: {
+            title: { display: true, text: "average per PR", color: "#c9d1d9" },
+            ticks: { color: "#c9d1d9" },
+            grid: { color: "rgba(139,148,158,0.25)" },
+            beginAtZero: true,
+          },
+        },
+      }),
+    }));
+
+    for (const ch of charts) {
+      ch.canvas.ondblclick = () => ch.resetZoom();
+    }
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
