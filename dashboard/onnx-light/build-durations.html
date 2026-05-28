@@ -145,6 +145,19 @@ function jobLabelFromFilename(name) {
   return name.replace(/\.csv$/, "");
 }
 
+function movingAverage(data, window) {
+  const result = [];
+  let sum = 0;
+  const q = [];
+  for (let i = 0; i < data.length; i++) {
+    q.push(data[i].y);
+    sum += data[i].y;
+    if (q.length > window) sum -= q.shift();
+    result.push({ x: data[i].x, y: sum / q.length });
+  }
+  return result;
+}
+
 function buildChart(canvas, jobName, rows, color) {
   const data = rows.map(r => ({
     x: r.date,
@@ -154,6 +167,8 @@ function buildChart(canvas, jobName, rows, color) {
     run_id: r.run_id,
   }));
   const pointColors = data.map(d => CONCLUSION_COLORS[d.conclusion] || color);
+  const window = Math.max(2, Math.min(10, Math.floor(data.length / 5) || 2));
+  const maData = movingAverage(data, window);
   const chart = new Chart(canvas.getContext("2d"), {
     type: "line",
     data: {
@@ -167,6 +182,17 @@ function buildChart(canvas, jobName, rows, color) {
         tension: 0.15,
         pointRadius: 3,
         pointHoverRadius: 5,
+      }, {
+        label: "moving avg (" + window + ")",
+        data: maData,
+        borderColor: color,
+        backgroundColor: "transparent",
+        borderDash: [4, 4],
+        borderWidth: 1.5,
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        tension: 0.25,
+        fill: false,
       }],
     },
     options: {
@@ -189,7 +215,7 @@ function buildChart(canvas, jobName, rows, color) {
         },
       },
       plugins: {
-        legend: { display: false },
+        legend: { display: true, labels: { color: "#c9d1d9" } },
         tooltip: {
           callbacks: {
             label: (item) => {
@@ -244,9 +270,12 @@ function renderJob(jobFile, color) {
       return r.text();
     })
     .then(text => {
-      const rows = parseCSV(text);
+      const allRows = parseCSV(text);
+      const rows = allRows.filter(r => r.conclusion === "success");
       if (rows.length === 0) {
-        meta.textContent = "no recorded run yet";
+        meta.textContent = allRows.length === 0
+          ? "no recorded run yet"
+          : "no successful run yet";
         cc.style.display = "none";
         hint.style.display = "none";
         return;
@@ -255,7 +284,7 @@ function renderJob(jobFile, color) {
       const last = rows[rows.length - 1];
       const avg = rows.reduce((s, r) => s + r.duration, 0) / total;
       meta.textContent =
-        total + " run(s) \u2013 avg " + avg.toFixed(0) + " s " +
+        total + " successful run(s) \u2013 avg " + avg.toFixed(0) + " s " +
         "\u2013 last " + last.duration.toFixed(0) + " s on " +
         last.date.replace("T", " ").replace("Z", "");
       buildChart(canvas, jobLabelFromFilename(jobFile), rows, color);
