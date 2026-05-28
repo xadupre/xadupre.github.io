@@ -78,6 +78,18 @@ JOB_CSV_FIELDS = (
 GITHUB_API = "https://api.github.com"
 
 
+def _log(message: str) -> None:
+    """Print ``message`` prefixed with a UTC timestamp.
+
+    The script is meant to be inspected from GitHub Actions logs days or
+    weeks after it ran, so every line is timestamped to make it easy to
+    correlate progress with the real wall-clock time and to spot slow
+    repositories or windows.
+    """
+    now = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{now}] {message}", flush=True)
+
+
 def _parse_iso(value: str) -> dt.datetime:
     """Parse an ISO 8601 timestamp returned by the GitHub API."""
     if value.endswith("Z"):
@@ -221,16 +233,29 @@ def iter_workflow_runs(
         pending.append((start, cursor))
         cursor = start
     seen_ids: set[str] = set()
+    total_windows = len(pending)
+    window_index = 0
     while pending:
         start, end = pending.pop(0)
+        window_index += 1
+        _log(
+            f"[{repo}] querying window {window_index}/{total_windows} "
+            f"[{_format_iso(start)} .. {_format_iso(end)}]"
+        )
         runs, capped = _fetch_runs_window(repo, start, end, token)
         if capped and (end - start) > min_window:
             mid = start + (end - start) / 2
+            _log(
+                f"[{repo}]   window saturated the 1000-result cap "
+                f"({len(runs)} runs); splitting at {_format_iso(mid)}"
+            )
             # Re-queue the two halves (newest first) and skip yielding the
             # truncated page; the split queries will return the full data.
             pending.insert(0, (mid, end))
             pending.insert(1, (start, mid))
+            total_windows += 2
             continue
+        _log(f"[{repo}]   fetched {len(runs)} run(s) for this window")
         for run in runs:
             run_id = str(run.get("id", ""))
             if run_id and run_id in seen_ids:
@@ -443,10 +468,18 @@ def process_repo(
     csv_path = os.path.join(cache_dir, repo_name, "build_durations.csv")
     seen, latest = read_existing(csv_path)
     since = determine_since(latest, months)
-    print(f"[{repo}] fetching runs since {_format_iso(since)}")
+    _log(
+        f"[{repo}] cache file: {csv_path} "
+        f"({len(seen)} run(s) already recorded, "
+        f"latest={_format_iso(latest) if latest else 'none'})"
+    )
+    _log(f"[{repo}] fetching runs since {_format_iso(since)}")
+    started = dt.datetime.now(tz=dt.timezone.utc)
     new_rows: list[dict] = []
     jobs_added = 0
+    processed = 0
     for run in iter_workflow_runs(repo, since, token):
+        processed += 1
         run_id = str(run.get("id", ""))
         if not run_id or run_id in seen:
             continue
@@ -455,17 +488,33 @@ def process_repo(
             continue
         new_rows.append(row)
         seen.add(run_id)
+        _log(
+            f"[{repo}] new run {run_id} "
+            f"workflow={row['workflow']!r} "
+            f"event={row['event']} conclusion={row['conclusion']} "
+            f"duration={row['duration_seconds']}s; fetching its jobs..."
+        )
         try:
-            jobs_added += record_jobs_for_run(run, repo, cache_dir, token)
+            added_jobs = record_jobs_for_run(run, repo, cache_dir, token)
         except urllib.error.HTTPError as exc:
             print(
                 f"[{repo}] failed to fetch jobs for run {run_id}: "
                 f"HTTP {exc.code}: {exc.reason}",
                 file=sys.stderr,
             )
+        else:
+            jobs_added += added_jobs
+            _log(f"[{repo}]   recorded {added_jobs} new job row(s) for run {run_id}")
     added = append_rows(csv_path, new_rows)
-    print(f"[{repo}] appended {added} new run(s) to {csv_path}")
-    print(f"[{repo}] appended {jobs_added} new job row(s) under {os.path.join(cache_dir, repo_name, 'jobs')}")
+    elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()
+    _log(
+        f"[{repo}] processed {processed} run(s) from GitHub in {elapsed:.1f}s; "
+        f"appended {added} new run(s) to {csv_path}"
+    )
+    _log(
+        f"[{repo}] appended {jobs_added} new job row(s) under "
+        f"{os.path.join(cache_dir, repo_name, 'jobs')}"
+    )
     return added
 
 
@@ -492,16 +541,32 @@ def main(argv: list[str] | None = None) -> int:
 
     repos = args.repos or list(DEFAULT_REPOS)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    _log("record_build_durations.py starting")
+    _log(f"  cache directory : {args.cache_dir}")
+    _log(f"  months fallback : {args.months}")
+    _log(f"  repositories    : {', '.join(repos)}")
     if not token:
+        _log("  authentication  : anonymous (no GITHUB_TOKEN/GH_TOKEN set)")
         print("warning: no GITHUB_TOKEN/GH_TOKEN set; using anonymous requests.")
+    else:
+        _log("  authentication  : using GITHUB_TOKEN/GH_TOKEN")
 
+    overall_started = dt.datetime.now(tz=dt.timezone.utc)
     total = 0
-    for repo in repos:
+    for index, repo in enumerate(repos, start=1):
+        _log(f"==> [{index}/{len(repos)}] processing repository {repo}")
         try:
             total += process_repo(repo, args.cache_dir, args.months, token)
         except urllib.error.HTTPError as exc:
             print(f"[{repo}] HTTP error {exc.code}: {exc.reason}", file=sys.stderr)
             return 1
+    overall_elapsed = (
+        dt.datetime.now(tz=dt.timezone.utc) - overall_started
+    ).total_seconds()
+    _log(
+        f"Done. {total} new run(s) recorded in total across {len(repos)} "
+        f"repository(ies) in {overall_elapsed:.1f}s."
+    )
     print(f"Done. {total} new run(s) recorded in total.")
     return 0
 
