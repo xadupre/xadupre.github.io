@@ -131,6 +131,43 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}/onnx-light
         run: python -m sphinx docs dist/html -j 4
 
+      - name: Build onnx-light wheel and record its size
+        working-directory: onnx-light
+        run: |
+          # Build a binary wheel for onnx-light so that the size of the
+          # distributable package can be tracked over time alongside the
+          # individual shared library sizes recorded below. The wheel is
+          # built into ``build/wheel`` and its size (in bytes) is appended
+          # as a CSV row to ``cache_data/onnx-light/wheel_sizes.csv`` in the
+          # xadupre.github.io checkout, so that the "Commit and push updated
+          # documentation" step below picks it up.
+          export CMAKE_BUILD_PARALLEL_LEVEL=4
+          wheel_dir="${PWD}/build/wheel"
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          pip wheel . --no-deps --no-build-isolation -w "$wheel_dir"
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,size,name" > "$out"
+          fi
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          found=0
+          for f in "$wheel_dir"/*.whl; do
+            [ -e "$f" ] || continue
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No wheel produced for onnx-light; failing." >&2
+            exit 1
+          fi
+
       - name: Record onnx_py shared library sizes
         working-directory: onnx-light
         run: |
