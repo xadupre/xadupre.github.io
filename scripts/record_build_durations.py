@@ -9,6 +9,13 @@ The CSV columns are::
 
     run_id,workflow,event,status,conclusion,created_at,updated_at,duration_seconds,head_sha
 
+For every new workflow run, the script also fetches the individual jobs
+that composed the run and appends per-job rows to one CSV file per job
+under ``cache_data/<repo>/jobs/<job_name>.csv``. The per-job CSV columns
+are::
+
+    job_id,run_id,workflow,job_name,status,conclusion,started_at,completed_at,duration_seconds,head_sha
+
 The script is designed to be run from a GitHub Actions workflow. It reads the
 ``GITHUB_TOKEN`` (or ``GH_TOKEN``) environment variable when present in order
 to authenticate API requests and benefit from the higher rate limits.
@@ -29,6 +36,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -50,6 +58,19 @@ CSV_FIELDS = (
     "conclusion",
     "created_at",
     "updated_at",
+    "duration_seconds",
+    "head_sha",
+)
+
+JOB_CSV_FIELDS = (
+    "job_id",
+    "run_id",
+    "workflow",
+    "job_name",
+    "status",
+    "conclusion",
+    "started_at",
+    "completed_at",
     "duration_seconds",
     "head_sha",
 )
@@ -252,6 +273,13 @@ def run_to_row(run: dict) -> dict | None:
 
 def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
     """Append ``rows`` to ``csv_path``, creating the file with a header if needed."""
+    return _append_rows(csv_path, rows, CSV_FIELDS)
+
+
+def _append_rows(
+    csv_path: str, rows: Iterable[dict], fieldnames: tuple[str, ...]
+) -> int:
+    """Append ``rows`` to ``csv_path`` using ``fieldnames`` as the header."""
     rows = list(rows)
     if not rows:
         # Still make sure the file exists with the proper header so that the
@@ -259,13 +287,13 @@ def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
         if not os.path.exists(csv_path):
             os.makedirs(os.path.dirname(csv_path), exist_ok=True)
             with open(csv_path, "w", newline="", encoding="utf-8") as fh:
-                writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+                writer = csv.DictWriter(fh, fieldnames=fieldnames)
                 writer.writeheader()
         return 0
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     file_exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
         for row in rows:
@@ -273,16 +301,151 @@ def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
     return len(rows)
 
 
+# ---------------------------------------------------------------------------
+# Per-job recording
+# ---------------------------------------------------------------------------
+
+
+_SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def safe_job_filename(name: str) -> str:
+    """Return a filesystem-safe file name for the given job ``name``.
+
+    Job names can contain spaces, slashes, parentheses, matrix expressions
+    such as ``build (ubuntu-latest, 3.12)`` and other characters that do not
+    play well with file systems. Replace any run of unsafe characters with a
+    single ``_`` and strip leading/trailing separators. If the result is
+    empty, fall back to ``"job"``.
+    """
+    if not name:
+        return "job"
+    cleaned = _SAFE_NAME_RE.sub("_", name).strip("_.-")
+    return cleaned or "job"
+
+
+def read_existing_jobs(csv_path: str) -> set[str]:
+    """Return the set of job ids already recorded in ``csv_path``."""
+    seen: set[str] = set()
+    if not os.path.exists(csv_path):
+        return seen
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            job_id = row.get("job_id")
+            if job_id:
+                seen.add(job_id)
+    return seen
+
+
+def iter_run_jobs(run_id: str, repo: str, token: str | None) -> Iterator[dict]:
+    """Yield all jobs of the workflow run ``run_id`` of ``repo``."""
+    page = 1
+    per_page = 100
+    while True:
+        params = {"per_page": str(per_page), "page": str(page)}
+        url = (
+            f"{GITHUB_API}/repos/{repo}/actions/runs/{run_id}/jobs?"
+            + urllib.parse.urlencode(params)
+        )
+        payload, _ = _request(url, token)
+        page_jobs = payload.get("jobs", [])
+        if not page_jobs:
+            return
+        for job in page_jobs:
+            yield job
+        if len(page_jobs) < per_page:
+            return
+        page += 1
+
+
+def job_to_row(job: dict, run: dict | None = None) -> dict | None:
+    """Convert a job payload into a CSV row.
+
+    Returns ``None`` for jobs that have not finished yet so that they are
+    re-fetched on the next invocation when their duration is known.
+    """
+    conclusion = job.get("conclusion")
+    status = job.get("status")
+    if status != "completed" or not conclusion:
+        return None
+    started_at = job.get("started_at")
+    completed_at = job.get("completed_at")
+    if not started_at or not completed_at:
+        return None
+    try:
+        duration = (_parse_iso(completed_at) - _parse_iso(started_at)).total_seconds()
+    except ValueError:
+        return None
+    workflow = ""
+    head_sha = job.get("head_sha") or ""
+    if run is not None:
+        workflow = run.get("name") or ""
+        head_sha = head_sha or run.get("head_sha") or ""
+    return {
+        "job_id": str(job.get("id", "")),
+        "run_id": str(job.get("run_id", "") or (run.get("id", "") if run else "")),
+        "workflow": workflow,
+        "job_name": job.get("name") or "",
+        "status": status,
+        "conclusion": conclusion,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "duration_seconds": f"{duration:.0f}",
+        "head_sha": head_sha,
+    }
+
+
+def record_jobs_for_run(
+    run: dict, repo: str, cache_dir: str, token: str | None
+) -> int:
+    """Fetch and append per-job rows for the given workflow ``run``.
+
+    Each job is appended to ``cache_data/<repo>/jobs/<safe_job_name>.csv``.
+    Jobs that have already been recorded (matching ``job_id``) are skipped.
+    """
+    run_id = run.get("id")
+    if not run_id:
+        return 0
+    repo_name = repo.split("/", 1)[-1]
+    jobs_dir = os.path.join(cache_dir, repo_name, "jobs")
+    # Group rows by destination file so that each file is opened only once.
+    rows_by_path: dict[str, list[dict]] = {}
+    seen_by_path: dict[str, set[str]] = {}
+    for job in iter_run_jobs(str(run_id), repo, token):
+        row = job_to_row(job, run)
+        if row is None:
+            continue
+        path = os.path.join(jobs_dir, safe_job_filename(row["job_name"]) + ".csv")
+        if path not in rows_by_path:
+            rows_by_path[path] = []
+            seen_by_path[path] = read_existing_jobs(path)
+        if row["job_id"] in seen_by_path[path]:
+            continue
+        seen_by_path[path].add(row["job_id"])
+        rows_by_path[path].append(row)
+    added = 0
+    for path, rows in rows_by_path.items():
+        added += _append_rows(path, rows, JOB_CSV_FIELDS)
+    return added
+
+
 def process_repo(
     repo: str, cache_dir: str, months: int, token: str | None
 ) -> int:
-    """Fetch new runs for ``repo`` and append them to the cache file."""
+    """Fetch new runs for ``repo`` and append them to the cache files.
+
+    Returns the number of new run rows appended to the workflow-level CSV.
+    For each new run, per-job rows are also recorded under
+    ``cache_data/<repo>/jobs/<job_name>.csv`` (one file per job).
+    """
     repo_name = repo.split("/", 1)[-1]
     csv_path = os.path.join(cache_dir, repo_name, "build_durations.csv")
     seen, latest = read_existing(csv_path)
     since = determine_since(latest, months)
     print(f"[{repo}] fetching runs since {_format_iso(since)}")
     new_rows: list[dict] = []
+    jobs_added = 0
     for run in iter_workflow_runs(repo, since, token):
         run_id = str(run.get("id", ""))
         if not run_id or run_id in seen:
@@ -292,8 +455,17 @@ def process_repo(
             continue
         new_rows.append(row)
         seen.add(run_id)
+        try:
+            jobs_added += record_jobs_for_run(run, repo, cache_dir, token)
+        except urllib.error.HTTPError as exc:
+            print(
+                f"[{repo}] failed to fetch jobs for run {run_id}: "
+                f"HTTP {exc.code}: {exc.reason}",
+                file=sys.stderr,
+            )
     added = append_rows(csv_path, new_rows)
     print(f"[{repo}] appended {added} new run(s) to {csv_path}")
+    print(f"[{repo}] appended {jobs_added} new job row(s) under {os.path.join(cache_dir, repo_name, 'jobs')}")
     return added
 
 

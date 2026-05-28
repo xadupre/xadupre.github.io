@@ -118,6 +118,101 @@ class TestRecordBuildDurations(unittest.TestCase):
         small_calls = [c for c in calls if (c[1] - c[0]) <= dt.timedelta(days=1)]
         self.assertGreater(len(small_calls), 10)
 
+    def test_safe_job_filename(self):
+        self.assertEqual(rbd.safe_job_filename("build"), "build")
+        self.assertEqual(
+            rbd.safe_job_filename("build (ubuntu-latest, 3.12)"),
+            "build_ubuntu-latest_3.12",
+        )
+        self.assertEqual(rbd.safe_job_filename("a/b\\c"), "a_b_c")
+        self.assertEqual(rbd.safe_job_filename(""), "job")
+        self.assertEqual(rbd.safe_job_filename("///"), "job")
+
+    def test_job_to_row_skips_unfinished(self):
+        job = {"id": 1, "status": "in_progress", "conclusion": None}
+        self.assertIsNone(rbd.job_to_row(job))
+
+    def test_job_to_row_computes_duration(self):
+        run = {"id": 10, "name": "Build docs", "head_sha": "abc"}
+        job = {
+            "id": 99,
+            "run_id": 10,
+            "name": "build (ubuntu-latest)",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2024-01-01T00:00:00Z",
+            "completed_at": "2024-01-01T00:02:30Z",
+        }
+        row = rbd.job_to_row(job, run)
+        self.assertEqual(row["job_id"], "99")
+        self.assertEqual(row["run_id"], "10")
+        self.assertEqual(row["workflow"], "Build docs")
+        self.assertEqual(row["job_name"], "build (ubuntu-latest)")
+        self.assertEqual(row["duration_seconds"], "150")
+        self.assertEqual(row["head_sha"], "abc")
+
+    def test_record_jobs_for_run_creates_file_per_job(self):
+        run = {"id": 42, "name": "CI", "head_sha": "sha42"}
+        fake_jobs = [
+            {
+                "id": 1,
+                "run_id": 42,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2024-01-01T00:00:00Z",
+                "completed_at": "2024-01-01T00:01:00Z",
+            },
+            {
+                "id": 2,
+                "run_id": 42,
+                "name": "test (ubuntu-latest, 3.12)",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2024-01-01T00:01:00Z",
+                "completed_at": "2024-01-01T00:03:00Z",
+            },
+            {
+                "id": 3,
+                "run_id": 42,
+                "name": "test (ubuntu-latest, 3.12)",
+                "status": "in_progress",
+                "conclusion": None,
+                "started_at": "2024-01-01T00:01:00Z",
+                "completed_at": None,
+            },
+        ]
+
+        def fake_iter(run_id, repo, token):
+            self.assertEqual(run_id, "42")
+            for j in fake_jobs:
+                yield j
+
+        original = rbd.iter_run_jobs
+        rbd.iter_run_jobs = fake_iter
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                added = rbd.record_jobs_for_run(run, "owner/myrepo", tmp, None)
+                self.assertEqual(added, 2)
+                jobs_dir = os.path.join(tmp, "myrepo", "jobs")
+                build_path = os.path.join(jobs_dir, "build.csv")
+                test_path = os.path.join(
+                    jobs_dir, "test_ubuntu-latest_3.12.csv"
+                )
+                self.assertTrue(os.path.exists(build_path))
+                self.assertTrue(os.path.exists(test_path))
+                # Re-running with the same jobs should not duplicate them.
+                added_again = rbd.record_jobs_for_run(
+                    run, "owner/myrepo", tmp, None
+                )
+                self.assertEqual(added_again, 0)
+                seen = rbd.read_existing_jobs(build_path)
+                self.assertEqual(seen, {"1"})
+                seen = rbd.read_existing_jobs(test_path)
+                self.assertEqual(seen, {"2"})
+        finally:
+            rbd.iter_run_jobs = original
+
 
 if __name__ == "__main__":
     unittest.main()
