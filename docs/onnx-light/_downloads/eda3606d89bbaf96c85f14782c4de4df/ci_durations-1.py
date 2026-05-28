@@ -17,12 +17,32 @@ _REPO = "onnx-light"
 _API_BASE = f"https://api.github.com/repos/{_OWNER}/{_REPO}"
 _HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 _CACHE_MAX_AGE_DAYS = 14
-_USER_CACHE_DIR = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
-_CACHE_DIR = os.path.join(_USER_CACHE_DIR, "onnx-light", "ci_durations_workflows")
+# Cache location.
+# By default the cache is stored in the per-user cache directory.
+# Set the environment variable ``ONNX_LIGHT_DOCS_CACHE_IN_REPO=1`` (e.g.
+# on the official xadupre/onnx-light documentation job that publishes to
+# xadupre.github.io) to persist the cache inside the repository under
+# ``cache_data/`` so it can be committed and reused across builds. The
+# repo-root is taken from ``GITHUB_WORKSPACE`` when available, otherwise
+# from the current working directory.
+_CACHE_IN_REPO = os.environ.get("ONNX_LIGHT_DOCS_CACHE_IN_REPO", "").lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+if _CACHE_IN_REPO:
+    _REPO_ROOT = os.environ.get("GITHUB_WORKSPACE") or os.getcwd()
+    _CACHE_DIR = os.path.join(_REPO_ROOT, "cache_data", "ci_durations_workflows")
+else:
+    _USER_CACHE_DIR = os.environ.get("XDG_CACHE_HOME", os.path.expanduser("~/.cache"))
+    _CACHE_DIR = os.path.join(_USER_CACHE_DIR, "onnx-light", "ci_durations_workflows")
 _WORKFLOWS_CACHE_PATH = os.path.join(_CACHE_DIR, "_workflows.json")
 
-# Workflows that are NOT CI (skip documentation / style / spelling / setup workflows)
-_SKIP_PATTERNS = ("docs", "style", "spelling", "pyrefly", "mypy", "doc_", "clang", "copilot")
+# Workflows that are NOT CI (skip Copilot agents and setup workflows).
+# All other workflows — including style/lint/spelling/typing/docs jobs that
+# run on pull requests — are considered CI and tracked on this page.
+_SKIP_PATTERNS = ("copilot",)
 
 
 def _gh_get(path, params=""):
@@ -203,9 +223,12 @@ def _collect_data():
         name = wf.get("name", "")
         wf_id = wf.get("id")
         path = wf.get("path", "")
-        # Skip non-CI workflows
+        # Skip non-CI workflows (Copilot agents live under ``dynamic/`` and
+        # the Copilot Setup Steps workflow under ``.github/workflows/``).
         filename = path.split("/")[-1].lower() if "/" in path else path.lower()
-        if any(filename.startswith(p) for p in _SKIP_PATTERNS):
+        if path.startswith("dynamic/") or any(
+            filename.startswith(p) for p in _SKIP_PATTERNS
+        ):
             continue
 
         cache_key = str(wf_id)
