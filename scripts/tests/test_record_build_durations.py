@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import sys
 import tempfile
@@ -262,8 +263,6 @@ class TestRecordBuildDurations(unittest.TestCase):
             rbd.iter_run_jobs = original
 
     def test_write_jobs_index(self):
-        import json as _json
-
         with tempfile.TemporaryDirectory() as tmp:
             # Missing directory -> 0 entries, no file.
             missing = os.path.join(tmp, "missing")
@@ -288,7 +287,7 @@ class TestRecordBuildDurations(unittest.TestCase):
             self.assertEqual(n, 2)
             index_path = os.path.join(jobs_dir, "index.json")
             with open(index_path, encoding="utf-8") as fh:
-                payload = _json.load(fh)
+                payload = json.load(fh)
             # The CSVs are sorted alphabetically and the non-CSV / nested
             # files are excluded.
             self.assertEqual(payload, {"jobs": ["a.csv", "b.csv"]})
