@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx statistics</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 55vh;
+  min-height: 320px;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx &mdash; weekly PyPI statistics</h1>
+</header>
+<div id="message" class="message info"></div>
+<div class="chart-wrap">
+  <h2 class="chart-title">wheel size (MB)</h2>
+  <div class="chart-container"><canvas id="chartSize"></canvas></div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">opset / operator / test case / data type counts</h2>
+  <div class="chart-container"><canvas id="chartCounts"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<script>
+const CSV_URL = "../../cache_data/onnx/stats.csv";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+  for (const id of ["chartSize", "chartCounts"]) {
+    const el = document.getElementById(id);
+    if (el && el.parentElement) el.parentElement.style.display = "none";
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const header = lines.shift().split(",");
+  const idx = {
+    date: header.indexOf("date"),
+    wheel_size: header.indexOf("wheel_size"),
+    version: header.indexOf("version"),
+    last_opset: header.indexOf("last_opset"),
+    n_operators: header.indexOf("n_operators"),
+    n_test_cases: header.indexOf("n_test_cases"),
+    n_supported_types: header.indexOf("n_supported_types"),
+  };
+  return lines.map(line => {
+    const cols = line.split(",");
+    return {
+      date: cols[idx.date],
+      wheel_size: Number(cols[idx.wheel_size]),
+      version: cols[idx.version],
+      last_opset: Number(cols[idx.last_opset]),
+      n_operators: Number(cols[idx.n_operators]),
+      n_test_cases: Number(cols[idx.n_test_cases]),
+      n_supported_types: Number(cols[idx.n_supported_types]),
+    };
+  }).filter(r => r.date);
+}
+
+const PALETTE = [
+  "#58a6ff", "#f78166", "#3fb950", "#d2a8ff",
+  "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
+];
+
+const COMMON_OPTIONS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  parsing: false,
+  interaction: { mode: "nearest", intersect: false },
+  plugins: {
+    legend: { labels: { color: "#c9d1d9" } },
+    zoom: {
+      pan: { enabled: true, mode: "xy" },
+      zoom: {
+        wheel: { enabled: true },
+        pinch: { enabled: true },
+        mode: "xy",
+      },
+    },
+  },
+};
+
+function axisX() {
+  return {
+    type: "time",
+    time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
+    title: { display: true, text: "date", color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+  };
+}
+
+function axisY(label) {
+  return {
+    title: { display: true, text: label, color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+    beginAtZero: true,
+  };
+}
+
+fetch(CSV_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No data available yet for the onnx statistics. " +
+        "The CSV file has not been generated yet — it will appear once the " +
+        "weekly recording workflow publishes its first measurement.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  })
+  .then(text => {
+    if (text === null) return;
+    const rows = parseCSV(text);
+    if (rows.length === 0) {
+      showMessage(
+        "No data available yet for the onnx statistics. " +
+        "The dashboard will populate automatically once the weekly " +
+        "recording workflow produces measurements.",
+        "info"
+      );
+      return;
+    }
+    rows.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const sizeData = rows.map(r => ({
+      x: r.date,
+      y: r.wheel_size / (1024 * 1024),
+      version: r.version,
+    }));
+
+    const countSeries = [
+      { key: "last_opset", label: "last_opset" },
+      { key: "n_operators", label: "n_operators" },
+      { key: "n_test_cases", label: "n_test_cases" },
+      { key: "n_supported_types", label: "n_supported_types" },
+    ];
+    const countDatasets = countSeries.map((s, i) => {
+      const color = PALETTE[i % PALETTE.length];
+      return {
+        label: s.label,
+        data: rows.map(r => ({ x: r.date, y: r[s.key], version: r.version })),
+        borderColor: color,
+        backgroundColor: color,
+        tension: 0.15,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      };
+    });
+
+    const sizeChart = new Chart(document.getElementById("chartSize").getContext("2d"), {
+      type: "line",
+      data: {
+        datasets: [{
+          label: "wheel size",
+          data: sizeData,
+          borderColor: PALETTE[0],
+          backgroundColor: PALETTE[0],
+          tension: 0.15,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        }],
+      },
+      options: {
+        ...COMMON_OPTIONS,
+        scales: { x: axisX(), y: axisY("size (MB)") },
+        plugins: {
+          ...COMMON_OPTIONS.plugins,
+          tooltip: {
+            callbacks: {
+              label: (item) => {
+                const r = item.raw;
+                const v = r.version ? " (v" + r.version + ")" : "";
+                return item.dataset.label + ": " + r.y.toFixed(3) + " MB" + v;
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const countsChart = new Chart(document.getElementById("chartCounts").getContext("2d"), {
+      type: "line",
+      data: { datasets: countDatasets },
+      options: {
+        ...COMMON_OPTIONS,
+        scales: { x: axisX(), y: axisY("count") },
+        plugins: {
+          ...COMMON_OPTIONS.plugins,
+          tooltip: {
+            callbacks: {
+              label: (item) => {
+                const r = item.raw;
+                const v = r.version ? " (v" + r.version + ")" : "";
+                return item.dataset.label + ": " + r.y + v;
+              },
+            },
+          },
+        },
+      },
+    });
+
+    for (const chart of [sizeChart, countsChart]) {
+      chart.canvas.ondblclick = () => chart.resetZoom();
+    }
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
