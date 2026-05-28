@@ -96,7 +96,17 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
   <div class="chart-container"><canvas id="chartSize"></canvas></div>
 </div>
 <div class="chart-wrap">
-  <h2 class="chart-title">opset / operator / test case / data type counts</h2>
+  <h2 class="chart-title">number of operators</h2>
+  <div class="chart-container"><canvas id="chartOperators"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">number of test cases</h2>
+  <div class="chart-container"><canvas id="chartTestCases"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">opset / data type counts</h2>
   <div class="chart-container"><canvas id="chartCounts"></canvas></div>
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
@@ -126,7 +136,7 @@ function showMessage(text, kind) {
   const msg = document.getElementById("message");
   msg.textContent = text;
   msg.className = "message visible " + (kind || "info");
-  for (const id of ["chartSize", "chartCounts"]) {
+  for (const id of ["chartSize", "chartOperators", "chartTestCases", "chartCounts"]) {
     const el = document.getElementById(id);
     if (el && el.parentElement) el.parentElement.style.display = "none";
   }
@@ -258,17 +268,11 @@ fetch(CSV_URL, { cache: "no-store" })
       version: r.version,
     }));
 
-    const countSeries = [
-      { key: "last_opset", label: "last_opset" },
-      { key: "n_operators", label: "n_operators" },
-      { key: "n_test_cases", label: "n_test_cases" },
-      { key: "n_supported_types", label: "n_supported_types" },
-    ];
-    const countDatasets = countSeries.map((s, i) => {
-      const color = PALETTE[i % PALETTE.length];
+    function makeDataset(key, label, colorIndex) {
+      const color = PALETTE[colorIndex % PALETTE.length];
       return {
-        label: s.label,
-        data: rows.map(r => ({ x: r.date, y: r[s.key], version: r.version })),
+        label: label,
+        data: rows.map(r => ({ x: r.date, y: r[key], version: r.version })),
         borderColor: color,
         backgroundColor: color,
         borderDash: [4, 4],
@@ -276,7 +280,15 @@ fetch(CSV_URL, { cache: "no-store" })
         pointRadius: 3,
         pointHoverRadius: 5,
       };
-    });
+    }
+
+    const operatorsDatasets = [makeDataset("n_operators", "n_operators", 1)];
+    const testCasesDatasets = [makeDataset("n_test_cases", "n_test_cases", 2)];
+    const countSeries = [
+      { key: "last_opset", label: "last_opset" },
+      { key: "n_supported_types", label: "n_supported_types" },
+    ];
+    const countDatasets = countSeries.map((s, i) => makeDataset(s.key, s.label, i));
 
     const sizeChart = new Chart(document.getElementById("chartSize").getContext("2d"), {
       type: "line",
@@ -310,28 +322,34 @@ fetch(CSV_URL, { cache: "no-store" })
       },
     });
 
-    const countsChart = new Chart(document.getElementById("chartCounts").getContext("2d"), {
-      type: "line",
-      data: { datasets: countDatasets },
-      options: {
-        ...COMMON_OPTIONS,
-        scales: { x: axisX(), y: axisY("count") },
-        plugins: {
-          ...COMMON_OPTIONS.plugins,
-          tooltip: {
-            callbacks: {
-              label: (item) => {
-                const r = item.raw;
-                const v = r.version ? " (v" + r.version + ")" : "";
-                return item.dataset.label + ": " + r.y + v;
+    function makeCountChart(canvasId, datasets, yLabel) {
+      return new Chart(document.getElementById(canvasId).getContext("2d"), {
+        type: "line",
+        data: { datasets: datasets },
+        options: {
+          ...COMMON_OPTIONS,
+          scales: { x: axisX(), y: axisY(yLabel) },
+          plugins: {
+            ...COMMON_OPTIONS.plugins,
+            tooltip: {
+              callbacks: {
+                label: (item) => {
+                  const r = item.raw;
+                  const v = r.version ? " (v" + r.version + ")" : "";
+                  return item.dataset.label + ": " + r.y + v;
+                },
               },
             },
           },
         },
-      },
-    });
+      });
+    }
 
-    for (const chart of [sizeChart, countsChart]) {
+    const operatorsChart = makeCountChart("chartOperators", operatorsDatasets, "n_operators");
+    const testCasesChart = makeCountChart("chartTestCases", testCasesDatasets, "n_test_cases");
+    const countsChart = makeCountChart("chartCounts", countDatasets, "count");
+
+    for (const chart of [sizeChart, operatorsChart, testCasesChart, countsChart]) {
       chart.canvas.ondblclick = () => chart.resetZoom();
     }
   })
