@@ -1,0 +1,5 @@
+yaourt
+======
+
+.. automodule:: yaourt
+    :members:
