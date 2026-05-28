@@ -350,6 +350,28 @@ def safe_job_filename(name: str) -> str:
     return cleaned or "job"
 
 
+def write_jobs_index(jobs_dir: str) -> int:
+    """Write ``jobs_dir/index.json`` listing the per-job CSV files.
+
+    The index is consumed by the static dashboards to discover which jobs
+    are available without having to list the directory at runtime (GitHub
+    Pages does not expose directory listings). The file contains a JSON
+    object of the form ``{"jobs": ["clang_format.csv", ...]}`` with file
+    names sorted alphabetically. Returns the number of CSV entries written.
+    """
+    if not os.path.isdir(jobs_dir):
+        return 0
+    names = sorted(
+        n for n in os.listdir(jobs_dir)
+        if n.endswith(".csv") and os.path.isfile(os.path.join(jobs_dir, n))
+    )
+    index_path = os.path.join(jobs_dir, "index.json")
+    with open(index_path, "w", encoding="utf-8") as fh:
+        json.dump({"jobs": names}, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+    return len(names)
+
+
 def read_existing_jobs(csv_path: str) -> set[str]:
     """Return the set of job ids already recorded in ``csv_path``."""
     seen: set[str] = set()
@@ -550,6 +572,16 @@ def process_repo(
         f"[{repo}] appended {jobs_added} new job row(s) under "
         f"{os.path.join(cache_dir, repo_name, 'jobs')}"
     )
+    try:
+        jobs_dir = os.path.join(cache_dir, repo_name, "jobs")
+        n_indexed = write_jobs_index(jobs_dir)
+        _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
+    except Exception as exc:  # pragma: no cover - defensive
+        print(
+            f"[{repo}] failed to write jobs index: "
+            f"{type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
     return added
 
 

@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light CI job durations</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.charts {
+  width: 100%;
+  max-width: 1100px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1em;
+}
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 40vh;
+  min-height: 260px;
+}
+h2.chart-title {
+  font-size: 1em;
+  margin: 0 0 0.5em;
+  text-align: center;
+  font-family: monospace;
+  color: #c9d1d9;
+  word-break: break-all;
+}
+.chart-meta {
+  font-size: 0.75em;
+  color: #8b949e;
+  text-align: center;
+  margin-bottom: 0.5em;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; CI job durations</h1>
+</header>
+<div id="message" class="message info"></div>
+<div id="charts" class="charts"></div>
+<script>
+const REPO = "onnx-light";
+const JOBS_DIR = "../../cache_data/" + REPO + "/jobs/";
+const INDEX_URL = JOBS_DIR + "index.json";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length === 0) return [];
+  const header = lines.shift().split(",");
+  const idx = {
+    completed_at: header.indexOf("completed_at"),
+    started_at: header.indexOf("started_at"),
+    duration_seconds: header.indexOf("duration_seconds"),
+    conclusion: header.indexOf("conclusion"),
+    head_sha: header.indexOf("head_sha"),
+    run_id: header.indexOf("run_id"),
+  };
+  const rows = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const cols = line.split(",");
+    const date = cols[idx.completed_at] || cols[idx.started_at];
+    const dur = Number(cols[idx.duration_seconds]);
+    if (!date || !Number.isFinite(dur)) continue;
+    rows.push({
+      date,
+      duration: dur,
+      conclusion: idx.conclusion >= 0 ? cols[idx.conclusion] : "",
+      head_sha: idx.head_sha >= 0 ? cols[idx.head_sha] : "",
+      run_id: idx.run_id >= 0 ? cols[idx.run_id] : "",
+    });
+  }
+  rows.sort((a, b) => new Date(a.date) - new Date(b.date));
+  return rows;
+}
+
+const PALETTE = [
+  "#58a6ff", "#f78166", "#3fb950", "#d2a8ff",
+  "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
+];
+
+const CONCLUSION_COLORS = {
+  success: "#3fb950",
+  failure: "#f85149",
+  cancelled: "#8b949e",
+  skipped: "#6e7681",
+  neutral: "#79c0ff",
+  timed_out: "#ffa657",
+  action_required: "#d2a8ff",
+};
+
+function jobLabelFromFilename(name) {
+  return name.replace(/\.csv$/, "");
+}
+
+function buildChart(canvas, jobName, rows, color) {
+  const data = rows.map(r => ({
+    x: r.date,
+    y: r.duration,
+    conclusion: r.conclusion,
+    head_sha: r.head_sha,
+    run_id: r.run_id,
+  }));
+  const pointColors = data.map(d => CONCLUSION_COLORS[d.conclusion] || color);
+  const chart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: {
+      datasets: [{
+        label: jobName,
+        data,
+        borderColor: color,
+        backgroundColor: color,
+        pointBackgroundColor: pointColors,
+        pointBorderColor: pointColors,
+        tension: 0.15,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
+          title: { display: true, text: "completed at (UTC)", color: "#c9d1d9" },
+          ticks: { color: "#c9d1d9" },
+          grid: { color: "rgba(139,148,158,0.25)" },
+        },
+        y: {
+          title: { display: true, text: "duration (s)", color: "#c9d1d9" },
+          ticks: { color: "#c9d1d9" },
+          grid: { color: "rgba(139,148,158,0.25)" },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const r = item.raw;
+              const parts = [r.y.toFixed(0) + " s"];
+              if (r.conclusion) parts.push(r.conclusion);
+              if (r.head_sha) parts.push(r.head_sha.slice(0, 7));
+              return parts.join(" \u2013 ");
+            },
+          },
+        },
+        zoom: {
+          pan: { enabled: true, mode: "xy" },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: "xy",
+          },
+        },
+      },
+    },
+  });
+  canvas.ondblclick = () => chart.resetZoom();
+  return chart;
+}
+
+function renderJob(jobFile, color) {
+  const container = document.getElementById("charts");
+  const wrap = document.createElement("div");
+  wrap.className = "chart-wrap";
+  const title = document.createElement("h2");
+  title.className = "chart-title";
+  title.textContent = jobLabelFromFilename(jobFile);
+  wrap.appendChild(title);
+  const meta = document.createElement("div");
+  meta.className = "chart-meta";
+  wrap.appendChild(meta);
+  const cc = document.createElement("div");
+  cc.className = "chart-container";
+  const canvas = document.createElement("canvas");
+  cc.appendChild(canvas);
+  wrap.appendChild(cc);
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.";
+  wrap.appendChild(hint);
+  container.appendChild(wrap);
+
+  return fetch(JOBS_DIR + jobFile, { cache: "no-store" })
+    .then(r => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    })
+    .then(text => {
+      const rows = parseCSV(text);
+      if (rows.length === 0) {
+        meta.textContent = "no recorded run yet";
+        cc.style.display = "none";
+        hint.style.display = "none";
+        return;
+      }
+      const total = rows.length;
+      const last = rows[rows.length - 1];
+      const avg = rows.reduce((s, r) => s + r.duration, 0) / total;
+      meta.textContent =
+        total + " run(s) \u2013 avg " + avg.toFixed(0) + " s " +
+        "\u2013 last " + last.duration.toFixed(0) + " s on " +
+        last.date.replace("T", " ").replace("Z", "");
+      buildChart(canvas, jobLabelFromFilename(jobFile), rows, color);
+    })
+    .catch(err => {
+      meta.textContent = "failed to load: " + (err && err.message ? err.message : err);
+      cc.style.display = "none";
+      hint.style.display = "none";
+    });
+}
+
+fetch(INDEX_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No CI job statistics available yet for " + REPO + ". " +
+        "The job index has not been generated yet \u2014 it will appear " +
+        "once the scheduled build-duration job records its first run.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })
+  .then(payload => {
+    if (payload === null) return;
+    const jobs = (payload && payload.jobs) || [];
+    if (jobs.length === 0) {
+      showMessage("No CI jobs have been recorded yet for " + REPO + ".", "info");
+      return;
+    }
+    let i = 0;
+    for (const jobFile of jobs) {
+      renderJob(jobFile, PALETTE[i % PALETTE.length]);
+      i++;
+    }
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
