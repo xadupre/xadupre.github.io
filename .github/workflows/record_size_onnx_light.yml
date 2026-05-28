@@ -60,7 +60,12 @@ jobs:
         working-directory: onnx-light
         run: |
           export CMAKE_BUILD_PARALLEL_LEVEL=4
-          python -m pip install setuptools nanobind numpy ml-dtypes
+          # ``onnx`` is required so that
+          # ``onnx_light.schema_comparison.compute_schema_comparison()`` can
+          # populate the ``onnx``-side columns of the per-operator comparison
+          # table consumed by the dashboard (otherwise it would silently
+          # report empty columns for the reference package).
+          python -m pip install setuptools nanobind numpy ml-dtypes onnx
           python setup.py build_ext --inplace
 
       - name: ls
@@ -98,6 +103,53 @@ jobs:
           if [ "$found" -eq 0 ]; then
             echo "No shared library found under onnx_light/onnx_py/; nothing to record."
           fi
+
+      - name: Record schema comparison snapshot
+        working-directory: onnx-light
+        env:
+          OUT: ${{ github.workspace }}/site/cache_data/onnx-light/schema_comparison.json
+        run: |
+          # Dump the latest per-operator comparison between ``onnx`` and
+          # ``onnx_light`` schemas (one row per (domain, operator)) as JSON
+          # so that the interactive dashboard at
+          # dashboard/onnx-light/schema-comparison.html can render one
+          # searchable / sortable table per domain without needing Sphinx.
+          mkdir -p "$(dirname "$OUT")"
+          export DATE_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export COMMIT_SHA="$(git rev-parse HEAD)"
+          python - <<'PY'
+          import json
+          import os
+          from dataclasses import asdict
+
+          from onnx_light.schema_comparison import compute_schema_comparison
+
+          comparison = compute_schema_comparison()
+          payload = {
+              "date": os.environ["DATE_ISO"],
+              "commit": os.environ["COMMIT_SHA"],
+              "onnx_available": comparison.onnx_available,
+              "totals": {
+                  "onnx": comparison.total_onnx,
+                  "onnx_light": comparison.total_onnx_light,
+                  "onnx_shape_inference": comparison.total_onnx_shape_inference,
+                  "onnx_light_shape_inference": comparison.total_onnx_light_shape_inference,
+                  "onnx_backend_tests": comparison.total_onnx_backend_tests,
+                  "onnx_light_backend_tests": comparison.total_onnx_light_backend_tests,
+              },
+              "rows": [asdict(r) for r in comparison.rows],
+          }
+          out = os.environ["OUT"]
+          with open(out, "w", encoding="utf-8") as f:
+              json.dump(payload, f, indent=2, sort_keys=True)
+          print(
+              "Wrote {} rows ({} domains) to {}".format(
+                  len(payload["rows"]),
+                  len({r["domain"] for r in payload["rows"]}),
+                  out,
+              )
+          )
+          PY
 
       - name: Commit and push cache data
         working-directory: site
