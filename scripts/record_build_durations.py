@@ -323,6 +323,7 @@ def _append_rows(
             writer.writeheader()
         for row in rows:
             writer.writerow(row)
+    _log(f"saved {len(rows)} row(s) to {csv_path}")
     return len(rows)
 
 
@@ -428,6 +429,10 @@ def record_jobs_for_run(
 
     Each job is appended to ``cache_data/<repo>/jobs/<safe_job_name>.csv``.
     Jobs that have already been recorded (matching ``job_id``) are skipped.
+
+    If fetching jobs fails partway through, the rows collected so far are
+    still flushed to disk so that the next run does not have to refetch
+    them.
     """
     run_id = run.get("id")
     if not run_id:
@@ -437,21 +442,32 @@ def record_jobs_for_run(
     # Group rows by destination file so that each file is opened only once.
     rows_by_path: dict[str, list[dict]] = {}
     seen_by_path: dict[str, set[str]] = {}
-    for job in iter_run_jobs(str(run_id), repo, token):
-        row = job_to_row(job, run)
-        if row is None:
-            continue
-        path = os.path.join(jobs_dir, safe_job_filename(row["job_name"]) + ".csv")
-        if path not in rows_by_path:
-            rows_by_path[path] = []
-            seen_by_path[path] = read_existing_jobs(path)
-        if row["job_id"] in seen_by_path[path]:
-            continue
-        seen_by_path[path].add(row["job_id"])
-        rows_by_path[path].append(row)
     added = 0
-    for path, rows in rows_by_path.items():
-        added += _append_rows(path, rows, JOB_CSV_FIELDS)
+    try:
+        for job in iter_run_jobs(str(run_id), repo, token):
+            row = job_to_row(job, run)
+            if row is None:
+                continue
+            path = os.path.join(
+                jobs_dir, safe_job_filename(row["job_name"]) + ".csv"
+            )
+            if path not in rows_by_path:
+                rows_by_path[path] = []
+                seen_by_path[path] = read_existing_jobs(path)
+            if row["job_id"] in seen_by_path[path]:
+                continue
+            seen_by_path[path].add(row["job_id"])
+            rows_by_path[path].append(row)
+    finally:
+        for path, rows in rows_by_path.items():
+            try:
+                added += _append_rows(path, rows, JOB_CSV_FIELDS)
+            except Exception as exc:  # pragma: no cover - defensive
+                print(
+                    f"[{repo}] failed to save {len(rows)} job row(s) to "
+                    f"{path}: {exc}",
+                    file=sys.stderr,
+                )
     return added
 
 
@@ -478,34 +494,53 @@ def process_repo(
     new_rows: list[dict] = []
     jobs_added = 0
     processed = 0
-    for run in iter_workflow_runs(repo, since, token):
-        processed += 1
-        run_id = str(run.get("id", ""))
-        if not run_id or run_id in seen:
-            continue
-        row = run_to_row(run)
-        if row is None:
-            continue
-        new_rows.append(row)
-        seen.add(run_id)
-        _log(
-            f"[{repo}] new run {run_id} "
-            f"workflow={row['workflow']!r} "
-            f"event={row['event']} conclusion={row['conclusion']} "
-            f"duration={row['duration_seconds']}s; fetching its jobs..."
-        )
+    try:
+        for run in iter_workflow_runs(repo, since, token):
+            processed += 1
+            run_id = str(run.get("id", ""))
+            if not run_id or run_id in seen:
+                continue
+            row = run_to_row(run)
+            if row is None:
+                continue
+            new_rows.append(row)
+            seen.add(run_id)
+            _log(
+                f"[{repo}] new run {run_id} "
+                f"workflow={row['workflow']!r} "
+                f"event={row['event']} conclusion={row['conclusion']} "
+                f"duration={row['duration_seconds']}s; fetching its jobs..."
+            )
+            try:
+                added_jobs = record_jobs_for_run(run, repo, cache_dir, token)
+            except Exception as exc:
+                # Recording jobs for one run must not abort the whole
+                # repository: log the failure and keep going so that the
+                # rows we have already collected are preserved.
+                print(
+                    f"[{repo}] failed to fetch jobs for run {run_id}: "
+                    f"{type(exc).__name__}: {exc}",
+                    file=sys.stderr,
+                )
+            else:
+                jobs_added += added_jobs
+                _log(
+                    f"[{repo}]   recorded {added_jobs} new job row(s) "
+                    f"for run {run_id}"
+                )
+    finally:
+        # Always flush whatever we managed to collect, even if an exception
+        # interrupted the loop above. This ensures partial progress is
+        # committed instead of being lost on the next retry.
         try:
-            added_jobs = record_jobs_for_run(run, repo, cache_dir, token)
-        except urllib.error.HTTPError as exc:
+            added = append_rows(csv_path, new_rows)
+        except Exception as exc:  # pragma: no cover - defensive
+            added = 0
             print(
-                f"[{repo}] failed to fetch jobs for run {run_id}: "
-                f"HTTP {exc.code}: {exc.reason}",
+                f"[{repo}] failed to save {len(new_rows)} run row(s) to "
+                f"{csv_path}: {exc}",
                 file=sys.stderr,
             )
-        else:
-            jobs_added += added_jobs
-            _log(f"[{repo}]   recorded {added_jobs} new job row(s) for run {run_id}")
-    added = append_rows(csv_path, new_rows)
     elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()
     _log(
         f"[{repo}] processed {processed} run(s) from GitHub in {elapsed:.1f}s; "
@@ -553,21 +588,49 @@ def main(argv: list[str] | None = None) -> int:
 
     overall_started = dt.datetime.now(tz=dt.timezone.utc)
     total = 0
+    failures = 0
     for index, repo in enumerate(repos, start=1):
         _log(f"==> [{index}/{len(repos)}] processing repository {repo}")
         try:
             total += process_repo(repo, args.cache_dir, args.months, token)
         except urllib.error.HTTPError as exc:
-            print(f"[{repo}] HTTP error {exc.code}: {exc.reason}", file=sys.stderr)
-            return 1
+            # Do not abort: keep going so that whatever was already saved
+            # for previous repositories (and for this one, thanks to the
+            # try/finally in ``process_repo``) is preserved and committed.
+            failures += 1
+            print(
+                f"[{repo}] HTTP error {exc.code}: {exc.reason}; "
+                "continuing with next repository.",
+                file=sys.stderr,
+            )
+            _log(
+                f"[{repo}] aborted with HTTP {exc.code}: {exc.reason}; "
+                "moving on to next repository"
+            )
+        except Exception as exc:
+            failures += 1
+            print(
+                f"[{repo}] unexpected error: {type(exc).__name__}: {exc}; "
+                "continuing with next repository.",
+                file=sys.stderr,
+            )
+            _log(
+                f"[{repo}] aborted with {type(exc).__name__}: {exc}; "
+                "moving on to next repository"
+            )
     overall_elapsed = (
         dt.datetime.now(tz=dt.timezone.utc) - overall_started
     ).total_seconds()
     _log(
         f"Done. {total} new run(s) recorded in total across {len(repos)} "
-        f"repository(ies) in {overall_elapsed:.1f}s."
+        f"repository(ies) in {overall_elapsed:.1f}s "
+        f"({failures} repository failure(s))."
     )
     print(f"Done. {total} new run(s) recorded in total.")
+    # Exit non-zero only if every repository failed, so the workflow can
+    # still commit whatever partial data was successfully saved.
+    if failures and failures == len(repos):
+        return 1
     return 0
 
 

@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+import urllib.error
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -212,6 +213,87 @@ class TestRecordBuildDurations(unittest.TestCase):
                 self.assertEqual(seen, {"2"})
         finally:
             rbd.iter_run_jobs = original
+
+
+    def test_record_jobs_for_run_saves_partial_on_failure(self):
+        run = {"id": 7, "name": "CI", "head_sha": "sha7"}
+        fake_jobs = [
+            {
+                "id": 1,
+                "run_id": 7,
+                "name": "build",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2024-01-01T00:00:00Z",
+                "completed_at": "2024-01-01T00:01:00Z",
+            },
+            {
+                "id": 2,
+                "run_id": 7,
+                "name": "test",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2024-01-01T00:01:00Z",
+                "completed_at": "2024-01-01T00:02:00Z",
+            },
+        ]
+
+        def fake_iter(run_id, repo, token):
+            yield fake_jobs[0]
+            yield fake_jobs[1]
+            raise RuntimeError("simulated API failure")
+
+        original = rbd.iter_run_jobs
+        rbd.iter_run_jobs = fake_iter
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with self.assertRaises(RuntimeError):
+                    rbd.record_jobs_for_run(run, "owner/myrepo", tmp, None)
+                # Even though the iterator raised, the rows collected
+                # before the failure must have been flushed to disk.
+                jobs_dir = os.path.join(tmp, "myrepo", "jobs")
+                build_path = os.path.join(jobs_dir, "build.csv")
+                test_path = os.path.join(jobs_dir, "test.csv")
+                self.assertTrue(os.path.exists(build_path))
+                self.assertTrue(os.path.exists(test_path))
+                self.assertEqual(rbd.read_existing_jobs(build_path), {"1"})
+                self.assertEqual(rbd.read_existing_jobs(test_path), {"2"})
+        finally:
+            rbd.iter_run_jobs = original
+
+    def test_main_continues_after_repo_failure(self):
+        calls: list[str] = []
+
+        def fake_process(repo, cache_dir, months, token):
+            calls.append(repo)
+            if repo == "owner/bad":
+                raise urllib.error.HTTPError(
+                    "http://x", 500, "boom", hdrs=None, fp=None
+                )
+            return 1
+
+        original = rbd.process_repo
+        rbd.process_repo = fake_process
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                rc = rbd.main(
+                    [
+                        "--cache-dir",
+                        tmp,
+                        "--repo",
+                        "owner/good1",
+                        "--repo",
+                        "owner/bad",
+                        "--repo",
+                        "owner/good2",
+                    ]
+                )
+        finally:
+            rbd.process_repo = original
+        # All three repos must have been attempted, and the overall exit
+        # code must be 0 because at least one repository succeeded.
+        self.assertEqual(calls, ["owner/good1", "owner/bad", "owner/good2"])
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":
