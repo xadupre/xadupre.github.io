@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light wheel size</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 65vh;
+  min-height: 360px;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.last-observations {
+  width: 100%;
+  max-width: 1100px;
+  margin-top: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+}
+.last-observations h2 {
+  margin: 0 0 0.5em;
+  font-size: 1em;
+  color: #c9d1d9;
+}
+.last-observations table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.last-observations th, .last-observations td {
+  text-align: left;
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+}
+.last-observations th { color: #8b949e; font-weight: normal; }
+.last-observations td { color: #c9d1d9; font-family: monospace; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; wheel size over time</h1>
+</header>
+<div class="chart-wrap">
+  <div id="message" class="message info"></div>
+  <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div id="lastObservations" class="last-observations" style="display:none;">
+  <h2>Last 3 observations</h2>
+  <table>
+    <thead>
+      <tr><th>date</th><th>name</th><th>size (MB)</th><th>commit</th></tr>
+    </thead>
+    <tbody id="lastObservationsBody"></tbody>
+  </table>
+</div>
+<script>
+const CSV_URL = "../../cache_data/onnx-light/wheel_sizes.csv";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+  document.getElementById("chartContainer").style.display = "none";
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const header = lines.shift().split(",");
+  const idx = {
+    date: header.indexOf("date"),
+    size: header.indexOf("size"),
+    name: header.indexOf("name"),
+    commit: header.indexOf("commit"),
+  };
+  return lines.map(line => {
+    const cols = line.split(",");
+    return {
+      date: cols[idx.date],
+      size: Number(cols[idx.size]),
+      name: cols[idx.name],
+      commit: cols[idx.commit],
+    };
+  }).filter(r => r.date && !Number.isNaN(r.size));
+}
+
+function groupByName(rows) {
+  const groups = new Map();
+  for (const r of rows) {
+    if (!groups.has(r.name)) groups.set(r.name, []);
+    groups.get(r.name).push({
+      x: r.date,
+      y: r.size / (1024 * 1024),
+      commit: r.commit,
+    });
+  }
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => new Date(a.x) - new Date(b.x));
+  }
+  return groups;
+}
+
+const PALETTE = [
+  "#58a6ff", "#f78166", "#3fb950", "#d2a8ff",
+  "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
+];
+
+fetch(CSV_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No data available yet for the onnx-light wheel size. " +
+        "The CSV file has not been generated yet — it will appear once the " +
+        "build pipeline publishes its first measurement.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  })
+  .then(text => {
+    if (text === null) return;
+    const rows = parseCSV(text);
+    if (rows.length === 0) {
+      showMessage(
+        "No data available yet for the onnx-light wheel size. " +
+        "The dashboard will populate automatically once the build pipeline " +
+        "produces measurements.",
+        "info"
+      );
+      return;
+    }
+    const groups = groupByName(rows);
+    const lastThree = rows
+      .slice()
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, 3);
+    const tbody = document.getElementById("lastObservationsBody");
+    for (const r of lastThree) {
+      const tr = document.createElement("tr");
+      const mb = (r.size / (1024 * 1024)).toFixed(3);
+      const commit = r.commit ? r.commit.slice(0, 7) : "";
+      for (const v of [r.date, r.name, mb, commit]) {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    if (lastThree.length > 0) {
+      document.getElementById("lastObservations").style.display = "block";
+    }
+    const datasets = [];
+    let i = 0;
+    for (const [name, data] of groups) {
+      const color = PALETTE[i % PALETTE.length];
+      datasets.push({
+        label: name,
+        data,
+        borderColor: color,
+        backgroundColor: color,
+        tension: 0.15,
+        pointRadius: 3,
+        pointHoverRadius: 5,
+      });
+      i++;
+    }
+    const ctx = document.getElementById("chart").getContext("2d");
+    const chart = new Chart(ctx, {
+      type: "line",
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        parsing: false,
+        interaction: { mode: "nearest", intersect: false },
+        scales: {
+          x: {
+            type: "time",
+            time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
+            title: { display: true, text: "date", color: "#c9d1d9" },
+            ticks: { color: "#c9d1d9" },
+            grid: { color: "rgba(139,148,158,0.25)" },
+          },
+          y: {
+            title: { display: true, text: "size (MB)", color: "#c9d1d9" },
+            ticks: { color: "#c9d1d9" },
+            grid: { color: "rgba(139,148,158,0.25)" },
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { labels: { color: "#c9d1d9" } },
+          tooltip: {
+            callbacks: {
+              label: (item) => {
+                const r = item.raw;
+                const mb = r.y.toFixed(3) + " MB";
+                const c = r.commit ? " (" + r.commit.slice(0, 7) + ")" : "";
+                return item.dataset.label + ": " + mb + c;
+              },
+            },
+          },
+          zoom: {
+            pan: { enabled: true, mode: "xy" },
+            zoom: {
+              wheel: { enabled: true },
+              pinch: { enabled: true },
+              mode: "xy",
+            },
+          },
+        },
+      },
+    });
+    document.getElementById("chart").ondblclick = function () {
+      chart.resetZoom();
+    };
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
