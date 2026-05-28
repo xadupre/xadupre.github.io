@@ -1,0 +1,130 @@
+name: Record onnx-light size
+
+# Manually triggered workflow only. Only the repository owner (xadupre) is
+# allowed to actually run the build; any other actor will see the job skipped.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/onnx-light to build"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish documentation.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the rebuilt docs.
+          fetch-depth: 0
+
+      - name: Checkout onnx-light
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light
+          ref: ${{ inputs.ref }}
+          path: onnx-light
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install graphviz
+        uses: ts-graphviz/setup-graphviz@v2
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y doxygen
+
+      - name: Install onnx-light with doc dependencies
+        working-directory: onnx-light
+        run: |
+          export CMAKE_BUILD_PARALLEL_LEVEL=4
+          python setup.py build_ext --inplace
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Record onnx_py shared library sizes
+        working-directory: onnx-light
+        run: |
+          # Record the size of every shared library produced in onnx_py/ so
+          # that the evolution of the compiled extension size can be tracked
+          # over time. The data is appended (one CSV row per .so file) to
+          # cache_data/onnx-light/so_sizes.csv inside the xadupre.github.io
+          # checkout so that the existing "Commit and push updated
+          # documentation" step below picks it up and pushes it back to this
+          # repository.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/so_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,size,name" > "$out"
+          fi
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          found=0
+          # Track every shared library shipped in the onnx_py package (.so on
+          # Linux/macOS, .dylib on macOS, .pyd on Windows just in case).
+          while IFS= read -r -d '' f; do
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
+          done < <(find onnx_py -maxdepth 2 -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.pyd' \) -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No shared library found under onnx_py/; nothing to record."
+          fi
+
+      - name: Commit and push cache data
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/onnx-light cache_data/onnx-light
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            built_sha="$(git -C ../onnx-light rev-parse HEAD)"
+            git commit -m "Update onnx-light documentation (from ${built_sha})"
+            # Retry the push a few times, rebasing on top of any new commits
+            # that may have landed on the remote in the meantime. This avoids
+            # "fetch first" / non-fast-forward push failures when another
+            # workflow run pushed to the same branch concurrently.
+            branch="${GITHUB_REF_NAME:-main}"
+            attempts=5
+            for i in $(seq 1 "$attempts"); do
+              if git push origin "HEAD:${branch}"; then
+                echo "Push succeeded on attempt ${i}."
+                exit 0
+              fi
+              echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+              git fetch origin "${branch}"
+              # Rebase our single doc commit on top of the latest remote state.
+              # Prefer our version for the generated docs directory in case of
+              # conflicts, since we just rebuilt it.
+              if ! git rebase -X ours "origin/${branch}"; then
+                echo "Rebase failed; aborting."
+                git rebase --abort || true
+                exit 1
+              fi
+              sleep $((i * 5))
+            done
+            echo "Failed to push after ${attempts} attempts." >&2
+            exit 1
+          fi
