@@ -121,11 +121,29 @@ def _request(url: str, token: str | None) -> tuple[dict, dict]:
         return payload, dict(resp.headers)
 
 
-def iter_workflow_runs(
-    repo: str, since: dt.datetime, token: str | None
-) -> Iterator[dict]:
-    """Yield workflow runs of ``repo`` created on or after ``since``."""
-    created_filter = ">=" + _format_iso(since)
+# GitHub's ``/actions/runs`` endpoint silently caps the total number of
+# returned results to 1000 (10 pages of 100 items), regardless of how many runs
+# actually match the query. For repositories with a lot of activity this means
+# a single ``created>=since`` query covering several months only returns the
+# most recent ~1000 runs, hiding the older history. To work around this we
+# split the requested time range into smaller windows and recursively split
+# any window that hits the cap.
+_RUNS_RESULT_CAP = 1000
+
+
+def _fetch_runs_window(
+    repo: str,
+    start: dt.datetime,
+    end: dt.datetime,
+    token: str | None,
+) -> tuple[list[dict], bool]:
+    """Fetch all runs of ``repo`` created in ``[start, end]``.
+
+    Returns the list of runs and a flag indicating whether the GitHub
+    1000-result cap was hit (in which case the caller should split the window).
+    """
+    created_filter = _format_iso(start) + ".." + _format_iso(end)
+    runs: list[dict] = []
     page = 1
     per_page = 100
     while True:
@@ -136,17 +154,69 @@ def iter_workflow_runs(
         }
         url = (
             f"{GITHUB_API}/repos/{repo}/actions/runs?"
-            + urllib.parse.urlencode(params, safe=":>=<")
+            + urllib.parse.urlencode(params, safe=":>=<.")
         )
         payload, _ = _request(url, token)
-        runs = payload.get("workflow_runs", [])
-        if not runs:
-            return
-        for run in runs:
-            yield run
-        if len(runs) < per_page:
-            return
+        page_runs = payload.get("workflow_runs", [])
+        if not page_runs:
+            break
+        runs.extend(page_runs)
+        if len(page_runs) < per_page:
+            break
+        if len(runs) >= _RUNS_RESULT_CAP:
+            # We reached the API cap; the window most likely contains more
+            # runs than we got back. Signal the caller to split.
+            return runs, True
         page += 1
+    return runs, False
+
+
+def iter_workflow_runs(
+    repo: str,
+    since: dt.datetime,
+    token: str | None,
+    until: dt.datetime | None = None,
+    initial_window_days: int = 7,
+) -> Iterator[dict]:
+    """Yield workflow runs of ``repo`` created on or after ``since``.
+
+    The query is split into windows of ``initial_window_days`` days. Any
+    window that hits GitHub's 1000-result cap is recursively split in half
+    (down to a minimum of one hour) so that the full history can be
+    retrieved even for very active repositories.
+    """
+    if until is None:
+        until = dt.datetime.now(tz=dt.timezone.utc)
+    if since > until:
+        return
+    window = dt.timedelta(days=max(initial_window_days, 1))
+    min_window = dt.timedelta(hours=1)
+    # Walk from the most recent window backwards so that any incremental
+    # progress is biased towards the freshest data.
+    pending: list[tuple[dt.datetime, dt.datetime]] = []
+    cursor = until
+    while cursor > since:
+        start = max(since, cursor - window)
+        pending.append((start, cursor))
+        cursor = start
+    seen_ids: set[str] = set()
+    while pending:
+        start, end = pending.pop(0)
+        runs, capped = _fetch_runs_window(repo, start, end, token)
+        if capped and (end - start) > min_window:
+            mid = start + (end - start) / 2
+            # Re-queue the two halves (newest first) and skip yielding the
+            # truncated page; the split queries will return the full data.
+            pending.insert(0, (mid, end))
+            pending.insert(1, (start, mid))
+            continue
+        for run in runs:
+            run_id = str(run.get("id", ""))
+            if run_id and run_id in seen_ids:
+                continue
+            if run_id:
+                seen_ids.add(run_id)
+            yield run
 
 
 def run_to_row(run: dict) -> dict | None:

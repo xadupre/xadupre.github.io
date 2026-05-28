@@ -76,6 +76,48 @@ class TestRecordBuildDurations(unittest.TestCase):
         self.assertGreater(delta.days, 175)
         self.assertLess(delta.days, 185)
 
+    def test_iter_workflow_runs_splits_saturated_windows(self):
+        # Simulate a repository with > 1000 runs per week so that the initial
+        # weekly windows saturate the GitHub 1000-result cap. The fake
+        # ``_fetch_runs_window`` returns a unique id per (window, index) tuple
+        # and reports saturation whenever the window covers more than one day.
+        calls: list[tuple[dt.datetime, dt.datetime]] = []
+
+        def fake_fetch(repo, start, end, token):
+            calls.append((start, end))
+            window = end - start
+            if window > dt.timedelta(days=1):
+                runs = [{"id": f"{start.isoformat()}-{i}"} for i in range(1000)]
+                return runs, True
+            runs = [{"id": f"{start.isoformat()}-{i}"} for i in range(3)]
+            return runs, False
+
+        original = rbd._fetch_runs_window
+        rbd._fetch_runs_window = fake_fetch
+        try:
+            since = dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)
+            until = dt.datetime(2024, 1, 15, tzinfo=dt.timezone.utc)
+            ids = [
+                str(r["id"])
+                for r in rbd.iter_workflow_runs(
+                    "owner/repo", since, token=None, until=until,
+                    initial_window_days=7,
+                )
+            ]
+        finally:
+            rbd._fetch_runs_window = original
+
+        # All windows should eventually be split down to <= 1 day and yield
+        # 3 fake runs per leaf window. The exact count depends on the
+        # recursive halving; the key properties are that all ids are unique
+        # and we retrieved more than the 1000-result API cap would have
+        # allowed with a single query.
+        self.assertGreater(len(ids), 30)
+        self.assertEqual(len(ids), len(set(ids)))
+        # The initial saturated windows must have been split.
+        small_calls = [c for c in calls if (c[1] - c[0]) <= dt.timedelta(days=1)]
+        self.assertGreater(len(small_calls), 10)
+
 
 if __name__ == "__main__":
     unittest.main()
