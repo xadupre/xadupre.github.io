@@ -13,6 +13,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_stats as ros  # noqa: E402
 
+try:
+    import onnx  # noqa: F401
+
+    HAS_ONNX = True
+except ImportError:
+    HAS_ONNX = False
+
 
 class TestRecordOnnxStats(unittest.TestCase):
     def test_python_version_from_filename(self):
@@ -86,6 +93,7 @@ class TestRecordOnnxStats(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual(rows[0]["filename"], "v-filename")
 
+    @unittest.skipUnless(HAS_ONNX, "requires the onnx package")
     def test_count_supported_types_excludes_undefined(self):
         # The actual count depends on the installed onnx version, but it must
         # be at least the number of types present in onnx 1.0 (UNDEFINED +
@@ -93,6 +101,7 @@ class TestRecordOnnxStats(unittest.TestCase):
         n = ros.count_supported_types()
         self.assertGreaterEqual(n, 16)
 
+    @unittest.skipUnless(HAS_ONNX, "requires the onnx package")
     def test_count_node_test_cases_positive(self):
         # The installed onnx package ships hundreds of node test cases.
         self.assertGreater(ros.count_node_test_cases(), 0)
