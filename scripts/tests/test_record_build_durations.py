@@ -261,6 +261,38 @@ class TestRecordBuildDurations(unittest.TestCase):
         finally:
             rbd.iter_run_jobs = original
 
+    def test_write_jobs_index(self):
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Missing directory -> 0 entries, no file.
+            missing = os.path.join(tmp, "missing")
+            self.assertEqual(rbd.write_jobs_index(missing), 0)
+            self.assertFalse(
+                os.path.exists(os.path.join(missing, "index.json"))
+            )
+
+            jobs_dir = os.path.join(tmp, "jobs")
+            os.makedirs(jobs_dir)
+            # Two CSVs, one non-CSV file, one nested dir -> ignored.
+            for name in ("b.csv", "a.csv", "notes.txt"):
+                with open(os.path.join(jobs_dir, name), "w") as fh:
+                    fh.write("x")
+            os.makedirs(os.path.join(jobs_dir, "sub"))
+            with open(
+                os.path.join(jobs_dir, "sub", "ignored.csv"), "w"
+            ) as fh:
+                fh.write("x")
+
+            n = rbd.write_jobs_index(jobs_dir)
+            self.assertEqual(n, 2)
+            index_path = os.path.join(jobs_dir, "index.json")
+            with open(index_path, encoding="utf-8") as fh:
+                payload = _json.load(fh)
+            # The CSVs are sorted alphabetically and the non-CSV / nested
+            # files are excluded.
+            self.assertEqual(payload, {"jobs": ["a.csv", "b.csv"]})
+
     def test_main_continues_after_repo_failure(self):
         calls: list[str] = []
 
