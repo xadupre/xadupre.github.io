@@ -138,6 +138,36 @@ jobs:
           GITHUB_WORKSPACE: ${{ github.workspace }}/onnx-light
         run: python -m sphinx docs dist/html -j 4
 
+      - name: Record onnx_py shared library sizes
+        working-directory: onnx-light
+        run: |
+          # Record the size of every shared library produced in onnx_py/ so
+          # that the evolution of the compiled extension size can be tracked
+          # over time. The data is appended (one CSV row per .so file) to
+          # cache_data/so_sizes.csv inside the onnx-light checkout so that the
+          # existing "Commit and push onnx-light cache_data" step below picks
+          # it up and pushes it back to xadupre/onnx-light.
+          mkdir -p cache_data
+          out=cache_data/so_sizes.csv
+          if [ ! -f "$out" ]; then
+            echo "date,commit,size,name" > "$out"
+          fi
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          found=0
+          # Track every shared library shipped in the onnx_py package (.so on
+          # Linux/macOS, .dylib on macOS, .pyd on Windows just in case).
+          while IFS= read -r -d '' f; do
+            size="$(stat -c%s "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
+          done < <(find onnx_py -maxdepth 2 -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.pyd' \) -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No shared library found under onnx_py/; nothing to record."
+          fi
+
       - name: Commit and push onnx-light cache_data
         # Only push the regenerated cache_data/ when:
         #  * a personal access token with write access to xadupre/onnx-light
