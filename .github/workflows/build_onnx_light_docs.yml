@@ -38,16 +38,6 @@ jobs:
           repository: xadupre/onnx-light
           ref: ${{ inputs.ref }}
           path: onnx-light
-          # Use a personal access token with write access to xadupre/onnx-light
-          # if available, so that the ``cache_data/`` directory produced by the
-          # documentation build (see ``docs/ci_durations.rst``) can be pushed
-          # back to the onnx-light repository. When the secret is not set the
-          # default ``GITHUB_TOKEN`` is used and the cache_data push step below
-          # is skipped.
-          token: ${{ secrets.ONNX_LIGHT_PUSH_TOKEN || github.token }}
-          # Full history so we can rebase on top of concurrent commits when
-          # pushing the updated cache_data/ directory.
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -144,11 +134,13 @@ jobs:
           # Record the size of every shared library produced in onnx_py/ so
           # that the evolution of the compiled extension size can be tracked
           # over time. The data is appended (one CSV row per .so file) to
-          # cache_data/so_sizes.csv inside the onnx-light checkout so that the
-          # existing "Commit and push onnx-light cache_data" step below picks
-          # it up and pushes it back to xadupre/onnx-light.
-          mkdir -p cache_data
-          out=cache_data/so_sizes.csv
+          # cache_data/onnx-light/so_sizes.csv inside the xadupre.github.io
+          # checkout so that the existing "Commit and push updated
+          # documentation" step below picks it up and pushes it back to this
+          # repository.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/so_sizes.csv"
           if [ ! -f "$out" ]; then
             echo "date,commit,size,name" > "$out"
           fi
@@ -168,48 +160,6 @@ jobs:
             echo "No shared library found under onnx_py/; nothing to record."
           fi
 
-      - name: Commit and push onnx-light cache_data
-        # Only push the regenerated cache_data/ when:
-        #  * a personal access token with write access to xadupre/onnx-light
-        #    was provided as the ``ONNX_LIGHT_PUSH_TOKEN`` secret, and
-        #  * the documentation was built from the ``main`` branch (pushing
-        #    back to a tag or commit SHA does not make sense).
-        if: ${{ env.HAS_PUSH_TOKEN == 'true' && inputs.ref == 'main' }}
-        working-directory: onnx-light
-        env:
-          HAS_PUSH_TOKEN: ${{ secrets.ONNX_LIGHT_PUSH_TOKEN != '' }}
-        run: |
-          if [ ! -d cache_data ]; then
-            echo "No cache_data/ directory produced by the documentation build."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cache_data
-          if git diff --cached --quiet; then
-            echo "No cache_data changes to commit."
-            exit 0
-          fi
-          git commit -m "Update ci_durations cache_data"
-          branch="${{ inputs.ref }}"
-          attempts=5
-          for i in $(seq 1 "$attempts"); do
-            if git push origin "HEAD:${branch}"; then
-              echo "Push succeeded on attempt ${i}."
-              exit 0
-            fi
-            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
-            git fetch origin "${branch}"
-            if ! git rebase -X ours "origin/${branch}"; then
-              echo "Rebase failed; aborting."
-              git rebase --abort || true
-              exit 1
-            fi
-            sleep $((i * 5))
-          done
-          echo "Failed to push cache_data after ${attempts} attempts." >&2
-          exit 1
-
       - name: Copy documentation into site/docs/onnx-light
         run: |
           rm -rf site/docs/onnx-light
@@ -223,7 +173,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/onnx-light
+          git add docs/onnx-light cache_data/onnx-light
           if git diff --cached --quiet; then
             echo "No documentation changes to commit."
           else
