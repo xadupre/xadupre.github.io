@@ -40,7 +40,6 @@ DEFAULT_REPOS = (
     "xadupre/onnx-light",
     "xadupre/yet-another-onnx-builder",
     "xadupre/yet-another-onnxruntime-extensions",
-    "xadupre/my-own-accelerator",
 )
 
 CSV_FIELDS = (
