@@ -1,0 +1,103 @@
+name: Record yobx sklearn coverage
+
+# Weekly job that records the scikit-learn (and friends) coverage of
+# ``yobx`` — the number of estimators exposed by each supported library
+# and how many of them have a yobx converter registered. The output is
+# cached as a CSV file under
+# ``cache_data/yet-another-onnx-builder/sklearn_coverage.csv`` and is
+# rendered by ``dashboard/yet-another-onnx-builder/sklearn-coverage.html``.
+# Only the repository owner is allowed to run the job manually; scheduled
+# runs always proceed because they are initiated by GitHub itself.
+
+on:
+  schedule:
+    # Run once a week, Monday at 07:23 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the hour is offset from
+    # the other weekly recording workflows so they do not compete for the
+    # same runner slot.
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/yet-another-onnx-builder to use"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the new row.
+          fetch-depth: 0
+
+      - name: Checkout yet-another-onnx-builder
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/yet-another-onnx-builder
+          ref: ${{ inputs.ref || 'main' }}
+          path: yet-another-onnx-builder
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install yet-another-onnx-builder with sklearn extras
+        working-directory: yet-another-onnx-builder
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[category_encoders,imblearn,lightgbm,sklearn,sksurv,statsmodels,xgboost]"
+
+      - name: Record yobx sklearn coverage
+        working-directory: site
+        run: |
+          python -u scripts/record_yobx_sklearn_coverage.py
+
+      - name: Commit and push cache data
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/yet-another-onnx-builder
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update yobx sklearn coverage cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            if git push origin "HEAD:${branch}"; then
+              echo "Push succeeded on attempt ${i}."
+              exit 0
+            fi
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            # Drop any leftover working-tree or untracked changes so that the
+            # rebase below does not abort with "cannot rebase: You have
+            # unstaged changes." Everything we want to publish has already
+            # been committed above, so any remainder is safe to set aside.
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
