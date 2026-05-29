@@ -386,6 +386,48 @@ def read_existing_jobs(csv_path: str) -> set[str]:
     return seen
 
 
+def read_cached_runs_from_jobs(
+    jobs_dir: str,
+) -> tuple[set[str], dt.datetime | None]:
+    """Return run ids and the latest job timestamp found in per-job CSVs.
+
+    Walks every ``*.csv`` file under ``jobs_dir`` (the per-job cache produced
+    by :func:`record_jobs_for_run`) and collects the set of ``run_id`` values
+    already recorded along with the most recent ``started_at`` timestamp. The
+    per-job cache often survives even when ``build_durations.csv`` has been
+    removed, so using it to seed the "already recorded" set lets the script
+    skip refetching jobs for runs whose data is already on disk.
+    """
+    seen: set[str] = set()
+    latest: dt.datetime | None = None
+    if not os.path.isdir(jobs_dir):
+        return seen, latest
+    for name in sorted(os.listdir(jobs_dir)):
+        if not name.endswith(".csv"):
+            continue
+        path = os.path.join(jobs_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                for row in reader:
+                    run_id = row.get("run_id")
+                    if run_id:
+                        seen.add(run_id)
+                    started = row.get("started_at")
+                    if started:
+                        try:
+                            parsed = _parse_iso(started)
+                        except ValueError:
+                            continue
+                        if latest is None or parsed > latest:
+                            latest = parsed
+        except OSError:
+            continue
+    return seen, latest
+
+
 def iter_run_jobs(run_id: str, repo: str, token: str | None) -> Iterator[dict]:
     """Yield all jobs of the workflow run ``run_id`` of ``repo``."""
     page = 1
@@ -504,7 +546,18 @@ def process_repo(
     """
     repo_name = repo.split("/", 1)[-1]
     csv_path = os.path.join(cache_dir, repo_name, "build_durations.csv")
+    jobs_dir = os.path.join(cache_dir, repo_name, "jobs")
     seen, latest = read_existing(csv_path)
+    # The per-job CSVs are an additional source of truth: every run whose
+    # jobs are already on disk has been processed before and does not need
+    # to be refetched. Seed ``seen`` and ``latest`` from them so the script
+    # actually reuses what is already cached even when
+    # ``build_durations.csv`` itself is missing or has been pruned.
+    job_seen, job_latest = read_cached_runs_from_jobs(jobs_dir)
+    if job_seen:
+        seen |= job_seen
+    if job_latest is not None and (latest is None or job_latest > latest):
+        latest = job_latest
     since = determine_since(latest, months)
     _log(
         f"[{repo}] cache file: {csv_path} "
@@ -573,7 +626,6 @@ def process_repo(
         f"{os.path.join(cache_dir, repo_name, 'jobs')}"
     )
     try:
-        jobs_dir = os.path.join(cache_dir, repo_name, "jobs")
         n_indexed = write_jobs_index(jobs_dir)
         _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
     except Exception as exc:  # pragma: no cover - defensive
