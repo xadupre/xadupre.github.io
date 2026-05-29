@@ -1,0 +1,104 @@
+name: Record yet-another-onnx-builder torch coverage
+
+# Runs on a weekly schedule and can also be triggered manually. Only the
+# repository owner (xadupre) is allowed to run the workflow manually; any
+# other actor will see the job skipped. Scheduled runs always proceed
+# because they are initiated by GitHub itself.
+on:
+  schedule:
+    # Run once a week, Monday at 07:17 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the hour is offset from
+    # the other weekly recording workflows so they do not compete for the
+    # same runner slot.
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/yet-another-onnx-builder to use"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the new snapshot.
+          fetch-depth: 0
+
+      - name: Checkout yet-another-onnx-builder
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/yet-another-onnx-builder
+          ref: ${{ inputs.ref || 'main' }}
+          path: yet-another-onnx-builder
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install yet-another-onnx-builder with torch+transformers extras
+        working-directory: yet-another-onnx-builder
+        run: |
+          python -m pip install --upgrade pip
+          # ``torch`` and ``transformers`` are required to import the test
+          # cases shipped with yobx and run the alternative exporters next
+          # to ``yobx-new-tracing``.
+          pip install -e ".[torch,transformers,onnxscript]"
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Record torch coverage snapshot
+        working-directory: site
+        run: |
+          # Resolve the actual commit SHA of yet-another-onnx-builder so that
+          # the dashboard can link the snapshot to a specific source revision.
+          commit_sha="$(git -C ../yet-another-onnx-builder rev-parse HEAD)"
+          YOBX_COMMIT="$commit_sha" python -u scripts/record_torch_coverage.py
+
+      - name: Commit and push cache data
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/yet-another-onnx-builder/torch_coverage.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          built_sha="$(git -C ../yet-another-onnx-builder rev-parse HEAD)"
+          git commit -m "Update yet-another-onnx-builder torch coverage (from ${built_sha})"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            if git push origin "HEAD:${branch}"; then
+              echo "Push succeeded on attempt ${i}."
+              exit 0
+            fi
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
