@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>onnx-light shared library size</title>
+<title>onnx-light package size</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="../../logo.svg" />
 <style>
@@ -84,24 +84,35 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 <body>
 <header>
   <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
-  <h1>onnx-light &mdash; shared library size over time</h1>
+  <h1>onnx-light &mdash; package size over time</h1>
 </header>
 <div class="chart-wrap">
   <div id="message" class="message info"></div>
   <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
-  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Shared library (.so/.dylib/.pyd) sizes use dashed lines; wheel sizes use solid lines.</div>
 </div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 3 observations</h2>
   <table>
     <thead>
-      <tr><th>date</th><th>name</th><th>size (MB)</th><th>commit</th></tr>
+      <tr><th>date</th><th>kind</th><th>name</th><th>size (MB)</th><th>commit</th></tr>
     </thead>
     <tbody id="lastObservationsBody"></tbody>
   </table>
 </div>
 <script>
-const CSV_URL = "../../cache_data/onnx-light/so_sizes.csv";
+const SOURCES = [
+  {
+    kind: "shared library",
+    url: "../../cache_data/onnx-light/so_sizes.csv",
+    dashed: true,
+  },
+  {
+    kind: "wheel",
+    url: "../../cache_data/onnx-light/wheel_sizes.csv",
+    dashed: false,
+  },
+];
 
 function showMessage(text, kind) {
   const msg = document.getElementById("message");
@@ -151,34 +162,37 @@ const PALETTE = [
   "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
 ];
 
-fetch(CSV_URL, { cache: "no-store" })
-  .then(r => {
-    if (r.status === 404) {
-      showMessage(
-        "No data available yet for the onnx-light shared library size. " +
-        "The CSV file has not been generated yet — it will appear once the " +
-        "build pipeline publishes its first measurement.",
-        "info"
-      );
-      return null;
+function fetchSource(src) {
+  return fetch(src.url, { cache: "no-store" })
+    .then(r => {
+      if (r.status === 404) return { kind: src.kind, dashed: src.dashed, rows: [] };
+      if (!r.ok) throw new Error("HTTP " + r.status + " for " + src.url);
+      return r.text().then(text => ({
+        kind: src.kind,
+        dashed: src.dashed,
+        rows: parseCSV(text),
+      }));
+    });
+}
+
+Promise.all(SOURCES.map(fetchSource))
+  .then(results => {
+    const allRows = [];
+    for (const res of results) {
+      for (const r of res.rows) {
+        allRows.push({ ...r, kind: res.kind });
+      }
     }
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    return r.text();
-  })
-  .then(text => {
-    if (text === null) return;
-    const rows = parseCSV(text);
-    if (rows.length === 0) {
+    if (allRows.length === 0) {
       showMessage(
-        "No data available yet for the onnx-light shared library size. " +
-        "The dashboard will populate automatically once the build pipeline " +
-        "produces measurements.",
+        "No data available yet for the onnx-light package size. " +
+        "The CSV files have not been generated yet — they will appear once " +
+        "the build pipeline publishes its first measurements.",
         "info"
       );
       return;
     }
-    const groups = groupByName(rows);
-    const lastThree = rows
+    const lastThree = allRows
       .slice()
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 3);
@@ -187,7 +201,7 @@ fetch(CSV_URL, { cache: "no-store" })
       const tr = document.createElement("tr");
       const mb = (r.size / (1024 * 1024)).toFixed(3);
       const commit = r.commit ? r.commit.slice(0, 7) : "";
-      for (const v of [r.date, r.name, mb, commit]) {
+      for (const v of [r.date, r.kind, r.name, mb, commit]) {
         const td = document.createElement("td");
         td.textContent = v;
         tr.appendChild(td);
@@ -199,19 +213,22 @@ fetch(CSV_URL, { cache: "no-store" })
     }
     const datasets = [];
     let i = 0;
-    for (const [name, data] of groups) {
-      const color = PALETTE[i % PALETTE.length];
-      datasets.push({
-        label: name,
-        data,
-        borderColor: color,
-        backgroundColor: color,
-        borderDash: [4, 4],
-        tension: 0.15,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      });
-      i++;
+    for (const res of results) {
+      const groups = groupByName(res.rows);
+      for (const [name, data] of groups) {
+        const color = PALETTE[i % PALETTE.length];
+        datasets.push({
+          label: res.kind + ": " + name,
+          data,
+          borderColor: color,
+          backgroundColor: color,
+          borderDash: res.dashed ? [4, 4] : [],
+          tension: 0.15,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        });
+        i++;
+      }
     }
     const ctx = document.getElementById("chart").getContext("2d");
     const chart = new Chart(ctx, {
