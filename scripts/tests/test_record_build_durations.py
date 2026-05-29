@@ -470,6 +470,42 @@ class TestRecordBuildDurations(unittest.TestCase):
         self.assertEqual(calls, ["owner/good1", "owner/bad", "owner/good2"])
         self.assertEqual(rc, 0)
 
+    def test_process_repo_writes_jobs_index_even_on_fetch_error(self):
+        # Regression test: when ``iter_workflow_runs`` raises partway
+        # through (e.g. a transient GitHub API error), ``process_repo``
+        # must still refresh ``jobs/index.json`` so the dashboard can
+        # discover the per-job CSV files that have already been cached.
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = os.path.join(tmp, "myrepo", "jobs")
+            os.makedirs(jobs_dir)
+            for name in ("build.csv", "test.csv"):
+                with open(os.path.join(jobs_dir, name), "w") as fh:
+                    fh.write(
+                        ",".join(rbd.JOB_CSV_FIELDS) + "\n"
+                    )
+
+            def fake_iter_runs(repo, since, token, until=None):
+                raise urllib.error.HTTPError(
+                    "http://x", 502, "bad gateway", hdrs=None, fp=None
+                )
+                yield  # pragma: no cover - generator marker
+
+            orig_runs = rbd.iter_workflow_runs
+            rbd.iter_workflow_runs = fake_iter_runs
+            try:
+                with self.assertRaises(urllib.error.HTTPError):
+                    rbd.process_repo(
+                        "owner/myrepo", tmp, months=6, token=None
+                    )
+            finally:
+                rbd.iter_workflow_runs = orig_runs
+
+            index_path = os.path.join(jobs_dir, "index.json")
+            self.assertTrue(os.path.exists(index_path))
+            with open(index_path, encoding="utf-8") as fh:
+                payload = json.load(fh)
+            self.assertEqual(payload, {"jobs": ["build.csv", "test.csv"]})
+
 
 if __name__ == "__main__":
     unittest.main()
