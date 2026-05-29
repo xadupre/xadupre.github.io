@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>yet-another-onnx-builder &mdash; scikit-learn coverage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 55vh;
+  min-height: 320px;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
+.last-observations {
+  width: 100%;
+  max-width: 1100px;
+  margin-top: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+}
+.last-observations h2 {
+  margin: 0 0 0.5em;
+  font-size: 1em;
+  color: #c9d1d9;
+}
+.last-observations .table-scroll { overflow-x: auto; }
+.last-observations table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.last-observations th, .last-observations td {
+  text-align: left;
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  white-space: nowrap;
+}
+.last-observations th { color: #8b949e; font-weight: normal; }
+.last-observations td { color: #c9d1d9; font-family: monospace; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>yet-another-onnx-builder &mdash; scikit-learn coverage</h1>
+  <div class="hint">
+    Weekly snapshot of <a href="../../docs/yet-another-onnx-builder/coverage/sklearn/supported_converters.html">yobx scikit-learn coverage</a>:
+    number of estimators per library and how many have a yobx converter.
+  </div>
+</header>
+<div id="message" class="message info"></div>
+<div class="chart-wrap">
+  <h2 class="chart-title">coverage per library (%)</h2>
+  <div class="chart-container"><canvas id="chartCoverage"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">number of converted estimators per library</h2>
+  <div class="chart-container"><canvas id="chartConverted"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">number of predictable estimators per library</h2>
+  <div class="chart-container"><canvas id="chartPredictable"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div id="lastObservations" class="last-observations" style="display:none;">
+  <h2>Last observations</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>date</th>
+          <th>library</th>
+          <th>sklearn</th>
+          <th>yobx</th>
+          <th>n_estimators</th>
+          <th>n_predictable</th>
+          <th>n_converted</th>
+          <th>coverage %</th>
+        </tr>
+      </thead>
+      <tbody id="lastObservationsBody"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const CSV_URL = "../../cache_data/yet-another-onnx-builder/sklearn_coverage.csv";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+  for (const id of ["chartCoverage", "chartConverted", "chartPredictable"]) {
+    const el = document.getElementById(id);
+    if (el && el.parentElement) el.parentElement.style.display = "none";
+  }
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const header = lines.shift().split(",");
+  const idx = {
+    date: header.indexOf("date"),
+    library: header.indexOf("library"),
+    sklearn_version: header.indexOf("sklearn_version"),
+    yobx_version: header.indexOf("yobx_version"),
+    n_estimators: header.indexOf("n_estimators"),
+    n_predictable: header.indexOf("n_predictable"),
+    n_converted: header.indexOf("n_converted"),
+    coverage_pct: header.indexOf("coverage_pct"),
+  };
+  return lines.map(line => {
+    const cols = line.split(",");
+    return {
+      date: cols[idx.date],
+      library: cols[idx.library],
+      sklearn_version: cols[idx.sklearn_version],
+      yobx_version: cols[idx.yobx_version],
+      n_estimators: Number(cols[idx.n_estimators]),
+      n_predictable: Number(cols[idx.n_predictable]),
+      n_converted: Number(cols[idx.n_converted]),
+      coverage_pct: Number(cols[idx.coverage_pct]),
+    };
+  }).filter(r => r.date);
+}
+
+const PALETTE = [
+  "#58a6ff", "#f78166", "#3fb950", "#d2a8ff",
+  "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
+];
+
+const COMMON_OPTIONS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "nearest", intersect: false },
+  plugins: {
+    legend: { labels: { color: "#c9d1d9" } },
+    zoom: {
+      pan: { enabled: true, mode: "xy" },
+      zoom: {
+        wheel: { enabled: true },
+        pinch: { enabled: true },
+        mode: "xy",
+      },
+    },
+  },
+};
+
+function axisX() {
+  return {
+    type: "time",
+    time: { tooltipFormat: "yyyy-MM-dd HH:mm" },
+    title: { display: true, text: "date", color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+  };
+}
+
+function axisY(label, suggestedMax) {
+  const a = {
+    title: { display: true, text: label, color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+    beginAtZero: true,
+  };
+  if (suggestedMax !== undefined) a.suggestedMax = suggestedMax;
+  return a;
+}
+
+function groupByLibrary(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.library)) map.set(r.library, []);
+    map.get(r.library).push(r);
+  }
+  for (const series of map.values()) {
+    series.sort((a, b) => new Date(a.date) - new Date(b.date));
+  }
+  return map;
+}
+
+function makeLibraryDatasets(byLibrary, key) {
+  const libs = Array.from(byLibrary.keys()).sort();
+  return libs.map((lib, i) => {
+    const color = PALETTE[i % PALETTE.length];
+    return {
+      label: lib,
+      data: byLibrary.get(lib).map(r => ({
+        x: r.date,
+        y: r[key],
+        sklearn_version: r.sklearn_version,
+        yobx_version: r.yobx_version,
+      })),
+      borderColor: color,
+      backgroundColor: color,
+      borderDash: [4, 4],
+      tension: 0.15,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+    };
+  });
+}
+
+function makeChart(canvasId, datasets, yLabel, suggestedMax, valueFormatter) {
+  return new Chart(document.getElementById(canvasId).getContext("2d"), {
+    type: "line",
+    data: { datasets: datasets },
+    options: {
+      ...COMMON_OPTIONS,
+      scales: { x: axisX(), y: axisY(yLabel, suggestedMax) },
+      plugins: {
+        ...COMMON_OPTIONS.plugins,
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const r = item.raw;
+              const sk = r.sklearn_version ? " (sklearn " + r.sklearn_version + ")" : "";
+              const val = valueFormatter ? valueFormatter(r.y) : r.y;
+              return item.dataset.label + ": " + val + sk;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+fetch(CSV_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No data available yet for the yobx scikit-learn coverage. " +
+        "The CSV file has not been generated yet — it will appear once the " +
+        "weekly recording workflow publishes its first measurement.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.text();
+  })
+  .then(text => {
+    if (text === null) return;
+    const rows = parseCSV(text);
+    if (rows.length === 0) {
+      showMessage(
+        "No data available yet for the yobx scikit-learn coverage. " +
+        "The dashboard will populate automatically once the weekly " +
+        "recording workflow produces measurements.",
+        "info"
+      );
+      return;
+    }
+    rows.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    const latestDate = rows[rows.length - 1].date;
+    const lastRows = rows.filter(r => r.date === latestDate)
+      .sort((a, b) => a.library.localeCompare(b.library));
+    const tbody = document.getElementById("lastObservationsBody");
+    for (const r of lastRows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        r.date,
+        r.library,
+        r.sklearn_version || "",
+        r.yobx_version || "",
+        r.n_estimators,
+        r.n_predictable,
+        r.n_converted,
+        r.coverage_pct.toFixed(2),
+      ];
+      for (const v of cells) {
+        const td = document.createElement("td");
+        td.textContent = v;
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    if (lastRows.length > 0) {
+      document.getElementById("lastObservations").style.display = "block";
+    }
+
+    const byLibrary = groupByLibrary(rows);
+
+    const coverageDatasets = makeLibraryDatasets(byLibrary, "coverage_pct");
+    const convertedDatasets = makeLibraryDatasets(byLibrary, "n_converted");
+    const predictableDatasets = makeLibraryDatasets(byLibrary, "n_predictable");
+
+    const coverageChart = makeChart(
+      "chartCoverage",
+      coverageDatasets,
+      "coverage (%)",
+      100,
+      v => v.toFixed(2) + " %"
+    );
+    const convertedChart = makeChart(
+      "chartConverted",
+      convertedDatasets,
+      "n_converted"
+    );
+    const predictableChart = makeChart(
+      "chartPredictable",
+      predictableDatasets,
+      "n_predictable"
+    );
+
+    for (const chart of [coverageChart, convertedChart, predictableChart]) {
+      chart.canvas.ondblclick = () => chart.resetZoom();
+    }
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
