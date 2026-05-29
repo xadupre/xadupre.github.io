@@ -506,6 +506,26 @@ class TestRecordBuildDurations(unittest.TestCase):
                 payload = json.load(fh)
             self.assertEqual(payload, {"jobs": ["build.csv", "test.csv"]})
 
+    def test_dashboard_job_duration_graphs_use_minutes(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        pages = [
+            os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
+            os.path.join(
+                root,
+                "dashboard",
+                "yet-another-onnx-builder",
+                "build-durations.html",
+            ),
+        ]
+        for path in pages:
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+            self.assertIn('duration: dur / 60', content)
+            self.assertIn('text: "duration (min)"', content)
+            self.assertIn('+ " min"', content)
+            self.assertNotIn('text: "duration (s)"', content)
+            self.assertNotIn('+ " s"', content)
+
 
 if __name__ == "__main__":
     unittest.main()
