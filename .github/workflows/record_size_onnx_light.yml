@@ -125,10 +125,56 @@ jobs:
           from onnx_light.schema_comparison import compute_schema_comparison
 
           comparison = compute_schema_comparison()
+
+          # Collect the IR_VERSION and the latest ai.onnx opset version from
+          # both packages so that the dashboard can show, as its first table,
+          # the ONNX specification version each side targets. ``onnx_light``
+          # forwards ``IR_VERSION`` and ``defs`` from its C++ ``onnx_lib``
+          # extension, mirroring the upstream ``onnx`` Python API.
+          def _max_ai_onnx_opset(defs_mod):
+              versions = [
+                  s.since_version
+                  for s in defs_mod.get_all_schemas()
+                  if (s.domain or "ai.onnx") == "ai.onnx"
+              ]
+              return max(versions) if versions else None
+
+          versions = {
+              "onnx_ir_version": None,
+              "onnx_opset_ai_onnx": None,
+              "onnx_light_ir_version": None,
+              "onnx_light_opset_ai_onnx": None,
+          }
+          try:
+              import onnx
+              from onnx import defs as _onnx_defs
+
+              versions["onnx_ir_version"] = int(onnx.IR_VERSION)
+              try:
+                  versions["onnx_opset_ai_onnx"] = int(_onnx_defs.onnx_opset_version())
+              except Exception:
+                  versions["onnx_opset_ai_onnx"] = _max_ai_onnx_opset(_onnx_defs)
+          except ImportError:
+              pass
+          try:
+              from onnx_light.onnx import IR_VERSION as _LIGHT_IR_VERSION
+              from onnx_light.onnx import defs as _light_defs
+
+              versions["onnx_light_ir_version"] = int(_LIGHT_IR_VERSION)
+              try:
+                  versions["onnx_light_opset_ai_onnx"] = int(
+                      _light_defs.onnx_opset_version()
+                  )
+              except Exception:
+                  versions["onnx_light_opset_ai_onnx"] = _max_ai_onnx_opset(_light_defs)
+          except ImportError:
+              pass
+
           payload = {
               "date": os.environ["DATE_ISO"],
               "commit": os.environ["COMMIT_SHA"],
               "onnx_available": comparison.onnx_available,
+              "versions": versions,
               "totals": {
                   "onnx": comparison.total_onnx,
                   "onnx_light": comparison.total_onnx_light,
