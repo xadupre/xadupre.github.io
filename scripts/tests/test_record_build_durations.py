@@ -262,7 +262,151 @@ class TestRecordBuildDurations(unittest.TestCase):
         finally:
             rbd.iter_run_jobs = original
 
-    def test_write_jobs_index(self):
+    def test_read_cached_runs_from_jobs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = os.path.join(tmp, "jobs")
+            # Missing directory -> empty result.
+            seen, latest = rbd.read_cached_runs_from_jobs(jobs_dir)
+            self.assertEqual(seen, set())
+            self.assertIsNone(latest)
+
+            os.makedirs(jobs_dir)
+            rbd._append_rows(
+                os.path.join(jobs_dir, "build.csv"),
+                [
+                    {
+                        "job_id": "j1",
+                        "run_id": "100",
+                        "workflow": "CI",
+                        "job_name": "build",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2024-01-01T00:00:00Z",
+                        "completed_at": "2024-01-01T00:01:00Z",
+                        "duration_seconds": "60",
+                        "head_sha": "sha1",
+                    },
+                    {
+                        "job_id": "j2",
+                        "run_id": "101",
+                        "workflow": "CI",
+                        "job_name": "build",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2024-02-15T08:30:00Z",
+                        "completed_at": "2024-02-15T08:32:00Z",
+                        "duration_seconds": "120",
+                        "head_sha": "sha2",
+                    },
+                ],
+                rbd.JOB_CSV_FIELDS,
+            )
+            rbd._append_rows(
+                os.path.join(jobs_dir, "test.csv"),
+                [
+                    {
+                        "job_id": "j3",
+                        "run_id": "101",
+                        "workflow": "CI",
+                        "job_name": "test",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2024-02-15T08:31:00Z",
+                        "completed_at": "2024-02-15T08:35:00Z",
+                        "duration_seconds": "240",
+                        "head_sha": "sha2",
+                    },
+                ],
+                rbd.JOB_CSV_FIELDS,
+            )
+            # Non-CSV files and nested directories must be ignored.
+            with open(os.path.join(jobs_dir, "index.json"), "w") as fh:
+                fh.write("{}")
+            os.makedirs(os.path.join(jobs_dir, "nested"))
+
+            seen, latest = rbd.read_cached_runs_from_jobs(jobs_dir)
+            self.assertEqual(seen, {"100", "101"})
+            self.assertEqual(rbd._format_iso(latest), "2024-02-15T08:31:00Z")
+
+    def test_process_repo_reuses_jobs_cache(self):
+        # Reproduce the scenario from the issue: ``build_durations.csv``
+        # is missing but the per-job CSVs are present. The script must
+        # use them to skip refetching runs whose jobs are already cached.
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs_dir = os.path.join(tmp, "myrepo", "jobs")
+            os.makedirs(jobs_dir)
+            rbd._append_rows(
+                os.path.join(jobs_dir, "build.csv"),
+                [
+                    {
+                        "job_id": "j1",
+                        "run_id": "100",
+                        "workflow": "CI",
+                        "job_name": "build",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2024-05-01T10:00:00Z",
+                        "completed_at": "2024-05-01T10:01:00Z",
+                        "duration_seconds": "60",
+                        "head_sha": "sha1",
+                    }
+                ],
+                rbd.JOB_CSV_FIELDS,
+            )
+
+            jobs_calls: list[str] = []
+
+            def fake_iter_runs(repo, since, token, until=None):
+                # Yield the already-cached run plus a brand-new one.
+                yield {
+                    "id": 100,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2024-05-01T09:59:00Z",
+                    "updated_at": "2024-05-01T10:02:00Z",
+                    "head_sha": "sha1",
+                }
+                yield {
+                    "id": 200,
+                    "name": "CI",
+                    "event": "push",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "created_at": "2024-05-02T09:00:00Z",
+                    "updated_at": "2024-05-02T09:03:00Z",
+                    "head_sha": "sha2",
+                }
+
+            def fake_iter_jobs(run_id, repo, token):
+                jobs_calls.append(run_id)
+                yield {
+                    "id": int(run_id) * 10,
+                    "run_id": int(run_id),
+                    "name": "build",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "started_at": "2024-05-02T09:00:30Z",
+                    "completed_at": "2024-05-02T09:02:30Z",
+                }
+
+            orig_runs = rbd.iter_workflow_runs
+            orig_jobs = rbd.iter_run_jobs
+            rbd.iter_workflow_runs = fake_iter_runs
+            rbd.iter_run_jobs = fake_iter_jobs
+            try:
+                added = rbd.process_repo("owner/myrepo", tmp, months=6, token=None)
+            finally:
+                rbd.iter_workflow_runs = orig_runs
+                rbd.iter_run_jobs = orig_jobs
+
+            # Only the new run should have triggered a jobs API call.
+            self.assertEqual(jobs_calls, ["200"])
+            # And only that new run should have been appended.
+            self.assertEqual(added, 1)
+
+
         with tempfile.TemporaryDirectory() as tmp:
             # Missing directory -> 0 entries, no file.
             missing = os.path.join(tmp, "missing")
