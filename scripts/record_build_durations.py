@@ -616,6 +616,22 @@ def process_repo(
                 f"{csv_path}: {exc}",
                 file=sys.stderr,
             )
+        # The jobs index must also be refreshed unconditionally so that the
+        # dashboard can discover the per-job CSV files even when the fetch
+        # loop above was interrupted by a transient GitHub API failure
+        # before reaching the end of ``process_repo``. Without this, a
+        # repository that has previously cached per-job CSVs but whose
+        # latest run triggered an error would never get its ``index.json``
+        # written and the dashboard page would silently render nothing.
+        try:
+            n_indexed = write_jobs_index(jobs_dir)
+            _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"[{repo}] failed to write jobs index: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
     elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()
     _log(
         f"[{repo}] processed {processed} run(s) from GitHub in {elapsed:.1f}s; "
@@ -625,15 +641,6 @@ def process_repo(
         f"[{repo}] appended {jobs_added} new job row(s) under "
         f"{os.path.join(cache_dir, repo_name, 'jobs')}"
     )
-    try:
-        n_indexed = write_jobs_index(jobs_dir)
-        _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
-    except Exception as exc:  # pragma: no cover - defensive
-        print(
-            f"[{repo}] failed to write jobs index: "
-            f"{type(exc).__name__}: {exc}",
-            file=sys.stderr,
-        )
     return added
 
 
