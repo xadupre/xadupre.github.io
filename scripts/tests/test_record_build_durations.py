@@ -509,6 +509,7 @@ class TestRecordBuildDurations(unittest.TestCase):
     def test_dashboard_job_duration_graphs_use_minutes(self):
         root = os.path.dirname(os.path.dirname(HERE))
         pages = [
+            os.path.join(root, "dashboard", "onnx", "build-durations.html"),
             os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
             os.path.join(
                 root,
