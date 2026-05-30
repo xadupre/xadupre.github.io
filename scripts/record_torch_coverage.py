@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import sys
 from typing import Any, Dict, List, Tuple
@@ -86,9 +87,15 @@ def _normalise_result(result: Dict[str, Any]) -> Dict[str, Any]:
         if value is None:
             return None
         try:
-            return float(value)
+            f = float(value)
         except (TypeError, ValueError):
             return None
+        # JSON does not support Infinity/NaN; coerce to None so the payload
+        # remains valid JSON parsable by browsers (see issue: javascript
+        # "Unexpected token 'I', ... abs": Infinity ... is not valid JSON).
+        if not math.isfinite(f):
+            return None
+        return f
 
     return {
         "name": result.get("name"),
@@ -210,7 +217,7 @@ def main(argv: list[str] | None = None) -> int:
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "torch_coverage.json")
     with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh, indent=2, sort_keys=True)
+        json.dump(payload, fh, indent=2, sort_keys=True, allow_nan=False)
         fh.write("\n")
 
     _log(
