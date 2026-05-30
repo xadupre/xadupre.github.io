@@ -528,5 +528,44 @@ class TestRecordBuildDurations(unittest.TestCase):
             self.assertNotIn('+ " s"', content)
 
 
+    def test_record_build_durations_workflow_has_robust_push(self):
+        # The ``record_build_durations`` workflow occasionally times out on
+        # bootstrap fetches for very active repositories such as
+        # ``onnx/onnx``. When that happens, the cancelled Python process can
+        # leave unstaged writes in ``cache_data`` while the commit step is
+        # running, and a previous bug ("git rebase: cannot rebase: You have
+        # unstaged changes") prevented the partially committed cache data
+        # from ever being pushed. This test pins the two properties that
+        # protect against that regression: a generous step timeout and a
+        # push retry loop that folds late writes into the commit and clears
+        # the working tree before rebasing.
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(
+            root, ".github", "workflows", "record_build_durations.yml"
+        )
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        # Step must allow the bootstrap fetch enough time to complete.
+        self.assertIn("timeout-minutes: 350", content)
+        # Late writes must be folded into the existing commit so they are
+        # not lost when the rebase clears the working tree.
+        self.assertIn("git commit --amend --no-edit", content)
+        # The working tree must be cleaned before rebasing so the rebase
+        # never aborts with "cannot rebase: You have unstaged changes."
+        self.assertIn("git checkout -- .", content)
+        self.assertIn("git clean -fd cache_data", content)
+        # The previous broken stash invocation (which silently stashed
+        # nothing because of the trailing ``--``) must not come back.
+        self.assertNotIn(
+            "git stash push --include-untracked --quiet --", content
+        )
+
+    def test_default_repos_includes_onnx(self):
+        # ``onnx/onnx`` must stay in the tracked list so the corresponding
+        # dashboard page (``dashboard/onnx/build-durations.html``) has data
+        # to render. Without this, the dashboard silently displays nothing.
+        self.assertIn("onnx/onnx", rbd.DEFAULT_REPOS)
+
+
 if __name__ == "__main__":
     unittest.main()
