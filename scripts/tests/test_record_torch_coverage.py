@@ -132,6 +132,13 @@ class TestRecordTorchCoverage(unittest.TestCase):
         self.assertEqual(args.exporters, ["a", "b"])
         self.assertEqual(args.limit, 3)
 
+    def test_default_exporters_include_yobx_and_dynamo(self):
+        # The coverage dashboard exposes the default ``yobx`` exporter and
+        # ``torch.onnx.export`` (referred to here as ``dynamo``) alongside the
+        # other torch-to-ONNX exporters.
+        self.assertIn("yobx", rtc.DEFAULT_EXPORTERS)
+        self.assertIn("dynamo", rtc.DEFAULT_EXPORTERS)
+
     def test_existing_snapshot_is_valid_json(self):
         repo_root = os.path.dirname(os.path.dirname(HERE))
         path = os.path.join(
