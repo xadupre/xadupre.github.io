@@ -139,6 +139,22 @@ class TestRecordTorchCoverage(unittest.TestCase):
         self.assertIn("yobx", rtc.DEFAULT_EXPORTERS)
         self.assertIn("dynamo", rtc.DEFAULT_EXPORTERS)
 
+    def test_normalise_result_coerces_non_finite_abs_rel(self):
+        # JSON does not support Infinity/NaN; ensure they are normalised to
+        # None so the resulting snapshot is parsable by browsers.
+        norm = rtc._normalise_result(
+            {
+                "name": "AtenC",
+                "exporter": "yobx",
+                "dynamic": False,
+                "success": True,
+                "abs": float("inf"),
+                "rel": float("nan"),
+            }
+        )
+        self.assertIsNone(norm["abs"])
+        self.assertIsNone(norm["rel"])
+
     def test_existing_snapshot_is_valid_json(self):
         repo_root = os.path.dirname(os.path.dirname(HERE))
         path = os.path.join(
@@ -150,7 +166,11 @@ class TestRecordTorchCoverage(unittest.TestCase):
         if not os.path.exists(path):
             self.skipTest("torch_coverage.json snapshot not present in repo")
         with open(path, encoding="utf-8") as fh:
-            payload = json.load(fh)
+            # Mirror the browser's strict JSON parser: reject Infinity/NaN.
+            def _reject(token: str) -> None:
+                raise ValueError(f"non-JSON token in snapshot: {token}")
+
+            payload = json.load(fh, parse_constant=_reject)
         for key in ("date", "exporters", "cases", "results", "totals"):
             self.assertIn(key, payload)
         self.assertIsInstance(payload["results"], list)
