@@ -128,15 +128,23 @@ def build_rows(
 ) -> list[dict[str, str]]:
     """Build the CSV rows for the supplied ``libraries``.
 
-    Importing :mod:`yobx.sklearn` triggers the registration of all
-    converters; this must be done before computing the coverage so that
+    Importing :mod:`yobx.sklearn` exposes the public API but does **not**
+    register the converters. :func:`yobx.sklearn.register_sklearn_converters`
+    must be called before computing the coverage so that
     ``SKLEARN_CONVERTERS`` is fully populated.
     """
     import sklearn
 
     import yobx
-    import yobx.sklearn  # noqa: F401 - import side effect: register converters
+    import yobx.sklearn
     from yobx.sklearn.register import get_sklearn_estimator_coverage
+
+    # Importing :mod:`yobx.sklearn` only exposes the public API; the
+    # converters themselves are populated lazily by
+    # :func:`register_sklearn_converters`. It must be called explicitly,
+    # otherwise ``SKLEARN_CONVERTERS`` stays empty and every library is
+    # reported with a coverage of 0%.
+    yobx.sklearn.register_sklearn_converters()
 
     date = _format_iso(now or dt.datetime.now(tz=dt.timezone.utc))
     sklearn_version = sklearn.__version__
