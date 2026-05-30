@@ -30,7 +30,14 @@ jobs:
   record:
     if: github.event_name == 'schedule' || github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The bootstrap fetch for very active repositories (notably ``onnx/onnx``,
+    # which can produce thousands of workflow runs per 6 months) does not fit
+    # in 30 minutes. Once the per-repo cache has been seeded, subsequent runs
+    # only need to fetch the incremental delta and complete in a few minutes,
+    # but the first run needs a much larger budget. GitHub-hosted runners
+    # allow up to 6 hours per job; cap a bit below that to leave headroom for
+    # the surrounding steps (checkout, commit, push).
+    timeout-minutes: 350
     steps:
       - name: Checkout xadupre.github.io
         uses: actions/checkout@v6
@@ -78,11 +85,23 @@ jobs:
               exit 0
             fi
             echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
-            # Drop any leftover working-tree or untracked changes so that the
-            # rebase below does not abort with "cannot rebase: You have
-            # unstaged changes." Everything we want to publish has already
-            # been committed above, so any remainder is safe to set aside.
-            git stash push --include-untracked --quiet -- || true
+            # When the previous step was cancelled by a timeout, the Python
+            # process may still be flushing CSV files to ``cache_data`` while
+            # this step runs. Fold any such late writes into the existing
+            # commit (so they are not lost) and then make sure the working
+            # tree is clean before rebasing, otherwise ``git rebase`` aborts
+            # with "cannot rebase: You have unstaged changes." and the
+            # partial cache data is never pushed.
+            git add cache_data || true
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit || true
+            fi
+            git stash push --include-untracked --quiet || true
+            # Belt-and-braces: discard anything the stash could not capture
+            # (for example files written after the stash returned) so that
+            # the rebase below always starts from a clean working tree.
+            git checkout -- . || true
+            git clean -fd cache_data || true
             git fetch origin "${branch}"
             if ! git rebase -X ours "origin/${branch}"; then
               echo "Rebase failed; aborting."
