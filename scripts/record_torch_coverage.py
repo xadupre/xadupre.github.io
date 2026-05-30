@@ -28,11 +28,10 @@ from typing import Any, Dict, List, Tuple
 
 
 DEFAULT_EXPORTERS: Tuple[str, ...] = (
+    "yobx",
+    "yobx-tracing",
     "yobx-new-tracing",
-    "export-tracing",
-    "export-strict",
-    "export-nostrict",
-    "export-nostrict-decall",
+    "dynamo",
 )
 
 
