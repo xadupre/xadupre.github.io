@@ -13,6 +13,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_yobx_sklearn_coverage as rysc  # noqa: E402
+import types  # noqa: E402
 
 
 def _make_row(predictable: bool, has_converter: bool) -> dict:
@@ -141,6 +142,50 @@ class TestRecordYobxSklearnCoverage(unittest.TestCase):
                 "coverage_pct",
             ),
         )
+
+    def test_build_rows_calls_register_sklearn_converters(self):
+        # ``build_rows`` must explicitly populate ``SKLEARN_CONVERTERS`` by
+        # calling ``yobx.sklearn.register_sklearn_converters``; importing
+        # ``yobx.sklearn`` alone is not enough and would lead to a coverage
+        # of 0% for every library (see the "coverage page for scikit-learn
+        # is zero" bug).
+        fake_sklearn = types.SimpleNamespace(__version__="9.9.9")
+        called = {"register": 0}
+
+        def _register():
+            called["register"] += 1
+
+        fake_yobx_sklearn = types.ModuleType("yobx.sklearn")
+        fake_yobx_sklearn.register_sklearn_converters = _register
+        fake_yobx = types.ModuleType("yobx")
+        fake_yobx.__version__ = "0.0.0"
+        fake_yobx.sklearn = fake_yobx_sklearn
+
+        fake_register = types.ModuleType("yobx.sklearn.register")
+        fake_register.get_sklearn_estimator_coverage = (
+            lambda libraries, rst: []
+        )
+
+        names = ("sklearn", "yobx", "yobx.sklearn", "yobx.sklearn.register")
+        original_modules = {name: sys.modules.get(name) for name in names}
+        sys.modules["sklearn"] = fake_sklearn
+        sys.modules["yobx"] = fake_yobx
+        sys.modules["yobx.sklearn"] = fake_yobx_sklearn
+        sys.modules["yobx.sklearn.register"] = fake_register
+        original_is_available = rysc._is_available
+        rysc._is_available = lambda library: True
+        try:
+            rows = rysc.build_rows(["sklearn"])
+        finally:
+            rysc._is_available = original_is_available
+            for name, mod in original_modules.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+        self.assertEqual(called["register"], 1)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["library"], "sklearn")
 
 
 if __name__ == "__main__":
