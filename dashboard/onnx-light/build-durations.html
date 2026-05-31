@@ -184,6 +184,31 @@ function movingAverage(data, windowSize) {
   return result;
 }
 
+// Drop observations whose duration is more than 4 times the moving
+// average computed over the prior 4 months of kept observations.
+// Outliers are compared against earlier kept points only, so a single
+// spike cannot poison the baseline used to vet later points.
+const OUTLIER_WINDOW_MS = 4 * 30 * 24 * 60 * 60 * 1000;
+const OUTLIER_FACTOR = 4;
+function filterOutliers(rows) {
+  const kept = [];
+  for (let i = 0; i < rows.length; i++) {
+    const t = new Date(rows[i].date).getTime();
+    let sum = 0;
+    let count = 0;
+    for (let j = kept.length - 1; j >= 0; j--) {
+      const tj = new Date(kept[j].date).getTime();
+      if (t - tj > OUTLIER_WINDOW_MS) break;
+      sum += kept[j].duration;
+      count += 1;
+    }
+    if (count === 0 || rows[i].duration <= OUTLIER_FACTOR * (sum / count)) {
+      kept.push(rows[i]);
+    }
+  }
+  return kept;
+}
+
 function buildChart(canvas, jobName, rows, color) {
   const data = rows.map(r => ({
     x: r.date,
@@ -297,7 +322,7 @@ function renderJob(jobFile, color) {
     })
     .then(text => {
       const allRows = parseCSV(text);
-      const rows = allRows.filter(r => r.conclusion === "success");
+      const rows = filterOutliers(allRows.filter(r => r.conclusion === "success"));
       if (rows.length === 0) {
         meta.textContent = allRows.length === 0
           ? "no recorded run yet"
