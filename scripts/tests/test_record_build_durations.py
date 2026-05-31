@@ -527,6 +527,37 @@ class TestRecordBuildDurations(unittest.TestCase):
             self.assertNotIn('text: "duration (s)"', content)
             self.assertNotIn('+ " s"', content)
 
+    def test_dashboard_filters_duration_outliers(self):
+        # The dashboards must drop observations whose duration is longer
+        # than 4 times the moving average over the past 4 months, so a
+        # single anomalously slow run cannot stretch the y axis and hide
+        # the normal variation.
+        root = os.path.dirname(os.path.dirname(HERE))
+        pages = [
+            os.path.join(root, "dashboard", "onnx", "build-durations.html"),
+            os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
+            os.path.join(
+                root,
+                "dashboard",
+                "yet-another-onnx-builder",
+                "build-durations.html",
+            ),
+        ]
+        for path in pages:
+            with open(path, encoding="utf-8") as fh:
+                content = fh.read()
+            self.assertIn("function filterOutliers(rows)", content)
+            # 4 months window expressed in milliseconds.
+            self.assertIn(
+                "OUTLIER_WINDOW_MS = 4 * 30 * 24 * 60 * 60 * 1000", content
+            )
+            # Outlier threshold is 4 x the moving average.
+            self.assertIn("OUTLIER_FACTOR = 4", content)
+            # The filter must actually be applied to the rendered rows.
+            self.assertIn(
+                'filterOutliers(allRows.filter(r => r.conclusion === "success"))',
+                content,
+            )
 
     def test_record_build_durations_workflow_has_robust_push(self):
         # The ``record_build_durations`` workflow occasionally times out on
