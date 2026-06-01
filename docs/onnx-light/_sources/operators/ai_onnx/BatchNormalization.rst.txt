@@ -1,0 +1,276 @@
+.. _op_ai_onnx_BatchNormalization:
+
+BatchNormalization
+==================
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 15
+
+Carries out batch normalization as described in the paper
+https://arxiv.org/abs/1502.03167. Depending on the mode it is being run,
+There are five required inputs 'X', 'scale', 'B', 'input_mean' and
+'input_var'.
+Note that 'input_mean' and 'input_var' are expected to be the estimated
+statistics in inference mode (training_mode=False, default),
+and the running statistics in training mode (training_mode=True).
+There are multiple cases for the number of outputs, which we list below:
+
+* Output case #1: Y, running_mean, running_var (training_mode=True)
+* Output case #2: Y (training_mode=False)
+
+When training_mode=False, extra outputs are invalid.
+The outputs are updated as follows when training_mode=True:
+
+.. code-block::
+
+    running_mean = input_mean * momentum + current_mean * (1 - momentum)
+    running_var = input_var * momentum + current_var * (1 - momentum)
+    
+    Y = (X - current_mean) / sqrt(current_var + epsilon) * scale + B
+
+where:
+
+.. code-block::
+
+    current_mean = ReduceMean(X, axis=all_except_channel_index)
+    current_var =  ReduceVar(X, axis=all_except_channel_index)
+
+Notice that ``ReduceVar`` refers to the population variance, and it equals to
+``sum(sqrd(x_i - x_avg)) / N``
+where ``N`` is the population size (this formula does not use sample size ``N - 1``).
+
+The computation of ReduceMean and ReduceVar uses float to avoid overflow for float16 inputs.
+
+When training_mode=False:
+
+.. code-block::
+
+    Y = (X - input_mean) / sqrt(input_var + epsilon) * scale + B
+
+
+For previous (depreciated) non-spatial cases, implementers are suggested
+to flatten the input shape to (N x C \* D1 \* D2 \* ... \* Dn) before a BatchNormalization Op.
+
+**Inputs**
+
+- **X** (*T*): Input data tensor from the previous operator; dimensions are in the form of (N x C x D1 x D2 ... Dn), where N is the batch size, C is the number of channels. Statistics are computed for every channel of C over N and D1 to Dn dimensions. For image data, input dimensions become (N x C x H x W). The op also accepts single dimension input of size N in which case C is assumed to be 1
+- **scale** (*T1*): Scale tensor of shape (C).
+- **B** (*T1*): Bias tensor of shape (C).
+- **input_mean** (*T2*): running (training) or estimated (testing) mean tensor of shape (C).
+- **input_var** (*T2*): running (training) or estimated (testing) variance tensor of shape (C).
+
+**Outputs**
+
+- **Y** (*T*): The output tensor of the same shape as X
+- **running_mean** (*T2*): The running mean after the BatchNormalization operator.
+- **running_var** (*T2*): The running variance after the BatchNormalization operator. This op uses the population size (N) for calculating variance, and not the sample size N-1.
+
+**Type Constraints**
+
+- **T**: Constrain input and output types to float tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+- **T1**: Constrain scale and bias types to float tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+- **T2**: Constrain mean and variance types to float tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+
+Examples
+--------
+
+**test_cc_batchnorm_epsilon**
+
+.. code-block:: text
+
+    Attributes:
+      epsilon = 0.009999999776482582
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(2, 3, 4, 5), dtype=float32
+        [[[[-1.        , -0.9       , -0.8       , -0.7       , -0.6       ],
+           [-0.5       , -0.39999998, -0.3       , -0.19999999, -0.09999996],
+           [ 0.        ,  0.10000002,  0.20000005,  0.30000007,  0.39999998],
+           [ 0.5       ,  0.6       ,  0.70000005,  0.8000001 ,  0.9       ]],
+        
+          [[ 1.        ,  1.1000001 ,  1.2       ,  1.3       ,  1.4000001 ],
+           [ 1.5       ,  1.6000001 ,  1.7       ,  1.8       ,  1.9000001 ],
+           [ 2.        ,  2.1000001 ,  2.2       ,  2.3       ,  2.4       ],
+           [ 2.5       ,  2.6000001 ,  2.7       ,  2.8       ,  2.9       ]],
+        
+          [[ 3.        ,  3.1       ,  3.2000003 ,  3.3000002 ,  3.4       ],
+           [ 3.5       ,  3.6       ,  3.7000003 ,  3.8000002 ,  3.9       ],
+           [ 4.        ,  4.1       ,  4.2000003 ,  4.3       ,  4.4       ],
+           [ 4.5       ,  4.6       ,  4.7000003 ,  4.8       ,  4.9       ]]],
+        
+        
+         [[[ 5.        ,  5.1       ,  5.2000003 ,  5.3       ,  5.4       ],
+           [ 5.5       ,  5.6       ,  5.7000003 ,  5.8       ,  5.9       ],
+           [ 6.        ,  6.1       ,  6.2000003 ,  6.3       ,  6.4       ],
+           [ 6.5       ,  6.6       ,  6.7000003 ,  6.8       ,  6.9       ]],
+        
+          [[ 7.        ,  7.1000004 ,  7.2       ,  7.3       ,  7.4000006 ],
+           [ 7.5       ,  7.6000004 ,  7.7       ,  7.8       ,  7.9000006 ],
+           [ 8.        ,  8.1       ,  8.2       ,  8.3       ,  8.400001  ],
+           [ 8.5       ,  8.6       ,  8.7       ,  8.8       ,  8.900001  ]],
+        
+          [[ 9.        ,  9.1       ,  9.2       ,  9.3       ,  9.400001  ],
+           [ 9.5       ,  9.6       ,  9.7       ,  9.8       ,  9.900001  ],
+           [10.        , 10.1       , 10.2       , 10.3       , 10.400001  ],
+           [10.5       , 10.6       , 10.7       , 10.8       , 10.900001  ]]]]
+      scale: shape=(3,), dtype=float32
+        [1. , 1.5, 2. ]
+      B: shape=(3,), dtype=float32
+        [ 0. , -0.5,  0.5]
+      input_mean: shape=(3,), dtype=float32
+        [ 0.5 ,  1.  , -0.25]
+      input_var: shape=(3,), dtype=float32
+        [0.25, 0.5 , 1.  ]
+
+    Outputs:
+      y: shape=(2, 3, 4, 5), dtype=float32
+        [[[[-2.941742  , -2.745626  , -2.5495098 , -2.3533936 , -2.1572776 ],
+           [-1.9611614 , -1.7650452 , -1.5689292 , -1.372813  , -1.1766968 ],
+           [-0.9805807 , -0.7844645 , -0.5883483 , -0.39223212, -0.19611621],
+           [ 0.        ,  0.19611621,  0.39223242,  0.5883485 ,  0.7844645 ]],
+        
+          [[-0.5       , -0.28995776, -0.079916  ,  0.130126  ,  0.34016824],
+           [ 0.55021   ,  0.76025224,  0.970294  ,  1.180336  ,  1.3903782 ],
+           [ 1.60042   ,  1.8104625 ,  2.020504  ,  2.230546  ,  2.440588  ],
+           [ 2.65063   ,  2.8606725 ,  3.070714  ,  3.280756  ,  3.490798  ]],
+        
+          [[ 6.9677415 ,  7.1667485 ,  7.365757  ,  7.564764  ,  7.763771  ],
+           [ 7.9627786 ,  8.161785  ,  8.360794  ,  8.559801  ,  8.758808  ],
+           [ 8.957815  ,  9.156823  ,  9.355831  ,  9.554838  ,  9.753845  ],
+           [ 9.952853  , 10.15186   , 10.350868  , 10.549875  , 10.748882  ]]],
+        
+        
+         [[[ 8.825227  ,  9.021342  ,  9.21746   ,  9.413575  ,  9.609692  ],
+           [ 9.805807  , 10.001924  , 10.19804   , 10.394156  , 10.590272  ],
+           [10.786387  , 10.982504  , 11.17862   , 11.374737  , 11.570852  ],
+           [11.766969  , 11.963084  , 12.159202  , 12.355317  , 12.551434  ]],
+        
+          [[12.10252   , 12.312563  , 12.522604  , 12.732646  , 12.942689  ],
+           [13.15273   , 13.362773  , 13.572813  , 13.782856  , 13.992899  ],
+           [14.20294   , 14.412983  , 14.623024  , 14.833067  , 15.04311   ],
+           [15.253149  , 15.463192  , 15.673233  , 15.883276  , 16.093319  ]],
+        
+          [[18.908188  , 19.107195  , 19.306202  , 19.505209  , 19.704218  ],
+           [19.903225  , 20.102232  , 20.301239  , 20.500246  , 20.699255  ],
+           [20.898262  , 21.09727   , 21.296276  , 21.495283  , 21.694292  ],
+           [21.8933    , 22.092306  , 22.291313  , 22.49032   , 22.68933   ]]]]
+
+**test_cc_batchnorm_example**
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(1, 2, 1, 3), dtype=float32
+        [[[[-1.,  0.,  1.]],
+        
+          [[ 2.,  3.,  4.]]]]
+      scale: shape=(2,), dtype=float32
+        [1. , 1.5]
+      B: shape=(2,), dtype=float32
+        [0., 1.]
+      input_mean: shape=(2,), dtype=float32
+        [0., 3.]
+      input_var: shape=(2,), dtype=float32
+        [1. , 1.5]
+
+    Outputs:
+      y: shape=(1, 2, 1, 3), dtype=float32
+        [[[[-0.999995  ,  0.        ,  0.999995  ]],
+        
+          [[-0.22474074,  1.        ,  2.2247407 ]]]]
+
+Differences with previous version (14)
+--------------------------------------
+
+**SchemaDiff**: ``BatchNormalization`` (domain ``'ai.onnx'``)
+
+* old version: 14
+* new version: 15
+* breaking: **yes**
+
+**Breaking reasons:**
+
+* input 'scale' (changed): type_str changed 'T' -> 'T1'
+* input 'B' (changed): type_str changed 'T' -> 'T1'
+* input 'input_mean' (changed): type_str changed 'U' -> 'T2'
+* input 'input_var' (changed): type_str changed 'U' -> 'T2'
+* output 'running_mean' (changed): type_str changed 'U' -> 'T2'
+* output 'running_var' (changed): type_str changed 'U' -> 'T2'
+* type constraint 'U' (removed): entire constraint removed
+
+**Inputs:**
+
+* [BREAKING] changed 'scale': type_str changed 'T' -> 'T1'
+* [BREAKING] changed 'B': type_str changed 'T' -> 'T1'
+* [BREAKING] changed 'input_mean': type_str changed 'U' -> 'T2'
+* [BREAKING] changed 'input_var': type_str changed 'U' -> 'T2'
+
+**Outputs:**
+
+* [BREAKING] changed 'running_mean': type_str changed 'U' -> 'T2'
+* [BREAKING] changed 'running_var': type_str changed 'U' -> 'T2'
+
+**Type constraints:**
+
+* [BREAKING] removed 'U': entire constraint removed
+* added 'T1': added types: ['tensor(bfloat16)', 'tensor(double)', 'tensor(float)', 'tensor(float16)']
+* added 'T2': added types: ['tensor(bfloat16)', 'tensor(double)', 'tensor(float)', 'tensor(float16)']
+
+**Documentation:**
+
+* line similarity: 0.77 (+9/-9 lines)
+
+.. code-block:: diff
+
+    --- BatchNormalization v14
+    +++ BatchNormalization v15
+    @@ -8,8 +8,8 @@
+     and the running statistics in training mode (training_mode=True).
+     There are multiple cases for the number of outputs, which we list below:
+     
+    -Output case #1: Y, running_mean, running_var (training_mode=True)
+    -Output case #2: Y (training_mode=False)
+    +* Output case #1: Y, running_mean, running_var (training_mode=True)
+    +* Output case #2: Y (training_mode=False)
+     
+     When training_mode=False, extra outputs are invalid.
+     The outputs are updated as follows when training_mode=True:
+    @@ -18,17 +18,17 @@
+     running_var = input_var * momentum + current_var * (1 - momentum)
+     
+     Y = (X - current_mean) / sqrt(current_var + epsilon) * scale + B
+    -
+    +```
+     where:
+    -
+    +```
+     current_mean = ReduceMean(X, axis=all_except_channel_index)
+     current_var =  ReduceVar(X, axis=all_except_channel_index)
+    +```
+    +Notice that `ReduceVar` refers to the population variance, and it equals to
+    +`sum(sqrd(x_i - x_avg)) / N`
+    +where `N` is the population size (this formula does not use sample size `N - 1`).
+     
+    -Notice that ReduceVar refers to the population variance, and it equals to
+    -sum(sqrd(x_i - x_avg)) / N
+    -where N is the population size (this formula does not use sample size N - 1).
+    -
+    -```
+    +The computation of ReduceMean and ReduceVar uses float to avoid overflow for float16 inputs.
+     
+     When training_mode=False:
+     ```
+
+Version History
+---------------
+
+- :doc:`Version 14 <BatchNormalization-14>`
+- :doc:`Version 9 <BatchNormalization-9>`
+- :doc:`Version 7 <BatchNormalization-7>`
+- :doc:`Version 6 <BatchNormalization-6>`
+- :doc:`Version 1 <BatchNormalization-1>`

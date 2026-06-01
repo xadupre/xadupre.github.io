@@ -1,0 +1,122 @@
+.. _op_ai_onnx_Loop:
+
+Loop
+====
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 13
+
+Generic Looping construct. This loop has multiple termination conditions:
+
+1) Trip count. Iteration count specified at runtime. Set by
+   specifying the input M. Optional. Set to empty string to omit.
+   Note that a static trip count (specified at graph construction time) can be
+   specified by passing in a constant node for input M.
+2) Loop termination condition. This is an input to the op that determines
+   whether to run the first iteration and also a loop-carried dependency for
+   the body graph. The body graph must yield a value for the condition variable,
+   whether this input is provided or not.
+
+Note that the semantics of this op support "diagonal" or "wavefront" execution.
+Frontends should emit multi-layer RNNs as a series of While operators (with
+time being the inner looping dimension), with each successive layer consuming
+the scan_outputs from the previous layer, possibly going through several
+point-wise operators (e.g. dropout, residual connections, linear layer).
+
+The input/output of subgraph (produced by loop node) matching is based on order instead of name. The implementation will figure out the names based on this order.
+
+**Inputs**
+
+- **M** (*I*): A maximum trip-count for the loop specified at runtime. Optional. Pass empty string to skip.
+- **cond** (*B*): A boolean termination condition. Optional. Pass empty string to skip.
+- **v_initial** (*V*): The initial values of any loop-carried dependencies (values that change across loop iterations)
+
+**Outputs**
+
+- **v_final_and_scan_outputs** (*V*): Final N loop carried dependency values then K scan_outputs. Scan outputs must be Tensors.
+
+**Attributes**
+
+- **body** (*graph*): The graph run each iteration. It has 2+N inputs: (iteration_num, condition, loop carried dependencies...). It has 1+N+K outputs: (condition, loop carried dependencies..., scan_outputs...). Each scan_output is created by concatenating the value of the specified output value at the end of each iteration of the loop. It is an error if the dimensions or data type of these scan_outputs change across loop iterations.
+
+**Type Constraints**
+
+- **V**: All Tensor and Sequence types
+  Allowed types: seq(tensor(bool)), seq(tensor(complex128)), seq(tensor(complex64)), seq(tensor(double)), seq(tensor(float)), seq(tensor(float16)), seq(tensor(int16)), seq(tensor(int32)), seq(tensor(int64)), seq(tensor(int8)), seq(tensor(string)), seq(tensor(uint16)), seq(tensor(uint32)), seq(tensor(uint64)), seq(tensor(uint8)), tensor(bool), tensor(complex128), tensor(complex64), tensor(double), tensor(float), tensor(float16), tensor(int16), tensor(int32), tensor(int64), tensor(int8), tensor(string), tensor(uint16), tensor(uint32), tensor(uint64), tensor(uint8).
+- **I**: tensor of int64, which should be a scalar.
+  Allowed types: tensor(int64).
+- **B**: tensor of bool, which should be a scalar.
+  Allowed types: tensor(bool).
+
+Examples
+--------
+
+**test_cc_loop_basic_trip_count**
+
+.. code-block:: text
+
+    Attributes:
+      body = <subgraph>
+
+.. code-block:: text
+
+    Inputs:
+      M: shape=(), dtype=int64
+        3
+
+    Outputs:
+      scan_outputs: shape=(3, 1), dtype=int64
+        [[42],
+         [42],
+         [42]]
+
+**test_cc_loop_zero_trip_count**
+
+.. code-block:: text
+
+    Attributes:
+      body = <subgraph>
+
+.. code-block:: text
+
+    Inputs:
+      M: shape=(), dtype=int64
+        0
+
+    Outputs:
+      scan_outputs: shape=(0, 1), dtype=int64
+        []
+
+Differences with previous version (11)
+--------------------------------------
+
+**SchemaDiff**: ``Loop`` (domain ``'ai.onnx'``)
+
+* old version: 11
+* new version: 13
+* breaking: no
+
+**Type constraints:**
+
+* changed 'V': added types: ['seq(tensor(bool))', 'seq(tensor(complex128))', 'seq(tensor(complex64))', 'seq(tensor(double))', 'seq(tensor(float))', 'seq(tensor(float16))', 'seq(tensor(int16))', 'seq(tensor(int32))', 'seq(tensor(int64))', 'seq(tensor(int8))', 'seq(tensor(string))', 'seq(tensor(uint16))', 'seq(tensor(uint32))', 'seq(tensor(uint64))', 'seq(tensor(uint8))']
+
+**Documentation:**
+
+* line similarity: 0.94 (+2/-0 lines)
+
+.. code-block:: diff
+
+    --- Loop v11
+    +++ Loop v13
+    @@ -14,3 +14,5 @@
+     time being the inner looping dimension), with each successive layer consuming
+     the scan_outputs from the previous layer, possibly going through several
+     point-wise operators (e.g. dropout, residual connections, linear layer).
+    +
+    +The input/output of subgraph (produced by loop node) matching is based on order instead of name. The implementation will figure out the names based on this order.
+
+Version History
+---------------
+
+- :doc:`Version 11 <Loop-11>`
+- :doc:`Version 1 <Loop-1>`

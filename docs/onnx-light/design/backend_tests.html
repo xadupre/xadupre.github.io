@@ -383,7 +383,6 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Shape Inference</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="schema_comparison.html">Comparison: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> <code class="docutils literal notranslate"><span class="pre">OpSchema</span></code> vs <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code> <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="expressions.html">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Backend</span></p>
@@ -634,10 +633,20 @@ backend test case through
 <span class="c1">#     not register the ``ai.onnx.preview.training`` domain, so these models</span>
 <span class="c1">#     fail to load with</span>
 <span class="c1">#     &quot;ai.onnx.preview.training:Adam(-1) is not a registered function/op&quot;.</span>
+<span class="c1">#   * ``test_cc_bernoulli``, ``test_cc_bernoulli_double`` and</span>
+<span class="c1">#     ``test_cc_bernoulli_seed`` — ORT decomposes ``Bernoulli`` into</span>
+<span class="c1">#     ``RandomUniformLike`` + ``Less``, but its CPU EP has no kernel</span>
+<span class="c1">#     registered for ``RandomUniformLike(22)`` (&quot;Could not find an</span>
+<span class="c1">#     implementation for RandomUniformLike(22) node&quot;). The reference backend</span>
+<span class="c1">#     still exercises these cases.</span>
 <span class="c1">#   * ``test_cc_binarizer_int64`` — ORT only registers a ``float`` kernel for</span>
 <span class="c1">#     ``ai.onnx.ml::Binarizer``, so the ``int64`` variant fails with</span>
 <span class="c1">#     &quot;Could not find an implementation for Binarizer(1) node&quot;. The</span>
 <span class="c1">#     ``float`` variant (``test_cc_binarizer_float``) is still exercised.</span>
+<span class="c1">#   * ``test_cc_scaler_int64`` — ORT only registers a ``float`` kernel for</span>
+<span class="c1">#     ``ai.onnx.ml::Scaler``, so the ``int64`` variant fails with</span>
+<span class="c1">#     &quot;Could not find an implementation for Scaler(1) node&quot;. The</span>
+<span class="c1">#     ``float`` variant (``test_cc_scaler_float``) is still exercised.</span>
 <span class="c1">#   * ``test_cc_cast_*FLOAT8E4M3*`` and ``test_cc_cast_*FLOAT8E5M2*`` — ORT&#39;s</span>
 <span class="c1">#     CPU EP rejects the float8 dtypes as ``Cast`` operand types</span>
 <span class="c1">#     (&quot;Type &#39;tensor(float8eNmM)&#39; of input parameter ... is invalid&quot;) and its</span>
@@ -654,6 +663,45 @@ backend test case through
 <span class="c1">#     Python bindings have no numpy mapping for the packed output types</span>
 <span class="c1">#     (&quot;No corresponding Numpy type for Tensor Type. Int4x2&quot;). The</span>
 <span class="c1">#     reference backend still exercises these conversions byte-for-byte.</span>
+<span class="c1">#   * ``test_cc_zipmap_*`` — ORT returns Python ``list[dict]`` for ZipMap</span>
+<span class="c1">#     outputs while the lightweight backend-test carrier materializes ZipMap</span>
+<span class="c1">#     expected outputs as float tensors containing map values.</span>
+<span class="c1">#   * ``test_dequantizelinear_int16`` and ``test_dequantizelinear_uint16`` —</span>
+<span class="c1">#     ORT&#39;s CPU EP rejects ``int16``/``uint16`` as ``DequantizeLinear`` input</span>
+<span class="c1">#     types (&quot;Type &#39;tensor(int16)&#39; of input parameter ... is invalid&quot;). The</span>
+<span class="c1">#     reference backend still exercises these cases.</span>
+<span class="c1">#   * ``test_dequantizelinear_e4m3fn``, ``test_dequantizelinear_e5m2`` and</span>
+<span class="c1">#     ``test_dequantizelinear_e4m3fn_zero_point`` — ORT&#39;s CPU EP rejects</span>
+<span class="c1">#     ``float8e4m3fn`` / ``float8e5m2`` as ``DequantizeLinear`` input types</span>
+<span class="c1">#     (&quot;Type &#39;tensor(float8e4m3fn)&#39; of input parameter (x) of operator</span>
+<span class="c1">#     (DequantizeLinear) ... is invalid&quot;). The reference backend still</span>
+<span class="c1">#     exercises these cases.</span>
+<span class="c1">#   * ``test_quantizelinear_int16`` and ``test_quantizelinear_uint16`` — ORT&#39;s</span>
+<span class="c1">#     CPU EP rejects ``int16``/``uint16`` as ``QuantizeLinear`` ``y_zero_point``</span>
+<span class="c1">#     types (&quot;Type &#39;tensor(int16)&#39; of input parameter (y_zero_point) ... is</span>
+<span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
+<span class="c1">#   * ``test_cc_svmclassifier_int64_binary`` and</span>
+<span class="c1">#     ``test_cc_svmregressor_linear`` — ORT&#39;s ``ai.onnx.ml`` SVM kernels follow</span>
+<span class="c1">#     a different scoring/layout convention than the lightweight backend</span>
+<span class="c1">#     reference kernels for these focused C++ parity cases.</span>
+<span class="c1">#   * ``test_cc_linearclassifier_int64_binary`` and</span>
+<span class="c1">#     ``test_cc_linearregressor_single_target`` — focused C++ parity cases for</span>
+<span class="c1">#     the ``ai.onnx.ml`` Linear* operators; ORT&#39;s kernels may apply a</span>
+<span class="c1">#     different score-expansion convention for binary classifiers.</span>
+<span class="c1">#   * ``test_cc_treeensembleclassifier_int64_binary`` — focused C++ parity</span>
+<span class="c1">#     case for ``ai.onnx.ml::TreeEnsembleClassifier``; ORT&#39;s binary-classifier</span>
+<span class="c1">#     kernel applies a different score-expansion convention (threshold-at-zero</span>
+<span class="c1">#     rather than argmax) that produces a different predicted label for the</span>
+<span class="c1">#     zero-score sample.</span>
+<span class="c1">#   * ``test_cc_globallppool_*`` — ORT has no CPU kernel for</span>
+<span class="c1">#     ``GlobalLpPool(22)`` (&quot;Could not find an implementation for</span>
+<span class="c1">#     GlobalLpPool(22) node&quot;). The reference backend still exercises these</span>
+<span class="c1">#     cases.</span>
+<span class="c1">#   * ``test_cc_simple_rnn_batchwise`` — ORT&#39;s CPU ``RNN`` kernel rejects</span>
+<span class="c1">#     ``layout=1`` at initialization (&quot;Batchwise recurrent operations</span>
+<span class="c1">#     (layout == 1) are not supported. If you need support create a github</span>
+<span class="c1">#     issue with justification.&quot;). The reference backend still exercises</span>
+<span class="c1">#     this case.</span>
 <span class="c1"># These cases remain covered by the reference backend tests.</span>
 <span class="n">ORT_EXCLUDE_REGEX</span> <span class="o">=</span> <span class="p">[</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_roialign_max$&quot;</span><span class="p">,</span>
@@ -662,13 +710,32 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_adam_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam_multiple$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_double$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_seed$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_binarizer_int64$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_scaler_int64$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E4M3.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E5M2.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*UINT4.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*UINT2.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*INT4.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*INT2.*$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_zipmap_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_int16$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_uint16$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn_zero_point$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e5m2$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int16$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint16$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_svmclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_svmregressor_linear$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_linearclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_linearregressor_single_target$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_treeensembleclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_globallppool_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_simple_rnn_batchwise$&quot;</span><span class="p">,</span>
 <span class="p">]</span>
 
 <span class="n">TestOrtBackend</span> <span class="o">=</span> <span class="n">make_test_class</span><span class="p">(</span><span class="n">onnxruntime_backend</span><span class="p">,</span> <span class="n">exclude_regex</span><span class="o">=</span><span class="n">ORT_EXCLUDE_REGEX</span><span class="p">)</span>
