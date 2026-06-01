@@ -1,0 +1,917 @@
+.. _op_ai_onnx_Attention-23:
+
+Attention - version 23
+======================
+
+This page documents version **23** of operator **Attention**. See :doc:`Attention` for the latest version (since version 24).
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 23
+
+Computes scaled dot product attention on query, key and value tensors, using an optional attention mask if passed.
+
+This operator covers self and cross variants of the attention operation based on sequence lengths of K, Q and V.
+
+For self attention, ``kv_sequence_length`` equals to ``q_sequence_length``.
+
+For cross attention, query and key might have different lengths.
+
+This operator also covers the 3 following variants based on the number of heads:
+
+1) Multi-headed Attention (MHA): Described in the paper https://arxiv.org/pdf/1706.03762, ``q_num_heads = kv_num_heads``.
+2) Group-query Attention (GQA): Described in the paper https://arxiv.org/pdf/2305.13245, ``q_num_heads > kv_num_heads``, ``q_num_heads % kv_num_heads == 0``.
+3) Multi-query Attention (MQA): Described in the paper https://arxiv.org/pdf/1911.02150, ``q_num_heads > kv_num_heads``, ``kv_num_heads=1``.
+
+Attention bias to be added is calculated based on ``attn_mask`` input and ``is_causal attribute``, only one of which can be provided.
+
+1) If ``is_causal`` is set to ``1``, the attention masking is a lower triangular matrix when the mask is a square matrix. The attention masking has the form of the upper left causal bias due to the alignment.
+2) ``attn_mask``: A boolean mask where a value of ``True`` indicates that the element should take part in attention or a float mask of the same type as query, key, value that is added to the attention score.
+
+Both past and present state key/values are optional. They shall be used together, and not allowed to use only one of them.
+The following pattern is applied to the Q, K and V inputs after appropriate reshaping of K and V inputs based on sequence lengths and num heads provided:
+
+.. code-block::
+
+      The following pattern is applied by this operator:
+          Q          K          V
+          |          |          |
+    Q*sqrt(scale) K*sqrt(scale) |
+          |          |          |
+          |       Transpose     |
+          |          |          |
+          ---MatMul---          |
+                |               |
+      softcap (if provided)     |
+                |               |
+     at_mask---Add              |
+                |               |
+             Softmax            |
+                |               |
+                -----MatMul------
+                       |
+                       Y
+
+
+**Inputs**
+
+- **Q** (*T1*): Query tensor. 4D tensor with shape ``(batch_size, q_num_heads, q_sequence_length, head_size)`` or 3D tensor with shape ``(batch_size, q_sequence_length, q_hidden_size)``. For cases with a 3D input tensor, ``q_hidden_size = q_num_heads * head_size``
+- **K** (*T1*): Key tensor. 4D tensor with shape ``(batch_size, kv_num_heads, kv_sequence_length, head_size)`` or 3D tensor with shape ``(batch_size, kv_sequence_length, k_hidden_size)``. For cases with a 3D input tensor, ``k_hidden_size = kv_num_heads * head_size``
+- **V** (*T2*): Value tensor. 4D tensor with shape ``(batch_size, kv_num_heads, kv_sequence_length, v_head_size)`` or 3D tensor with shape ``(batch_size, kv_sequence_length, v_hidden_size)``. For cases with a 3D input tensor, ``v_hidden_size = kv_num_heads * v_head_size``
+- **attn_mask** (*U*): Attention mask. Shape must be broadcastable to 4D tensor with shape ``(batch_size, q_num_heads, q_sequence_length, total_sequence_length)`` where ``total_sequence_length = past_sequence_length + kv_sequence_length.`` Two types of masks are supported. A boolean mask where a value of ``True`` indicates that the element should take part in attention. Also supports a float mask of the same type as query, key, value that is added to the attention score.
+- **past_key** (*T1*): past state cache for key with shape ``(batch_size, kv_num_heads, past_sequence_length, head_size)``
+- **past_value** (*T2*): past state cache for value with shape ``(batch_size, kv_num_heads, past_sequence_length, v_head_size)``
+
+**Outputs**
+
+- **Y** (*T1*): The output tensor . 4D tensor with shape ``(batch_size, q_num_heads, q_sequence_length, v_head_size)`` or 3D tensor with shape ``(batch_size, q_sequence_length, hidden_size)``. For cases with a 3D input tensor, ``hidden_size = q_num_heads * v_head_size``
+- **present_key** (*T1*): Updated key cache with shape ``(batch_size, kv_num_heads, total_sequence_length, head_size)`` where ``total_sequence_length = past_sequence_length + kv_sequence_length``.
+- **present_value** (*T2*): Updated value cache with shape ``(batch_size, kv_num_heads, total_sequence_length, v_head_size)`` where ``total_sequence_length = past_sequence_length + kv_sequence_length``.
+- **qk_matmul_output** (*T1*): The output of QK matmul. 4D tensor with shape ``(batch_size, q_num_heads, q_sequence_length, total_sequence_length)`` where ``total_sequence_length = past_sequence_length + kv_sequence_length``.
+
+**Type Constraints**
+
+- **T1**: Constrain Q and K inputs types to float tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+- **T2**: Constrain V input types to float tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+- **U**: Constrain output 'mask' types to boolean tensors and input types.
+  Allowed types: tensor(bfloat16), tensor(bool), tensor(double), tensor(float), tensor(float16), tensor(int16), tensor(int32), tensor(int64), tensor(int8), tensor(uint16), tensor(uint32), tensor(uint64), tensor(uint8).
+
+Examples
+--------
+
+**test_cc_attention_3d**
+
+.. code-block:: text
+
+    Attributes:
+      q_num_heads = 2
+      kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      K: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  , -1.  ,  1.  ],
+          [ 0.5 ,  0.5 ,  1.  ,  1.  ],
+          [ 0.  ,  1.  ,  0.25, -0.5 ]]]
+      V: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  ,  2.  , -2.  ],
+          [ 0.  ,  1.  ,  0.5 ,  0.25],
+          [-1.  ,  1.  , -0.5 ,  0.  ]]]
+
+    Outputs:
+      Y: shape=(1, 2, 4), dtype=float32
+        [[[ 0.23092115,  0.5444725 ,  0.6482418 , -0.37858847],
+          [-0.23092115,  0.77539366,  0.04638294, -0.08028026]]]
+
+**test_cc_attention_3d_causal**
+
+.. code-block:: text
+
+    Attributes:
+      q_num_heads = 2
+      kv_num_heads = 2
+      is_causal = 1
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  , -1.  ,  1.  ],
+          [ 0.  ,  1.  ,  1.  , -1.  ],
+          [ 0.5 ,  0.5 ,  0.25,  0.5 ]]]
+      K: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  , -1.  ,  1.  ],
+          [ 0.5 ,  0.5 ,  1.  ,  1.  ],
+          [ 0.  ,  1.  ,  0.25, -0.5 ]]]
+      V: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  ,  2.  , -2.  ],
+          [ 0.  ,  1.  ,  0.5 ,  0.25],
+          [-1.  ,  1.  , -0.5 ,  0.  ]]]
+
+    Outputs:
+      Y: shape=(1, 3, 4), dtype=float32
+        [[[ 1.        ,  0.        ,  2.        , -2.        ],
+          [ 0.412521  ,  0.587479  ,  0.79335546, -0.19003323],
+          [ 0.        ,  0.6666667 ,  0.7425821 , -0.5205673 ]]]
+
+**test_cc_attention_3d_gqa**
+
+.. code-block:: text
+
+    Attributes:
+      q_num_heads = 4
+      kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 8), dtype=float32
+        [[[ 0.1 ,  0.2 , -0.1 ,  0.05,  0.5 ,  0.5 ,  1.  ,  0.  ],
+          [ 0.3 ,  0.4 ,  0.2 , -0.3 ,  0.  ,  1.  ,  0.5 , -0.5 ]]]
+      K: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  , -1.  ,  1.  ],
+          [ 0.5 ,  0.5 ,  1.  ,  1.  ],
+          [ 0.  ,  1.  ,  0.25, -0.5 ]]]
+      V: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  ,  2.  , -2.  ],
+          [ 0.  ,  1.  ,  0.5 ,  0.25],
+          [-1.  ,  1.  , -0.5 ,  0.  ]]]
+
+    Outputs:
+      Y: shape=(1, 2, 8), dtype=float32
+        [[[-0.02356532,  0.6783799 , -0.03533878,  0.6841799 ,  0.6482418 ,
+           -0.37858847,  0.37784207, -0.12898168],
+          [-0.02356531,  0.6783799 ,  0.11724145,  0.6063233 ,  0.9917567 ,
+           -0.74587834,  0.29831943, -0.26321504]]]
+
+**test_cc_attention_3d_with_past_and_present**
+
+.. code-block:: text
+
+    Attributes:
+      q_num_heads = 2
+      kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      K: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  , -1.  ,  1.  ],
+          [ 0.5 ,  0.5 ,  1.  ,  1.  ],
+          [ 0.  ,  1.  ,  0.25, -0.5 ]]]
+      V: shape=(1, 3, 4), dtype=float32
+        [[[ 1.  ,  0.  ,  2.  , -2.  ],
+          [ 0.  ,  1.  ,  0.5 ,  0.25],
+          [-1.  ,  1.  , -0.5 ,  0.  ]]]
+      past_key: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5, -0.5],
+           [ 0. ,  0.5]],
+        
+          [[ 1. ,  0. ],
+           [-0.5,  1. ]]]]
+      past_value: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5,  0.5],
+           [-1. ,  0. ]],
+        
+          [[ 0. ,  0.5],
+           [ 0.5, -0.5]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 4), dtype=float32
+        [[[ 0.10764056,  0.45608166,  0.48057237, -0.20996696],
+          [-0.31939295,  0.57814157,  0.05822894,  0.11373253]]]
+      present_key: shape=(1, 2, 5, 2), dtype=float32
+        [[[[ 0.5 , -0.5 ],
+           [ 0.  ,  0.5 ],
+           [ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[ 1.  ,  0.  ],
+           [-0.5 ,  1.  ],
+           [-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      present_value: shape=(1, 2, 5, 2), dtype=float32
+        [[[[ 0.5 ,  0.5 ],
+           [-1.  ,  0.  ],
+           [ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 0.  ,  0.5 ],
+           [ 0.5 , -0.5 ],
+           [ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+**test_cc_attention_attn_mask_2d**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.5
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      attn_mask: shape=(2, 3), dtype=float32
+        [[ 0. , -0.5, -1. ],
+         [ 0.5,  0. , -0.2]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.458196  ,  0.41020232],
+           [ 0.0697852 ,  0.6150191 ]],
+        
+          [[ 0.9921614 , -0.7460807 ],
+           [ 0.3994022 , -0.34422377]]]]
+
+**test_cc_attention_attn_mask_3d**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.5
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      attn_mask: shape=(1, 2, 3), dtype=float32
+        [[[ 0. , -1. ,  0.5],
+          [ 0.2,  0. , -0.4]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.        ,  0.5626513 ],
+           [ 0.03219185,  0.6617174 ]],
+        
+          [[ 0.48452467, -0.58578634],
+           [ 0.3757273 , -0.26752764]]]]
+
+**test_cc_attention_attn_mask_4d**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.5
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      attn_mask: shape=(1, 2, 2, 3), dtype=float32
+        [[[[ 0. , -0.5, -1. ],
+           [ 0.2,  0. , -0.1]],
+        
+          [[-0.2,  0.3,  0. ],
+           [ 0. , -0.1,  0.4]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.458196  ,  0.41020232],
+           [-0.06765194,  0.6944395 ]],
+        
+          [[ 0.5724663 , -0.27137595],
+           [ 0.02987868, -0.14798252]]]]
+
+**test_cc_attention_attn_mask_bool**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.5
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      attn_mask: shape=(1, 2, 2, 3), dtype=bool
+        [[[[ True,  True, False],
+           [ True, False,  True]],
+        
+          [[ True, False,  True],
+           [ True,  True, False]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5621765 ,  0.4378235 ],
+           [-0.24491866,  0.62245935]],
+        
+          [[ 0.7890498 , -1.0312399 ],
+           [ 0.9034121 , -0.3551182 ]]]]
+
+**test_cc_attention_basic**
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.,  0.],
+           [ 0.,  1.]],
+        
+          [[ 1.,  1.],
+           [-1.,  1.]]]]
+      V: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.,  2.],
+           [ 3.,  4.]],
+        
+          [[-1.,  0.],
+           [ 0.,  1.]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.6604769 ,  2.660477  ],
+           [ 2.339523  ,  3.339523  ]],
+        
+          [[-0.66976154,  0.33023846],
+           [-0.80442965,  0.19557032]]]]
+
+**test_cc_attention_causal**
+
+.. code-block:: text
+
+    Attributes:
+      is_causal = 1
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [ 0.5 ,  0.5 ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  , -1.  ],
+           [ 0.25,  0.5 ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.        ,  0.        ],
+           [ 0.412521  ,  0.587479  ],
+           [ 0.        ,  0.6666667 ]],
+        
+          [[ 2.        , -2.        ],
+           [ 0.79335546, -0.19003323],
+           [ 0.7425821 , -0.5205673 ]]]]
+
+**test_cc_attention_diff_head_sizes**
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 3), dtype=float32
+        [[[[ 1.  ,  0.  , -1.  ],
+           [ 0.  ,  1.  ,  2.  ],
+           [-1.  ,  1.  ,  0.5 ]],
+        
+          [[ 2.  , -2.  ,  1.  ],
+           [ 0.5 ,  0.25, -0.25],
+           [-0.5 ,  0.  ,  1.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 3), dtype=float32
+        [[[[ 0.23092115,  0.5444725 ,  0.296508  ],
+           [-0.23092115,  0.77539366,  0.64288974]],
+        
+          [[ 0.6482418 , -0.37858847,  0.3571369 ],
+           [ 0.04638294, -0.08028026,  0.57520705]]]]
+
+**test_cc_attention_gqa**
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 4, 2, 2), dtype=float32
+        [[[[ 0.1 ,  0.2 ],
+           [ 0.3 ,  0.4 ]],
+        
+          [[-0.1 ,  0.05],
+           [ 0.2 , -0.3 ]],
+        
+          [[ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[ 1.  ,  0.  ],
+           [ 0.5 , -0.5 ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 4, 2, 2), dtype=float32
+        [[[[-0.02356532,  0.6783799 ],
+           [-0.02356531,  0.6783799 ]],
+        
+          [[-0.03533878,  0.6841799 ],
+           [ 0.11724145,  0.6063233 ]],
+        
+          [[ 0.6482418 , -0.37858847],
+           [ 0.9917567 , -0.74587834]],
+        
+          [[ 0.37784207, -0.12898168],
+           [ 0.29831943, -0.26321504]]]]
+
+**test_cc_attention_scaled**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.009999999776482582
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.,  0.],
+           [ 0.,  1.]],
+        
+          [[ 1.,  1.],
+           [-1.,  1.]]]]
+      V: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.,  2.],
+           [ 3.,  4.]],
+        
+          [[-1.,  0.],
+           [ 0.,  1.]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.995     ,  2.9950001 ],
+           [ 2.0049999 ,  3.0049999 ]],
+        
+          [[-0.5025    ,  0.49750003],
+           [-0.5049998 ,  0.49500015]]]]
+
+**test_cc_attention_softcap**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 1.0
+      softcap = 0.5
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.15169363,  0.6033754 ],
+           [-0.15169363,  0.755069  ]],
+        
+          [[ 0.67558366, -0.4552321 ],
+           [ 0.29168454, -0.3030643 ]]]]
+
+**test_cc_attention_with_past_and_present**
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      past_key: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5, -0.5],
+           [ 0. ,  0.5]],
+        
+          [[ 1. ,  0. ],
+           [-0.5,  1. ]]]]
+      past_value: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5,  0.5],
+           [-1. ,  0. ]],
+        
+          [[ 0. ,  0.5],
+           [ 0.5, -0.5]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.10764056,  0.45608166],
+           [-0.31939295,  0.57814157]],
+        
+          [[ 0.48057237, -0.20996696],
+           [ 0.05822894,  0.11373253]]]]
+      present_key: shape=(1, 2, 5, 2), dtype=float32
+        [[[[ 0.5 , -0.5 ],
+           [ 0.  ,  0.5 ],
+           [ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[ 1.  ,  0.  ],
+           [-0.5 ,  1.  ],
+           [-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      present_value: shape=(1, 2, 5, 2), dtype=float32
+        [[[[ 0.5 ,  0.5 ],
+           [-1.  ,  0.  ],
+           [ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 0.  ,  0.5 ],
+           [ 0.5 , -0.5 ],
+           [ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+**test_cc_attention_with_qk_matmul**
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.23092115,  0.5444725 ],
+           [-0.23092115,  0.77539366]],
+        
+          [[ 0.6482418 , -0.37858847],
+           [ 0.04638294, -0.08028026]]]]
+      qk_matmul_output: shape=(1, 2, 2, 3), dtype=float32
+        [[[[ 0.70710677,  0.35355338,  0.        ],
+           [ 0.        ,  0.35355338,  0.70710677]],
+        
+          [[ 0.        ,  0.70710677, -0.08838835],
+           [-1.4142135 ,  0.        ,  0.53033006]]]]
+
+**test_cc_attention_with_qk_matmul_bias**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 0.5
+      qk_matmul_output_mode = 1
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+      attn_mask: shape=(2, 3), dtype=float32
+        [[ 0. , -0.5, -1. ],
+         [ 0.5,  0. , -0.2]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.458196  ,  0.41020232],
+           [ 0.0697852 ,  0.6150191 ]],
+        
+          [[ 0.9921614 , -0.7460807 ],
+           [ 0.3994022 , -0.34422377]]]]
+      qk_matmul_output: shape=(1, 2, 2, 3), dtype=float32
+        [[[[ 0.5   , -0.25  , -1.    ],
+           [ 0.5   ,  0.25  ,  0.3   ]],
+        
+          [[ 0.    ,  0.    , -1.0625],
+           [-0.5   ,  0.    ,  0.175 ]]]]
+
+**test_cc_attention_with_qk_matmul_softcap**
+
+.. code-block:: text
+
+    Attributes:
+      scale = 1.0
+      softcap = 0.5
+      qk_matmul_output_mode = 2
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.15169363,  0.6033754 ],
+           [-0.15169363,  0.755069  ]],
+        
+          [[ 0.67558366, -0.4552321 ],
+           [ 0.29168454, -0.3030643 ]]]]
+      qk_matmul_output: shape=(1, 2, 2, 3), dtype=float32
+        [[[[ 0.4820138 ,  0.3807971 ,  0.        ],
+           [ 0.        ,  0.3807971 ,  0.4820138 ]],
+        
+          [[ 0.        ,  0.4820138 , -0.12245933],
+           [-0.49966466,  0.        ,  0.45257413]]]]
+
+**test_cc_attention_with_qk_matmul_softmax**
+
+.. code-block:: text
+
+    Attributes:
+      qk_matmul_output_mode = 3
+
+.. code-block:: text
+
+    Inputs:
+      Q: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1. ,  0. ],
+           [ 0. ,  1. ]],
+        
+          [[ 0.5,  0.5],
+           [ 1. , -1. ]]]]
+      K: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.5 ,  0.5 ],
+           [ 0.  ,  1.  ]],
+        
+          [[-1.  ,  1.  ],
+           [ 1.  ,  1.  ],
+           [ 0.25, -0.5 ]]]]
+      V: shape=(1, 2, 3, 2), dtype=float32
+        [[[[ 1.  ,  0.  ],
+           [ 0.  ,  1.  ],
+           [-1.  ,  1.  ]],
+        
+          [[ 2.  , -2.  ],
+           [ 0.5 ,  0.25],
+           [-0.5 ,  0.  ]]]]
+
+    Outputs:
+      Y: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.23092115,  0.5444725 ],
+           [-0.23092115,  0.77539366]],
+        
+          [[ 0.6482418 , -0.37858847],
+           [ 0.04638294, -0.08028026]]]]
+      qk_matmul_output: shape=(1, 2, 2, 3), dtype=float32
+        [[[[0.45552748, 0.31986618, 0.22460635],
+           [0.22460635, 0.31986618, 0.45552748]],
+        
+          [[0.25358054, 0.5142905 , 0.23212898],
+           [0.08261943, 0.33983436, 0.5775462 ]]]]

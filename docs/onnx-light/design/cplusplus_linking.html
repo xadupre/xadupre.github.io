@@ -63,7 +63,7 @@
     <link rel="icon" href="../_static/logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Comparison: onnx OpSchema vs onnx_light LightOpSchema" href="schema_comparison.html" />
+    <link rel="next" title="Symbolic expression library (onnx_light.onnx_optim.expressions)" href="expressions.html" />
     <link rel="prev" title="ModelProto creation and no-copy ownership" href="no_copy_ownership.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -383,7 +383,6 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Shape Inference</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="schema_comparison.html">Comparison: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> <code class="docutils literal notranslate"><span class="pre">OpSchema</span></code> vs <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code> <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="expressions.html">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Backend</span></p>
@@ -524,6 +523,51 @@ that pattern:</p>
 </pre></div>
 </div>
 </section>
+<section id="python-extension-modules-and-proto-duplication">
+<h2>Python extension modules and proto duplication<a class="headerlink" href="#python-extension-modules-and-proto-duplication" title="Link to this heading">#</a></h2>
+<p>The Python package ships three nanobind extension modules,
+<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpyproto</span></code>,
+<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpyoptim</span></code> and
+<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxbackend</span></code>.  All three need access to the proto
+classes (<code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>, <code class="docutils literal notranslate"><span class="pre">NodeProto</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>, …) defined in
+<code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_proto</span></code>.  How do the extensions agree on a single
+<code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> registration so that values can flow between
+them without a serialise/parse round-trip?</p>
+<p>When <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_PYTHON=ON</span></code>, <code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> builds
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> as a <strong>shared</strong> library (<code class="docutils literal notranslate"><span class="pre">liblib_onnx_proto.so</span></code> /
+<code class="docutils literal notranslate"><span class="pre">.dylib</span></code> / <code class="docutils literal notranslate"><span class="pre">.dll</span></code>) instead of a static archive.  All three
+extensions link against that single shared
+object (directly or transitively through <code class="docutils literal notranslate"><span class="pre">lib_onnx_lib</span></code> /
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code> / <code class="docutils literal notranslate"><span class="pre">lib_onnx_optim</span></code> / <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code>), and
+the build installs every file side by side under
+<code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_py/</span></code>.  The extensions are linked with an <code class="docutils literal notranslate"><span class="pre">$ORIGIN</span></code>
+runtime path (<code class="docutils literal notranslate"><span class="pre">&#64;loader_path</span></code> on macOS) so the dynamic loader finds
+<code class="docutils literal notranslate"><span class="pre">liblib_onnx_proto.so</span></code> next to them at import time without any
+<code class="docutils literal notranslate"><span class="pre">LD_LIBRARY_PATH</span></code> setup.</p>
+<p>Pure C++ consumers (<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_PYTHON=OFF</span></code>) keep the lighter
+<strong>static</strong> variant they used to ship, so the existing
+<code class="docutils literal notranslate"><span class="pre">find_package(onnx_light)</span> <span class="pre">-&gt;</span> <span class="pre">onnx_light::lib_onnx_proto</span></code> workflow is
+unchanged.</p>
+<p>Because <code class="docutils literal notranslate"><span class="pre">liblib_onnx_proto.so</span></code> is loaded only once per process, the
+proto classes have a single set of out-of-line member definitions and a
+single <code class="docutils literal notranslate"><span class="pre">std::type_info</span></code> instance.  Consequently
+<code class="docutils literal notranslate"><span class="pre">&amp;typeid(ModelProto)</span></code> evaluates to the same pointer in every
+extension, and nanobind’s cross-module type registry resolves
+<code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> references coming from <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code> or
+<code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> against the
+<code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> that <code class="docutils literal notranslate"><span class="pre">_onnxpyproto</span></code> registered.  In
+practice, only <code class="docutils literal notranslate"><span class="pre">_onnxpyproto</span></code> declares
+<code class="docutils literal notranslate"><span class="pre">nb::class_&lt;NodeProto&gt;</span></code> / <code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> / …; the
+<code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code> and <code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> modules return proto values by
+reference (for example
+<code class="docutils literal notranslate"><span class="pre">TestCase.model</span></code>, see <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_py/_onnxpy_backend_test.cc</span></code>)
+and let the shared registry produce a Python object backed by the same
+binding.  The package’s <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_py/_onnxpy.py</span></code> shim imports
+<code class="docutils literal notranslate"><span class="pre">_onnxpyproto</span></code> before <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code> and <code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> to
+guarantee that the
+<code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> binding exists by the time any <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code> or
+<code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> accessor is used.</p>
+</section>
 <section id="see-also">
 <h2>See also<a class="headerlink" href="#see-also" title="Link to this heading">#</a></h2>
 <ul class="simple">
@@ -552,11 +596,11 @@ that pattern:</p>
       </div>
     </a>
     <a class="right-next"
-       href="schema_comparison.html"
+       href="expressions.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Comparison: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> <code class="docutils literal notranslate"><span class="pre">OpSchema</span></code> vs <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code> <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code></p>
+        <p class="prev-next-title">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -582,6 +626,7 @@ that pattern:</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#install-and-link-model">Install and link model</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#alternative-without-install">Alternative without install</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#excerpt-from-the-example-project">Excerpt from the example project</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-extension-modules-and-proto-duplication">Python extension modules and proto duplication</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#see-also">See also</a></li>
 </ul>
   </nav></div>
