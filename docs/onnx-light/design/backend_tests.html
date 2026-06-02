@@ -629,7 +629,9 @@ backend test case through
 <span class="c1">#   * ``test_cc_flex_attention_*`` — ORT does not register the</span>
 <span class="c1">#     ``ai.onnx.preview`` domain, so these models fail to load with</span>
 <span class="c1">#     &quot;ai.onnx.preview:FlexAttention(-1) is not a registered function/op&quot;.</span>
-<span class="c1">#   * ``test_cc_adam_*``, ``test_adam`` and ``test_adam_multiple`` — ORT does</span>
+<span class="c1">#   * ``test_cc_adam_*``, ``test_adam``, ``test_adam_multiple``,</span>
+<span class="c1">#     ``test_adagrad``, ``test_adagrad_multiple``, ``test_momentum``,</span>
+<span class="c1">#     ``test_momentum_multiple`` and ``test_nesterov_momentum`` — ORT does</span>
 <span class="c1">#     not register the ``ai.onnx.preview.training`` domain, so these models</span>
 <span class="c1">#     fail to load with</span>
 <span class="c1">#     &quot;ai.onnx.preview.training:Adam(-1) is not a registered function/op&quot;.</span>
@@ -680,6 +682,13 @@ backend test case through
 <span class="c1">#     CPU EP rejects ``int16``/``uint16`` as ``QuantizeLinear`` ``y_zero_point``</span>
 <span class="c1">#     types (&quot;Type &#39;tensor(int16)&#39; of input parameter (y_zero_point) ... is</span>
 <span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
+<span class="c1">#   * ``test_quantizelinear_e4m3fn``, ``test_quantizelinear_e5m2``,</span>
+<span class="c1">#     ``test_quantizelinear_uint4``, ``test_quantizelinear_int4``,</span>
+<span class="c1">#     ``test_quantizelinear_uint2``, ``test_quantizelinear_int2`` and</span>
+<span class="c1">#     ``test_quantizelinear_float4e2m1`` — ORT&#39;s CPU EP rejects these</span>
+<span class="c1">#     sub-byte / float8 / float4 types as ``QuantizeLinear`` ``y_zero_point``</span>
+<span class="c1">#     types (&quot;Type &#39;tensor(&lt;dtype&gt;)&#39; of input parameter (y_zero_point) ... is</span>
+<span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
 <span class="c1">#   * ``test_cc_svmclassifier_int64_binary`` and</span>
 <span class="c1">#     ``test_cc_svmregressor_linear`` — ORT&#39;s ``ai.onnx.ml`` SVM kernels follow</span>
 <span class="c1">#     a different scoring/layout convention than the lightweight backend</span>
@@ -697,19 +706,52 @@ backend test case through
 <span class="c1">#     ``GlobalLpPool(22)`` (&quot;Could not find an implementation for</span>
 <span class="c1">#     GlobalLpPool(22) node&quot;). The reference backend still exercises these</span>
 <span class="c1">#     cases.</span>
-<span class="c1">#   * ``test_cc_simple_rnn_batchwise`` — ORT&#39;s CPU ``RNN`` kernel rejects</span>
-<span class="c1">#     ``layout=1`` at initialization (&quot;Batchwise recurrent operations</span>
-<span class="c1">#     (layout == 1) are not supported. If you need support create a github</span>
-<span class="c1">#     issue with justification.&quot;). The reference backend still exercises</span>
-<span class="c1">#     this case.</span>
+<span class="c1">#   * ``test_bitshift_right_uint16`` — ORT&#39;s CPU EP does not register a</span>
+<span class="c1">#     ``BitShift`` kernel for ``uint16`` (&quot;Could not find an implementation</span>
+<span class="c1">#     for BitShift(11) node&quot;); only ``uint8`` / ``uint32`` / ``uint64`` are</span>
+<span class="c1">#     registered. The reference backend still exercises the ``uint16`` case.</span>
+<span class="c1">#   * ``test_cc_dict_vectorizer_*`` and ``test_cc_cast_map_*`` — these models</span>
+<span class="c1">#     declare an ``ai.onnx.ml::DictVectorizer`` / ``ai.onnx.ml::CastMap``</span>
+<span class="c1">#     input typed as ``map(K, V)``. ORT loads the model with a map-typed</span>
+<span class="c1">#     input parameter and rejects the tensor placeholder fed by the</span>
+<span class="c1">#     lightweight backend harness (&quot;input with name: &#39;x&#39; expected to be of</span>
+<span class="c1"># type: 1 but received a tensor&quot;). The reference backend still exercises</span>
+<span class="c1">#     these cases.</span>
+<span class="c1">#   * ``test_cc_feature_vectorizer_mixed_dtypes`` — ORT&#39;s</span>
+<span class="c1">#     ``ai.onnx.ml::FeatureVectorizer`` kernel binds the variadic ``T1``</span>
+<span class="c1">#     type-constraint to a single dtype across all inputs and rejects mixed</span>
+<span class="c1">#     dtypes at load time (&quot;Type parameter (T1) of Optype (FeatureVectorizer)</span>
+<span class="c1">#     bound to different types (tensor(int64) and tensor(float))&quot;). The ONNX</span>
+<span class="c1">#     reference backend still exercises this case.</span>
+<span class="c1">#   * ``test_cc_simple_rnn_batchwise``, ``test_cc_lstm_batchwise`` and</span>
+<span class="c1">#     ``test_cc_gru_batchwise`` — ORT&#39;s CPU ``RNN``/``LSTM``/``GRU``</span>
+<span class="c1">#     kernels reject ``layout=1`` at initialization (&quot;Batchwise recurrent</span>
+<span class="c1">#     operations (layout == 1) are not supported. If you need support</span>
+<span class="c1">#     create a github issue with justification.&quot;). The reference backend</span>
+<span class="c1">#     still exercises these cases.</span>
+<span class="c1">#   * ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_3d_mask_causal``</span>
+<span class="c1">#     and ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask_causal``</span>
+<span class="c1">#     — ORT&#39;s CPU ``Attention`` kernel writes ``-FLT_MAX`` (≈ -3.4e38) into the</span>
+<span class="c1">#     ``qk_matmul_output`` at causal-masked positions while the ONNX reference</span>
+<span class="c1">#     (and this lightweight backend) writes the mathematical ``-inf`` from the</span>
+<span class="c1">#     additive causal bias. Both produce the same softmax outputs but differ</span>
+<span class="c1">#     bit-for-bit in the intermediate ``qk_matmul_output``. The reference</span>
+<span class="c1">#     backend still exercises these cases.</span>
 <span class="c1"># These cases remain covered by the reference backend tests.</span>
 <span class="n">ORT_EXCLUDE_REGEX</span> <span class="o">=</span> <span class="p">[</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_roialign_max$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_roialign_mode_max$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_flex_attention_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_with_past_and_present_qk_matmul_bias_3d_mask_causal$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask_causal$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_adam_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam_multiple$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_adagrad$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_adagrad_multiple$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_momentum$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_momentum_multiple$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_nesterov_momentum$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_double$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_seed$&quot;</span><span class="p">,</span>
@@ -729,13 +771,26 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e5m2$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint16$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_e4m3fn$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_e5m2$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint4$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int4$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint2$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int2$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_float4e2m1$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_svmclassifier_int64_binary$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_svmregressor_linear$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_linearclassifier_int64_binary$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_linearregressor_single_target$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_treeensembleclassifier_int64_binary$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_globallppool_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_dict_vectorizer_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_map_&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_feature_vectorizer_mixed_dtypes$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_simple_rnn_batchwise$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_lstm_batchwise$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_gru_batchwise$&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_bitshift_right_uint16$&quot;</span><span class="p">,</span>
 <span class="p">]</span>
 
 <span class="n">TestOrtBackend</span> <span class="o">=</span> <span class="n">make_test_class</span><span class="p">(</span><span class="n">onnxruntime_backend</span><span class="p">,</span> <span class="n">exclude_regex</span><span class="o">=</span><span class="n">ORT_EXCLUDE_REGEX</span><span class="p">)</span>
