@@ -80,30 +80,30 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
     def test_build_payload_runs_every_backend_and_aggregates_totals(self):
         tests = [
-            {"name": "test_a", "model_dir": "/fake/a"},
-            {"name": "test_b", "model_dir": "/fake/b"},
-            {"name": "test_c", "model_dir": "/fake/c"},
+            {"name": "test_a", "model": "model_a", "data_sets": [("in_a", "out_a")]},
+            {"name": "test_b", "model": "model_b", "data_sets": [("in_b", "out_b")]},
+            {"name": "test_c", "model": "model_c", "data_sets": [("in_c", "out_c")]},
         ]
-        # Map of (model_dir, backend) -> result dict
+        # Map of (model, backend) -> result dict
         outcomes = {
-            ("/fake/a", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
-            ("/fake/a", "reference"): {"success": True, "error": "", "error_step": ""},
-            ("/fake/b", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
-            ("/fake/b", "reference"): {
+            ("model_a", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
+            ("model_a", "reference"): {"success": True, "error": "", "error_step": ""},
+            ("model_b", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
+            ("model_b", "reference"): {
                 "success": False,
                 "error": "not implemented",
                 "error_step": "run",
             },
-            ("/fake/c", "onnxruntime"): {
+            ("model_c", "onnxruntime"): {
                 "success": False,
                 "error": "kernel missing",
                 "error_step": "load",
             },
-            ("/fake/c", "reference"): {"success": True, "error": "", "error_step": ""},
+            ("model_c", "reference"): {"success": True, "error": "", "error_step": ""},
         }
 
-        def fake_run(model_dir, backend, rtol, atol):
-            return outcomes[(model_dir, backend)]
+        def fake_run(model, data_sets, backend, rtol, atol):
+            return outcomes[(model, backend)]
 
         payload = rbc.build_payload(
             kind="node",
@@ -134,11 +134,11 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
     def test_build_payload_honours_limit(self):
         tests = [
-            {"name": f"test_{i}", "model_dir": f"/fake/{i}"}
+            {"name": f"test_{i}", "model": f"model_{i}", "data_sets": []}
             for i in range(5)
         ]
 
-        def fake_run(model_dir, backend, rtol, atol):
+        def fake_run(model, data_sets, backend, rtol, atol):
             return {"success": True, "error": "", "error_step": ""}
 
         payload = rbc.build_payload(
@@ -158,9 +158,9 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
 
     def test_build_payload_captures_unhandled_runner_exceptions(self):
-        tests = [{"name": "boom", "model_dir": "/fake/boom"}]
+        tests = [{"name": "boom", "model": "model_boom", "data_sets": []}]
 
-        def fake_run(model_dir, backend, rtol, atol):
+        def fake_run(model, data_sets, backend, rtol, atol):
             raise RuntimeError("unexpected")
 
         payload = rbc.build_payload(
@@ -186,12 +186,12 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         import datetime as dt
 
         tests = [
-            {"name": "test_a", "model_dir": "/fake/a"},
-            {"name": "test_b", "model_dir": "/fake/b"},
+            {"name": "test_a", "model": "model_a", "data_sets": []},
+            {"name": "test_b", "model": "model_b", "data_sets": []},
         ]
 
-        def fake_run(model_dir, backend, rtol, atol):
-            if model_dir == "/fake/a":
+        def fake_run(model, data_sets, backend, rtol, atol):
+            if model == "model_a":
                 return {"success": True, "error": "", "error_step": ""}
             return {"success": False, "error": "boom", "error_step": "run"}
 
@@ -256,7 +256,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             )
 
     def test_run_test_with_backend_unknown_backend(self):
-        result = rbc.run_test_with_backend("/does/not/matter", "totally-unknown")
+        result = rbc.run_test_with_backend(None, [], "totally-unknown")
         self.assertFalse(result["success"])
         self.assertEqual(result["error_step"], "load")
         self.assertIn("unknown backend", result["error"])
@@ -329,14 +329,13 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(len(discovered), 1)
         entry = discovered[0]
         self.assertEqual(entry["name"], "test_relu_light")
-        self.assertTrue(os.path.isfile(os.path.join(entry["model_dir"], "model.onnx")))
-        ds_dir = os.path.join(entry["model_dir"], "test_data_set_0")
-        self.assertTrue(os.path.isfile(os.path.join(ds_dir, "input_0.pb")))
-        self.assertTrue(os.path.isfile(os.path.join(ds_dir, "output_0.pb")))
-        # The materialised data set round-trips through ``_load_test_data_sets``.
-        data_sets = rbc._load_test_data_sets(entry["model_dir"])
-        self.assertEqual(len(data_sets), 1)
-        loaded_inputs, loaded_outputs = data_sets[0]
+        # The model is kept in memory as an ``onnx.ModelProto``.
+        self.assertIsInstance(entry["model"], onnx.ModelProto)
+        self.assertEqual(entry["model"].graph.node[0].op_type, "Relu")
+        # Data sets are kept in memory as numpy arrays, ready to feed to
+        # the backends without any disk round-trip.
+        self.assertEqual(len(entry["data_sets"]), 1)
+        loaded_inputs, loaded_outputs = entry["data_sets"][0]
         np.testing.assert_array_equal(loaded_inputs[0], inputs[0])
         np.testing.assert_array_equal(loaded_outputs[0], outputs[0])
 
