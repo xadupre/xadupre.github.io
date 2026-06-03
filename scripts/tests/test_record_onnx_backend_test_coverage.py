@@ -261,6 +261,85 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(result["error_step"], "load")
         self.assertIn("unknown backend", result["error"])
 
+    def test_discover_node_tests_loads_from_onnx_light(self):
+        """``discover_node_tests`` must materialise onnx-light test cases."""
+        import types
+
+        import numpy as np
+        import onnx
+        from onnx import helper
+
+        # Build a tiny in-memory ONNX model representing ``y = Relu(x)`` so
+        # the fake ``collect_test_case`` mirrors the shape of onnx-light's
+        # output (TestCase with a ``ModelProto`` and ``data_sets``).
+        node = helper.make_node("Relu", ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+        inputs = [np.array([-1.0, 2.0], dtype=np.float32)]
+        outputs = [np.array([0.0, 2.0], dtype=np.float32)]
+
+        node_tc = types.SimpleNamespace(
+            name="test_relu_light",
+            kind="node",
+            model=model,
+            data_sets=[(inputs, outputs)],
+            model_dir=None,
+        )
+        # A test from a different kind must be filtered out.
+        simple_tc = types.SimpleNamespace(
+            name="test_simple_other",
+            kind="simple",
+            model=model,
+            data_sets=[(inputs, outputs)],
+            model_dir=None,
+        )
+        fake_module = types.ModuleType("onnx_light.backend.test.case")
+        fake_module.collect_test_case = lambda: {
+            "test_relu_light": node_tc,
+            "test_simple_other": simple_tc,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.backend", types.ModuleType("onnx_light.backend")),
+            (
+                "onnx_light.backend.test",
+                types.ModuleType("onnx_light.backend.test"),
+            ),
+            ("onnx_light.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = rbc.discover_node_tests(kind="node")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(len(discovered), 1)
+        entry = discovered[0]
+        self.assertEqual(entry["name"], "test_relu_light")
+        self.assertTrue(os.path.isfile(os.path.join(entry["model_dir"], "model.onnx")))
+        ds_dir = os.path.join(entry["model_dir"], "test_data_set_0")
+        self.assertTrue(os.path.isfile(os.path.join(ds_dir, "input_0.pb")))
+        self.assertTrue(os.path.isfile(os.path.join(ds_dir, "output_0.pb")))
+        # The materialised data set round-trips through ``_load_test_data_sets``.
+        data_sets = rbc._load_test_data_sets(entry["model_dir"])
+        self.assertEqual(len(data_sets), 1)
+        loaded_inputs, loaded_outputs = data_sets[0]
+        np.testing.assert_array_equal(loaded_inputs[0], inputs[0])
+        np.testing.assert_array_equal(loaded_outputs[0], outputs[0])
+
     def test_compare_outputs_detects_shape_mismatch(self):
         import numpy as np
 

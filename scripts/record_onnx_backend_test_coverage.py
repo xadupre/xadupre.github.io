@@ -2,8 +2,9 @@
 Python reference implementation.
 
 The script walks every backend node test bundled with the installed
-``onnx`` package (the same tests that are exercised by ``onnx-light``),
-runs each one against:
+``onnx-light`` package (collected via
+``onnx_light.backend.test.case.collect_test_case``), runs each one
+against:
 
 * ``onnxruntime`` (CPU execution provider) and
 * the ONNX Python reference implementation (``onnx.reference``),
@@ -27,6 +28,7 @@ import datetime as dt
 import json
 import os
 import sys
+import tempfile
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -93,22 +95,64 @@ def _stringify_error(value: Any) -> str:
 def discover_node_tests(kind: str = "node") -> List[Dict[str, str]]:
     """Return ``[{"name", "model_dir"}, ...]`` for every backend test.
 
-    The tests are loaded from ``onnx.backend.test`` which ships with the
-    installed ``onnx`` package. ``kind`` selects the test group (``node``,
-    ``simple``, ``pytorch-converted``, ``pytorch-operator`` or ``real``).
-    The default ``node`` matches the tests exercised by ``onnx-light``'s
-    reference implementation.
-    """
-    from onnx.backend.test.loader import load_model_tests
+    The tests are loaded from ``onnx_light.backend.test.case`` which
+    ships with the installed ``onnx-light`` package via
+    :func:`onnx_light.backend.test.case.collect_test_case`. ``kind``
+    selects the test group (``node``, ``simple``, ``pytorch-converted``,
+    ``pytorch-operator`` or ``real``); the default ``node`` matches the
+    tests exercised by ``onnx-light``'s reference implementation.
 
-    tests = load_model_tests(kind=kind)
+    Test cases collected by ``onnx-light`` carry their ``ModelProto`` and
+    expected input / output tensors in memory. They are materialised on
+    disk in the standard ``model.onnx`` + ``test_data_set_<n>/`` layout
+    expected by :func:`run_test_with_backend`, so the rest of the
+    pipeline keeps operating on file paths.
+    """
+    import numpy as np
+    import onnx
+    from onnx import numpy_helper
+    from onnx_light.backend.test.case import collect_test_case
+
+    cases = collect_test_case()
+    root = tempfile.mkdtemp(prefix="onnx_light_backend_tests_")
     discovered: List[Dict[str, str]] = []
-    for tc in tests:
-        model_dir = getattr(tc, "model_dir", None)
-        name = getattr(tc, "name", None)
-        if not model_dir or not name:
+    for name, tc in cases.items():
+        if not name:
             continue
-        discovered.append({"name": str(name), "model_dir": str(model_dir)})
+        if kind and getattr(tc, "kind", None) != kind:
+            continue
+        model = getattr(tc, "model", None)
+        data_sets = getattr(tc, "data_sets", None) or []
+        existing_dir = getattr(tc, "model_dir", None)
+        if existing_dir:
+            # Test cases that already live on disk (for example fetched
+            # ``real`` models) can be used as-is.
+            discovered.append({"name": str(name), "model_dir": str(existing_dir)})
+            continue
+        if model is None:
+            continue
+        test_dir = os.path.join(root, str(name))
+        os.makedirs(test_dir, exist_ok=True)
+        with open(os.path.join(test_dir, "model.onnx"), "wb") as fh:
+            fh.write(model.SerializeToString())
+        for ds_idx, (inputs, outputs) in enumerate(data_sets):
+            ds_dir = os.path.join(test_dir, f"test_data_set_{ds_idx}")
+            os.makedirs(ds_dir, exist_ok=True)
+            for i, arr in enumerate(inputs):
+                if isinstance(arr, onnx.TensorProto):
+                    tensor = arr
+                else:
+                    tensor = numpy_helper.from_array(np.asarray(arr), name=f"input_{i}")
+                with open(os.path.join(ds_dir, f"input_{i}.pb"), "wb") as fh:
+                    fh.write(tensor.SerializeToString())
+            for j, arr in enumerate(outputs):
+                if isinstance(arr, onnx.TensorProto):
+                    tensor = arr
+                else:
+                    tensor = numpy_helper.from_array(np.asarray(arr), name=f"output_{j}")
+                with open(os.path.join(ds_dir, f"output_{j}.pb"), "wb") as fh:
+                    fh.write(tensor.SerializeToString())
+        discovered.append({"name": str(name), "model_dir": test_dir})
     discovered.sort(key=lambda d: d["name"])
     return discovered
 
