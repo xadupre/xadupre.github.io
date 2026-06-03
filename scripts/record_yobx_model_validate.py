@@ -274,6 +274,7 @@ def run_validate_one(
         do_run=True,
         quiet=True,
         verbose=verbose,
+        patch="transformers",
     )
     return summary
 
