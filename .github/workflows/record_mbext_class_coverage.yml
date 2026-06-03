@@ -1,0 +1,79 @@
+name: Record mbext class coverage
+
+# Weekly job that records the list of Python classes defined in the
+# ``modelbuilder`` directory of xadupre/mbext and the
+# ``src/python/py/models`` directory of microsoft/onnxruntime-genai, and
+# caches them as JSON under ``cache_data/mbext/class_coverage.json``. The
+# dashboard at ``dashboard/mbext/class-coverage.html`` consumes that file.
+
+on:
+  schedule:
+    # Run once a week, Monday at 07:21 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the time is offset from
+    # the other weekly recording workflows so they do not compete for the
+    # same runner slot.
+    - cron: "21 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the new snapshot.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Record mbext class coverage
+        env:
+          # Use the workflow token so the GitHub API rate limit is the
+          # higher authenticated one. The script only needs read access.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python -u scripts/record_mbext_class_coverage.py
+
+      - name: Commit and push cache data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update mbext class coverage cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            if git push origin "HEAD:${branch}"; then
+              echo "Push succeeded on attempt ${i}."
+              exit 0
+            fi
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
