@@ -35,6 +35,8 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "error_step": "run",
                 },
             },
+            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now_iso="2024-05-06T07:08:09Z",
         )
         self.assertEqual(row["name"], "test_relu")
         self.assertTrue(row["onnxruntime"])
@@ -43,6 +45,38 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertNotIn("onnxruntime_error_step", row)
         self.assertEqual(row["reference_error"], "boom")
         self.assertEqual(row["reference_error_step"], "run")
+        # Passing backend records its last-pass date + matching package version.
+        self.assertEqual(row["onnxruntime_last_pass_date"], "2024-05-06T07:08:09Z")
+        self.assertEqual(row["onnxruntime_last_pass_version"], "1.20.0")
+        # Failing backend has no recorded last-pass when there is no history.
+        self.assertNotIn("reference_last_pass_date", row)
+        self.assertNotIn("reference_last_pass_version", row)
+
+    def test_row_from_results_carries_over_previous_last_pass_on_failure(self):
+        previous = {
+            "name": "test_relu",
+            "reference_last_pass_date": "2024-01-02T03:04:05Z",
+            "reference_last_pass_version": "1.16.0",
+        }
+        row = rbc._row_from_results(
+            "test_relu",
+            {
+                "onnxruntime": {"success": True, "error": "", "error_step": ""},
+                "reference": {
+                    "success": False,
+                    "error": "boom",
+                    "error_step": "run",
+                },
+            },
+            previous=previous,
+            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now_iso="2024-05-06T07:08:09Z",
+        )
+        # Current pass refreshes the onnxruntime entry, prior reference pass is kept.
+        self.assertEqual(row["onnxruntime_last_pass_date"], "2024-05-06T07:08:09Z")
+        self.assertEqual(row["onnxruntime_last_pass_version"], "1.20.0")
+        self.assertEqual(row["reference_last_pass_date"], "2024-01-02T03:04:05Z")
+        self.assertEqual(row["reference_last_pass_version"], "1.16.0")
 
     def test_build_payload_runs_every_backend_and_aggregates_totals(self):
         tests = [
@@ -147,6 +181,79 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "reference": {"pass": 0, "fail": 1},
             },
         )
+
+    def test_build_payload_carries_previous_last_pass_for_failing_tests(self):
+        import datetime as dt
+
+        tests = [
+            {"name": "test_a", "model_dir": "/fake/a"},
+            {"name": "test_b", "model_dir": "/fake/b"},
+        ]
+
+        def fake_run(model_dir, backend, rtol, atol):
+            if model_dir == "/fake/a":
+                return {"success": True, "error": "", "error_step": ""}
+            return {"success": False, "error": "boom", "error_step": "run"}
+
+        previous = {
+            "tests": [
+                {
+                    "name": "test_b",
+                    "onnxruntime_last_pass_date": "2024-01-01T00:00:00Z",
+                    "onnxruntime_last_pass_version": "1.18.0",
+                    "reference_last_pass_date": "2024-02-02T00:00:00Z",
+                    "reference_last_pass_version": "1.16.0",
+                },
+            ],
+        }
+
+        payload = rbc.build_payload(
+            kind="node",
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now=dt.datetime(2024, 5, 6, 7, 8, 9, tzinfo=dt.timezone.utc),
+            previous=previous,
+        )
+        by_name = {row["name"]: row for row in payload["tests"]}
+        # Currently-passing test gets a fresh last-pass timestamp.
+        self.assertEqual(
+            by_name["test_a"]["onnxruntime_last_pass_date"],
+            "2024-05-06T07:08:09Z",
+        )
+        self.assertEqual(
+            by_name["test_a"]["onnxruntime_last_pass_version"], "1.20.0"
+        )
+        self.assertEqual(
+            by_name["test_a"]["reference_last_pass_version"], "1.17.0"
+        )
+        # Currently-failing test keeps the previously recorded last-pass info.
+        self.assertEqual(
+            by_name["test_b"]["onnxruntime_last_pass_date"],
+            "2024-01-01T00:00:00Z",
+        )
+        self.assertEqual(
+            by_name["test_b"]["onnxruntime_last_pass_version"], "1.18.0"
+        )
+        self.assertEqual(
+            by_name["test_b"]["reference_last_pass_date"],
+            "2024-02-02T00:00:00Z",
+        )
+
+    def test_load_previous_payload_handles_missing_and_malformed_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = os.path.join(tmp, "nope.json")
+            self.assertEqual(rbc.load_previous_payload(missing), {})
+            bad = os.path.join(tmp, "bad.json")
+            with open(bad, "w", encoding="utf-8") as fh:
+                fh.write("not json")
+            self.assertEqual(rbc.load_previous_payload(bad), {})
+            ok = os.path.join(tmp, "ok.json")
+            with open(ok, "w", encoding="utf-8") as fh:
+                json.dump({"tests": [{"name": "x"}]}, fh)
+            self.assertEqual(
+                rbc.load_previous_payload(ok), {"tests": [{"name": "x"}]}
+            )
 
     def test_run_test_with_backend_unknown_backend(self):
         result = rbc.run_test_with_backend("/does/not/matter", "totally-unknown")

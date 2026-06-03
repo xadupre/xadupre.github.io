@@ -33,6 +33,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference")
 
+# Package whose version is recorded alongside the ``last_pass`` date for
+# each backend. ``onnxruntime`` runs the model with the ``onnxruntime``
+# package while the reference implementation lives in ``onnx``.
+BACKEND_PACKAGE: Dict[str, str] = {
+    "onnxruntime": "onnxruntime",
+    "reference": "onnx",
+}
+
 # Default numerical tolerances when comparing produced outputs with the
 # expected ones. ``onnxruntime`` and the reference implementation are not
 # always bit-identical (different math libraries, different summation
@@ -299,8 +307,23 @@ def run_test_with_backend(
 
 
 def _row_from_results(
-    name: str, results: Dict[str, Dict[str, Any]]
+    name: str,
+    results: Dict[str, Dict[str, Any]],
+    previous: Optional[Dict[str, Any]] = None,
+    versions: Optional[Dict[str, str]] = None,
+    now_iso: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Build a dashboard row, carrying over per-backend ``last_pass`` info.
+
+    For every backend, when the current run succeeds, ``last_pass_date``
+    is set to ``now_iso`` and ``last_pass_version`` to the recorded
+    version of the matching package (``onnxruntime`` or ``onnx``). When
+    the current run fails, the corresponding values are carried over from
+    ``previous`` (the row from a previous snapshot, if any) so the
+    dashboard can report when the test last passed.
+    """
+    versions = versions or {}
+    previous = previous or {}
     row: Dict[str, Any] = {"name": name}
     for backend in BACKENDS:
         info = results.get(backend, {})
@@ -312,7 +335,53 @@ def _row_from_results(
         step = info.get("error_step") or ""
         if step:
             row[f"{backend}_error_step"] = step
+        if success and now_iso is not None:
+            row[f"{backend}_last_pass_date"] = now_iso
+            pkg = BACKEND_PACKAGE.get(backend)
+            version = versions.get(pkg) if pkg else None
+            if version:
+                row[f"{backend}_last_pass_version"] = version
+        else:
+            prev_date = previous.get(f"{backend}_last_pass_date")
+            if prev_date:
+                row[f"{backend}_last_pass_date"] = prev_date
+            prev_version = previous.get(f"{backend}_last_pass_version")
+            if prev_version:
+                row[f"{backend}_last_pass_version"] = prev_version
     return row
+
+
+def load_previous_payload(json_path: str) -> Dict[str, Any]:
+    """Return the previously written payload, or an empty dict if absent.
+
+    The recorder uses this to carry over ``last_pass_date`` /
+    ``last_pass_version`` entries for tests that fail in the current run
+    but passed in a prior one. Any unreadable / malformed file is treated
+    as missing so a fresh snapshot can always be produced.
+    """
+    if not os.path.exists(json_path):
+        return {}
+    try:
+        with open(json_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return data
+
+
+def _index_previous_rows(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    rows = payload.get("tests") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return {}
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            name = row.get("name")
+            if isinstance(name, str):
+                indexed[name] = row
+    return indexed
 
 
 def build_payload(
@@ -324,6 +393,7 @@ def build_payload(
     run: Callable[..., Dict[str, Any]] = run_test_with_backend,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
+    previous: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Discover all tests, run them on every backend and return a payload."""
     if versions is None:
@@ -332,6 +402,11 @@ def build_payload(
     if limit is not None and limit >= 0:
         tests = tests[:limit]
     _log(f"Discovered {len(tests)} {kind} backend tests.")
+
+    now_dt = now or dt.datetime.now(tz=dt.timezone.utc)
+    now_iso = _format_iso(now_dt)
+    version_map = versions()
+    previous_rows = _index_previous_rows(previous or {})
 
     rows: List[Dict[str, Any]] = []
     totals: Dict[str, Dict[str, int]] = {
@@ -360,15 +435,23 @@ def build_payload(
             results[backend] = info
             bucket = "pass" if info.get("success") else "fail"
             totals[backend][bucket] += 1
-        rows.append(_row_from_results(name, results))
+        rows.append(
+            _row_from_results(
+                name,
+                results,
+                previous=previous_rows.get(name),
+                versions=version_map,
+                now_iso=now_iso,
+            )
+        )
         if (idx + 1) % 50 == 0:
             _log(f"Ran {idx + 1}/{len(tests)} tests.")
 
     return {
-        "date": _format_iso(now or dt.datetime.now(tz=dt.timezone.utc)),
+        "date": now_iso,
         "kind": kind,
         "tolerances": {"rtol": rtol, "atol": atol},
-        "versions": versions(),
+        "versions": version_map,
         "totals": totals,
         "tests": rows,
     }
@@ -421,20 +504,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
+    json_path = os.path.join(
+        args.cache_dir, "onnx-light", "backend_test_coverage.json"
+    )
+    previous = load_previous_payload(json_path)
     try:
         payload = build_payload(
             kind=args.kind,
             limit=args.limit,
             rtol=args.rtol,
             atol=args.atol,
+            previous=previous,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record backend test coverage: {exc}")
         traceback.print_exc()
         return 1
-    json_path = os.path.join(
-        args.cache_dir, "onnx-light", "backend_test_coverage.json"
-    )
     write_payload(json_path, payload)
     _log(
         f"Wrote {len(payload['tests'])} test entries to {json_path} "
