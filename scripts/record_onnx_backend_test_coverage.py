@@ -2,8 +2,9 @@
 Python reference implementation.
 
 The script walks every backend node test bundled with the installed
-``onnx`` package (the same tests that are exercised by ``onnx-light``),
-runs each one against:
+``onnx-light`` package (collected via
+``onnx_light.backend.test.case.collect_test_case``), runs each one
+against:
 
 * ``onnxruntime`` (CPU execution provider) and
 * the ONNX Python reference implementation (``onnx.reference``),
@@ -90,25 +91,101 @@ def _stringify_error(value: Any) -> str:
     return text
 
 
-def discover_node_tests(kind: str = "node") -> List[Dict[str, str]]:
-    """Return ``[{"name", "model_dir"}, ...]`` for every backend test.
+def _onnx_light_model_to_onnx(model):
+    """Convert an ``onnx-light`` ``ModelProto`` into an ``onnx`` ``ModelProto``.
 
-    The tests are loaded from ``onnx.backend.test`` which ships with the
-    installed ``onnx`` package. ``kind`` selects the test group (``node``,
-    ``simple``, ``pytorch-converted``, ``pytorch-operator`` or ``real``).
-    The default ``node`` matches the tests exercised by ``onnx-light``'s
-    reference implementation.
+    ``onnx-light`` exposes its own (protobuf-free) ``ModelProto`` whose
+    wire format is compatible with the official ``onnx`` package. The
+    conversion goes through ``SerializeToString`` / ``ParseFromString``
+    so the returned object is a real ``onnx.ModelProto`` that
+    ``onnxruntime`` and ``onnx.reference`` know how to consume.
     """
-    from onnx.backend.test.loader import load_model_tests
+    import onnx
 
-    tests = load_model_tests(kind=kind)
-    discovered: List[Dict[str, str]] = []
-    for tc in tests:
-        model_dir = getattr(tc, "model_dir", None)
-        name = getattr(tc, "name", None)
-        if not model_dir or not name:
+    if isinstance(model, onnx.ModelProto):
+        return model
+    out = onnx.ModelProto()
+    out.ParseFromString(model.SerializeToString())
+    return out
+
+
+def _onnx_light_tensor_to_numpy(arr):
+    """Convert an ``onnx-light`` tensor / numpy array to a numpy array.
+
+    ``arr`` can either be an ``onnx-light`` ``TensorProto`` (converted by
+    round-tripping its serialised bytes through ``onnx.TensorProto``) or
+    a plain numpy-compatible value, in which case ``numpy.asarray`` is
+    used.
+    """
+    import numpy as np
+
+    if isinstance(arr, np.ndarray):
+        return arr
+    if hasattr(arr, "SerializeToString"):
+        import onnx
+        from onnx import numpy_helper
+
+        tensor = onnx.TensorProto()
+        tensor.ParseFromString(arr.SerializeToString())
+        return numpy_helper.to_array(tensor)
+    return np.asarray(arr)
+
+
+def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
+    """Return ``[{"name", "model", "data_sets"}, ...]`` for every backend test.
+
+    The tests are loaded from ``onnx_light.backend.test.case`` which
+    ships with the installed ``onnx-light`` package via
+    :func:`onnx_light.backend.test.case.collect_test_case`. ``kind``
+    selects the test group (``node``, ``simple``, ``pytorch-converted``,
+    ``pytorch-operator`` or ``real``); the default ``node`` matches the
+    tests exercised by ``onnx-light``'s reference implementation.
+
+    Test cases collected by ``onnx-light`` carry their ``ModelProto`` and
+    expected input / output tensors in memory. They are converted to the
+    official ``onnx`` types via :func:`_onnx_light_model_to_onnx` /
+    :func:`_onnx_light_tensor_to_numpy` and returned in memory so the
+    rest of the pipeline never has to touch the filesystem. ``real``
+    test cases that only carry a ``model_dir`` are loaded from disk on
+    the fly into the same in-memory shape.
+    """
+    from onnx_light.backend.test.case import collect_test_case
+
+    cases = collect_test_case()
+    discovered: List[Dict[str, Any]] = []
+    for name, tc in cases.items():
+        if not name:
             continue
-        discovered.append({"name": str(name), "model_dir": str(model_dir)})
+        if kind and getattr(tc, "kind", None) != kind:
+            continue
+        model = getattr(tc, "model", None)
+        data_sets = getattr(tc, "data_sets", None) or []
+        existing_dir = getattr(tc, "model_dir", None)
+        if model is None and existing_dir:
+            # ``real`` cases (large models fetched on demand) only carry
+            # a ``model_dir``; load the model + data sets into memory so
+            # the runner side keeps a single in-memory contract.
+            import onnx
+
+            model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
+            data_sets = _load_test_data_sets(str(existing_dir))
+        if model is None:
+            continue
+        onnx_model = _onnx_light_model_to_onnx(model)
+        converted_data_sets: List[Tuple[List[Any], List[Any]]] = [
+            (
+                [_onnx_light_tensor_to_numpy(a) for a in inputs],
+                [_onnx_light_tensor_to_numpy(a) for a in outputs],
+            )
+            for inputs, outputs in data_sets
+        ]
+        discovered.append(
+            {
+                "name": str(name),
+                "model": onnx_model,
+                "data_sets": converted_data_sets,
+            }
+        )
     discovered.sort(key=lambda d: d["name"])
     return discovered
 
@@ -202,12 +279,11 @@ def _compare_outputs(
     return None
 
 
-def _run_with_onnxruntime(model_dir: str) -> Callable[[List[Any]], List[Any]]:
+def _run_with_onnxruntime(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
-    model_path = os.path.join(model_dir, "model.onnx")
     sess = onnxruntime.InferenceSession(
-        model_path, providers=["CPUExecutionProvider"]
+        model.SerializeToString(), providers=["CPUExecutionProvider"]
     )
     input_names = [i.name for i in sess.get_inputs()]
 
@@ -218,11 +294,9 @@ def _run_with_onnxruntime(model_dir: str) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
-def _run_with_reference(model_dir: str) -> Callable[[List[Any]], List[Any]]:
-    import onnx
+def _run_with_reference(model) -> Callable[[List[Any]], List[Any]]:
     from onnx.reference import ReferenceEvaluator
 
-    model = onnx.load(os.path.join(model_dir, "model.onnx"))
     evaluator = ReferenceEvaluator(model)
     input_names = _model_input_names(model)
 
@@ -233,21 +307,25 @@ def _run_with_reference(model_dir: str) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
-_BACKEND_FACTORIES: Dict[str, Callable[[str], Callable[[List[Any]], List[Any]]]] = {
+_BACKEND_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
     "onnxruntime": _run_with_onnxruntime,
     "reference": _run_with_reference,
 }
 
 
 def run_test_with_backend(
-    model_dir: str,
+    model: Any,
+    data_sets: List[Tuple[List[Any], List[Any]]],
     backend: str,
     rtol: float = DEFAULT_RTOL,
     atol: float = DEFAULT_ATOL,
 ) -> Dict[str, Any]:
     """Run a single backend test against ``backend``.
 
-    The returned dictionary has the following structure::
+    ``model`` is an in-memory ``onnx.ModelProto`` and ``data_sets`` is
+    the list of ``(inputs, expected_outputs)`` numpy arrays produced by
+    :func:`discover_node_tests`. The returned dictionary has the
+    following structure::
 
         {"success": bool, "error": str, "error_step": str}
 
@@ -263,14 +341,6 @@ def run_test_with_backend(
             "error_step": "load",
         }
 
-    try:
-        data_sets = _load_test_data_sets(model_dir)
-    except Exception as exc:  # noqa: BLE001 - dataset corruption is a failure
-        return {
-            "success": False,
-            "error": _stringify_error(exc),
-            "error_step": "load",
-        }
     if not data_sets:
         return {
             "success": False,
@@ -279,7 +349,7 @@ def run_test_with_backend(
         }
 
     try:
-        runner = factory(model_dir)
+        runner = factory(model)
     except Exception as exc:  # noqa: BLE001
         return {
             "success": False,
@@ -389,7 +459,7 @@ def build_payload(
     limit: Optional[int] = None,
     rtol: float = DEFAULT_RTOL,
     atol: float = DEFAULT_ATOL,
-    discover: Callable[[str], List[Dict[str, str]]] = discover_node_tests,
+    discover: Callable[[str], List[Dict[str, Any]]] = discover_node_tests,
     run: Callable[..., Dict[str, Any]] = run_test_with_backend,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
@@ -414,11 +484,12 @@ def build_payload(
     }
     for idx, test in enumerate(tests):
         name = test["name"]
-        model_dir = test["model_dir"]
+        model = test["model"]
+        data_sets = test["data_sets"]
         results: Dict[str, Dict[str, Any]] = {}
         for backend in BACKENDS:
             try:
-                info = run(model_dir, backend, rtol=rtol, atol=atol)
+                info = run(model, data_sets, backend, rtol=rtol, atol=atol)
             except Exception as exc:  # noqa: BLE001
                 # Defensive guard: the runner is expected to capture its
                 # own exceptions, but we never want a single broken test
