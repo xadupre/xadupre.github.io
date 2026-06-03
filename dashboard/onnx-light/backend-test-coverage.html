@@ -144,14 +144,12 @@ table.comparison td.error {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-table.comparison td.last-pass {
-  color: #8b949e;
-  font-size: 0.8em;
-  white-space: nowrap;
+table.comparison td.error .error-runtime {
+  color: #c9d1d9;
+  font-weight: bold;
+  margin-right: 0.3em;
 }
-table.comparison td.last-pass .pass-date { color: #c9d1d9; }
-table.comparison td.last-pass .pass-version { color: #8b949e; }
-table.comparison td.last-pass.never { color: #6e7681; font-style: italic; }
+table.comparison td.error .error-entry { display: block; }
 table.comparison th .arrow {
   display: inline-block;
   width: 0.8em;
@@ -237,10 +235,7 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
           <th data-key="name">Test <span class="arrow"></span></th>
           <th data-key="onnxruntime" class="center"><code>onnxruntime</code> <span class="arrow"></span></th>
           <th data-key="reference" class="center"><code>reference</code> <span class="arrow"></span></th>
-          <th data-key="onnxruntime_error">onnxruntime error <span class="arrow"></span></th>
-          <th data-key="reference_error">reference error <span class="arrow"></span></th>
-          <th data-key="onnxruntime_last_pass_date">onnxruntime last pass <span class="arrow"></span></th>
-          <th data-key="reference_last_pass_date">reference last pass <span class="arrow"></span></th>
+          <th data-key="errors">errors <span class="arrow"></span></th>
         </tr>
       </thead>
       <tbody id="rowsBody"></tbody>
@@ -322,8 +317,15 @@ function rowMatches(row) {
 
 function compareRows(a, b) {
   const { key, dir } = state.sort;
-  const va = a[key];
-  const vb = b[key];
+  let va;
+  let vb;
+  if (key === "errors") {
+    va = collectErrors(a).map(e => e.runtime + ": " + e.message).join("\n");
+    vb = collectErrors(b).map(e => e.runtime + ": " + e.message).join("\n");
+  } else {
+    va = a[key];
+    vb = b[key];
+  }
   let cmp;
   if (typeof va === "boolean" && typeof vb === "boolean") {
     cmp = (va === vb) ? 0 : (va ? 1 : -1);
@@ -386,7 +388,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 4;
     td.textContent = state.regexError
       ? "Fix the filter regex to see results."
       : state.search
@@ -403,10 +405,7 @@ function renderRows() {
       tr.appendChild(cellText(r.name));
       tr.appendChild(cellCheck(r.onnxruntime));
       tr.appendChild(cellCheck(r.reference));
-      tr.appendChild(cellError(r.onnxruntime_error, r.onnxruntime_error_step));
-      tr.appendChild(cellError(r.reference_error, r.reference_error_step));
-      tr.appendChild(cellLastPass(r.onnxruntime_last_pass_date, r.onnxruntime_last_pass_version));
-      tr.appendChild(cellLastPass(r.reference_last_pass_date, r.reference_last_pass_version));
+      tr.appendChild(cellErrors(r));
       body.appendChild(tr);
     }
   }
@@ -426,16 +425,41 @@ function cellCheck(value) {
   return td;
 }
 
-function cellError(error, step) {
+function formatErrorMessage(error, step) {
+  if (!error) return "";
+  return step ? "[" + step + "] " + error : error;
+}
+
+function collectErrors(row) {
+  const entries = [];
+  const ort = formatErrorMessage(row.onnxruntime_error, row.onnxruntime_error_step);
+  if (ort) entries.push({ runtime: "onnxruntime", message: ort });
+  const ref = formatErrorMessage(row.reference_error, row.reference_error_step);
+  if (ref) entries.push({ runtime: "reference", message: ref });
+  return entries;
+}
+
+function cellErrors(row) {
   const td = document.createElement("td");
   td.className = "error";
-  if (!error) {
+  const entries = collectErrors(row);
+  if (entries.length === 0) {
     td.textContent = "";
     return td;
   }
-  const full = step ? "[" + step + "] " + error : error;
-  td.textContent = shortenError(full);
-  td.title = full;
+  const titleParts = [];
+  for (const entry of entries) {
+    const span = document.createElement("span");
+    span.className = "error-entry";
+    const label = document.createElement("span");
+    label.className = "error-runtime";
+    label.textContent = entry.runtime + ":";
+    span.appendChild(label);
+    span.appendChild(document.createTextNode(" " + shortenError(entry.message)));
+    td.appendChild(span);
+    titleParts.push(entry.runtime + ": " + entry.message);
+  }
+  td.title = titleParts.join("\n");
   return td;
 }
 
@@ -445,29 +469,6 @@ function shortenError(text) {
   const firstLine = text.split(/\r?\n/)[0];
   if (firstLine.length <= maxLength) return firstLine;
   return firstLine.slice(0, maxLength - 1) + "\u2026";
-}
-
-function formatPassDate(value) {
-  if (!value) return "";
-  // Display the calendar day; keep the full timestamp as a tooltip.
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(value);
-  return m ? m[1] : value;
-}
-
-function cellLastPass(date, version) {
-  const td = document.createElement("td");
-  td.className = "last-pass";
-  if (!date) {
-    td.textContent = "never";
-    td.classList.add("never");
-    return td;
-  }
-  const span = document.createElement("span");
-  span.className = "pass-date";
-  span.textContent = formatPassDate(date);
-  td.appendChild(span);
-  td.title = version ? date + " (" + version + ")" : date;
-  return td;
 }
 
 function updateSortArrows() {
