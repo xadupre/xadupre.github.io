@@ -92,6 +92,44 @@ def _stringify_error(value: Any) -> str:
     return text
 
 
+def _onnx_light_model_to_onnx(model):
+    """Convert an ``onnx-light`` ``ModelProto`` into an ``onnx`` ``ModelProto``.
+
+    ``onnx-light`` exposes its own (protobuf-free) ``ModelProto`` whose
+    wire format is compatible with the official ``onnx`` package. The
+    conversion goes through ``SerializeToString`` / ``ParseFromString``
+    so the returned object is a real ``onnx.ModelProto`` that
+    ``onnxruntime`` and ``onnx.reference`` know how to consume.
+    """
+    import onnx
+
+    if isinstance(model, onnx.ModelProto):
+        return model
+    out = onnx.ModelProto()
+    out.ParseFromString(model.SerializeToString())
+    return out
+
+
+def _onnx_light_tensor_to_onnx(arr, name: str):
+    """Convert an ``onnx-light`` tensor / numpy array to an ``onnx`` ``TensorProto``.
+
+    ``arr`` can either be an ``onnx-light`` ``TensorProto`` (converted by
+    round-tripping its serialised bytes) or a plain numpy-compatible
+    value, in which case ``onnx.numpy_helper.from_array`` is used.
+    """
+    import numpy as np
+    import onnx
+    from onnx import numpy_helper
+
+    if isinstance(arr, onnx.TensorProto):
+        return arr
+    if hasattr(arr, "SerializeToString") and not isinstance(arr, np.ndarray):
+        tensor = onnx.TensorProto()
+        tensor.ParseFromString(arr.SerializeToString())
+        return tensor
+    return numpy_helper.from_array(np.asarray(arr), name=name)
+
+
 def discover_node_tests(kind: str = "node") -> List[Dict[str, str]]:
     """Return ``[{"name", "model_dir"}, ...]`` for every backend test.
 
@@ -103,14 +141,13 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, str]]:
     tests exercised by ``onnx-light``'s reference implementation.
 
     Test cases collected by ``onnx-light`` carry their ``ModelProto`` and
-    expected input / output tensors in memory. They are materialised on
-    disk in the standard ``model.onnx`` + ``test_data_set_<n>/`` layout
-    expected by :func:`run_test_with_backend`, so the rest of the
-    pipeline keeps operating on file paths.
+    expected input / output tensors in memory. They are converted to the
+    official ``onnx`` types via :func:`_onnx_light_model_to_onnx` /
+    :func:`_onnx_light_tensor_to_onnx` and materialised on disk in the
+    standard ``model.onnx`` + ``test_data_set_<n>/`` layout expected by
+    :func:`run_test_with_backend`, so the rest of the pipeline keeps
+    operating on file paths.
     """
-    import numpy as np
-    import onnx
-    from onnx import numpy_helper
     from onnx_light.backend.test.case import collect_test_case
 
     cases = collect_test_case()
@@ -131,25 +168,20 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, str]]:
             continue
         if model is None:
             continue
+        onnx_model = _onnx_light_model_to_onnx(model)
         test_dir = os.path.join(root, str(name))
         os.makedirs(test_dir, exist_ok=True)
         with open(os.path.join(test_dir, "model.onnx"), "wb") as fh:
-            fh.write(model.SerializeToString())
+            fh.write(onnx_model.SerializeToString())
         for ds_idx, (inputs, outputs) in enumerate(data_sets):
             ds_dir = os.path.join(test_dir, f"test_data_set_{ds_idx}")
             os.makedirs(ds_dir, exist_ok=True)
             for i, arr in enumerate(inputs):
-                if isinstance(arr, onnx.TensorProto):
-                    tensor = arr
-                else:
-                    tensor = numpy_helper.from_array(np.asarray(arr), name=f"input_{i}")
+                tensor = _onnx_light_tensor_to_onnx(arr, f"input_{i}")
                 with open(os.path.join(ds_dir, f"input_{i}.pb"), "wb") as fh:
                     fh.write(tensor.SerializeToString())
             for j, arr in enumerate(outputs):
-                if isinstance(arr, onnx.TensorProto):
-                    tensor = arr
-                else:
-                    tensor = numpy_helper.from_array(np.asarray(arr), name=f"output_{j}")
+                tensor = _onnx_light_tensor_to_onnx(arr, f"output_{j}")
                 with open(os.path.join(ds_dir, f"output_{j}.pb"), "wb") as fh:
                     fh.write(tensor.SerializeToString())
         discovered.append({"name": str(name), "model_dir": test_dir})
