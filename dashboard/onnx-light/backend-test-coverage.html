@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light &mdash; backend test coverage (onnxruntime vs reference)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; max-width: 1100px; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
+.intro code { background: rgba(110, 118, 129, 0.4); padding: 0 0.3em; border-radius: 4px; }
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.meta { font-size: 0.85em; color: #8b949e; }
+.meta strong { color: #c9d1d9; }
+.ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1em;
+  margin: 0.5em 0 0.75em;
+  font-size: 0.9em;
+}
+.ratio-card {
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+.ratio-card .ratio-label {
+  color: #8b949e;
+  font-size: 0.8em;
+}
+.ratio-card .ratio-value {
+  font-size: 1.4em;
+  margin-top: 0.15em;
+  font-weight: bold;
+}
+.ratio-card .ratio-detail {
+  font-size: 0.8em;
+  color: #8b949e;
+  margin-top: 0.1em;
+}
+.ratio-card.ort .ratio-value { color: #79c0ff; }
+.ratio-card.ref .ratio-value { color: #d2a8ff; }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.75em;
+}
+.controls input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 200px;
+  padding: 0.4em 0.6em;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid rgba(139, 148, 158, 0.4);
+  border-radius: 6px;
+  font: inherit;
+}
+.controls input[type="search"].invalid {
+  border-color: #f85149;
+}
+.controls .filter-status {
+  font-size: 0.8em;
+  color: #8b949e;
+}
+.controls .filter-status.error { color: #f85149; }
+.legend {
+  font-size: 0.8em;
+  color: #8b949e;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8em;
+}
+.legend .swatch {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 0.3em;
+}
+.legend .swatch.ort-only { background: rgba(121, 192, 255, 0.25); border: 1px solid rgba(121, 192, 255, 0.5); }
+.legend .swatch.ref-only { background: rgba(210, 168, 255, 0.25); border: 1px solid rgba(210, 168, 255, 0.5); }
+.legend .swatch.both-fail { background: rgba(248, 81, 73, 0.18); border: 1px solid rgba(248, 81, 73, 0.5); }
+.table-wrap { overflow-x: auto; }
+table.comparison {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+table.comparison th, table.comparison td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+}
+table.comparison th {
+  color: #8b949e;
+  font-weight: normal;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: rgba(22, 27, 34, 0.95);
+  white-space: nowrap;
+}
+table.comparison th.center { text-align: center; width: 1%; }
+table.comparison td.center { text-align: center; }
+table.comparison td.pass { color: #3fb950; font-weight: bold; }
+table.comparison td.fail { color: #f85149; }
+table.comparison td.error {
+  color: #8b949e;
+  font-size: 0.8em;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+table.comparison td.last-pass {
+  color: #8b949e;
+  font-size: 0.8em;
+  white-space: nowrap;
+}
+table.comparison td.last-pass .pass-date { color: #c9d1d9; }
+table.comparison td.last-pass .pass-version { color: #8b949e; }
+table.comparison td.last-pass.never { color: #6e7681; font-style: italic; }
+table.comparison th .arrow {
+  display: inline-block;
+  width: 0.8em;
+  color: #58a6ff;
+}
+table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
+table.comparison tbody tr.ort-only { background: rgba(121, 192, 255, 0.12); }
+table.comparison tbody tr.ref-only { background: rgba(210, 168, 255, 0.12); }
+table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; backend test coverage</h1>
+  <p class="intro">
+    Pass / fail status of every ONNX backend node test (the same tests
+    exercised by <a href="https://github.com/xadupre/onnx-light"><code>xadupre/onnx-light</code></a>'s
+    reference implementation) when executed against
+    <a href="https://onnxruntime.ai/"><code>onnxruntime</code></a> and the
+    Python reference implementation shipped with
+    <a href="https://github.com/onnx/onnx"><code>onnx</code></a>
+    (<code>onnx.reference.ReferenceEvaluator</code>).
+    Use the filter below to narrow the table to tests matching a regular
+    expression &mdash; the pass ratio is recomputed for the selection.
+  </p>
+</header>
+
+<div id="message" class="message info"></div>
+
+<div id="metaPanel" class="panel" style="display:none;">
+  <div class="meta">
+    Snapshot recorded on <strong id="metaDate"></strong>.
+    <span id="metaVersions"></span>
+    <span id="metaTolerances"></span>
+  </div>
+</div>
+
+<div id="mainPanel" class="panel" style="display:none;">
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_relu)…" autocomplete="off" />
+    <div id="filterStatus" class="filter-status"></div>
+  </div>
+  <div class="ratios" id="ratiosContainer">
+    <div class="ratio-card ort">
+      <div class="ratio-label">onnxruntime &mdash; pass ratio</div>
+      <div class="ratio-value" id="ortRatio">&mdash;</div>
+      <div class="ratio-detail" id="ortDetail"></div>
+    </div>
+    <div class="ratio-card ref">
+      <div class="ratio-label">reference &mdash; pass ratio</div>
+      <div class="ratio-value" id="refRatio">&mdash;</div>
+      <div class="ratio-detail" id="refDetail"></div>
+    </div>
+    <div class="ratio-card">
+      <div class="ratio-label">selected tests</div>
+      <div class="ratio-value" id="selectedCount">0</div>
+      <div class="ratio-detail" id="selectedDetail"></div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="swatch ort-only"></span>passes only on onnxruntime</span>
+    <span><span class="swatch ref-only"></span>passes only on the reference</span>
+    <span><span class="swatch both-fail"></span>fails on both</span>
+  </div>
+  <div class="table-wrap">
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th data-key="name">Test <span class="arrow"></span></th>
+          <th data-key="onnxruntime" class="center"><code>onnxruntime</code> <span class="arrow"></span></th>
+          <th data-key="reference" class="center"><code>reference</code> <span class="arrow"></span></th>
+          <th data-key="onnxruntime_error">onnxruntime error <span class="arrow"></span></th>
+          <th data-key="reference_error">reference error <span class="arrow"></span></th>
+          <th data-key="onnxruntime_last_pass_date">onnxruntime last pass <span class="arrow"></span></th>
+          <th data-key="reference_last_pass_date">reference last pass <span class="arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="rowsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const JSON_URL = "../../cache_data/onnx-light/backend_test_coverage.json";
+
+const state = {
+  rows: [],
+  search: "",
+  regex: null,
+  regexError: null,
+  sort: { key: "name", dir: "asc" },
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function hideMessage() {
+  document.getElementById("message").className = "message";
+}
+
+function renderMeta(payload) {
+  document.getElementById("metaPanel").style.display = "block";
+  document.getElementById("metaDate").textContent = payload.date || "(unknown date)";
+  const versions = payload.versions || {};
+  const verEl = document.getElementById("metaVersions");
+  verEl.textContent = "";
+  const verEntries = Object.entries(versions);
+  if (verEntries.length) {
+    verEl.appendChild(document.createTextNode(" Versions: "));
+    verEntries.forEach(([name, value], i) => {
+      if (i > 0) verEl.appendChild(document.createTextNode(", "));
+      const code = document.createElement("code");
+      code.textContent = name + " " + value;
+      verEl.appendChild(code);
+    });
+    verEl.appendChild(document.createTextNode("."));
+  }
+  const tol = payload.tolerances || {};
+  const tolEl = document.getElementById("metaTolerances");
+  tolEl.textContent = "";
+  if (tol.rtol !== undefined || tol.atol !== undefined) {
+    tolEl.textContent =
+      " Tolerances: rtol=" + tol.rtol + ", atol=" + tol.atol + ".";
+  }
+}
+
+function compileRegex(value) {
+  state.search = value;
+  if (!value) {
+    state.regex = null;
+    state.regexError = null;
+    return;
+  }
+  try {
+    state.regex = new RegExp(value, "i");
+    state.regexError = null;
+  } catch (err) {
+    state.regex = null;
+    state.regexError = err.message;
+  }
+}
+
+function rowMatches(row) {
+  if (state.regexError) {
+    // When the regex is invalid we keep showing the previous selection.
+    return false;
+  }
+  if (!state.regex) return true;
+  return state.regex.test(row.name);
+}
+
+function compareRows(a, b) {
+  const { key, dir } = state.sort;
+  const va = a[key];
+  const vb = b[key];
+  let cmp;
+  if (typeof va === "boolean" && typeof vb === "boolean") {
+    cmp = (va === vb) ? 0 : (va ? 1 : -1);
+  } else if (va === undefined || va === null) {
+    cmp = (vb === undefined || vb === null) ? 0 : -1;
+  } else if (vb === undefined || vb === null) {
+    cmp = 1;
+  } else {
+    cmp = String(va).localeCompare(String(vb));
+  }
+  if (cmp === 0 && key !== "name") {
+    cmp = String(a.name).localeCompare(String(b.name));
+  }
+  return dir === "desc" ? -cmp : cmp;
+}
+
+function formatRatio(passed, total) {
+  if (!total) return "—";
+  const pct = (passed * 100) / total;
+  return pct.toFixed(1) + "%";
+}
+
+function renderRatios(filtered) {
+  let ortPass = 0;
+  let refPass = 0;
+  for (const r of filtered) {
+    if (r.onnxruntime) ortPass++;
+    if (r.reference) refPass++;
+  }
+  const total = filtered.length;
+  document.getElementById("ortRatio").textContent = formatRatio(ortPass, total);
+  document.getElementById("ortDetail").textContent =
+    ortPass + " / " + total + " tests passing";
+  document.getElementById("refRatio").textContent = formatRatio(refPass, total);
+  document.getElementById("refDetail").textContent =
+    refPass + " / " + total + " tests passing";
+  document.getElementById("selectedCount").textContent = String(total);
+  document.getElementById("selectedDetail").textContent =
+    "of " + state.rows.length + " tests in snapshot";
+}
+
+function renderRows() {
+  const body = document.getElementById("rowsBody");
+  body.innerHTML = "";
+  const filtered = state.rows.filter(rowMatches);
+  filtered.sort(compareRows);
+  renderRatios(filtered);
+  const status = document.getElementById("filterStatus");
+  const input = document.getElementById("search");
+  if (state.regexError) {
+    status.textContent = "Invalid regex: " + state.regexError;
+    status.className = "filter-status error";
+    input.classList.add("invalid");
+  } else {
+    status.textContent = "";
+    status.className = "filter-status";
+    input.classList.remove("invalid");
+  }
+  if (filtered.length === 0) {
+    const tr = document.createElement("tr");
+    tr.className = "empty-row";
+    const td = document.createElement("td");
+    td.colSpan = 7;
+    td.textContent = state.regexError
+      ? "Fix the filter regex to see results."
+      : state.search
+        ? "No test matches the current filter."
+        : "No test recorded.";
+    tr.appendChild(td);
+    body.appendChild(tr);
+  } else {
+    for (const r of filtered) {
+      const tr = document.createElement("tr");
+      if (r.onnxruntime && !r.reference) tr.classList.add("ort-only");
+      else if (r.reference && !r.onnxruntime) tr.classList.add("ref-only");
+      else if (!r.onnxruntime && !r.reference) tr.classList.add("both-fail");
+      tr.appendChild(cellText(r.name));
+      tr.appendChild(cellCheck(r.onnxruntime));
+      tr.appendChild(cellCheck(r.reference));
+      tr.appendChild(cellError(r.onnxruntime_error, r.onnxruntime_error_step));
+      tr.appendChild(cellError(r.reference_error, r.reference_error_step));
+      tr.appendChild(cellLastPass(r.onnxruntime_last_pass_date, r.onnxruntime_last_pass_version));
+      tr.appendChild(cellLastPass(r.reference_last_pass_date, r.reference_last_pass_version));
+      body.appendChild(tr);
+    }
+  }
+  updateSortArrows();
+}
+
+function cellText(value) {
+  const td = document.createElement("td");
+  td.textContent = value;
+  return td;
+}
+
+function cellCheck(value) {
+  const td = document.createElement("td");
+  td.className = "center " + (value ? "pass" : "fail");
+  td.textContent = value ? "☑" : "☐";
+  return td;
+}
+
+function cellError(error, step) {
+  const td = document.createElement("td");
+  td.className = "error";
+  if (!error) {
+    td.textContent = "";
+  } else if (step) {
+    td.textContent = "[" + step + "] " + error;
+    td.title = "[" + step + "] " + error;
+  } else {
+    td.textContent = error;
+    td.title = error;
+  }
+  return td;
+}
+
+function formatPassDate(value) {
+  if (!value) return "";
+  // Display the calendar day; keep the full timestamp as a tooltip.
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+  return m ? m[1] : value;
+}
+
+function cellLastPass(date, version) {
+  const td = document.createElement("td");
+  td.className = "last-pass";
+  if (!date) {
+    td.textContent = "never";
+    td.classList.add("never");
+    return td;
+  }
+  const span = document.createElement("span");
+  span.className = "pass-date";
+  span.textContent = formatPassDate(date);
+  td.appendChild(span);
+  td.title = version ? date + " (" + version + ")" : date;
+  if (version) {
+    td.appendChild(document.createTextNode(" "));
+    const v = document.createElement("span");
+    v.className = "pass-version";
+    v.textContent = "(" + version + ")";
+    td.appendChild(v);
+  }
+  return td;
+}
+
+function updateSortArrows() {
+  const ths = document.querySelectorAll("table.comparison thead th");
+  for (const th of ths) {
+    const arrow = th.querySelector(".arrow");
+    if (!arrow) continue;
+    if (th.dataset.key === state.sort.key) {
+      arrow.textContent = state.sort.dir === "asc" ? "▲" : "▼";
+    } else {
+      arrow.textContent = "";
+    }
+  }
+}
+
+function bindHeaderSorting() {
+  const ths = document.querySelectorAll("table.comparison thead th");
+  for (const th of ths) {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (!key) return;
+      if (state.sort.key === key) {
+        state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort.key = key;
+        state.sort.dir = (key === "name") ? "asc" : "desc";
+      }
+      renderRows();
+    });
+  }
+}
+
+function bindSearch() {
+  const input = document.getElementById("search");
+  input.addEventListener("input", () => {
+    compileRegex(input.value);
+    renderRows();
+  });
+}
+
+fetch(JSON_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No backend test coverage snapshot available yet. The JSON file " +
+        "will appear once the 'Record onnx-light backend test coverage' " +
+        "workflow has published its first run.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })
+  .then(payload => {
+    if (!payload) return;
+    const rows = Array.isArray(payload.tests) ? payload.tests : [];
+    if (rows.length === 0) {
+      showMessage(
+        "The backend test coverage snapshot is empty. The dashboard will " +
+        "populate automatically once the recording workflow produces " +
+        "measurements.",
+        "info"
+      );
+      return;
+    }
+    hideMessage();
+    renderMeta(payload);
+    state.rows = rows;
+    document.getElementById("mainPanel").style.display = "block";
+    bindHeaderSorting();
+    bindSearch();
+    renderRows();
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
