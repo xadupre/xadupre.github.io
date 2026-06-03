@@ -92,6 +92,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
                 "n_nodes": 42,
                 "top_op_types": "MatMul:5",
             },
+            duration_s=1.25,
         )
         self.assertEqual(row["model_id"], "arnir0/Tiny-LLM")
         self.assertEqual(row["label"], "yobx")
@@ -106,6 +107,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertAlmostEqual(row["discrepancies_atol"], 1e-3)
         self.assertEqual(row["n_nodes"], 42)
         self.assertEqual(row["top_op_types"], "MatMul:5")
+        self.assertAlmostEqual(row["duration_s"], 1.25)
         self.assertEqual(row["error_step"], "")
         self.assertEqual(row["error"], "")
 
@@ -148,21 +150,24 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         cfg_yobx = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
         cfg_dyn = {"label": "dynamo-ir", "exporter": "dynamo", "optimization": "ir"}
         raw = [
-            ("arnir0/Tiny-LLM", cfg_yobx, {"export": "OK", "discrepancies": "OK"}),
+            ("arnir0/Tiny-LLM", cfg_yobx, {"export": "OK", "discrepancies": "OK"}, 1.5),
             (
                 "arnir0/Tiny-LLM",
                 cfg_dyn,
                 {"export": "FAILED", "error_export": "boom"},
+                0.7,
             ),
             (
                 "microsoft/Phi-4-reasoning",
                 cfg_yobx,
                 {"export": "FAILED", "error_export": "boom"},
+                2.0,
             ),
             (
                 "microsoft/Phi-4-reasoning",
                 cfg_dyn,
                 {"export": "OK", "discrepancies": "OK"},
+                3.25,
             ),
         ]
         previous = {
@@ -208,6 +213,13 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         # No previous and now failing -> empty.
         self.assertEqual(
             rows_by_key[("arnir0/Tiny-LLM", "dynamo-ir")]["last_working_date"], ""
+        )
+        # Per-cell export duration is preserved in the row.
+        self.assertAlmostEqual(
+            rows_by_key[("arnir0/Tiny-LLM", "yobx")]["duration_s"], 1.5
+        )
+        self.assertAlmostEqual(
+            rows_by_key[("microsoft/Phi-4-reasoning", "dynamo-ir")]["duration_s"], 3.25
         )
         # Payload must be JSON-serialisable with allow_nan=False.
         json.dumps(payload, allow_nan=False)

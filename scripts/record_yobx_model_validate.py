@@ -36,6 +36,7 @@ import json
 import math
 import os
 import sys
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 
@@ -172,6 +173,7 @@ def _normalise_result(
     model_id: str,
     exporter_cfg: Dict[str, str],
     summary: Any,
+    duration_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Pick a JSON-serialisable subset of the fields returned by ``validate_model``."""
     working = is_cell_working(summary)
@@ -193,6 +195,7 @@ def _normalise_result(
         "discrepancies_atol": _to_float(_summary_get(summary, "discrepancies_atol")),
         "n_nodes": _to_int(_summary_get(summary, "n_nodes")),
         "top_op_types": _summary_get(summary, "top_op_types") or "",
+        "duration_s": _to_float(duration_s),
         "error_step": error_step,
         "error": error,
     }
@@ -291,13 +294,14 @@ def run_all(
     items = list(models)
     if limit is not None:
         items = items[:limit]
-    out: List[Tuple[str, Dict[str, str], Any]] = []
+    out: List[Tuple[str, Dict[str, str], Any, float]] = []
     for model_id in items:
         for exporter_cfg in exporters:
             _log(
                 f"Validating {model_id} with exporter={exporter_cfg['exporter']} "
                 f"optimization={exporter_cfg['optimization']}..."
             )
+            start = time.monotonic()
             try:
                 summary = run_validate_one(
                     model_id, exporter_cfg, dtype=dtype, device=device, verbose=verbose
@@ -311,12 +315,14 @@ def run_all(
                     "export": "FAILED",
                     "error_export": f"{type(exc).__name__}: {exc}",
                 }
-            out.append((model_id, exporter_cfg, summary))
+            duration_s = time.monotonic() - start
+            _log(f"  -> done in {duration_s:.2f}s")
+            out.append((model_id, exporter_cfg, summary, duration_s))
     return out
 
 
 def build_payload(
-    raw_results: List[Tuple[str, Dict[str, str], Any]],
+    raw_results: List[Tuple[str, Dict[str, str], Any, float]],
     models: Tuple[str, ...],
     exporters: Tuple[Dict[str, str], ...],
     dtype: str,
@@ -336,8 +342,13 @@ def build_payload(
     for label in (e["label"] for e in exporters):
         totals[label] = {"success": 0, "failure": 0, "total": 0}
 
-    for model_id, exporter_cfg, summary in raw_results:
-        row = _normalise_result(model_id, exporter_cfg, summary)
+    for item in raw_results:
+        if len(item) == 4:
+            model_id, exporter_cfg, summary, duration_s = item
+        else:
+            model_id, exporter_cfg, summary = item
+            duration_s = None
+        row = _normalise_result(model_id, exporter_cfg, summary, duration_s)
         previous_row = previous_index.get((model_id, exporter_cfg["label"]))
         merge_last_working(row, previous_row, current_date, commit or "")
         results.append(row)
