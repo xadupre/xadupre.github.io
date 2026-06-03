@@ -178,7 +178,8 @@ class TestRecordYobxModelValidate(unittest.TestCase):
                     "last_working_date": "2024-01-01T00:00:00Z",
                     "last_working_commit": "old",
                 }
-            ]
+            ],
+            "tasks": {"microsoft/Phi-4-reasoning": "fill-mask"},
         }
         payload = rymv.build_payload(
             raw_results=raw,
@@ -189,6 +190,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             commit="newcommit",
             previous_payload=previous,
             now="2024-05-01T00:00:00Z",
+            tasks={"arnir0/Tiny-LLM": "text-generation"},
         )
         self.assertEqual(payload["date"], "2024-05-01T00:00:00Z")
         self.assertEqual(payload["dtype"], "float16")
@@ -220,6 +222,21 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
         self.assertAlmostEqual(
             rows_by_key[("microsoft/Phi-4-reasoning", "dynamo-ir")]["duration_s"], 3.25
+        )
+        # HuggingFace task is captured per row, taking the explicit value first
+        # and falling back to the previous snapshot.
+        self.assertEqual(
+            rows_by_key[("arnir0/Tiny-LLM", "yobx")]["task"], "text-generation"
+        )
+        self.assertEqual(
+            rows_by_key[("microsoft/Phi-4-reasoning", "yobx")]["task"], "fill-mask"
+        )
+        self.assertEqual(
+            payload["tasks"],
+            {
+                "arnir0/Tiny-LLM": "text-generation",
+                "microsoft/Phi-4-reasoning": "fill-mask",
+            },
         )
         # Payload must be JSON-serialisable with allow_nan=False.
         json.dumps(payload, allow_nan=False)

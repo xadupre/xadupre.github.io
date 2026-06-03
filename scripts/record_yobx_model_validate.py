@@ -282,6 +282,26 @@ def run_validate_one(
     return summary
 
 
+def detect_task(model_id: str) -> str:
+    """Return the HuggingFace task detected for ``model_id``.
+
+    Uses :func:`yobx.torch.validate._detect_task` against the model's
+    ``AutoConfig`` (e.g. ``"text-generation"``, ``"fill-mask"``,
+    ``"image-classification"``, ``"feature-extraction"``).  Returns an
+    empty string when the task cannot be detected (missing dependencies,
+    network failure, ...).
+    """
+    try:  # pragma: no cover - exercised via the recording script
+        from transformers import AutoConfig
+        from yobx.torch.validate import _detect_task
+
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        return _detect_task(config) or ""
+    except Exception as exc:  # noqa: BLE001 - never fail the recorder for this
+        _log(f"  -> could not detect task for {model_id}: {type(exc).__name__}: {exc}")
+        return ""
+
+
 def run_all(
     models: Tuple[str, ...],
     exporters: Tuple[Dict[str, str], ...],
@@ -289,7 +309,7 @@ def run_all(
     device: str,
     limit: Optional[int] = None,
     verbose: int = 0,
-) -> List[Tuple[str, Dict[str, str], Any]]:
+) -> List[Tuple[str, Dict[str, str], Any, float]]:
     """Run ``validate_model`` for every (model, exporter) combination."""
     items = list(models)
     if limit is not None:
@@ -330,12 +350,22 @@ def build_payload(
     commit: Optional[str],
     previous_payload: Optional[Dict[str, Any]] = None,
     now: Optional[str] = None,
+    tasks: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Assemble the JSON snapshot to be written to disk."""
     current_date = now or dt.datetime.now(tz=dt.timezone.utc).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     previous_index = _index_previous_results(previous_payload or {})
+    previous_tasks = (previous_payload or {}).get("tasks") or {}
+    resolved_tasks: Dict[str, str] = {}
+    for m in models:
+        if tasks and tasks.get(m):
+            resolved_tasks[m] = tasks[m]
+        elif previous_tasks.get(m):
+            resolved_tasks[m] = previous_tasks[m]
+        else:
+            resolved_tasks[m] = ""
 
     results: List[Dict[str, Any]] = []
     totals: Dict[str, Dict[str, int]] = {}
@@ -349,6 +379,7 @@ def build_payload(
             model_id, exporter_cfg, summary = item
             duration_s = None
         row = _normalise_result(model_id, exporter_cfg, summary, duration_s)
+        row["task"] = resolved_tasks.get(model_id, "")
         previous_row = previous_index.get((model_id, exporter_cfg["label"]))
         merge_last_working(row, previous_row, current_date, commit or "")
         results.append(row)
@@ -368,6 +399,7 @@ def build_payload(
         "dtype": dtype,
         "device": device,
         "models": list(models),
+        "tasks": resolved_tasks,
         "exporters": [dict(e) for e in exporters],
         "totals": totals,
         "results": results,
@@ -436,6 +468,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     previous_payload = _load_existing_cache(out_path)
 
+    tasks = {m: detect_task(m) for m in models}
+
     raw_results = run_all(
         models=models,
         exporters=exporters,
@@ -452,6 +486,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         device=args.device,
         commit=args.commit,
         previous_payload=previous_payload,
+        tasks=tasks,
     )
 
     with open(out_path, "w", encoding="utf-8") as fh:
