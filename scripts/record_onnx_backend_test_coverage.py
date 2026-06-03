@@ -132,7 +132,7 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
         inputs: List[Any] = []
         i = 0
         while True:
-            p = os.path.join(ds_path, "input_%d.pb" % i)
+            p = os.path.join(ds_path, f"input_{i}.pb")
             if not os.path.exists(p):
                 break
             inputs.append(_load_tensor(p))
@@ -140,7 +140,7 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
         outputs: List[Any] = []
         j = 0
         while True:
-            p = os.path.join(ds_path, "output_%d.pb" % j)
+            p = os.path.join(ds_path, f"output_{j}.pb")
             if not os.path.exists(p):
                 break
             outputs.append(_load_tensor(p))
@@ -166,16 +166,16 @@ def _compare_outputs(
 
     if len(expected) != len(actual):
         return (
-            "output count mismatch: expected %d, got %d"
-            % (len(expected), len(actual))
+            f"output count mismatch: "
+            f"expected {len(expected)}, got {len(actual)}"
         )
     for idx, (exp, act) in enumerate(zip(expected, actual)):
         exp_arr = np.asarray(exp)
         act_arr = np.asarray(act)
         if exp_arr.shape != act_arr.shape:
             return (
-                "output %d shape mismatch: expected %s, got %s"
-                % (idx, exp_arr.shape, act_arr.shape)
+                f"output {idx} shape mismatch: "
+                f"expected {exp_arr.shape}, got {act_arr.shape}"
             )
         if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
             "U",
@@ -183,14 +183,14 @@ def _compare_outputs(
             "O",
         ):
             if not np.array_equal(exp_arr, act_arr):
-                return "output %d value mismatch" % idx
+                return f"output {idx} value mismatch"
             continue
         try:
             np.testing.assert_allclose(
                 act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
             )
         except AssertionError as exc:
-            return "output %d mismatch (%s)" % (idx, _stringify_error(exc))
+            return f"output {idx} mismatch ({_stringify_error(exc)})"
     return None
 
 
@@ -251,7 +251,7 @@ def run_test_with_backend(
     if factory is None:
         return {
             "success": False,
-            "error": "unknown backend: %s" % backend,
+            "error": f"unknown backend: {backend}",
             "error_step": "load",
         }
 
@@ -308,10 +308,10 @@ def _row_from_results(
         row[backend] = success
         error = _stringify_error(info.get("error"))
         if error:
-            row["%s_error" % backend] = error
+            row[f"{backend}_error"] = error
         step = info.get("error_step") or ""
         if step:
-            row["%s_error_step" % backend] = step
+            row[f"{backend}_error_step"] = step
     return row
 
 
@@ -331,7 +331,7 @@ def build_payload(
     tests = discover(kind)
     if limit is not None and limit >= 0:
         tests = tests[:limit]
-    _log("Discovered %d %s backend tests." % (len(tests), kind))
+    _log(f"Discovered {len(tests)} {kind} backend tests.")
 
     rows: List[Dict[str, Any]] = []
     totals: Dict[str, Dict[str, int]] = {
@@ -349,8 +349,8 @@ def build_payload(
                 # own exceptions, but we never want a single broken test
                 # to abort the whole snapshot.
                 _log(
-                    "Unhandled error for %s on %s: %s\n%s"
-                    % (name, backend, exc, traceback.format_exc())
+                    f"Unhandled error for {name} on {backend}: {exc}\n"
+                    f"{traceback.format_exc()}"
                 )
                 info = {
                     "success": False,
@@ -362,7 +362,7 @@ def build_payload(
             totals[backend][bucket] += 1
         rows.append(_row_from_results(name, results))
         if (idx + 1) % 50 == 0:
-            _log("Ran %d/%d tests." % (idx + 1, len(tests)))
+            _log(f"Ran {idx + 1}/{len(tests)} tests.")
 
     return {
         "date": _format_iso(now or dt.datetime.now(tz=dt.timezone.utc)),
@@ -429,7 +429,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             atol=args.atol,
         )
     except Exception as exc:  # noqa: BLE001
-        _log("ERROR: failed to record backend test coverage: %s" % exc)
+        _log(f"ERROR: failed to record backend test coverage: {exc}")
         traceback.print_exc()
         return 1
     json_path = os.path.join(
@@ -437,8 +437,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     write_payload(json_path, payload)
     _log(
-        "Wrote %d test entries to %s (totals=%s)."
-        % (len(payload["tests"]), json_path, payload["totals"])
+        f"Wrote {len(payload['tests'])} test entries to {json_path} "
+        f"(totals={payload['totals']})."
     )
     return 0
 

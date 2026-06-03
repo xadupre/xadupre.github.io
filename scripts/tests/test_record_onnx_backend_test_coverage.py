@@ -100,7 +100,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
     def test_build_payload_honours_limit(self):
         tests = [
-            {"name": "test_%d" % i, "model_dir": "/fake/%d" % i}
+            {"name": f"test_{i}", "model_dir": f"/fake/{i}"}
             for i in range(5)
         ]
 
