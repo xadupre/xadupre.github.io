@@ -59,10 +59,29 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         # Returns a copy so the input is not mutated.
         self.assertIsNot(entry, src)
 
-    def test_stringify_error_truncates_and_takes_first_line(self):
+    def test_stringify_error_collapses_whitespace_and_truncates(self):
         self.assertEqual(rymv._stringify_error(None), "")
         self.assertEqual(rymv._stringify_error("boom"), "boom")
-        self.assertEqual(rymv._stringify_error("boom\nrest"), "boom")
+        # Multi-line errors are collapsed into a single line so that the
+        # actionable trailing lines (such as HuggingFace's "You need to
+        # have sentencepiece installed ...") are preserved in the snapshot.
+        self.assertEqual(rymv._stringify_error("boom\nrest"), "boom rest")
+        self.assertEqual(
+            rymv._stringify_error(
+                "Couldn't instantiate the backend tokenizer from one of: \n"
+                "(1) a `tokenizers` library serialization file, \n"
+                "(2) a slow tokenizer instance to convert or \n"
+                "(3) an equivalent slow tokenizer class to instantiate and convert. \n"
+                "You need to have sentencepiece installed to convert a slow "
+                "tokenizer to a fast one."
+            ),
+            "Couldn't instantiate the backend tokenizer from one of: "
+            "(1) a `tokenizers` library serialization file, "
+            "(2) a slow tokenizer instance to convert or "
+            "(3) an equivalent slow tokenizer class to instantiate and convert. "
+            "You need to have sentencepiece installed to convert a slow "
+            "tokenizer to a fast one.",
+        )
         long = "x" * 500
         out = rymv._stringify_error(long)
         self.assertTrue(out.endswith("..."))
@@ -122,7 +141,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             }
         )
         self.assertEqual(step, "config")
-        self.assertEqual(msg, "bad config")
+        self.assertEqual(msg, "bad config stack")
 
         step, msg = rymv._first_error({"error_export": "export boom"})
         self.assertEqual(step, "export")
@@ -175,7 +194,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
         self.assertEqual(row["success"], 0)
         self.assertEqual(row["error_step"], "export")
-        self.assertEqual(row["error"], "boom!")
+        self.assertEqual(row["error"], "boom! stack")
         self.assertIsNone(row["discrepancies_max_abs"])
         self.assertEqual(row["discrepancies"], "")
 
