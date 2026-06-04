@@ -472,9 +472,12 @@ def run_all(
             # discrepancy check and other unrelated work.
             if is_yobx and effective_dump:
                 new_xlsx = _list_xlsx(effective_dump) - pre_xlsx
-                for xlsx_path in sorted(
-                    new_xlsx, key=os.path.getmtime, reverse=True
-                ):
+                def _safe_mtime(p: str) -> float:
+                    try:
+                        return os.path.getmtime(p)
+                    except OSError:
+                        return 0.0
+                for xlsx_path in sorted(new_xlsx, key=_safe_mtime, reverse=True):
                     metric = _read_yobx_export_duration(xlsx_path)
                     if metric is not None:
                         duration_s = metric
