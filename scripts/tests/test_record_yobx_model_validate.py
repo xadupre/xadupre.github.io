@@ -302,6 +302,16 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         args = rymv.parse_args(["--dump-folder", "/tmp/dump"])
         self.assertEqual(args.dump_folder, "/tmp/dump")
 
+    def test_parse_args_quiet_default(self):
+        args = rymv.parse_args([])
+        self.assertTrue(args.quiet)
+
+    def test_parse_args_no_quiet(self):
+        args = rymv.parse_args(["--no-quiet"])
+        self.assertFalse(args.quiet)
+        args = rymv.parse_args(["--no-quiet", "--quiet"])
+        self.assertTrue(args.quiet)
+
     def test_parse_args_custom_models(self):
         args = rymv.parse_args(["--model", "a/b", "--model", "c/d", "--limit", "1"])
         self.assertEqual(args.models, ["a/b", "c/d"])
