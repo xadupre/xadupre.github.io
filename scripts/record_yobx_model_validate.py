@@ -183,20 +183,36 @@ def _summary_get(summary: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-def is_cell_working(summary: Any) -> bool:
+def is_cell_working(summary: Any, model_atol: Optional[float] = None) -> bool:
     """Return ``True`` when the export *and* the discrepancy check succeeded.
 
     ``summary`` may be either a ``ValidateSummary`` instance or a plain dict
     (the latter is used by the tests).
+
+    When ``model_atol`` is provided, a cell is also considered working if the
+    export succeeded and the maximum absolute discrepancy is below the
+    per-model tolerance, even if ``validate_model`` flagged the run as failed
+    because it used a stricter default tolerance.
     """
     export = _summary_get(summary, "export")
     discrepancies = _summary_get(summary, "discrepancies")
     if export != "OK":
         return False
+    if discrepancies == "OK":
+        return True
+    # ``discrepancies`` was set but reported as failed by ``validate_model``.
+    # If the caller supplied a per-model ``atol`` that is more permissive than
+    # the one used during validation, honour it: a cell where the observed
+    # maximum absolute error is within the model's declared tolerance is still
+    # considered working for our dashboard.
+    if model_atol is not None and discrepancies:
+        max_abs = _to_float(_summary_get(summary, "discrepancies_max_abs"))
+        if max_abs is not None and max_abs <= model_atol:
+            return True
     # ``discrepancies`` is only set when ``do_run=True``. If it was not set
     # the export ran but we cannot conclude that the model is "working"
     # numerically, so we conservatively report False.
-    return discrepancies == "OK"
+    return False
 
 
 def _first_error(summary: Any) -> Tuple[str, str]:
@@ -221,9 +237,10 @@ def _normalise_result(
     exporter_cfg: Dict[str, str],
     summary: Any,
     duration_s: Optional[float] = None,
+    model_atol: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Pick a JSON-serialisable subset of the fields returned by ``validate_model``."""
-    working = is_cell_working(summary)
+    working = is_cell_working(summary, model_atol=model_atol)
     error_step, error = _first_error(summary)
 
     return {
@@ -436,7 +453,13 @@ def build_payload(
         else:
             model_id, exporter_cfg, summary = item
             duration_s = None
-        row = _normalise_result(model_id, exporter_cfg, summary, duration_s)
+        row = _normalise_result(
+            model_id,
+            exporter_cfg,
+            summary,
+            duration_s,
+            model_atol=_to_float(entries_by_id.get(model_id, {}).get("atol")),
+        )
         row["task"] = resolved_tasks.get(model_id, "")
         entry = entries_by_id.get(model_id, {})
         row["dtype"] = entry.get("dtype", dtype)
