@@ -26,10 +26,13 @@ the rule. The following setups are known to work with this repository:
    merging* and *Require status checks*) and add the following entries to
    *Bypass list*:
 
-   - the **GitHub Actions** app/role (`Repository role: Maintain` or higher,
-     or the `github-actions` app, depending on what your plan exposes), so
-     that pushes made with the default `GITHUB_TOKEN` from the workflows in
-     this repository are allowed;
+   - the **GitHub Actions** bypass actor, so that pushes made with the
+     default `GITHUB_TOKEN` from the workflows in this repository are
+     allowed. On public repositories and on paid plans this is exposed
+     directly as the *GitHub Actions* entry in the bypass picker; on plans
+     where that entry is not available, add a repository role of *Maintain*
+     or higher and run the workflows under an account with that role
+     (see option 3 below);
    - the repository owner, so that manual maintenance pushes keep working.
 
    Rulesets (unlike the legacy *Branch protection rules*) support bypassing
