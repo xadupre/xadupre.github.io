@@ -615,7 +615,7 @@ def build_payload(
                 previous=previous_rows.get(name),
                 versions=version_map,
                 now_iso=now_iso,
-                mermaid=test.get("mermaid", "") or "",
+                mermaid=test.get("mermaid", ""),
             )
         )
         if (idx + 1) % 25 == 0:

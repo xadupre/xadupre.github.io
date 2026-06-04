@@ -315,7 +315,7 @@ class TestMermaid(unittest.TestCase):
         # otherwise the helper returns an empty string.
         try:
             import yobx  # noqa: F401
-        except Exception:
+        except ImportError:
             self.assertEqual(out, "")
         else:
             self.assertIn("flowchart", out.lower())
