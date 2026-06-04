@@ -433,7 +433,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             test = self
 
-            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
                 if exporter_cfg["exporter"] == "yobx":
                     # Mimic the yobx exporter writing a companion workbook.
                     xlsx = os.path.join(
@@ -470,7 +470,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         test = self
         seen_folders = []
 
-        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
             # yobx must receive a real dump folder so it can save the report.
             test.assertIsNotNone(dump_folder)
             test.assertTrue(os.path.isdir(dump_folder))
