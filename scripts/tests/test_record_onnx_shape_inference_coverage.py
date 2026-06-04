@@ -141,6 +141,75 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         self.assertFalse(by_name["Y"]["ok"])
         self.assertIn("missing from graph", by_name["Y"]["reason"])
 
+    def _make_symbolic_model(self, exp_name, got_name):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [exp_name, 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [exp_name, 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "sym",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        # Rewrite the inferred dim_param to ``got_name`` (or to a concrete
+        # value when an int is given) to simulate a different inference
+        # result for the dynamic dimension.
+        wrong = type(model)()
+        wrong.CopyFrom(model)
+        out_dim0 = wrong.graph.output[0].type.tensor_type.shape.dim[0]
+        out_dim0.Clear()
+        if isinstance(got_name, str):
+            out_dim0.dim_param = got_name
+        else:
+            out_dim0.dim_value = got_name
+        return snap, wrong
+
+    def test_symbolic_dim_name_mismatch_is_flagged(self):
+        snap, wrong = self._make_symbolic_model("N", "M")
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
+    def test_symbolic_vs_concrete_dim_is_flagged(self):
+        snap, wrong = self._make_symbolic_model("N", 4)
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
+    def test_concrete_vs_symbolic_dim_is_flagged(self):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "g",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        wrong = type(model)()
+        wrong.CopyFrom(model)
+        d0 = wrong.graph.output[0].type.tensor_type.shape.dim[0]
+        d0.Clear()
+        d0.dim_param = "N"
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
 
 class TestRunTestWithBackend(unittest.TestCase):
     def test_run_with_official_onnx(self):
@@ -382,6 +451,98 @@ class TestBuildPayload(unittest.TestCase):
         for backend in rsi.BACKENDS:
             self.assertFalse(row["runtimes"][backend]["success"])
             self.assertEqual(row["runtimes"][backend]["error"], "kaboom")
+
+
+class TestMermaid(unittest.TestCase):
+    def test_model_to_mermaid_returns_flowchart(self):
+        model = _make_simple_model()
+        out = rsi.model_to_mermaid(model)
+        self.assertIsInstance(out, str)
+        # The helper is now self-contained (only depends on ``onnx``),
+        # so it must always return a non-empty Mermaid ``flowchart TD``
+        # block for a valid model.
+        self.assertTrue(out.startswith("flowchart TD"))
+        # Inputs, the two Identity nodes and the output all appear.
+        self.assertIn("X", out)
+        self.assertIn("Identity", out)
+        self.assertIn("Z", out)
+
+    def test_model_to_mermaid_returns_empty_on_invalid_model(self):
+        # Non-model inputs are tolerated and produce an empty string.
+        self.assertEqual(rsi.model_to_mermaid(None), "")
+        self.assertEqual(rsi.model_to_mermaid("not a model"), "")
+
+    def test_model_to_mermaid_escapes_quotes_in_names(self):
+        import onnx
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info('X"weird', TensorProto.FLOAT, [1])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [1])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ['X"weird'], ["Z"])],
+            "weird",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        model.ir_version = 7
+        rendered = rsi.model_to_mermaid(model)
+        # The double-quote is escaped so it cannot terminate the Mermaid label.
+        self.assertNotIn('X"weird"', rendered)
+        self.assertIn("&quot;weird", rendered)
+
+    def test_row_includes_mermaid_when_provided(self):
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            mermaid="flowchart TD\nA-->B",
+        )
+        self.assertEqual(row["mermaid"], "flowchart TD\nA-->B")
+
+    def test_row_preserves_previous_mermaid_when_missing(self):
+        previous = {"mermaid": "flowchart TD\nX-->Y"}
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            previous=previous,
+            mermaid="",
+        )
+        self.assertEqual(row["mermaid"], "flowchart TD\nX-->Y")
+
+    def test_row_omits_mermaid_when_absent(self):
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            mermaid="",
+        )
+        self.assertNotIn("mermaid", row)
+
+    def test_build_payload_propagates_mermaid(self):
+        tests = [
+            {
+                "name": "test_a",
+                "model": "m",
+                "expected": [{"name": "Y"}],
+                "mermaid": "flowchart TD\nA-->B",
+            }
+        ]
+
+        def fake_run(model, expected, backend):
+            return {
+                "success": True, "correct": 1, "total": 1,
+                "details": [], "error": "", "error_step": "",
+            }
+
+        payload = rsi.build_payload(
+            tag="inference",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertEqual(payload["tests"][0]["mermaid"], "flowchart TD\nA-->B")
 
 
 class TestMain(unittest.TestCase):
