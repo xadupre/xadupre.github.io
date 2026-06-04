@@ -162,12 +162,21 @@ def collect_versions() -> Dict[str, str]:
 
 
 def _stringify_error(value: Any) -> str:
-    """Return a short, single-line string for an exporter error message."""
+    """Return a short, single-line string for an exporter error message.
+
+    Multi-line error messages are collapsed into a single line (newlines and
+    runs of whitespace are replaced with a single space) instead of keeping
+    only the first line. HuggingFace ``transformers`` in particular raises
+    multi-line errors whose *first* line is uninformative on its own (for
+    example ``Couldn't instantiate the backend tokenizer from one of:``) and
+    whose subsequent lines contain the actual remediation hint (``You need
+    to have sentencepiece installed ...``). Keeping the whole message - up
+    to a hard cap - makes the JSON snapshot consumed by the dashboard
+    actually useful for debugging failing model exports.
+    """
     if value is None:
         return ""
-    text = str(value)
-    if "\n" in text:
-        text = text.splitlines()[0]
+    text = " ".join(str(value).split())
     if len(text) > 400:
         text = text[:397] + "..."
     return text
