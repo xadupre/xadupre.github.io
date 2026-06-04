@@ -31,7 +31,6 @@ import sys
 import urllib.error
 import urllib.request
 
-
 GITHUB_CONTENTS_URL = (
     "https://api.github.com/repos/{owner}/{repo}/contents/{path}?ref={ref}"
 )
@@ -101,9 +100,7 @@ def list_python_files(
     Python file so that classes re-exported from a package's top-level file
     are not silently dropped.
     """
-    url = GITHUB_CONTENTS_URL.format(
-        owner=owner, repo=repo, path=path, ref=ref
-    )
+    url = GITHUB_CONTENTS_URL.format(owner=owner, repo=repo, path=path, ref=ref)
     entries = json.loads(_request(url).decode("utf-8"))
     if not isinstance(entries, list):
         raise RuntimeError(
@@ -121,9 +118,7 @@ def list_python_files(
                 }
             )
         elif kind == "dir":
-            files.extend(
-                list_python_files(owner, repo, entry["path"], ref)
-            )
+            files.extend(list_python_files(owner, repo, entry["path"], ref))
     return files
 
 
@@ -160,9 +155,7 @@ def collect_classes(project: dict[str, str]) -> dict[str, list[str]]:
     return classes
 
 
-def fetch_latest_commit(
-    owner: str, repo: str, path: str, ref: str
-) -> str | None:
+def fetch_latest_commit(owner: str, repo: str, path: str, ref: str) -> str | None:
     """Return the SHA of the most recent commit touching ``path``."""
     url = GITHUB_COMMIT_URL.format(owner=owner, repo=repo, path=path, ref=ref)
     try:
@@ -222,10 +215,7 @@ def build_payload(
     return {
         "date": _format_iso(now or dt.datetime.now(tz=dt.timezone.utc)),
         "projects": per_project_meta,
-        "totals": {
-            key: len(classes)
-            for key, classes in per_project_classes.items()
-        },
+        "totals": {key: len(classes) for key, classes in per_project_classes.items()},
         "classes": rows,
     }
 

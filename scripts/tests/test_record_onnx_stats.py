@@ -35,9 +35,7 @@ class TestRecordOnnxStats(unittest.TestCase):
             ),
             (3, 9),
         )
-        self.assertIsNone(
-            ros._python_version_from_filename("onnx-1.21.0.tar.gz")
-        )
+        self.assertIsNone(ros._python_version_from_filename("onnx-1.21.0.tar.gz"))
 
     def test_pick_latest_linux_wheel(self):
         files = [

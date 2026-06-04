@@ -33,7 +33,6 @@ import os
 import sys
 from typing import Iterable
 
-
 CSV_FIELDS = (
     "date",
     "library",

@@ -43,7 +43,6 @@ import urllib.parse
 import urllib.request
 from typing import Iterable, Iterator
 
-
 DEFAULT_REPOS = (
     "onnx/onnx",
     "xadupre/onnx-light",
@@ -186,9 +185,8 @@ def _fetch_runs_window(
             "per_page": str(per_page),
             "page": str(page),
         }
-        url = (
-            f"{GITHUB_API}/repos/{repo}/actions/runs?"
-            + urllib.parse.urlencode(params, safe=":>=<.")
+        url = f"{GITHUB_API}/repos/{repo}/actions/runs?" + urllib.parse.urlencode(
+            params, safe=":>=<."
         )
         payload, _ = _request(url, token)
         page_runs = payload.get("workflow_runs", [])
@@ -363,7 +361,8 @@ def write_jobs_index(jobs_dir: str) -> int:
     if not os.path.isdir(jobs_dir):
         return 0
     names = sorted(
-        n for n in os.listdir(jobs_dir)
+        n
+        for n in os.listdir(jobs_dir)
         if n.endswith(".csv") and os.path.isfile(os.path.join(jobs_dir, n))
     )
     index_path = os.path.join(jobs_dir, "index.json")
@@ -487,9 +486,7 @@ def job_to_row(job: dict, run: dict | None = None) -> dict | None:
     }
 
 
-def record_jobs_for_run(
-    run: dict, repo: str, cache_dir: str, token: str | None
-) -> int:
+def record_jobs_for_run(run: dict, repo: str, cache_dir: str, token: str | None) -> int:
     """Fetch and append per-job rows for the given workflow ``run``.
 
     Each job is appended to ``cache_data/<repo>/jobs/<safe_job_name>.csv``.
@@ -513,9 +510,7 @@ def record_jobs_for_run(
             row = job_to_row(job, run)
             if row is None:
                 continue
-            path = os.path.join(
-                jobs_dir, safe_job_filename(row["job_name"]) + ".csv"
-            )
+            path = os.path.join(jobs_dir, safe_job_filename(row["job_name"]) + ".csv")
             if path not in rows_by_path:
                 rows_by_path[path] = []
                 seen_by_path[path] = read_existing_jobs(path)
@@ -536,9 +531,7 @@ def record_jobs_for_run(
     return added
 
 
-def process_repo(
-    repo: str, cache_dir: str, months: int, token: str | None
-) -> int:
+def process_repo(repo: str, cache_dir: str, months: int, token: str | None) -> int:
     """Fetch new runs for ``repo`` and append them to the cache files.
 
     Returns the number of new run rows appended to the workflow-level CSV.
@@ -629,8 +622,7 @@ def process_repo(
             _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
         except Exception as exc:  # pragma: no cover - defensive
             print(
-                f"[{repo}] failed to write jobs index: "
-                f"{type(exc).__name__}: {exc}",
+                f"[{repo}] failed to write jobs index: " f"{type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
     elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()

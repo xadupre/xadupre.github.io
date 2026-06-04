@@ -86,9 +86,17 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         ]
         # Map of (model, backend) -> result dict
         outcomes = {
-            ("model_a", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
+            ("model_a", "onnxruntime"): {
+                "success": True,
+                "error": "",
+                "error_step": "",
+            },
             ("model_a", "reference"): {"success": True, "error": "", "error_step": ""},
-            ("model_b", "onnxruntime"): {"success": True, "error": "", "error_step": ""},
+            ("model_b", "onnxruntime"): {
+                "success": True,
+                "error": "",
+                "error_step": "",
+            },
             ("model_b", "reference"): {
                 "success": False,
                 "error": "not implemented",
@@ -221,20 +229,14 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             by_name["test_a"]["onnxruntime_last_pass_date"],
             "2024-05-06T07:08:09Z",
         )
-        self.assertEqual(
-            by_name["test_a"]["onnxruntime_last_pass_version"], "1.20.0"
-        )
-        self.assertEqual(
-            by_name["test_a"]["reference_last_pass_version"], "1.17.0"
-        )
+        self.assertEqual(by_name["test_a"]["onnxruntime_last_pass_version"], "1.20.0")
+        self.assertEqual(by_name["test_a"]["reference_last_pass_version"], "1.17.0")
         # Currently-failing test keeps the previously recorded last-pass info.
         self.assertEqual(
             by_name["test_b"]["onnxruntime_last_pass_date"],
             "2024-01-01T00:00:00Z",
         )
-        self.assertEqual(
-            by_name["test_b"]["onnxruntime_last_pass_version"], "1.18.0"
-        )
+        self.assertEqual(by_name["test_b"]["onnxruntime_last_pass_version"], "1.18.0")
         self.assertEqual(
             by_name["test_b"]["reference_last_pass_date"],
             "2024-02-02T00:00:00Z",
@@ -251,9 +253,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             ok = os.path.join(tmp, "ok.json")
             with open(ok, "w", encoding="utf-8") as fh:
                 json.dump({"tests": [{"name": "x"}]}, fh)
-            self.assertEqual(
-                rbc.load_previous_payload(ok), {"tests": [{"name": "x"}]}
-            )
+            self.assertEqual(rbc.load_previous_payload(ok), {"tests": [{"name": "x"}]})
 
     def test_run_test_with_backend_unknown_backend(self):
         result = rbc.run_test_with_backend(None, [], "totally-unknown")
@@ -279,9 +279,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
             [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 18)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
         inputs = [np.array([-1.0, 2.0], dtype=np.float32)]
         outputs = [np.array([0.0, 2.0], dtype=np.float32)]
 
@@ -412,9 +410,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "onnxruntime": {"pass": 1, "fail": 0},
                     "reference": {"pass": 1, "fail": 0},
                 },
-                "tests": [
-                    {"name": "test_x", "onnxruntime": True, "reference": True}
-                ],
+                "tests": [{"name": "test_x", "onnxruntime": True, "reference": True}],
             }
 
         rbc.build_payload = fake_build
@@ -445,9 +441,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertFalse(
                     os.path.exists(
-                        os.path.join(
-                            tmp, "onnx-light", "backend_test_coverage.json"
-                        )
+                        os.path.join(tmp, "onnx-light", "backend_test_coverage.json")
                     )
                 )
         finally:

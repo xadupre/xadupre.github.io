@@ -31,7 +31,6 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-
 BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference")
 
 # Package whose version is recorded alongside the ``last_pass`` date for
@@ -250,10 +249,7 @@ def _compare_outputs(
     import numpy as np
 
     if len(expected) != len(actual):
-        return (
-            f"output count mismatch: "
-            f"expected {len(expected)}, got {len(actual)}"
-        )
+        return f"output count mismatch: " f"expected {len(expected)}, got {len(actual)}"
     for idx, (exp, act) in enumerate(zip(expected, actual)):
         exp_arr = np.asarray(exp)
         act_arr = np.asarray(act)
@@ -575,9 +571,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    json_path = os.path.join(
-        args.cache_dir, "onnx-light", "backend_test_coverage.json"
-    )
+    json_path = os.path.join(args.cache_dir, "onnx-light", "backend_test_coverage.json")
     previous = load_previous_payload(json_path)
     try:
         payload = build_payload(

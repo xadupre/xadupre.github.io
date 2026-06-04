@@ -102,7 +102,10 @@ class TestRecordBuildDurations(unittest.TestCase):
             ids = [
                 str(r["id"])
                 for r in rbd.iter_workflow_runs(
-                    "owner/repo", since, token=None, until=until,
+                    "owner/repo",
+                    since,
+                    token=None,
+                    until=until,
                     initial_window_days=7,
                 )
             ]
@@ -198,15 +201,11 @@ class TestRecordBuildDurations(unittest.TestCase):
                 self.assertEqual(added, 2)
                 jobs_dir = os.path.join(tmp, "myrepo", "jobs")
                 build_path = os.path.join(jobs_dir, "build.csv")
-                test_path = os.path.join(
-                    jobs_dir, "test_ubuntu-latest_3.12.csv"
-                )
+                test_path = os.path.join(jobs_dir, "test_ubuntu-latest_3.12.csv")
                 self.assertTrue(os.path.exists(build_path))
                 self.assertTrue(os.path.exists(test_path))
                 # Re-running with the same jobs should not duplicate them.
-                added_again = rbd.record_jobs_for_run(
-                    run, "owner/myrepo", tmp, None
-                )
+                added_again = rbd.record_jobs_for_run(run, "owner/myrepo", tmp, None)
                 self.assertEqual(added_again, 0)
                 seen = rbd.read_existing_jobs(build_path)
                 self.assertEqual(seen, {"1"})
@@ -214,7 +213,6 @@ class TestRecordBuildDurations(unittest.TestCase):
                 self.assertEqual(seen, {"2"})
         finally:
             rbd.iter_run_jobs = original
-
 
     def test_record_jobs_for_run_saves_partial_on_failure(self):
         run = {"id": 7, "name": "CI", "head_sha": "sha7"}
@@ -406,14 +404,11 @@ class TestRecordBuildDurations(unittest.TestCase):
             # And only that new run should have been appended.
             self.assertEqual(added, 1)
 
-
         with tempfile.TemporaryDirectory() as tmp:
             # Missing directory -> 0 entries, no file.
             missing = os.path.join(tmp, "missing")
             self.assertEqual(rbd.write_jobs_index(missing), 0)
-            self.assertFalse(
-                os.path.exists(os.path.join(missing, "index.json"))
-            )
+            self.assertFalse(os.path.exists(os.path.join(missing, "index.json")))
 
             jobs_dir = os.path.join(tmp, "jobs")
             os.makedirs(jobs_dir)
@@ -422,9 +417,7 @@ class TestRecordBuildDurations(unittest.TestCase):
                 with open(os.path.join(jobs_dir, name), "w") as fh:
                     fh.write("x")
             os.makedirs(os.path.join(jobs_dir, "sub"))
-            with open(
-                os.path.join(jobs_dir, "sub", "ignored.csv"), "w"
-            ) as fh:
+            with open(os.path.join(jobs_dir, "sub", "ignored.csv"), "w") as fh:
                 fh.write("x")
 
             n = rbd.write_jobs_index(jobs_dir)
@@ -480,9 +473,7 @@ class TestRecordBuildDurations(unittest.TestCase):
             os.makedirs(jobs_dir)
             for name in ("build.csv", "test.csv"):
                 with open(os.path.join(jobs_dir, name), "w") as fh:
-                    fh.write(
-                        ",".join(rbd.JOB_CSV_FIELDS) + "\n"
-                    )
+                    fh.write(",".join(rbd.JOB_CSV_FIELDS) + "\n")
 
             def fake_iter_runs(repo, since, token, until=None):
                 raise urllib.error.HTTPError(
@@ -494,9 +485,7 @@ class TestRecordBuildDurations(unittest.TestCase):
             rbd.iter_workflow_runs = fake_iter_runs
             try:
                 with self.assertRaises(urllib.error.HTTPError):
-                    rbd.process_repo(
-                        "owner/myrepo", tmp, months=6, token=None
-                    )
+                    rbd.process_repo("owner/myrepo", tmp, months=6, token=None)
             finally:
                 rbd.iter_workflow_runs = orig_runs
 
@@ -521,7 +510,7 @@ class TestRecordBuildDurations(unittest.TestCase):
         for path in pages:
             with open(path, encoding="utf-8") as fh:
                 content = fh.read()
-            self.assertIn('duration: dur / 60', content)
+            self.assertIn("duration: dur / 60", content)
             self.assertIn('text: "duration (min)"', content)
             self.assertIn('+ " min"', content)
             self.assertNotIn('text: "duration (s)"', content)
@@ -548,9 +537,7 @@ class TestRecordBuildDurations(unittest.TestCase):
                 content = fh.read()
             self.assertIn("function filterOutliers(rows)", content)
             # 4 months window expressed in milliseconds.
-            self.assertIn(
-                "OUTLIER_WINDOW_MS = 4 * 30 * 24 * 60 * 60 * 1000", content
-            )
+            self.assertIn("OUTLIER_WINDOW_MS = 4 * 30 * 24 * 60 * 60 * 1000", content)
             # Outlier threshold is 4 x the moving average.
             self.assertIn("OUTLIER_FACTOR = 4", content)
             # The filter must actually be applied to the rendered rows.
@@ -571,9 +558,7 @@ class TestRecordBuildDurations(unittest.TestCase):
         # push retry loop that folds late writes into the commit and clears
         # the working tree before rebasing.
         root = os.path.dirname(os.path.dirname(HERE))
-        path = os.path.join(
-            root, ".github", "workflows", "record_build_durations.yml"
-        )
+        path = os.path.join(root, ".github", "workflows", "record_build_durations.yml")
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
         # Step must allow the bootstrap fetch enough time to complete.
@@ -587,9 +572,7 @@ class TestRecordBuildDurations(unittest.TestCase):
         self.assertIn("git clean -fd cache_data", content)
         # The previous broken stash invocation (which silently stashed
         # nothing because of the trailing ``--``) must not come back.
-        self.assertNotIn(
-            "git stash push --include-untracked --quiet --", content
-        )
+        self.assertNotIn("git stash push --include-untracked --quiet --", content)
 
     def test_default_repos_includes_onnx(self):
         # ``onnx/onnx`` must stay in the tracked list so the corresponding
