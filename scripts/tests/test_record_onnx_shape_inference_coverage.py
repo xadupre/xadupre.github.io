@@ -48,6 +48,40 @@ class TestSnapshotAndStrip(unittest.TestCase):
             self.assertEqual(entry["shape"], [2, 3])
             self.assertEqual(entry["elem_type"], 1)  # FLOAT
 
+    def test_snapshot_orders_entries_by_node_order(self):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+        a = helper.make_tensor_value_info("A", TensorProto.FLOAT, [2, 3])
+        b = helper.make_tensor_value_info("B", TensorProto.FLOAT, [2, 3])
+        c = helper.make_tensor_value_info("C", TensorProto.FLOAT, [2, 3])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [2, 3])
+        # Declare nodes in computation order but value_info in a
+        # different order to ensure snapshot follows node order.
+        nodes = [
+            helper.make_node("Identity", ["X"], ["A"]),
+            helper.make_node("Identity", ["A"], ["B"]),
+            helper.make_node("Identity", ["B"], ["C"]),
+            helper.make_node("Identity", ["C"], ["Z"]),
+        ]
+        graph = helper.make_graph(
+            nodes, "ordered", [inp], [out], value_info=[c, a, b]
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        self.assertEqual(
+            [(s["name"], s["kind"]) for s in snap],
+            [
+                ("A", "value_info"),
+                ("B", "value_info"),
+                ("C", "value_info"),
+                ("Z", "output"),
+            ],
+        )
+
     def test_snapshot_preserves_symbolic_dim_names(self):
         import onnx
         from onnx import TensorProto, helper
