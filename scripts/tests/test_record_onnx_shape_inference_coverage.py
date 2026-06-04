@@ -330,6 +330,98 @@ class TestBuildPayload(unittest.TestCase):
             self.assertEqual(row["runtimes"][backend]["error"], "kaboom")
 
 
+class TestMermaid(unittest.TestCase):
+    def test_model_to_mermaid_returns_flowchart(self):
+        model = _make_simple_model()
+        out = rsi.model_to_mermaid(model)
+        self.assertIsInstance(out, str)
+        # The helper is now self-contained (only depends on ``onnx``),
+        # so it must always return a non-empty Mermaid ``flowchart TD``
+        # block for a valid model.
+        self.assertTrue(out.startswith("flowchart TD"))
+        # Inputs, the two Identity nodes and the output all appear.
+        self.assertIn("X", out)
+        self.assertIn("Identity", out)
+        self.assertIn("Z", out)
+
+    def test_model_to_mermaid_returns_empty_on_invalid_model(self):
+        # Non-model inputs are tolerated and produce an empty string.
+        self.assertEqual(rsi.model_to_mermaid(None), "")
+        self.assertEqual(rsi.model_to_mermaid("not a model"), "")
+
+    def test_model_to_mermaid_escapes_quotes_in_names(self):
+        import onnx
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info('X"weird', TensorProto.FLOAT, [1])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [1])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ['X"weird'], ["Z"])],
+            "weird",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        model.ir_version = 7
+        rendered = rsi.model_to_mermaid(model)
+        # The double-quote is escaped so it cannot terminate the Mermaid label.
+        self.assertNotIn('X"weird"', rendered)
+        self.assertIn("&quot;weird", rendered)
+
+    def test_row_includes_mermaid_when_provided(self):
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            mermaid="flowchart TD\nA-->B",
+        )
+        self.assertEqual(row["mermaid"], "flowchart TD\nA-->B")
+
+    def test_row_preserves_previous_mermaid_when_missing(self):
+        previous = {"mermaid": "flowchart TD\nX-->Y"}
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            previous=previous,
+            mermaid="",
+        )
+        self.assertEqual(row["mermaid"], "flowchart TD\nX-->Y")
+
+    def test_row_omits_mermaid_when_absent(self):
+        row = rsi._row_from_results(
+            "t",
+            [],
+            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            mermaid="",
+        )
+        self.assertNotIn("mermaid", row)
+
+    def test_build_payload_propagates_mermaid(self):
+        tests = [
+            {
+                "name": "test_a",
+                "model": "m",
+                "expected": [{"name": "Y"}],
+                "mermaid": "flowchart TD\nA-->B",
+            }
+        ]
+
+        def fake_run(model, expected, backend):
+            return {
+                "success": True, "correct": 1, "total": 1,
+                "details": [], "error": "", "error_step": "",
+            }
+
+        payload = rsi.build_payload(
+            tag="inference",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertEqual(payload["tests"][0]["mermaid"], "flowchart TD\nA-->B")
+
+
 class TestMain(unittest.TestCase):
     def test_main_writes_payload(self):
         original_build = rsi.build_payload
