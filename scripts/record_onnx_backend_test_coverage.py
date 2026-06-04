@@ -178,11 +178,13 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
             )
             for inputs, outputs in data_sets
         ]
+        tag = getattr(tc, "tag", None) or ""
         discovered.append(
             {
                 "name": str(name),
                 "model": onnx_model,
                 "data_sets": converted_data_sets,
+                "tag": str(tag),
             }
         )
     discovered.sort(key=lambda d: d["name"])
@@ -378,6 +380,7 @@ def _row_from_results(
     previous: Optional[Dict[str, Any]] = None,
     versions: Optional[Dict[str, str]] = None,
     now_iso: Optional[str] = None,
+    tag: str = "",
 ) -> Dict[str, Any]:
     """Build a dashboard row, carrying over per-backend ``last_pass`` info.
 
@@ -391,6 +394,10 @@ def _row_from_results(
     versions = versions or {}
     previous = previous or {}
     row: Dict[str, Any] = {"name": name}
+    if tag:
+        row["tag"] = tag
+    elif previous.get("tag"):
+        row["tag"] = previous["tag"]
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -509,6 +516,7 @@ def build_payload(
                 previous=previous_rows.get(name),
                 versions=version_map,
                 now_iso=now_iso,
+                tag=str(test.get("tag", "") or ""),
             )
         )
         if (idx + 1) % 50 == 0:
