@@ -78,10 +78,28 @@ jobs:
           branch="${GITHUB_REF_NAME:-main}"
           attempts=5
           for i in $(seq 1 "$attempts"); do
-            if git push origin "HEAD:${branch}"; then
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
               echo "Push succeeded on attempt ${i}."
+              rm -f "$push_err"
               exit 0
             fi
+            # A permission error (HTTP 403) is not a transient race and will not be
+            # fixed by retrying. Fail fast with a pointer to the README section that
+            # explains which GitHub setting needs to be changed.
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "" >&2
+              echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+              echo "Retrying will not help: the authenticated user shown above is" >&2
+              echo "not allowed to push to ${branch}." >&2
+              echo "" >&2
+              echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+              echo "setting to change:" >&2
+              echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+              exit 1
+            fi
+            rm -f "$push_err"
             echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
             # Drop any leftover working-tree or untracked changes so that the
             # rebase below does not abort with "cannot rebase: You have
