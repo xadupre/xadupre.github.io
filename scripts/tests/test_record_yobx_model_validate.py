@@ -16,8 +16,17 @@ import record_yobx_model_validate as rymv  # noqa: E402
 
 class TestRecordYobxModelValidate(unittest.TestCase):
     def test_defaults(self):
-        self.assertIn("arnir0/Tiny-LLM", rymv.DEFAULT_MODELS)
-        self.assertIn("microsoft/Phi-4-reasoning", rymv.DEFAULT_MODELS)
+        model_ids = {e["model"] for e in rymv.DEFAULT_MODELS}
+        self.assertIn("arnir0/Tiny-LLM", model_ids)
+        self.assertIn("microsoft/Phi-4-reasoning", model_ids)
+        # Each model entry must declare the per-model fields used by the
+        # recorder so the snapshot can carry them.
+        for entry in rymv.DEFAULT_MODELS:
+            self.assertIn("model", entry)
+            self.assertIn("dtype", entry)
+            self.assertIn("device", entry)
+            self.assertIn("atol", entry)
+            self.assertIn("task", entry)
         labels = {e["label"] for e in rymv.DEFAULT_EXPORTERS}
         self.assertIn("yobx", labels)
         self.assertIn("dynamo-ir", labels)
@@ -28,6 +37,25 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             self.assertIn("optimization", cfg)
         self.assertEqual(rymv.DEFAULT_DTYPE, "float16")
         self.assertEqual(rymv.DEFAULT_DEVICE, "cpu")
+
+    def test_coerce_model_entry_from_string(self):
+        entry = rymv._coerce_model_entry("a/b")
+        self.assertEqual(entry["model"], "a/b")
+        self.assertEqual(entry["dtype"], rymv.DEFAULT_DTYPE)
+        self.assertEqual(entry["device"], rymv.DEFAULT_DEVICE)
+        self.assertEqual(entry["atol"], rymv.DEFAULT_ATOL)
+        self.assertEqual(entry["task"], rymv.DEFAULT_TASK)
+
+    def test_coerce_model_entry_from_dict_preserves_overrides(self):
+        src = dict(model="a/b", dtype="float32", atol=0.5, device="cuda", task="t")
+        entry = rymv._coerce_model_entry(src)
+        self.assertEqual(entry["model"], "a/b")
+        self.assertEqual(entry["dtype"], "float32")
+        self.assertEqual(entry["device"], "cuda")
+        self.assertEqual(entry["atol"], 0.5)
+        self.assertEqual(entry["task"], "t")
+        # Returns a copy so the input is not mutated.
+        self.assertIsNot(entry, src)
 
     def test_stringify_error_truncates_and_takes_first_line(self):
         self.assertEqual(rymv._stringify_error(None), "")
@@ -183,7 +211,10 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         }
         payload = rymv.build_payload(
             raw_results=raw,
-            models=("arnir0/Tiny-LLM", "microsoft/Phi-4-reasoning"),
+            models=(
+                dict(model="arnir0/Tiny-LLM", dtype="float16", atol=0.02, device="cpu", task="text-generation"),
+                dict(model="microsoft/Phi-4-reasoning", dtype="float16", atol=0.02, device="cpu", task="text-generation"),
+            ),
             exporters=(cfg_yobx, cfg_dyn),
             dtype="float16",
             device="cpu",
@@ -229,15 +260,19 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             rows_by_key[("arnir0/Tiny-LLM", "yobx")]["task"], "text-generation"
         )
         self.assertEqual(
-            rows_by_key[("microsoft/Phi-4-reasoning", "yobx")]["task"], "fill-mask"
+            rows_by_key[("microsoft/Phi-4-reasoning", "yobx")]["task"], "text-generation"
         )
         self.assertEqual(
             payload["tasks"],
             {
                 "arnir0/Tiny-LLM": "text-generation",
-                "microsoft/Phi-4-reasoning": "fill-mask",
+                "microsoft/Phi-4-reasoning": "text-generation",
             },
         )
+        # Per-model dtype/device/atol are recorded in each row.
+        self.assertEqual(rows_by_key[("arnir0/Tiny-LLM", "yobx")]["dtype"], "float16")
+        self.assertEqual(rows_by_key[("arnir0/Tiny-LLM", "yobx")]["device"], "cpu")
+        self.assertAlmostEqual(rows_by_key[("arnir0/Tiny-LLM", "yobx")]["atol"], 0.02)
         # Payload must be JSON-serialisable with allow_nan=False.
         json.dumps(payload, allow_nan=False)
 
@@ -261,6 +296,11 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(args.dtype, "float16")
         self.assertEqual(args.device, "cpu")
         self.assertIsNone(args.limit)
+        self.assertIsNone(args.dump_folder)
+
+    def test_parse_args_dump_folder(self):
+        args = rymv.parse_args(["--dump-folder", "/tmp/dump"])
+        self.assertEqual(args.dump_folder, "/tmp/dump")
 
     def test_parse_args_custom_models(self):
         args = rymv.parse_args(["--model", "a/b", "--model", "c/d", "--limit", "1"])
