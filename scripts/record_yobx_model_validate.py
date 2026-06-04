@@ -321,6 +321,65 @@ def merge_last_working(
     return row
 
 
+def _list_xlsx(folder: Optional[str]) -> set:
+    """Return the set of all ``.xlsx`` files found recursively under ``folder``."""
+    if not folder or not os.path.isdir(folder):
+        return set()
+    out = set()
+    for root, _dirs, files in os.walk(folder):
+        for name in files:
+            if name.endswith(".xlsx"):
+                out.add(os.path.join(root, name))
+    return out
+
+
+def _read_yobx_export_duration(xlsx_path: str) -> Optional[float]:
+    """Return ``stat_time_export_and_post_processing`` from the ``extra`` sheet.
+
+    The yobx exporter saves a companion ``.xlsx`` next to every exported
+    ``.onnx`` file. The ``extra`` sheet of that workbook is a small
+    key/value table with scalar metrics recorded during the export.
+    Returns ``None`` when the workbook, sheet, key or value cannot be
+    read (missing ``openpyxl``, corrupted file, ...).
+    """
+    try:  # pragma: no cover - exercised when openpyxl is available
+        from openpyxl import load_workbook
+    except Exception:  # noqa: BLE001 - optional dependency
+        return None
+    try:
+        wb = load_workbook(xlsx_path, read_only=True, data_only=True)
+    except Exception:  # noqa: BLE001 - never fail the recorder on a bad file
+        return None
+    try:
+        if "extra" not in wb.sheetnames:
+            return None
+        ws = wb["extra"]
+        key = "stat_time_export_and_post_processing"
+        # ``extra`` is a two-column key/value table; the first row is a
+        # header. We do not assume which column holds the key, so scan both.
+        for row in ws.iter_rows(values_only=True):
+            if not row:
+                continue
+            # Find the key cell and pair it with the first non-key cell.
+            try:
+                idx = row.index(key)
+            except ValueError:
+                continue
+            for j, cell in enumerate(row):
+                if j == idx:
+                    continue
+                value = _to_float(cell)
+                if value is not None:
+                    return value
+            return None
+        return None
+    finally:
+        try:
+            wb.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def run_validate_one(
     entry: Dict[str, Any],
     exporter_cfg: Dict[str, str],
@@ -374,6 +433,9 @@ def run_all(
     dump_folder: Optional[str] = None,
 ) -> List[Tuple[str, Dict[str, str], Any, float]]:
     """Run ``validate_model`` for every (model, exporter) combination."""
+    import shutil
+    import tempfile
+
     items = list(models)
     if limit is not None:
         items = items[:limit]
@@ -387,13 +449,29 @@ def run_all(
                 f"exporter={exporter_cfg['exporter']} "
                 f"optimization={exporter_cfg['optimization']}..."
             )
+            # For yobx, the export time we want to record is the
+            # ``stat_time_export_and_post_processing`` metric stored in
+            # the ``extra`` sheet of the workbook saved next to the
+            # ONNX file. We therefore make sure that a dump folder is
+            # always passed for yobx runs, even when the user did not
+            # supply one (in which case we use a per-cell temporary
+            # directory which is removed once the metric is read).
+            is_yobx = exporter_cfg["exporter"] == "yobx"
+            tmp_dump: Optional[str] = None
+            effective_dump = dump_folder
+            if is_yobx and effective_dump is None:
+                tmp_dump = tempfile.mkdtemp(prefix="yobx_dump_")
+                effective_dump = tmp_dump
+            # Snapshot the xlsx files present before the export so we can
+            # detect the workbook(s) the yobx exporter just produced.
+            pre_xlsx = _list_xlsx(effective_dump) if is_yobx else set()
             start = time.monotonic()
             try:
                 summary = run_validate_one(
                     entry,
                     exporter_cfg,
                     verbose=verbose,
-                    dump_folder=dump_folder,
+                    dump_folder=effective_dump,
                 )
             except Exception as exc:  # noqa: BLE001 - we never want to crash CI
                 _log(f"  -> raised: {type(exc).__name__}: {exc}")
@@ -405,6 +483,24 @@ def run_all(
                     "error_export": f"{type(exc).__name__}: {exc}",
                 }
             duration_s = time.monotonic() - start
+            # For yobx, prefer the ``stat_time_export_and_post_processing``
+            # metric recorded in the ``extra`` sheet of the generated
+            # workbook over the wall-clock time, which also includes the
+            # discrepancy check and other unrelated work.
+            if is_yobx and effective_dump:
+                new_xlsx = _list_xlsx(effective_dump) - pre_xlsx
+                def _safe_mtime(p: str) -> float:
+                    try:
+                        return os.path.getmtime(p)
+                    except OSError:
+                        return 0.0
+                for xlsx_path in sorted(new_xlsx, key=_safe_mtime, reverse=True):
+                    metric = _read_yobx_export_duration(xlsx_path)
+                    if metric is not None:
+                        duration_s = metric
+                        break
+            if tmp_dump is not None:
+                shutil.rmtree(tmp_dump, ignore_errors=True)
             _log(f"  -> done in {duration_s:.2f}s")
             out.append((model_id, exporter_cfg, summary, duration_s))
     return out
