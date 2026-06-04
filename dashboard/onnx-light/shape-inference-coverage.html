@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light &mdash; shape inference coverage (onnx-light vs onnx vs onnx-shape-inference)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; max-width: 1200px; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
+.intro code { background: rgba(110, 118, 129, 0.4); padding: 0 0.3em; border-radius: 4px; }
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1200px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.meta { font-size: 0.85em; color: #8b949e; }
+.meta strong { color: #c9d1d9; }
+.ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1em;
+  margin: 0.5em 0 0.75em;
+  font-size: 0.9em;
+}
+.ratio-card {
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  min-width: 180px;
+  flex: 1 1 180px;
+}
+.ratio-card .ratio-label {
+  color: #8b949e;
+  font-size: 0.8em;
+}
+.ratio-card .ratio-value {
+  font-size: 1.4em;
+  margin-top: 0.15em;
+  font-weight: bold;
+}
+.ratio-card .ratio-detail {
+  font-size: 0.8em;
+  color: #8b949e;
+  margin-top: 0.1em;
+}
+.ratio-card.b0 .ratio-value { color: #79c0ff; }
+.ratio-card.b1 .ratio-value { color: #d2a8ff; }
+.ratio-card.b2 .ratio-value { color: #ffa657; }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.75em;
+}
+.controls input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 200px;
+  padding: 0.4em 0.6em;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid rgba(139, 148, 158, 0.4);
+  border-radius: 6px;
+  font: inherit;
+}
+.controls input[type="search"].invalid {
+  border-color: #f85149;
+}
+.controls .filter-status {
+  font-size: 0.8em;
+  color: #8b949e;
+}
+.controls .filter-status.error { color: #f85149; }
+.table-wrap { overflow-x: auto; }
+table.comparison {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+table.comparison th, table.comparison td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+}
+table.comparison th {
+  color: #8b949e;
+  font-weight: normal;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: rgba(22, 27, 34, 0.95);
+  white-space: nowrap;
+}
+table.comparison th.center { text-align: center; }
+table.comparison td.center { text-align: center; }
+table.comparison td.score { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.comparison td.score.full { color: #3fb950; font-weight: bold; }
+table.comparison td.score.partial { color: #d29922; }
+table.comparison td.score.empty { color: #f85149; }
+table.comparison td.score.error { color: #8b949e; font-style: italic; }
+table.comparison tbody tr.test-row { cursor: pointer; }
+table.comparison tbody tr.test-row:hover { background: rgba(88, 166, 255, 0.06); }
+table.comparison tbody tr.detail-row td {
+  background: rgba(13, 17, 23, 0.75);
+  padding: 0;
+}
+table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
+table.comparison th .arrow {
+  display: inline-block;
+  width: 0.8em;
+  color: #58a6ff;
+}
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin-top: 0.4em;
+}
+.detail-table th, .detail-table td {
+  text-align: left;
+  padding: 0.3em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.18);
+  vertical-align: top;
+}
+.detail-table th { color: #8b949e; font-weight: normal; }
+.detail-table td.ok { color: #3fb950; }
+.detail-table td.ko { color: #f85149; }
+.detail-table td.muted { color: #8b949e; font-size: 0.85em; }
+.detail-error {
+  color: #f85149;
+  font-size: 0.85em;
+  margin-bottom: 0.4em;
+}
+.toggle-arrow { color: #8b949e; margin-right: 0.4em; display: inline-block; width: 0.8em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; shape inference coverage</h1>
+  <p class="intro">
+    Per-intermediate shape inference correctness on every backend test
+    tagged <code>inference</code> (collected via
+    <a href="https://github.com/xadupre/onnx-light"><code>onnx_light.backend.test.case.collect_test_case</code></a>,
+    same set exercised by
+    <code>unittests/backend/test_backend_with_shape_inference.py</code>).
+    Each case has its output and intermediate <code>value_info</code> shapes
+    stripped, then re-inferred with three runtimes:
+    <a href="https://github.com/xadupre/onnx-light"><code>onnx-light</code></a>,
+    <a href="https://github.com/onnx/onnx"><code>onnx.shape_inference</code></a>
+    and
+    <a href="https://pypi.org/project/onnx-shape-inference/"><code>onnx-shape-inference</code></a>.
+    The table reports the percentage of intermediates whose
+    <code>elem_type</code> and shape were correctly recovered. Click a row
+    to see the per-intermediate detail for each runtime.
+  </p>
+</header>
+<div class="notice" style="max-width:1200px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
+
+<div id="message" class="message info"></div>
+
+<div id="metaPanel" class="panel" style="display:none;">
+  <div class="meta">
+    Snapshot recorded on <strong id="metaDate"></strong>.
+    <span id="metaVersions"></span>
+    <span id="metaTag"></span>
+  </div>
+</div>
+
+<div id="mainPanel" class="panel" style="display:none;">
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_reshape)…" autocomplete="off" />
+    <div id="filterStatus" class="filter-status"></div>
+  </div>
+  <div class="ratios" id="ratiosContainer"></div>
+  <div class="table-wrap">
+    <table class="comparison">
+      <thead id="tableHead"></thead>
+      <tbody id="rowsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const JSON_URL = "../../cache_data/onnx-light/shape_inference_coverage.json";
+
+const state = {
+  rows: [],
+  backends: [],
+  search: "",
+  regex: null,
+  regexError: null,
+  sort: { key: "name", dir: "asc" },
+  expanded: new Set(),
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function hideMessage() {
+  document.getElementById("message").className = "message";
+}
+
+function renderMeta(payload) {
+  document.getElementById("metaPanel").style.display = "block";
+  document.getElementById("metaDate").textContent = payload.date || "(unknown date)";
+  const versions = payload.versions || {};
+  const verEl = document.getElementById("metaVersions");
+  verEl.textContent = "";
+  const verEntries = Object.entries(versions);
+  if (verEntries.length) {
+    verEl.appendChild(document.createTextNode(" Versions: "));
+    verEntries.forEach(([name, value], i) => {
+      if (i > 0) verEl.appendChild(document.createTextNode(", "));
+      const code = document.createElement("code");
+      code.textContent = name + " " + value;
+      verEl.appendChild(code);
+    });
+    verEl.appendChild(document.createTextNode("."));
+  }
+  const tagEl = document.getElementById("metaTag");
+  tagEl.textContent = payload.tag ? " Tag filter: " + payload.tag + "." : "";
+}
+
+function compileRegex(value) {
+  state.search = value;
+  if (!value) {
+    state.regex = null;
+    state.regexError = null;
+    return;
+  }
+  try {
+    state.regex = new RegExp(value, "i");
+    state.regexError = null;
+  } catch (err) {
+    state.regex = null;
+    state.regexError = err.message;
+  }
+}
+
+function rowMatches(row) {
+  if (state.regexError) return false;
+  if (!state.regex) return true;
+  return state.regex.test(row.name);
+}
+
+function backendStats(row, backend) {
+  const rt = (row.runtimes || {})[backend] || {};
+  const correct = Number(rt.correct || 0);
+  const total = Number(rt.total || 0);
+  return { correct, total, error: rt.error || "", errorStep: rt.error_step || "", success: !!rt.success };
+}
+
+function compareRows(a, b) {
+  const { key, dir } = state.sort;
+  let va;
+  let vb;
+  if (key === "name") {
+    va = a.name; vb = b.name;
+  } else if (key === "total") {
+    va = (a.expected || []).length;
+    vb = (b.expected || []).length;
+  } else if (state.backends.includes(key)) {
+    const sa = backendStats(a, key);
+    const sb = backendStats(b, key);
+    va = sa.total ? sa.correct / sa.total : -1;
+    vb = sb.total ? sb.correct / sb.total : -1;
+  } else {
+    va = a[key]; vb = b[key];
+  }
+  let cmp;
+  if (typeof va === "number" && typeof vb === "number") {
+    cmp = va - vb;
+  } else if (va === undefined || va === null) {
+    cmp = (vb === undefined || vb === null) ? 0 : -1;
+  } else if (vb === undefined || vb === null) {
+    cmp = 1;
+  } else {
+    cmp = String(va).localeCompare(String(vb));
+  }
+  if (cmp === 0 && key !== "name") {
+    cmp = String(a.name).localeCompare(String(b.name));
+  }
+  return dir === "desc" ? -cmp : cmp;
+}
+
+function formatPercent(passed, total) {
+  if (!total) return "—";
+  return ((passed * 100) / total).toFixed(1) + "%";
+}
+
+function renderRatios(filtered) {
+  const container = document.getElementById("ratiosContainer");
+  container.innerHTML = "";
+  state.backends.forEach((backend, i) => {
+    let correct = 0;
+    let total = 0;
+    let testsPass = 0;
+    for (const r of filtered) {
+      const s = backendStats(r, backend);
+      correct += s.correct;
+      total += s.total;
+      if (s.success) testsPass += 1;
+    }
+    const card = document.createElement("div");
+    card.className = "ratio-card b" + (i % 3);
+    const label = document.createElement("div");
+    label.className = "ratio-label";
+    label.textContent = backend + " — correct shape ratio";
+    const value = document.createElement("div");
+    value.className = "ratio-value";
+    value.textContent = formatPercent(correct, total);
+    const detail = document.createElement("div");
+    detail.className = "ratio-detail";
+    detail.textContent =
+      correct + " / " + total + " intermediates · " +
+      testsPass + " / " + filtered.length + " tests fully correct";
+    card.appendChild(label);
+    card.appendChild(value);
+    card.appendChild(detail);
+    container.appendChild(card);
+  });
+  const card = document.createElement("div");
+  card.className = "ratio-card";
+  const label = document.createElement("div");
+  label.className = "ratio-label";
+  label.textContent = "selected tests";
+  const value = document.createElement("div");
+  value.className = "ratio-value";
+  value.textContent = String(filtered.length);
+  const detail = document.createElement("div");
+  detail.className = "ratio-detail";
+  detail.textContent = "of " + state.rows.length + " tests in snapshot";
+  card.appendChild(label);
+  card.appendChild(value);
+  card.appendChild(detail);
+  container.appendChild(card);
+}
+
+function renderHead() {
+  const head = document.getElementById("tableHead");
+  head.innerHTML = "";
+  const tr = document.createElement("tr");
+  const cols = [
+    { key: "name", label: "Test", center: false },
+    { key: "total", label: "#intermediates", center: true },
+  ];
+  for (const b of state.backends) {
+    cols.push({ key: b, label: b, center: true });
+  }
+  for (const c of cols) {
+    const th = document.createElement("th");
+    if (c.center) th.classList.add("center");
+    th.dataset.key = c.key;
+    th.textContent = c.label;
+    const arrow = document.createElement("span");
+    arrow.className = "arrow";
+    th.appendChild(document.createTextNode(" "));
+    th.appendChild(arrow);
+    tr.appendChild(th);
+  }
+  head.appendChild(tr);
+}
+
+function formatShape(shape, hasShape) {
+  if (hasShape === false || !shape) return "(no shape)";
+  if (shape.length === 0) return "()";
+  return "(" + shape.map(d => d === -1 ? "?" : d).join(", ") + ")";
+}
+
+function elemTypeName(et) {
+  // Mirror onnx.TensorProto.DataType for the most common cases; fall
+  // back to the integer for unknown ones so the page never lies.
+  const names = {
+    0: "UNDEFINED", 1: "FLOAT", 2: "UINT8", 3: "INT8", 4: "UINT16",
+    5: "INT16", 6: "INT32", 7: "INT64", 8: "STRING", 9: "BOOL",
+    10: "FLOAT16", 11: "DOUBLE", 12: "UINT32", 13: "UINT64",
+    14: "COMPLEX64", 15: "COMPLEX128", 16: "BFLOAT16",
+  };
+  if (et === undefined || et === null) return "?";
+  return names[et] || String(et);
+}
+
+function scoreClass(correct, total, success, error) {
+  if (error && total === 0) return "score error";
+  if (!total) return "score error";
+  if (correct === total) return "score full";
+  if (correct === 0) return "score empty";
+  return "score partial";
+}
+
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  // Show any runtime-level errors at the top.
+  for (const backend of state.backends) {
+    const rt = (row.runtimes || {})[backend] || {};
+    if (rt.error && rt.error_step && rt.error_step !== "compare") {
+      const div = document.createElement("div");
+      div.className = "detail-error";
+      div.textContent = backend + " [" + rt.error_step + "]: " + rt.error;
+      wrap.appendChild(div);
+    }
+  }
+
+  const table = document.createElement("table");
+  table.className = "detail-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  const cols = ["intermediate", "kind", "expected"];
+  for (const b of state.backends) cols.push(b);
+  for (const c of cols) {
+    const th = document.createElement("th");
+    th.textContent = c;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const expected = row.expected || [];
+  const detailByBackend = {};
+  for (const b of state.backends) {
+    const rt = (row.runtimes || {})[b] || {};
+    const map = {};
+    for (const d of rt.details || []) map[d.name] = d;
+    detailByBackend[b] = map;
+  }
+  for (const e of expected) {
+    const tr = document.createElement("tr");
+    const tdName = document.createElement("td");
+    tdName.textContent = e.name;
+    tr.appendChild(tdName);
+    const tdKind = document.createElement("td");
+    tdKind.className = "muted";
+    tdKind.textContent = e.kind || "";
+    tr.appendChild(tdKind);
+    const tdExp = document.createElement("td");
+    tdExp.textContent = elemTypeName(e.elem_type) + " " + formatShape(e.shape, e.has_shape);
+    tr.appendChild(tdExp);
+    for (const b of state.backends) {
+      const d = detailByBackend[b][e.name];
+      const td = document.createElement("td");
+      if (!d) {
+        td.className = "muted";
+        td.textContent = "—";
+      } else if (d.ok) {
+        td.className = "ok";
+        td.textContent = "✓ " + elemTypeName(d.elem_type) + " " + formatShape(d.shape, d.has_shape);
+      } else {
+        td.className = "ko";
+        const got = (d.elem_type === null || d.elem_type === undefined)
+          ? "(missing)"
+          : elemTypeName(d.elem_type) + " " + formatShape(d.shape, d.has_shape);
+        td.textContent = "✗ " + got;
+        if (d.reason) td.title = d.reason;
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderRows() {
+  const body = document.getElementById("rowsBody");
+  body.innerHTML = "";
+  const filtered = state.rows.filter(rowMatches);
+  filtered.sort(compareRows);
+  renderRatios(filtered);
+  const status = document.getElementById("filterStatus");
+  const input = document.getElementById("search");
+  if (state.regexError) {
+    status.textContent = "Invalid regex: " + state.regexError;
+    status.className = "filter-status error";
+    input.classList.add("invalid");
+  } else {
+    status.textContent = "";
+    status.className = "filter-status";
+    input.classList.remove("invalid");
+  }
+  const colCount = 2 + state.backends.length;
+  if (filtered.length === 0) {
+    const tr = document.createElement("tr");
+    tr.className = "empty-row";
+    const td = document.createElement("td");
+    td.colSpan = colCount;
+    td.textContent = state.regexError
+      ? "Fix the filter regex to see results."
+      : state.search
+        ? "No test matches the current filter."
+        : "No test recorded.";
+    tr.appendChild(td);
+    body.appendChild(tr);
+  } else {
+    for (const r of filtered) {
+      const tr = document.createElement("tr");
+      tr.className = "test-row";
+      tr.dataset.name = r.name;
+      const tdName = document.createElement("td");
+      const arrow = document.createElement("span");
+      arrow.className = "toggle-arrow";
+      arrow.textContent = state.expanded.has(r.name) ? "▼" : "▶";
+      tdName.appendChild(arrow);
+      tdName.appendChild(document.createTextNode(r.name));
+      tr.appendChild(tdName);
+      const tdTotal = document.createElement("td");
+      tdTotal.className = "center";
+      tdTotal.textContent = String((r.expected || []).length);
+      tr.appendChild(tdTotal);
+      for (const backend of state.backends) {
+        const s = backendStats(r, backend);
+        const td = document.createElement("td");
+        td.classList.add("center");
+        td.classList.add(...scoreClass(s.correct, s.total, s.success, s.error).split(" "));
+        if (s.errorStep && s.errorStep !== "compare") {
+          td.textContent = "[" + s.errorStep + "]";
+          if (s.error) td.title = s.error;
+        } else {
+          td.textContent =
+            formatPercent(s.correct, s.total) +
+            " (" + s.correct + "/" + s.total + ")";
+          if (s.error) td.title = s.error;
+        }
+        tr.appendChild(td);
+      }
+      tr.addEventListener("click", () => {
+        if (state.expanded.has(r.name)) state.expanded.delete(r.name);
+        else state.expanded.add(r.name);
+        renderRows();
+      });
+      body.appendChild(tr);
+      if (state.expanded.has(r.name)) {
+        const detailTr = document.createElement("tr");
+        detailTr.className = "detail-row";
+        const detailTd = document.createElement("td");
+        detailTd.colSpan = colCount;
+        detailTd.appendChild(renderDetailFor(r));
+        detailTr.appendChild(detailTd);
+        body.appendChild(detailTr);
+      }
+    }
+  }
+  updateSortArrows();
+}
+
+function updateSortArrows() {
+  const ths = document.querySelectorAll("table.comparison thead th");
+  for (const th of ths) {
+    const arrow = th.querySelector(".arrow");
+    if (!arrow) continue;
+    if (th.dataset.key === state.sort.key) {
+      arrow.textContent = state.sort.dir === "asc" ? "▲" : "▼";
+    } else {
+      arrow.textContent = "";
+    }
+  }
+}
+
+function bindHeaderSorting() {
+  const ths = document.querySelectorAll("table.comparison thead th");
+  for (const th of ths) {
+    th.addEventListener("click", () => {
+      const key = th.dataset.key;
+      if (!key) return;
+      if (state.sort.key === key) {
+        state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort.key = key;
+        state.sort.dir = (key === "name") ? "asc" : "desc";
+      }
+      renderRows();
+    });
+  }
+}
+
+function bindSearch() {
+  const input = document.getElementById("search");
+  input.addEventListener("input", () => {
+    compileRegex(input.value);
+    renderRows();
+  });
+}
+
+fetch(JSON_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No shape inference coverage snapshot available yet. The JSON file " +
+        "will appear once the 'Record onnx-light shape inference coverage' " +
+        "workflow has published its first run.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })
+  .then(payload => {
+    if (!payload) return;
+    const rows = Array.isArray(payload.tests) ? payload.tests : [];
+    const totals = payload.totals && typeof payload.totals === "object"
+      ? payload.totals : {};
+    // Preserve the order returned by the recorder so the dashboard
+    // matches the canonical BACKENDS tuple ordering.
+    const backends = Object.keys(totals);
+    if (backends.length === 0 && rows.length > 0) {
+      const seen = new Set();
+      for (const r of rows) {
+        for (const b of Object.keys(r.runtimes || {})) {
+          if (!seen.has(b)) { seen.add(b); backends.push(b); }
+        }
+      }
+    }
+    state.backends = backends;
+    renderHead();
+    bindHeaderSorting();
+    bindSearch();
+    if (rows.length === 0) {
+      showMessage(
+        "The shape inference coverage snapshot is empty. The dashboard will " +
+        "populate automatically once the recording workflow produces " +
+        "measurements.",
+        "info"
+      );
+      return;
+    }
+    hideMessage();
+    renderMeta(payload);
+    state.rows = rows;
+    document.getElementById("mainPanel").style.display = "block";
+    renderRows();
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+</body>
+</html>
