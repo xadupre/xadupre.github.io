@@ -120,9 +120,13 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
         # Mirrors the install step of record_yobx_model_validate.yml. ``pandas``,
         # ``openpyxl`` and ``optree`` are required at runtime by
         # ``validate_model`` and recent ``torch`` releases respectively.
+        # ``sentencepiece`` and ``tiktoken`` are tokenizer backends required
+        # by some HuggingFace models (for example ``mistralai/Mistral-7B-v0.3``)
+        # without which ``AutoTokenizer.from_pretrained`` aborts with
+        # ``Couldn't instantiate the backend tokenizer from one of:``.
         "$PYTHON_BIN" -m pip install --upgrade pip
         "$PYTHON_BIN" -m pip install -e "$YOBX_DIR[torch,transformers,onnxscript]" \
-            pandas openpyxl optree
+            pandas openpyxl optree sentencepiece tiktoken
     fi
 fi
 
