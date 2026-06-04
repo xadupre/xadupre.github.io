@@ -400,6 +400,8 @@ def run_validate_one(
         verbose=verbose,
         patch="transformers",
         dump_folder=dump_folder,
+        config_overrides={"num_hidden_layers": 2},
+        random_weights=True,
     )
     return summary
 
