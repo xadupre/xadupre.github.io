@@ -308,6 +308,7 @@ def run_validate_one(
     entry: Dict[str, Any],
     exporter_cfg: Dict[str, str],
     verbose: int = 0,
+    dump_folder: Optional[str] = None,
 ) -> Any:
     """Run :func:`yobx.torch.validate.validate_model` for one (model, exporter)."""
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
@@ -323,6 +324,7 @@ def run_validate_one(
         quiet=True,
         verbose=verbose,
         patch="transformers",
+        dump_folder=dump_folder,
     )
     return summary
 
@@ -352,6 +354,7 @@ def run_all(
     exporters: Tuple[Dict[str, str], ...],
     limit: Optional[int] = None,
     verbose: int = 0,
+    dump_folder: Optional[str] = None,
 ) -> List[Tuple[str, Dict[str, str], Any, float]]:
     """Run ``validate_model`` for every (model, exporter) combination."""
     items = list(models)
@@ -369,7 +372,12 @@ def run_all(
             )
             start = time.monotonic()
             try:
-                summary = run_validate_one(entry, exporter_cfg, verbose=verbose)
+                summary = run_validate_one(
+                    entry,
+                    exporter_cfg,
+                    verbose=verbose,
+                    dump_folder=dump_folder,
+                )
             except Exception as exc:  # noqa: BLE001 - we never want to crash CI
                 _log(f"  -> raised: {type(exc).__name__}: {exc}")
                 # Build a synthetic summary so the dashboard can still display
@@ -509,6 +517,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=0,
         help="Verbosity level forwarded to validate_model (default: 0).",
     )
+    parser.add_argument(
+        "--dump-folder",
+        default=None,
+        help=(
+            "Folder where validate_model dumps its intermediate artefacts "
+            "(ONNX files, captured inputs, ...). Intended for local runs. "
+            "The folder is created if missing and the script changes its "
+            "working directory to it before running so any relative paths "
+            "(including --cache-dir) are resolved inside it."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -530,6 +549,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
     exporters = DEFAULT_EXPORTERS
 
+    dump_folder: Optional[str] = None
+    if args.dump_folder:
+        dump_folder = os.path.abspath(args.dump_folder)
+        os.makedirs(dump_folder, exist_ok=True)
+        _log(f"Using dump folder: {dump_folder} (chdir into it)")
+        os.chdir(dump_folder)
+
     out_dir = os.path.join(args.cache_dir, args.repo)
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, "model_validate.json")
@@ -543,6 +569,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         exporters=exporters,
         limit=args.limit,
         verbose=args.verbose,
+        dump_folder=dump_folder,
     )
     payload = build_payload(
         raw_results=raw_results,

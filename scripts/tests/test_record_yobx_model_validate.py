@@ -296,6 +296,11 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(args.dtype, "float16")
         self.assertEqual(args.device, "cpu")
         self.assertIsNone(args.limit)
+        self.assertIsNone(args.dump_folder)
+
+    def test_parse_args_dump_folder(self):
+        args = rymv.parse_args(["--dump-folder", "/tmp/dump"])
+        self.assertEqual(args.dump_folder, "/tmp/dump")
 
     def test_parse_args_custom_models(self):
         args = rymv.parse_args(["--model", "a/b", "--model", "c/d", "--limit", "1"])
