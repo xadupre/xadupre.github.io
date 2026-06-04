@@ -1,0 +1,324 @@
+.. _op_ai_onnx_NonMaxSuppression:
+
+NonMaxSuppression
+=================
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 11
+
+Filter out boxes that have high intersection-over-union (IOU) overlap with previously selected boxes.
+Bounding boxes with score less than score_threshold are removed. Bounding box format is indicated by attribute center_point_box.
+Boxes are suppressed if their IOU with a previously selected box is strictly greater than iou_threshold (i.e., boxes with IOU exactly equal to the threshold are kept).
+Note that this algorithm is agnostic to where the origin is in the coordinate system and more generally is invariant to
+orthogonal transformations and translations of the coordinate system; thus translating or reflections of the coordinate system
+result in the same boxes being selected by the algorithm.
+The selected_indices output is a set of integers indexing into the input collection of bounding boxes representing the selected boxes.
+The bounding box coordinates corresponding to the selected indices can then be obtained using the Gather or GatherND operation.
+
+**Inputs**
+
+- **boxes** (*tensor(float)*): An input tensor with shape [num_batches, spatial_dimension, 4]. The single box data format is indicated by center_point_box.
+- **scores** (*tensor(float)*): An input tensor with shape [num_batches, num_classes, spatial_dimension]
+- **max_output_boxes_per_class** (*tensor(int64)*): Integer representing the maximum number of boxes to be selected per batch per class. It is a scalar. Default to 0, which means no output.
+- **iou_threshold** (*tensor(float)*): Float representing the threshold for deciding whether boxes overlap too much with respect to IOU. Boxes with IoU strictly greater than this threshold are suppressed. It is scalar. Value range [0, 1]. Default to 0.
+- **score_threshold** (*tensor(float)*): Float representing the threshold for deciding when to remove boxes based on score. It is a scalar.
+
+**Outputs**
+
+- **selected_indices** (*tensor(int64)*): selected indices from the boxes tensor. [num_selected_indices, 3], the selected index format is [batch_index, class_index, box_index].
+
+**Attributes**
+
+- **center_point_box** (*int*): Integer indicate the format of the box data. The default is 0. 0 - the box data is supplied as [y1, x1, y2, x2] where (y1, x1) and (y2, x2) are the coordinates of any diagonal pair of box corners and the coordinates can be provided as normalized (i.e., lying in the interval [0, 1]) or absolute. Mostly used for TF models. 1 - the box data is supplied as [x_center, y_center, width, height]. Mostly used for Pytorch models.
+
+Examples
+--------
+
+**test_cc_nonmaxsuppression_center_point_box_format**
+
+.. code-block:: text
+
+    Attributes:
+      center_point_box = 1
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[  0.5,   0.5,   1. ,   1. ],
+          [  0.5,   0.6,   1. ,   1. ],
+          [  0.5,   0.4,   1. ,   1. ],
+          [  0.5,  10.5,   1. ,   1. ],
+          [  0.5,  10.6,   1. ,   1. ],
+          [  0.5, 100.5,   1. ,   1. ]]]
+      scores: shape=(1, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(3, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0],
+         [0, 0, 5]]
+
+**test_cc_nonmaxsuppression_flipped_coordinates**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[ 1.00e+00,  1.00e+00,  0.00e+00,  0.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00,  9.00e-01,  1.00e+00, -1.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 1.00e+00,  1.01e+01,  0.00e+00,  1.11e+01],
+          [ 1.00e+00,  1.01e+02,  0.00e+00,  1.00e+02]]]
+      scores: shape=(1, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(3, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0],
+         [0, 0, 5]]
+
+**test_cc_nonmaxsuppression_identical_boxes**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 10, 4), dtype=float32
+        [[[0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.],
+          [0., 0., 1., 1.]]]
+      scores: shape=(1, 1, 10), dtype=float32
+        [[[0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(1, 3), dtype=int64
+        [[0, 0, 0]]
+
+**test_cc_nonmaxsuppression_iou_threshold_boundary**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 2, 4), dtype=float32
+        [[[0. , 0. , 1. , 1. ],
+          [0.5, 0.5, 1.5, 1.5]]]
+      scores: shape=(1, 1, 2), dtype=float32
+        [[[0.9, 0.8]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.14285715]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(2, 3), dtype=int64
+        [[0, 0, 0],
+         [0, 0, 1]]
+
+**test_cc_nonmaxsuppression_limit_output_size**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]]]
+      scores: shape=(1, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [2]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(2, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0]]
+
+**test_cc_nonmaxsuppression_single_box**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 1, 4), dtype=float32
+        [[[0., 0., 1., 1.]]]
+      scores: shape=(1, 1, 1), dtype=float32
+        [[[0.9]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(1, 3), dtype=int64
+        [[0, 0, 0]]
+
+**test_cc_nonmaxsuppression_suppress_by_IOU**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]]]
+      scores: shape=(1, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(3, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0],
+         [0, 0, 5]]
+
+**test_cc_nonmaxsuppression_suppress_by_IOU_and_scores**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]]]
+      scores: shape=(1, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [3]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.4]
+
+    Outputs:
+      selected_indices: shape=(2, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0]]
+
+**test_cc_nonmaxsuppression_two_batches**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(2, 6, 4), dtype=float32
+        [[[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]],
+        
+         [[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]]]
+      scores: shape=(2, 1, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]],
+        
+         [[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [2]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(4, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0],
+         [1, 0, 3],
+         [1, 0, 0]]
+
+**test_cc_nonmaxsuppression_two_classes**
+
+.. code-block:: text
+
+    Inputs:
+      boxes: shape=(1, 6, 4), dtype=float32
+        [[[ 0.00e+00,  0.00e+00,  1.00e+00,  1.00e+00],
+          [ 0.00e+00,  1.00e-01,  1.00e+00,  1.10e+00],
+          [ 0.00e+00, -1.00e-01,  1.00e+00,  9.00e-01],
+          [ 0.00e+00,  1.00e+01,  1.00e+00,  1.10e+01],
+          [ 0.00e+00,  1.01e+01,  1.00e+00,  1.11e+01],
+          [ 0.00e+00,  1.00e+02,  1.00e+00,  1.01e+02]]]
+      scores: shape=(1, 2, 6), dtype=float32
+        [[[0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ],
+          [0.9 , 0.75, 0.6 , 0.95, 0.5 , 0.3 ]]]
+      max_output_boxes_per_class: shape=(1,), dtype=int64
+        [2]
+      iou_threshold: shape=(1,), dtype=float32
+        [0.5]
+      score_threshold: shape=(1,), dtype=float32
+        [0.]
+
+    Outputs:
+      selected_indices: shape=(4, 3), dtype=int64
+        [[0, 0, 3],
+         [0, 0, 0],
+         [0, 1, 3],
+         [0, 1, 0]]
+
+Differences with previous version (10)
+--------------------------------------
+
+**SchemaDiff**: ``NonMaxSuppression`` (domain ``'ai.onnx'``)
+
+* old version: 10
+* new version: 11
+* breaking: no
+
+Version History
+---------------
+
+- :doc:`Version 10 <NonMaxSuppression-10>`

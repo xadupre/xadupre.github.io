@@ -1,0 +1,193 @@
+.. _op_ai_onnx_TensorScatter:
+
+TensorScatter
+=============
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 24
+
+TensorScatter is a generic tensor update operation, motivated by the requirements for KV cache updates for Attention
+ops commonly found in LLMs. It is a functional operation that models an in-place update to a KV cache buffer.
+
+The past and present cache tensors have the same shape (batch_size, D1, D2, ..., max_sequence_length, ..., Dn), with
+the sequence dimension (indicated by the ``axis`` attribute) being max_sequence_length, so the sizes of these tensors do
+not need to grow between iterations. The ``update`` tensor's shape only differs from the cache tensors in the sequence
+dimension: (batch_size, D1, D2, ..., sequence_length, ..., Dn), where sequence_length <= max_sequence_length.
+
+The optional ``write_indices`` input indicates the write index for each sample in the batch, assumed to be zero
+if not provided. When the ``mode`` attribute is set to "circular", the write index is modulo max_sequence_length.
+The operation can be described using the following pseudocode:
+
+.. code-block::
+
+    for prefix_idx in np.ndindex(past_cache.shape[:axis]):
+        batch_idx = prefix_idx[0]
+        for sequence_idx in range(sequence_length):
+            cache_idx = (*prefix_idx, write_indices[batch_idx] + sequence_idx)
+            if mode == "circular":
+                cache_idx = tuple(np.mod(np.asarray(cache_idx), max_sequence_length))
+            update_idx = (*prefix_idx, sequence_idx)
+            present_cache[cache_idx] = update[update_idx]
+
+
+During the prefill phase of attention, only the first two inputs are needed. During the decode phase, ``write_indices``
+is also needed so that the incoming key or value update can be appended after the last valid token for each sample
+in the batch.
+
+**Inputs**
+
+- **past_cache** (*T*): Past state cache for key or value with shape ``(batch_size, D1, D2, ..., max_sequence_length, ..., Dn)``.
+- **update** (*T*): New update tensor with shape ``(batch_size, D1, D2, ..., sequence_length, ..., Dn)``.
+- **write_indices** (*tensor(int64)*): Write indices for the incoming update tensor in the cache. Shape is ``(batch_size,)``. Assumed to be all zeros if not provided.
+
+**Outputs**
+
+- **present_cache** (*T*): Updated cache. Same shape as ``past_cache``.
+
+**Attributes**
+
+- **axis** (*int*): Sequence dimension of the ``past_cache`` and ``update`` tensors. It cannot be 0 (the batch dimension). Default is -2.
+- **mode** (*string*): Write mode of cache update. Supported modes include ``linear`` and ``circular``. ``linear`` mode requires write_indices+sequence_length<=max_sequence_length. For ``circular`` mode, the updates happen in wrap-around fashion, ie, the update index is modulo ``max_sequence_length``
+
+**Type Constraints**
+
+- **T**: Constrain input and output types to any tensor type.
+  Allowed types: tensor(bfloat16), tensor(bool), tensor(complex128), tensor(complex64), tensor(double), tensor(float), tensor(float16), tensor(float4e2m1), tensor(float8e4m3fn), tensor(float8e4m3fnuz), tensor(float8e5m2), tensor(float8e5m2fnuz), tensor(float8e8m0), tensor(int16), tensor(int32), tensor(int4), tensor(int64), tensor(int8), tensor(string), tensor(uint16), tensor(uint32), tensor(uint4), tensor(uint64), tensor(uint8).
+
+Examples
+--------
+
+**test_cc_tensorscatter**
+
+.. code-block:: text
+
+    Attributes:
+      mode = "linear"
+
+.. code-block:: text
+
+    Inputs:
+      past_cache: shape=(2, 1, 4, 5), dtype=float32
+        [[[[1., 2., 3., 4., 5.],
+           [5., 6., 7., 8., 9.],
+           [8., 7., 6., 5., 4.],
+           [4., 3., 2., 1., 0.]]],
+        
+        
+         [[[1., 2., 3., 4., 5.],
+           [5., 6., 7., 8., 9.],
+           [8., 7., 6., 5., 4.],
+           [4., 3., 2., 1., 0.]]]]
+      update: shape=(2, 1, 1, 5), dtype=float32
+        [[[[5., 5., 5., 5., 5.]]],
+        
+        
+         [[[1., 1., 1., 1., 1.]]]]
+      write_indices: shape=(2,), dtype=int64
+        [1, 2]
+
+    Outputs:
+      present_cache: shape=(2, 1, 4, 5), dtype=float32
+        [[[[1., 2., 3., 4., 5.],
+           [5., 5., 5., 5., 5.],
+           [8., 7., 6., 5., 4.],
+           [4., 3., 2., 1., 0.]]],
+        
+        
+         [[[1., 2., 3., 4., 5.],
+           [5., 6., 7., 8., 9.],
+           [1., 1., 1., 1., 1.],
+           [4., 3., 2., 1., 0.]]]]
+
+**test_cc_tensorscatter_3d**
+
+.. code-block:: text
+
+    Inputs:
+      past_cache: shape=(3, 4, 5), dtype=float32
+        [[[1., 2., 3., 4., 5.],
+          [5., 6., 7., 8., 9.],
+          [8., 7., 6., 5., 4.],
+          [5., 4., 3., 2., 1.]],
+        
+         [[1., 2., 3., 4., 5.],
+          [5., 6., 7., 8., 9.],
+          [8., 7., 6., 5., 4.],
+          [5., 4., 3., 2., 1.]],
+        
+         [[1., 2., 3., 4., 5.],
+          [5., 6., 7., 8., 9.],
+          [8., 7., 6., 5., 4.],
+          [5., 4., 3., 2., 1.]]]
+      update: shape=(3, 2, 5), dtype=float32
+        [[[4., 4., 4., 4., 4.],
+          [5., 5., 5., 5., 5.]],
+        
+         [[6., 6., 6., 6., 6.],
+          [7., 7., 7., 7., 7.]],
+        
+         [[2., 2., 2., 2., 2.],
+          [3., 3., 3., 3., 3.]]]
+      write_indices: shape=(3,), dtype=int64
+        [1, 2, 0]
+
+    Outputs:
+      present_cache: shape=(3, 4, 5), dtype=float32
+        [[[1., 2., 3., 4., 5.],
+          [4., 4., 4., 4., 4.],
+          [5., 5., 5., 5., 5.],
+          [5., 4., 3., 2., 1.]],
+        
+         [[1., 2., 3., 4., 5.],
+          [5., 6., 7., 8., 9.],
+          [6., 6., 6., 6., 6.],
+          [7., 7., 7., 7., 7.]],
+        
+         [[2., 2., 2., 2., 2.],
+          [3., 3., 3., 3., 3.],
+          [8., 7., 6., 5., 4.],
+          [5., 4., 3., 2., 1.]]]
+
+**test_cc_tensorscatter_circular**
+
+.. code-block:: text
+
+    Attributes:
+      mode = "circular"
+
+.. code-block:: text
+
+    Inputs:
+      past_cache: shape=(2, 1, 4, 5), dtype=float32
+        [[[[1., 2., 3., 4., 5.],
+           [5., 6., 7., 8., 9.],
+           [8., 7., 6., 5., 4.],
+           [4., 3., 2., 1., 0.]]],
+        
+        
+         [[[1., 2., 3., 4., 5.],
+           [5., 6., 7., 8., 9.],
+           [8., 7., 6., 5., 4.],
+           [4., 3., 2., 1., 0.]]]]
+      update: shape=(2, 1, 2, 5), dtype=float32
+        [[[[5., 5., 5., 5., 5.],
+           [6., 6., 6., 6., 6.]]],
+        
+        
+         [[[1., 1., 1., 1., 1.],
+           [2., 2., 2., 2., 2.]]]]
+      write_indices: shape=(2,), dtype=int64
+        [1, 3]
+
+    Outputs:
+      present_cache: shape=(2, 1, 4, 5), dtype=float32
+        [[[[1., 2., 3., 4., 5.],
+           [5., 5., 5., 5., 5.],
+           [6., 6., 6., 6., 6.],
+           [4., 3., 2., 1., 0.]]],
+        
+        
+         [[[2., 2., 2., 2., 2.],
+           [5., 6., 7., 8., 9.],
+           [8., 7., 6., 5., 4.],
+           [1., 1., 1., 1., 1.]]]]
