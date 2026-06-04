@@ -20,7 +20,9 @@ The run uses ``dtype=float16`` and ``device=cpu`` and exercises the
 following exporter configurations:
 
 * ``yobx`` with ``optimization='default'``
+* ``yobx`` with ``optimization='default+onnxruntime'``
 * ``dynamo`` with ``optimization='ir'``
+* ``onnx-dynamo`` with ``optimization='os_ort'``
 
 Usage::
 
@@ -87,7 +89,17 @@ DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
 # ``label`` field of each result row).
 DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
     {"label": "yobx", "exporter": "yobx", "optimization": "default"},
+    {
+        "label": "yobx-ort",
+        "exporter": "yobx",
+        "optimization": "default+onnxruntime",
+    },
     {"label": "dynamo-ir", "exporter": "dynamo", "optimization": "ir"},
+    {
+        "label": "onnx-dynamo-os_ort",
+        "exporter": "onnx-dynamo",
+        "optimization": "os_ort",
+    },
 )
 
 
