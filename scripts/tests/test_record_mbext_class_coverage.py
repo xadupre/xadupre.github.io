@@ -109,9 +109,7 @@ class TestRecordMbextClassCoverage(unittest.TestCase):
         self.assertTrue(by_name["Shared"]["in_alpha"])
         self.assertTrue(by_name["Shared"]["in_beta"])
         # ``Shared`` is defined in two alpha files; files are sorted/unique.
-        self.assertEqual(
-            by_name["Shared"]["alpha_files"], ["p1/extra.py", "p1/m.py"]
-        )
+        self.assertEqual(by_name["Shared"]["alpha_files"], ["p1/extra.py", "p1/m.py"])
         self.assertNotIn("alpha_files", by_name["Only2"])
 
     def test_write_payload_round_trip(self):
@@ -161,9 +159,7 @@ class TestRecordMbextClassCoverage(unittest.TestCase):
                 code = rmcc.main(["--cache-dir", tmp])
                 self.assertEqual(code, 1)
                 self.assertFalse(
-                    os.path.exists(
-                        os.path.join(tmp, "mbext", "class_coverage.json")
-                    )
+                    os.path.exists(os.path.join(tmp, "mbext", "class_coverage.json"))
                 )
         finally:
             rmcc.build_payload = original_build

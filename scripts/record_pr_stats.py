@@ -54,7 +54,6 @@ from record_build_durations import (  # noqa: E402
     _request,
 )
 
-
 DEFAULT_REPOS = (
     "xadupre/onnx-light",
     "xadupre/yet-another-onnx-builder",
@@ -139,10 +138,7 @@ def iter_closed_pulls(
             "per_page": str(per_page),
             "page": str(page),
         }
-        url = (
-            f"{GITHUB_API}/repos/{repo}/pulls?"
-            + urllib.parse.urlencode(params)
-        )
+        url = f"{GITHUB_API}/repos/{repo}/pulls?" + urllib.parse.urlencode(params)
         payload, _ = _request(url, token)
         if not isinstance(payload, list) or not payload:
             return
@@ -273,9 +269,7 @@ def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
     return len(rows)
 
 
-def process_repo(
-    repo: str, cache_dir: str, months: int, token: str | None
-) -> int:
+def process_repo(repo: str, cache_dir: str, months: int, token: str | None) -> int:
     """Fetch new merged PRs for ``repo`` and append them to the cache file."""
     repo_name = repo.split("/", 1)[-1]
     csv_path = os.path.join(cache_dir, repo_name, "pr_stats.csv")

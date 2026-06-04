@@ -39,27 +39,25 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-
 DEFAULT_DTYPE = "float16"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_ATOL = 0.02
 DEFAULT_TASK = "text-generation"
 
+
+def default_fp16_tg(model_id):
+    return dict(
+        model=model_id,
+        dtype="float16",
+        atol=0.02,
+        device="cpu",
+        task="text-generation",
+    )
+
+
 DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
-    dict(
-        model="arnir0/Tiny-LLM",
-        dtype="float16",
-        atol=0.02,
-        device="cpu",
-        task="text-generation",
-    ),
-    dict(
-        model="microsoft/Phi-4-reasoning",
-        dtype="float16",
-        atol=0.02,
-        device="cpu",
-        task="text-generation",
-    ),
+    default_fp16_tg("arnir0/Tiny-LLM"),
+    default_fp16_tg("mistralai/Mistral-7B-v0.3"),
 )
 
 # Each exporter configuration is fully described by a small dict so that the
@@ -93,9 +91,7 @@ def _coerce_model_entry(
     elif isinstance(item, dict):
         data = dict(item)
     else:
-        raise TypeError(
-            f"Model entry must be a str or dict, got {type(item).__name__}"
-        )
+        raise TypeError(f"Model entry must be a str or dict, got {type(item).__name__}")
     if not data.get("model"):
         raise ValueError(f"Model entry is missing a 'model' field: {item!r}")
     data.setdefault("dtype", default_dtype)
@@ -279,7 +275,9 @@ def _load_existing_cache(path: str) -> Dict[str, Any]:
     return payload
 
 
-def _index_previous_results(payload: Dict[str, Any]) -> Dict[Tuple[str, str], Dict[str, Any]]:
+def _index_previous_results(
+    payload: Dict[str, Any],
+) -> Dict[Tuple[str, str], Dict[str, Any]]:
     """Index previous results by ``(model_id, label)`` for quick lookup."""
     out: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for row in payload.get("results", []) or []:
@@ -485,6 +483,8 @@ def run_all(
                     "export": "FAILED",
                     "error_export": f"{type(exc).__name__}: {exc}",
                 }
+                if not quiet:
+                    raise
             duration_s = time.monotonic() - start
             # For yobx, prefer the ``stat_time_export_and_post_processing``
             # metric recorded in the ``extra`` sheet of the generated
@@ -492,11 +492,13 @@ def run_all(
             # discrepancy check and other unrelated work.
             if is_yobx and effective_dump:
                 new_xlsx = _list_xlsx(effective_dump) - pre_xlsx
+
                 def _safe_mtime(p: str) -> float:
                     try:
                         return os.path.getmtime(p)
                     except OSError:
                         return 0.0
+
                 for xlsx_path in sorted(new_xlsx, key=_safe_mtime, reverse=True):
                     metric = _read_yobx_export_duration(xlsx_path)
                     if metric is not None:
@@ -676,16 +678,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
     if args.models:
         models = tuple(
-            _coerce_model_entry(
-                m, default_dtype=args.dtype, default_device=args.device
-            )
+            _coerce_model_entry(m, default_dtype=args.dtype, default_device=args.device)
             for m in args.models
         )
     else:
         models = tuple(
-            _coerce_model_entry(
-                e, default_dtype=args.dtype, default_device=args.device
-            )
+            _coerce_model_entry(e, default_dtype=args.dtype, default_device=args.device)
             for e in DEFAULT_MODELS
         )
     exporters = DEFAULT_EXPORTERS

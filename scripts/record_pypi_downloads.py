@@ -28,7 +28,6 @@ import sys
 import urllib.error
 import urllib.request
 
-
 PYPISTATS_RECENT_URL = "https://pypistats.org/api/packages/{package}/recent"
 
 DEFAULT_PACKAGES: tuple[str, ...] = (
@@ -76,9 +75,7 @@ def fetch_recent_downloads(package: str) -> dict:
         payload = json.loads(resp.read().decode("utf-8"))
     data = payload.get("data")
     if not isinstance(data, dict):
-        raise RuntimeError(
-            f"Unexpected pypistats payload for {package!r}: {payload!r}"
-        )
+        raise RuntimeError(f"Unexpected pypistats payload for {package!r}: {payload!r}")
     return data
 
 

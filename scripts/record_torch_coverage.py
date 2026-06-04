@@ -27,7 +27,6 @@ import os
 import sys
 from typing import Any, Dict, List, Tuple
 
-
 DEFAULT_EXPORTERS: Tuple[str, ...] = (
     "yobx",
     "yobx-tracing",
@@ -149,9 +148,7 @@ def build_payload(
         totals[exporter] = {"success": 0, "failure": 0, "total": 0}
     for row in results:
         exporter = row["exporter"]
-        bucket = totals.setdefault(
-            exporter, {"success": 0, "failure": 0, "total": 0}
-        )
+        bucket = totals.setdefault(exporter, {"success": 0, "failure": 0, "total": 0})
         bucket["total"] += 1
         if row["success"] == 1:
             bucket["success"] += 1
