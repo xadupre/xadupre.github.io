@@ -348,6 +348,16 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         args = rymv.parse_args(["--dump-folder", "/tmp/dump"])
         self.assertEqual(args.dump_folder, "/tmp/dump")
 
+    def test_parse_args_quiet_default(self):
+        args = rymv.parse_args([])
+        self.assertTrue(args.quiet)
+
+    def test_parse_args_no_quiet(self):
+        args = rymv.parse_args(["--no-quiet"])
+        self.assertFalse(args.quiet)
+        args = rymv.parse_args(["--no-quiet", "--quiet"])
+        self.assertTrue(args.quiet)
+
     def test_parse_args_custom_models(self):
         args = rymv.parse_args(["--model", "a/b", "--model", "c/d", "--limit", "1"])
         self.assertEqual(args.models, ["a/b", "c/d"])
@@ -423,7 +433,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             test = self
 
-            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
                 if exporter_cfg["exporter"] == "yobx":
                     # Mimic the yobx exporter writing a companion workbook.
                     xlsx = os.path.join(
@@ -460,7 +470,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         test = self
         seen_folders = []
 
-        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
             # yobx must receive a real dump folder so it can save the report.
             test.assertIsNotNone(dump_folder)
             test.assertTrue(os.path.isdir(dump_folder))
