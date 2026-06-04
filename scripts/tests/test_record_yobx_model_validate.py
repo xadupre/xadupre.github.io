@@ -195,6 +195,12 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
         self.assertEqual(row["success"], 1)
         self.assertEqual(row["error_step"], "")
+        # ``discrepancies`` and ``discrepancies_atol`` should be rewritten so
+        # the cached JSON reflects the per-model tolerance that made the cell
+        # successful, instead of the stricter default used by ``validate_model``.
+        self.assertEqual(row["discrepancies"], "OK")
+        self.assertAlmostEqual(row["discrepancies_atol"], 0.02)
+        self.assertEqual(row["error"], "")
 
     def test_merge_last_working_records_now_on_success(self):
         row = {"success": 1}
