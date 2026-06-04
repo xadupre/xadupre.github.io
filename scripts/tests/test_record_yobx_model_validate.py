@@ -87,6 +87,33 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertFalse(rymv.is_cell_working({}))
         self.assertFalse(rymv.is_cell_working(None))
 
+    def test_is_cell_working_honours_model_atol(self):
+        # Even when ``validate_model`` reports a failed discrepancy check
+        # (because it used a stricter default tolerance), a cell where the
+        # observed max abs error is within the model's declared atol should
+        # be considered working.
+        summary = {
+            "export": "OK",
+            "discrepancies": "FAILED",
+            "discrepancies_max_abs": 0.01,
+            "discrepancies_atol": 1e-5,
+        }
+        self.assertTrue(rymv.is_cell_working(summary, model_atol=0.02))
+        # Still failing when the per-model atol is stricter than the error.
+        self.assertFalse(rymv.is_cell_working(summary, model_atol=0.001))
+        # Export failure dominates even when within atol.
+        self.assertFalse(
+            rymv.is_cell_working(
+                {**summary, "export": "FAILED"}, model_atol=0.02
+            )
+        )
+        # Without a max_abs we cannot conclude success.
+        self.assertFalse(
+            rymv.is_cell_working(
+                {"export": "OK", "discrepancies": "FAILED"}, model_atol=0.02
+            )
+        )
+
     def test_first_error_picks_earliest_failing_step(self):
         step, msg = rymv._first_error(
             {
@@ -151,6 +178,25 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(row["error"], "boom!")
         self.assertIsNone(row["discrepancies_max_abs"])
         self.assertEqual(row["discrepancies"], "")
+
+    def test_normalise_result_success_within_model_atol(self):
+        # ``validate_model`` flagged discrepancies as failed (because of its
+        # stricter default tolerance), but the observed max abs error is
+        # below the per-model atol, so the cell should be marked as working.
+        cfg = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
+        row = rymv._normalise_result(
+            "arnir0/Tiny-LLM",
+            cfg,
+            {
+                "export": "OK",
+                "discrepancies": "FAILED",
+                "discrepancies_max_abs": 0.01,
+                "discrepancies_atol": 1e-5,
+            },
+            model_atol=0.02,
+        )
+        self.assertEqual(row["success"], 1)
+        self.assertEqual(row["error_step"], "")
 
     def test_merge_last_working_records_now_on_success(self):
         row = {"success": 1}
@@ -316,6 +362,138 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         args = rymv.parse_args(["--model", "a/b", "--model", "c/d", "--limit", "1"])
         self.assertEqual(args.models, ["a/b", "c/d"])
         self.assertEqual(args.limit, 1)
+
+    def _write_extra_xlsx(self, path: str, value: float) -> None:
+        """Write a minimal workbook with the ``extra`` sheet used by yobx."""
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        # Replace the default sheet with one named ``extra`` and populate it
+        # with a small key/value table mimicking the yobx export report.
+        default = wb.active
+        wb.remove(default)
+        ws = wb.create_sheet("extra")
+        ws.append(["name", "value"])
+        ws.append(["builder", "torch"])
+        ws.append(["stat_time_export_and_post_processing", value])
+        ws.append(["stat_time_post_process_exported_program", 0.001])
+        wb.save(path)
+
+    def test_read_yobx_export_duration_returns_metric(self):
+        try:
+            import openpyxl  # noqa: F401
+        except Exception:
+            self.skipTest("openpyxl is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            xlsx = os.path.join(tmp, "model.xlsx")
+            self._write_extra_xlsx(xlsx, 1.5)
+            self.assertAlmostEqual(rymv._read_yobx_export_duration(xlsx), 1.5)
+
+    def test_read_yobx_export_duration_missing_file(self):
+        self.assertIsNone(rymv._read_yobx_export_duration("/no/such/file.xlsx"))
+
+    def test_read_yobx_export_duration_missing_sheet(self):
+        try:
+            from openpyxl import Workbook
+        except Exception:
+            self.skipTest("openpyxl is not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            xlsx = os.path.join(tmp, "other.xlsx")
+            wb = Workbook()
+            wb.active.append(["a", "b"])
+            wb.save(xlsx)
+            self.assertIsNone(rymv._read_yobx_export_duration(xlsx))
+
+    def test_list_xlsx_recurses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(rymv._list_xlsx(tmp), set())
+            sub = os.path.join(tmp, "sub")
+            os.makedirs(sub)
+            a = os.path.join(tmp, "a.xlsx")
+            b = os.path.join(sub, "b.xlsx")
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write("")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("")
+            # A non-xlsx file is ignored.
+            with open(os.path.join(tmp, "skip.txt"), "w", encoding="utf-8") as fh:
+                fh.write("")
+            self.assertEqual(rymv._list_xlsx(tmp), {a, b})
+            self.assertEqual(rymv._list_xlsx(None), set())
+            self.assertEqual(rymv._list_xlsx("/no/such/folder"), set())
+
+    def test_run_all_uses_xlsx_duration_for_yobx(self):
+        try:
+            import openpyxl  # noqa: F401
+        except Exception:
+            self.skipTest("openpyxl is not installed")
+        cfg_yobx = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
+        cfg_dyn = {"label": "dynamo-ir", "exporter": "dynamo", "optimization": "ir"}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            test = self
+
+            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+                if exporter_cfg["exporter"] == "yobx":
+                    # Mimic the yobx exporter writing a companion workbook.
+                    xlsx = os.path.join(
+                        dump_folder, f"{entry['model'].replace('/', '_')}.xlsx"
+                    )
+                    test._write_extra_xlsx(xlsx, 2.5)
+                return {"export": "OK", "discrepancies": "OK"}
+
+            original = rymv.run_validate_one
+            rymv.run_validate_one = fake_run_validate_one
+            try:
+                results = rymv.run_all(
+                    models=({"model": "a/b", "dtype": "float16", "device": "cpu"},),
+                    exporters=(cfg_yobx, cfg_dyn),
+                    dump_folder=tmp,
+                )
+            finally:
+                rymv.run_validate_one = original
+
+        durations = {item[1]["label"]: item[3] for item in results}
+        # yobx duration is replaced by the metric from the extra sheet.
+        self.assertAlmostEqual(durations["yobx"], 2.5)
+        # The other exporter keeps its wall-clock measurement.
+        self.assertGreaterEqual(durations["dynamo-ir"], 0.0)
+        self.assertNotAlmostEqual(durations["dynamo-ir"], 2.5)
+
+    def test_run_all_uses_temp_dump_folder_when_none_provided(self):
+        """When no dump folder is supplied, yobx still gets one (a temp dir)."""
+        try:
+            import openpyxl  # noqa: F401
+        except Exception:
+            self.skipTest("openpyxl is not installed")
+        cfg_yobx = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
+        test = self
+        seen_folders = []
+
+        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None):
+            # yobx must receive a real dump folder so it can save the report.
+            test.assertIsNotNone(dump_folder)
+            test.assertTrue(os.path.isdir(dump_folder))
+            seen_folders.append(dump_folder)
+            xlsx = os.path.join(dump_folder, "model.xlsx")
+            test._write_extra_xlsx(xlsx, 3.75)
+            return {"export": "OK", "discrepancies": "OK"}
+
+        original = rymv.run_validate_one
+        rymv.run_validate_one = fake_run_validate_one
+        try:
+            results = rymv.run_all(
+                models=({"model": "a/b", "dtype": "float16", "device": "cpu"},),
+                exporters=(cfg_yobx,),
+                dump_folder=None,
+            )
+        finally:
+            rymv.run_validate_one = original
+
+        self.assertAlmostEqual(results[0][3], 3.75)
+        # The temporary directory is cleaned up after the metric is read.
+        self.assertEqual(len(seen_folders), 1)
+        self.assertFalse(os.path.isdir(seen_folders[0]))
 
     def test_existing_snapshot_is_valid_json(self):
         repo_root = os.path.dirname(os.path.dirname(HERE))
