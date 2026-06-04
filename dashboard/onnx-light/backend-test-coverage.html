@@ -87,6 +87,37 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .controls input[type="search"].invalid {
   border-color: #f85149;
 }
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3em;
+  margin-bottom: 0.75em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.3);
+}
+.tab {
+  background: transparent;
+  color: #8b949e;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 0.4em 0.8em;
+  cursor: pointer;
+  font: inherit;
+}
+.tab:hover { color: #c9d1d9; }
+.tab.active {
+  background: rgba(13, 17, 23, 0.9);
+  color: #c9d1d9;
+  border-color: rgba(139, 148, 158, 0.4);
+  border-bottom-color: transparent;
+  position: relative;
+  top: 1px;
+}
+.tab .count {
+  color: #8b949e;
+  margin-left: 0.4em;
+  font-size: 0.85em;
+}
 .controls .filter-status {
   font-size: 0.8em;
   color: #8b949e;
@@ -202,6 +233,7 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
 </div>
 
 <div id="mainPanel" class="panel" style="display:none;">
+  <div id="tabs" class="tabs" style="display:none;"></div>
   <div class="controls">
     <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_relu)…" autocomplete="off" />
     <div id="filterStatus" class="filter-status"></div>
@@ -252,6 +284,8 @@ const state = {
   regex: null,
   regexError: null,
   sort: { key: "name", dir: "asc" },
+  tags: [],
+  activeTag: "__all__",
 };
 
 function showMessage(text, kind) {
@@ -307,12 +341,61 @@ function compileRegex(value) {
 }
 
 function rowMatches(row) {
+  if (state.activeTag !== "__all__") {
+    const tag = row.tag || "";
+    if (tag !== state.activeTag) return false;
+  }
   if (state.regexError) {
     // When the regex is invalid we keep showing the previous selection.
     return false;
   }
   if (!state.regex) return true;
   return state.regex.test(row.name);
+}
+
+function collectTags(rows) {
+  const counts = new Map();
+  for (const r of rows) {
+    const tag = r.tag || "";
+    if (!tag) continue;
+    counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+function renderTabs() {
+  const container = document.getElementById("tabs");
+  container.innerHTML = "";
+  if (state.tags.length === 0) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "flex";
+  const entries = [["__all__", state.rows.length, "all"]];
+  for (const [tag, count] of state.tags) {
+    entries.push([tag, count, tag]);
+  }
+  for (const [key, count, label] of entries) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab" + (key === state.activeTag ? " active" : "");
+    btn.dataset.tag = key;
+    const labelSpan = document.createElement("span");
+    labelSpan.textContent = label;
+    const countSpan = document.createElement("span");
+    countSpan.className = "count";
+    countSpan.textContent = "(" + count + ")";
+    btn.appendChild(labelSpan);
+    btn.appendChild(countSpan);
+    btn.addEventListener("click", () => {
+      if (state.activeTag === key) return;
+      state.activeTag = key;
+      renderTabs();
+      renderRows();
+    });
+    container.appendChild(btn);
+  }
 }
 
 function compareRows(a, b) {
@@ -538,9 +621,12 @@ fetch(JSON_URL, { cache: "no-store" })
     hideMessage();
     renderMeta(payload);
     state.rows = rows;
+    state.tags = collectTags(rows);
+    state.activeTag = "__all__";
     document.getElementById("mainPanel").style.display = "block";
     bindHeaderSorting();
     bindSearch();
+    renderTabs();
     renderRows();
   })
   .catch(err => {
