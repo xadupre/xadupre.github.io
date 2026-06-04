@@ -45,6 +45,27 @@ DEFAULT_ATOL = 0.02
 DEFAULT_TASK = "text-generation"
 
 
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """Return ``True`` when *exc* looks like a HuggingFace HTTP 429 error.
+
+    The HuggingFace Hub raises rate-limit errors as
+    ``huggingface_hub.utils.HfHubHTTPError`` (or plain ``requests`` /
+    ``urllib`` errors) whose message contains either ``HTTP Error 429`` or
+    ``Too Many Requests``. When such an error happens, retrying within the
+    same CI run is pointless and only burns rate limiting budget, so the
+    caller must abort instead of merely logging the failure.
+    """
+    message = f"{exc}"
+    if "429" in message and (
+        "Too Many Requests" in message
+        or "HTTP Error 429" in message
+        or "rate limit" in message.lower()
+    ):
+        return True
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status == 429
+
+
 def default_fp16_tg(model_id):
     return dict(
         model=model_id,
@@ -435,6 +456,11 @@ def detect_task(model_id: str) -> str:
         return _detect_task(config) or ""
     except Exception as exc:  # noqa: BLE001 - never fail the recorder for this
         _log(f"  -> could not detect task for {model_id}: {type(exc).__name__}: {exc}")
+        if _is_rate_limit_error(exc):
+            # HuggingFace rate-limited us (HTTP 429). Continuing would only
+            # make things worse, so abort the whole run instead of silently
+            # returning an empty task.
+            raise
         return ""
 
 
@@ -490,6 +516,15 @@ def run_all(
                 )
             except Exception as exc:  # noqa: BLE001 - we never want to crash CI
                 _log(f"  -> raised: {type(exc).__name__}: {exc}")
+                if _is_rate_limit_error(exc):
+                    # HuggingFace rate-limited us (HTTP 429). Continuing
+                    # would only make things worse, so abort the whole run
+                    # and let the workflow surface the failure.
+                    _log(
+                        "  -> aborting: HuggingFace returned HTTP 429 "
+                        "(rate limit). Stopping the recording action."
+                    )
+                    raise
                 # Build a synthetic summary so the dashboard can still display
                 # a failed cell with a meaningful error message.
                 summary = {
