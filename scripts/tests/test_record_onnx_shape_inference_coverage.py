@@ -132,6 +132,75 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         self.assertFalse(by_name["Y"]["ok"])
         self.assertIn("missing from graph", by_name["Y"]["reason"])
 
+    def _make_symbolic_model(self, exp_name, got_name):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [exp_name, 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [exp_name, 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "sym",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        # Rewrite the inferred dim_param to ``got_name`` (or to a concrete
+        # value when an int is given) to simulate a different inference
+        # result for the dynamic dimension.
+        wrong = type(model)()
+        wrong.CopyFrom(model)
+        out_dim0 = wrong.graph.output[0].type.tensor_type.shape.dim[0]
+        out_dim0.Clear()
+        if isinstance(got_name, str):
+            out_dim0.dim_param = got_name
+        else:
+            out_dim0.dim_value = got_name
+        return snap, wrong
+
+    def test_symbolic_dim_name_mismatch_is_flagged(self):
+        snap, wrong = self._make_symbolic_model("N", "M")
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
+    def test_symbolic_vs_concrete_dim_is_flagged(self):
+        snap, wrong = self._make_symbolic_model("N", 4)
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
+    def test_concrete_vs_symbolic_dim_is_flagged(self):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "g",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        wrong = type(model)()
+        wrong.CopyFrom(model)
+        d0 = wrong.graph.output[0].type.tensor_type.shape.dim[0]
+        d0.Clear()
+        d0.dim_param = "N"
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertFalse(by_name["Y"]["ok"])
+        self.assertIn("dim[0]", by_name["Y"]["reason"])
+
 
 class TestRunTestWithBackend(unittest.TestCase):
     def test_run_with_official_onnx(self):
