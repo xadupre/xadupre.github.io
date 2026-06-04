@@ -29,7 +29,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             self.assertIn("task", entry)
         labels = {e["label"] for e in rymv.DEFAULT_EXPORTERS}
         self.assertIn("yobx", labels)
+        self.assertIn("yobx-ort", labels)
         self.assertIn("dynamo-ir", labels)
+        self.assertIn("onnx-dynamo-os_ort", labels)
         # Each exporter config must declare the three required fields.
         for cfg in rymv.DEFAULT_EXPORTERS:
             self.assertIn("label", cfg)
