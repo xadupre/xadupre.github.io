@@ -40,9 +40,26 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 
-DEFAULT_MODELS: Tuple[str, ...] = (
-    "arnir0/Tiny-LLM",
-    "microsoft/Phi-4-reasoning",
+DEFAULT_DTYPE = "float16"
+DEFAULT_DEVICE = "cpu"
+DEFAULT_ATOL = 0.02
+DEFAULT_TASK = "text-generation"
+
+DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
+    dict(
+        model="arnir0/Tiny-LLM",
+        dtype="float16",
+        atol=0.02,
+        device="cpu",
+        task="text-generation",
+    ),
+    dict(
+        model="microsoft/Phi-4-reasoning",
+        dtype="float16",
+        atol=0.02,
+        device="cpu",
+        task="text-generation",
+    ),
 )
 
 # Each exporter configuration is fully described by a small dict so that the
@@ -54,8 +71,38 @@ DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
     {"label": "dynamo-ir", "exporter": "dynamo", "optimization": "ir"},
 )
 
-DEFAULT_DTYPE = "float16"
-DEFAULT_DEVICE = "cpu"
+
+def _coerce_model_entry(
+    item: Any,
+    *,
+    default_dtype: str = DEFAULT_DTYPE,
+    default_device: str = DEFAULT_DEVICE,
+    default_atol: float = DEFAULT_ATOL,
+    default_task: str = DEFAULT_TASK,
+) -> Dict[str, Any]:
+    """Return a fully-populated model entry dict from a string id or dict.
+
+    Accepted forms:
+
+    * ``"org/model"`` – a bare HuggingFace model id; defaults are filled in.
+    * ``{"model": ..., "dtype": ..., "device": ..., "atol": ..., "task": ...}``
+      – any missing key falls back to the supplied default.
+    """
+    if isinstance(item, str):
+        data: Dict[str, Any] = {"model": item}
+    elif isinstance(item, dict):
+        data = dict(item)
+    else:
+        raise TypeError(
+            f"Model entry must be a str or dict, got {type(item).__name__}"
+        )
+    if not data.get("model"):
+        raise ValueError(f"Model entry is missing a 'model' field: {item!r}")
+    data.setdefault("dtype", default_dtype)
+    data.setdefault("device", default_device)
+    data.setdefault("atol", default_atol)
+    data.setdefault("task", default_task)
+    return data
 
 
 def _log(message: str) -> None:
@@ -258,26 +305,26 @@ def merge_last_working(
 
 
 def run_validate_one(
-    model_id: str,
+    entry: Dict[str, Any],
     exporter_cfg: Dict[str, str],
-    dtype: str,
-    device: str,
     verbose: int = 0,
+    dump_folder: Optional[str] = None,
 ) -> Any:
     """Run :func:`yobx.torch.validate.validate_model` for one (model, exporter)."""
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
     summary, _data = validate_model(
-        model_id=model_id,
+        model_id=entry["model"],
         exporter=exporter_cfg["exporter"],
         optimization=exporter_cfg["optimization"],
-        dtype=dtype,
-        device=device,
+        dtype=entry.get("dtype", DEFAULT_DTYPE),
+        device=entry.get("device", DEFAULT_DEVICE),
         do_run=True,
         quiet=True,
         verbose=verbose,
         patch="transformers",
+        dump_folder=dump_folder,
     )
     return summary
 
@@ -303,28 +350,33 @@ def detect_task(model_id: str) -> str:
 
 
 def run_all(
-    models: Tuple[str, ...],
+    models: Tuple[Dict[str, Any], ...],
     exporters: Tuple[Dict[str, str], ...],
-    dtype: str,
-    device: str,
     limit: Optional[int] = None,
     verbose: int = 0,
+    dump_folder: Optional[str] = None,
 ) -> List[Tuple[str, Dict[str, str], Any, float]]:
     """Run ``validate_model`` for every (model, exporter) combination."""
     items = list(models)
     if limit is not None:
         items = items[:limit]
     out: List[Tuple[str, Dict[str, str], Any, float]] = []
-    for model_id in items:
+    for entry in items:
+        model_id = entry["model"]
         for exporter_cfg in exporters:
             _log(
-                f"Validating {model_id} with exporter={exporter_cfg['exporter']} "
+                f"Validating {model_id} (dtype={entry.get('dtype')}, "
+                f"device={entry.get('device')}) with "
+                f"exporter={exporter_cfg['exporter']} "
                 f"optimization={exporter_cfg['optimization']}..."
             )
             start = time.monotonic()
             try:
                 summary = run_validate_one(
-                    model_id, exporter_cfg, dtype=dtype, device=device, verbose=verbose
+                    entry,
+                    exporter_cfg,
+                    verbose=verbose,
+                    dump_folder=dump_folder,
                 )
             except Exception as exc:  # noqa: BLE001 - we never want to crash CI
                 _log(f"  -> raised: {type(exc).__name__}: {exc}")
@@ -343,7 +395,7 @@ def run_all(
 
 def build_payload(
     raw_results: List[Tuple[str, Dict[str, str], Any, float]],
-    models: Tuple[str, ...],
+    models: Tuple[Dict[str, Any], ...],
     exporters: Tuple[Dict[str, str], ...],
     dtype: str,
     device: str,
@@ -358,10 +410,16 @@ def build_payload(
     )
     previous_index = _index_previous_results(previous_payload or {})
     previous_tasks = (previous_payload or {}).get("tasks") or {}
+    # Map model id -> entry dict for per-model lookups.
+    entries_by_id: Dict[str, Dict[str, Any]] = {e["model"]: e for e in models}
+    model_ids: List[str] = [e["model"] for e in models]
     resolved_tasks: Dict[str, str] = {}
-    for m in models:
+    for m in model_ids:
+        entry = entries_by_id.get(m, {})
         if tasks and tasks.get(m):
             resolved_tasks[m] = tasks[m]
+        elif entry.get("task"):
+            resolved_tasks[m] = entry["task"]
         elif previous_tasks.get(m):
             resolved_tasks[m] = previous_tasks[m]
         else:
@@ -380,6 +438,10 @@ def build_payload(
             duration_s = None
         row = _normalise_result(model_id, exporter_cfg, summary, duration_s)
         row["task"] = resolved_tasks.get(model_id, "")
+        entry = entries_by_id.get(model_id, {})
+        row["dtype"] = entry.get("dtype", dtype)
+        row["device"] = entry.get("device", device)
+        row["atol"] = _to_float(entry.get("atol"))
         previous_row = previous_index.get((model_id, exporter_cfg["label"]))
         merge_last_working(row, previous_row, current_date, commit or "")
         results.append(row)
@@ -398,7 +460,8 @@ def build_payload(
         "versions": collect_versions(),
         "dtype": dtype,
         "device": device,
-        "models": list(models),
+        "models": model_ids,
+        "model_entries": [dict(e) for e in models],
         "tasks": resolved_tasks,
         "exporters": [dict(e) for e in exporters],
         "totals": totals,
@@ -424,7 +487,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         dest="models",
         help=(
             "HuggingFace model id to validate. May be repeated. "
-            f"Defaults to: {', '.join(DEFAULT_MODELS)}."
+            f"Defaults to: {', '.join(e['model'] for e in DEFAULT_MODELS)}."
         ),
     )
     parser.add_argument(
@@ -454,13 +517,44 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=0,
         help="Verbosity level forwarded to validate_model (default: 0).",
     )
+    parser.add_argument(
+        "--dump-folder",
+        default=None,
+        help=(
+            "Folder where validate_model dumps its intermediate artefacts "
+            "(ONNX files, captured inputs, ...). Intended for local runs. "
+            "The folder is created if missing and the script changes its "
+            "working directory to it before running so any relative paths "
+            "(including --cache-dir) are resolved inside it."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    models = tuple(args.models) if args.models else DEFAULT_MODELS
+    if args.models:
+        models = tuple(
+            _coerce_model_entry(
+                m, default_dtype=args.dtype, default_device=args.device
+            )
+            for m in args.models
+        )
+    else:
+        models = tuple(
+            _coerce_model_entry(
+                e, default_dtype=args.dtype, default_device=args.device
+            )
+            for e in DEFAULT_MODELS
+        )
     exporters = DEFAULT_EXPORTERS
+
+    dump_folder: Optional[str] = None
+    if args.dump_folder:
+        dump_folder = os.path.abspath(args.dump_folder)
+        os.makedirs(dump_folder, exist_ok=True)
+        _log(f"Using dump folder: {dump_folder} (chdir into it)")
+        os.chdir(dump_folder)
 
     out_dir = os.path.join(args.cache_dir, args.repo)
     os.makedirs(out_dir, exist_ok=True)
@@ -468,15 +562,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     previous_payload = _load_existing_cache(out_path)
 
-    tasks = {m: detect_task(m) for m in models}
+    tasks = {e["model"]: e.get("task") or detect_task(e["model"]) for e in models}
 
     raw_results = run_all(
         models=models,
         exporters=exporters,
-        dtype=args.dtype,
-        device=args.device,
         limit=args.limit,
         verbose=args.verbose,
+        dump_folder=dump_folder,
     )
     payload = build_payload(
         raw_results=raw_results,
