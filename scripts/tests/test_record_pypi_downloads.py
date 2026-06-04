@@ -128,9 +128,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
         rpd.fetch_recent_downloads = fake_fetch
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                code = rpd.main(
-                    ["--cache-dir", tmp, "--package", "onnxscript"]
-                )
+                code = rpd.main(["--cache-dir", tmp, "--package", "onnxscript"])
                 self.assertEqual(code, 0)
         finally:
             rpd.fetch_recent_downloads = original

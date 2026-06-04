@@ -162,9 +162,7 @@ class TestRecordYobxSklearnCoverage(unittest.TestCase):
         fake_yobx.sklearn = fake_yobx_sklearn
 
         fake_register = types.ModuleType("yobx.sklearn.register")
-        fake_register.get_sklearn_estimator_coverage = (
-            lambda libraries, rst: []
-        )
+        fake_register.get_sklearn_estimator_coverage = lambda libraries, rst: []
 
         names = ("sklearn", "yobx", "yobx.sklearn", "yobx.sklearn.register")
         original_modules = {name: sys.modules.get(name) for name in names}

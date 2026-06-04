@@ -28,7 +28,6 @@ import sys
 import urllib.request
 from typing import Iterable
 
-
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 
 CSV_FIELDS = (
@@ -132,7 +131,9 @@ def count_node_test_cases() -> int:
     """
     import onnx
 
-    root = os.path.join(os.path.dirname(onnx.__file__), "backend", "test", "data", "node")
+    root = os.path.join(
+        os.path.dirname(onnx.__file__), "backend", "test", "data", "node"
+    )
     if not os.path.isdir(root):
         return 0
     return sum(
@@ -156,15 +157,15 @@ def collect_local_stats() -> dict[str, str]:
     }
 
 
-def build_row(package: str, metadata: dict, now: dt.datetime | None = None) -> dict[str, str]:
+def build_row(
+    package: str, metadata: dict, now: dt.datetime | None = None
+) -> dict[str, str]:
     """Build the CSV row for the latest release of ``package``."""
     version = metadata["info"]["version"]
     files = metadata.get("releases", {}).get(version, [])
     wheel = pick_latest_linux_wheel(files)
     if wheel is None:
-        raise RuntimeError(
-            f"No manylinux x86_64 wheel found for {package} {version}."
-        )
+        raise RuntimeError(f"No manylinux x86_64 wheel found for {package} {version}.")
     local = collect_local_stats()
     if local["version"] != version:
         _log(

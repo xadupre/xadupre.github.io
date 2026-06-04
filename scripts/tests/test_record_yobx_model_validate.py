@@ -103,9 +103,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertFalse(rymv.is_cell_working(summary, model_atol=0.001))
         # Export failure dominates even when within atol.
         self.assertFalse(
-            rymv.is_cell_working(
-                {**summary, "export": "FAILED"}, model_atol=0.02
-            )
+            rymv.is_cell_working({**summary, "export": "FAILED"}, model_atol=0.02)
         )
         # Without a max_abs we cannot conclude success.
         self.assertFalse(
@@ -258,8 +256,20 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         payload = rymv.build_payload(
             raw_results=raw,
             models=(
-                dict(model="arnir0/Tiny-LLM", dtype="float16", atol=0.02, device="cpu", task="text-generation"),
-                dict(model="microsoft/Phi-4-reasoning", dtype="float16", atol=0.02, device="cpu", task="text-generation"),
+                dict(
+                    model="arnir0/Tiny-LLM",
+                    dtype="float16",
+                    atol=0.02,
+                    device="cpu",
+                    task="text-generation",
+                ),
+                dict(
+                    model="microsoft/Phi-4-reasoning",
+                    dtype="float16",
+                    atol=0.02,
+                    device="cpu",
+                    task="text-generation",
+                ),
             ),
             exporters=(cfg_yobx, cfg_dyn),
             dtype="float16",
@@ -306,7 +316,8 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             rows_by_key[("arnir0/Tiny-LLM", "yobx")]["task"], "text-generation"
         )
         self.assertEqual(
-            rows_by_key[("microsoft/Phi-4-reasoning", "yobx")]["task"], "text-generation"
+            rows_by_key[("microsoft/Phi-4-reasoning", "yobx")]["task"],
+            "text-generation",
         )
         self.assertEqual(
             payload["tasks"],
@@ -433,7 +444,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             test = self
 
-            def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
+            def fake_run_validate_one(
+                entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
+            ):
                 if exporter_cfg["exporter"] == "yobx":
                     # Mimic the yobx exporter writing a companion workbook.
                     xlsx = os.path.join(
@@ -470,7 +483,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         test = self
         seen_folders = []
 
-        def fake_run_validate_one(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
+        def fake_run_validate_one(
+            entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
+        ):
             # yobx must receive a real dump folder so it can save the report.
             test.assertIsNotNone(dump_folder)
             test.assertTrue(os.path.isdir(dump_folder))
@@ -506,11 +521,20 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         if not os.path.exists(path):
             self.skipTest("model_validate.json snapshot not present in repo")
         with open(path, encoding="utf-8") as fh:
+
             def _reject(token: str) -> None:
                 raise ValueError(f"non-JSON token in snapshot: {token}")
 
             payload = json.load(fh, parse_constant=_reject)
-        for key in ("date", "exporters", "models", "results", "totals", "dtype", "device"):
+        for key in (
+            "date",
+            "exporters",
+            "models",
+            "results",
+            "totals",
+            "dtype",
+            "device",
+        ):
             self.assertIn(key, payload)
         self.assertIsInstance(payload["results"], list)
 
