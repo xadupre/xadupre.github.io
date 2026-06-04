@@ -315,11 +315,13 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
             # intermediate / output shape to recover, so it cannot be
             # used to score shape inference.
             continue
+        inputs = snapshot_inputs(onnx_model)
         discovered.append(
             {
                 "name": str(name),
                 "model": onnx_model,
                 "expected": expected,
+                "inputs": inputs,
                 "mermaid": model_to_mermaid(onnx_model),
             }
         )
@@ -349,6 +351,35 @@ def _dims_of_tensor_type(tensor_type) -> Tuple[bool, List[Any]]:
         else:
             dims.append(-1)
     return True, dims
+
+
+def snapshot_inputs(model) -> List[Dict[str, Any]]:
+    """Snapshot the shape information of every graph input.
+
+    Returns a list of dicts ``{"name", "kind", "elem_type", "has_shape",
+    "shape"}`` with ``kind == "input"``. Non plain-tensor entries
+    (sequence/optional/map) are skipped, matching
+    :func:`snapshot_intermediates`. Graph inputs are recorded so the
+    dashboard can show, alongside each test, the input shapes that were
+    fed to the shape-inference runtimes.
+    """
+    snapshots: List[Dict[str, Any]] = []
+    for vi in model.graph.input:
+        if not vi.HasField("type"):
+            continue
+        if not vi.type.HasField("tensor_type"):
+            continue
+        has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
+        snapshots.append(
+            {
+                "name": vi.name,
+                "kind": "input",
+                "elem_type": int(vi.type.tensor_type.elem_type),
+                "has_shape": has_shape,
+                "shape": dims,
+            }
+        )
+    return snapshots
 
 
 def snapshot_intermediates(model) -> List[Dict[str, Any]]:
@@ -671,6 +702,7 @@ def _row_from_results(
     previous: Optional[Dict[str, Any]] = None,
     versions: Optional[Dict[str, str]] = None,
     now_iso: Optional[str] = None,
+    inputs: Optional[List[Dict[str, Any]]] = None,
     mermaid: str = "",
 ) -> Dict[str, Any]:
     """Build a dashboard row carrying over per-backend ``last_pass`` info."""
@@ -678,6 +710,16 @@ def _row_from_results(
     previous = previous or {}
     row: Dict[str, Any] = {
         "name": name,
+        "inputs": [
+            {
+                "name": i.get("name"),
+                "kind": i.get("kind", "input"),
+                "elem_type": i.get("elem_type"),
+                "has_shape": i.get("has_shape", False),
+                "shape": list(i.get("shape", [])),
+            }
+            for i in (inputs or [])
+        ],
         "expected": [
             {
                 "name": e.get("name"),
@@ -797,6 +839,7 @@ def build_payload(
         name = test["name"]
         model = test["model"]
         expected = test["expected"]
+        inputs = test.get("inputs", [])
         results: Dict[str, Dict[str, Any]] = {}
         for backend in BACKENDS:
             try:
@@ -829,6 +872,7 @@ def build_payload(
                 previous=previous_rows.get(name),
                 versions=version_map,
                 now_iso=now_iso,
+                inputs=inputs,
                 mermaid=test.get("mermaid", ""),
             )
         )
