@@ -58,3 +58,47 @@ the rule. The following setups are known to work with this repository:
 In every case the workflows already retry the push after rebasing on top of
 `origin/main`, so transient races with other commits do not require any
 additional configuration.
+
+### Troubleshooting "none of the actions can update main"
+
+If every workflow that pushes to `main` fails with a job log that looks like
+
+```
+remote: Permission to <owner>/<repo>.git denied to <user>.
+fatal: unable to access 'https://github.com/<owner>/<repo>/': The requested URL returned error: 403
+Push attempt N failed; rebasing on origin/main and retrying...
+...
+Failed to push after 5 attempts.
+```
+
+the workflow code itself is fine — the rebase loop is succeeding, but the
+HTTPS push is being rejected by GitHub with HTTP **403**. The actor named on
+the `denied to <user>` line tells you which credential is being used and
+therefore which setting is missing:
+
+- **`denied to github-actions[bot]`** — the default `GITHUB_TOKEN` is being
+  used and is not allowed to write to `main`. Check, in order:
+    1. *Settings → Actions → General → Workflow permissions* must be set to
+       **Read and write permissions**. The per-workflow `permissions:
+       contents: write` block only lifts permissions up to the repository
+       cap; if the cap is read-only the workflow token is read-only too.
+    2. If `main` is covered by a branch protection rule or a ruleset
+       (*Settings → Branches* or *Settings → Rules → Rulesets*), add the
+       **GitHub Actions** bypass actor as described in option 2 above.
+       Plain *Branch protection rules* cannot grant this bypass; convert
+       the rule to a *Ruleset* if needed.
+- **`denied to <your-username>`** — a Personal Access Token stored in
+  `BOT_TOKEN` is being used and is not allowed to write to `main`. Check,
+  in order:
+    1. The token has not expired (fine-grained PATs expire by default
+       after a short period).
+    2. For a fine-grained PAT: the token grants **Contents: Read and
+       write** on this repository.
+    3. For a classic PAT: the token has the `repo` scope (or at least
+       `public_repo` for a public repository).
+    4. The account that owns the PAT is on the *Bypass list* of any
+       ruleset / branch protection rule that targets `main`.
+
+After updating the setting, re-run a failing workflow from the *Actions*
+tab. The push should succeed on the first attempt and no rebase loop
+should be printed.
