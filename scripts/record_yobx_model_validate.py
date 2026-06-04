@@ -239,6 +239,18 @@ def _normalise_result(
     working = is_cell_working(summary, model_atol=model_atol)
     error_step, error = _first_error(summary)
 
+    discrepancies = _summary_get(summary, "discrepancies") or ""
+    discrepancies_atol = _to_float(_summary_get(summary, "discrepancies_atol"))
+    # When the cell is considered working only because the observed error is
+    # within the per-model ``atol`` (which is more permissive than the default
+    # tolerance used by ``validate_model``), override the failure flag and the
+    # tolerance reported in the snapshot so the JSON is self-consistent.
+    if working and model_atol is not None and discrepancies and discrepancies != "OK":
+        discrepancies = "OK"
+        discrepancies_atol = float(model_atol)
+        if error_step == "discrepancies":
+            error_step, error = "", ""
+
     return {
         "model_id": model_id,
         "label": exporter_cfg["label"],
@@ -246,13 +258,13 @@ def _normalise_result(
         "optimization": exporter_cfg["optimization"],
         "success": 1 if working else 0,
         "export": _summary_get(summary, "export") or "",
-        "discrepancies": _summary_get(summary, "discrepancies") or "",
+        "discrepancies": discrepancies,
         "discrepancies_ok": _to_int(_summary_get(summary, "discrepancies_ok")),
         "discrepancies_total": _to_int(_summary_get(summary, "discrepancies_total")),
         "discrepancies_max_abs": _to_float(
             _summary_get(summary, "discrepancies_max_abs")
         ),
-        "discrepancies_atol": _to_float(_summary_get(summary, "discrepancies_atol")),
+        "discrepancies_atol": discrepancies_atol,
         "n_nodes": _to_int(_summary_get(summary, "n_nodes")),
         "top_op_types": _summary_get(summary, "top_op_types") or "",
         "duration_s": _to_float(duration_s),
