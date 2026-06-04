@@ -48,6 +48,30 @@ class TestSnapshotAndStrip(unittest.TestCase):
             self.assertEqual(entry["shape"], [2, 3])
             self.assertEqual(entry["elem_type"], 1)  # FLOAT
 
+    def test_snapshot_preserves_symbolic_dim_names(self):
+        import onnx
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N", 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "sym",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        by_name = {s["name"]: s for s in snap}
+        self.assertEqual(by_name["Y"]["shape"], ["N", 3])
+        # Named symbolic dims must match themselves (and not be flagged
+        # as a mismatch) when scoring inferred shapes.
+        details = rsi._compare_snapshot_with_model(snap, model)
+        self.assertTrue(all(d["ok"] for d in details), details)
+
     def test_strip_shapes_clears_value_info_and_output_shapes(self):
         model = _make_simple_model()
         stripped = rsi.strip_shapes(model)

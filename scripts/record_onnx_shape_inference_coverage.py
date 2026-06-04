@@ -141,19 +141,25 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
     return discovered
 
 
-def _dims_of_tensor_type(tensor_type) -> Tuple[bool, List[int]]:
+def _dims_of_tensor_type(tensor_type) -> Tuple[bool, List[Any]]:
     """Return ``(has_shape, dims)`` for an ``onnx`` ``TypeProto.Tensor``.
 
-    Unknown / symbolic dimensions are represented by ``-1``. When the
-    tensor type does not carry a ``shape`` field, ``has_shape`` is False
-    and ``dims`` is empty.
+    Concrete dimensions are returned as ``int``. Named symbolic
+    dimensions (``dim_param``) are returned as the parameter name
+    (``str``) so the dashboard can show the dim name instead of a
+    generic ``?``. Fully unknown dimensions (neither ``dim_value`` nor
+    ``dim_param`` set) are represented by ``-1``. When the tensor type
+    does not carry a ``shape`` field, ``has_shape`` is False and
+    ``dims`` is empty.
     """
     if not tensor_type.HasField("shape"):
         return False, []
-    dims: List[int] = []
+    dims: List[Any] = []
     for d in tensor_type.shape.dim:
         if d.HasField("dim_value"):
             dims.append(int(d.dim_value))
+        elif d.HasField("dim_param") and d.dim_param:
+            dims.append(str(d.dim_param))
         else:
             dims.append(-1)
     return True, dims
@@ -292,7 +298,9 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                 continue
             mismatch = None
             for i, (got, exp) in enumerate(zip(inferred_dims, expected_shape)):
-                if got != -1 and exp != -1 and got != exp:
+                got_concrete = isinstance(got, int) and got >= 0
+                exp_concrete = isinstance(exp, int) and exp >= 0
+                if got_concrete and exp_concrete and got != exp:
                     mismatch = (
                         f"dim[{i}] mismatch: expected {exp}, got {got}"
                     )
