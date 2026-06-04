@@ -72,6 +72,15 @@ class TestSnapshotAndStrip(unittest.TestCase):
         details = rsi._compare_snapshot_with_model(snap, model)
         self.assertTrue(all(d["ok"] for d in details), details)
 
+    def test_snapshot_inputs_captures_graph_inputs(self):
+        model = _make_simple_model()
+        inputs = rsi.snapshot_inputs(model)
+        self.assertEqual([(i["name"], i["kind"]) for i in inputs], [("X", "input")])
+        entry = inputs[0]
+        self.assertTrue(entry["has_shape"])
+        self.assertEqual(entry["shape"], [2, 3])
+        self.assertEqual(entry["elem_type"], 1)  # FLOAT
+
     def test_strip_shapes_clears_value_info_and_output_shapes(self):
         model = _make_simple_model()
         stripped = rsi.strip_shapes(model)
@@ -280,6 +289,51 @@ class TestRowFromResults(unittest.TestCase):
         self.assertFalse(row["runtimes"]["onnx"]["success"])
         self.assertEqual(row["runtimes"]["onnx"]["error"], "boom")
         self.assertNotIn("last_pass_date", row["runtimes"]["onnx"])
+
+    def test_includes_inputs_when_provided(self):
+        expected = [
+            {
+                "name": "Y",
+                "kind": "value_info",
+                "elem_type": 1,
+                "has_shape": True,
+                "shape": [2, 3],
+            },
+        ]
+        inputs = [
+            {
+                "name": "X",
+                "kind": "input",
+                "elem_type": 1,
+                "has_shape": True,
+                "shape": [2, 3],
+            },
+        ]
+        results = {
+            backend: {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "correct": 1,
+                "total": 1,
+                "details": [],
+            }
+            for backend in rsi.BACKENDS
+        }
+        row = rsi._row_from_results(
+            "test_a",
+            expected,
+            results,
+            inputs=inputs,
+        )
+        self.assertEqual(len(row["inputs"]), 1)
+        self.assertEqual(row["inputs"][0]["name"], "X")
+        self.assertEqual(row["inputs"][0]["kind"], "input")
+        self.assertEqual(row["inputs"][0]["shape"], [2, 3])
+
+    def test_inputs_default_to_empty_list(self):
+        row = rsi._row_from_results("t", [], {})
+        self.assertEqual(row["inputs"], [])
 
     def test_carries_over_previous_last_pass_on_failure(self):
         expected = []
