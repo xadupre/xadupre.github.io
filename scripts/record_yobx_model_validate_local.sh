@@ -12,7 +12,7 @@
 #
 #     scripts/record_yobx_model_validate_local.sh [--yobx-dir DIR]
 #         [--ref REF] [--python BIN] [--skip-install]
-#         [--dump-folder DIR]
+#         [--dump-folder DIR] [--quiet|--no-quiet]
 #         [-- ...extra args forwarded to record_yobx_model_validate.py]
 #
 # Examples::
@@ -30,6 +30,9 @@
 #   PYTHON      Same as --python. Defaults to ``python``.
 #   DUMP_FOLDER Same as --dump-folder. When set, the recorder script ``chdir``s
 #               into this folder and writes intermediate artefacts there.
+#   QUIET       Same as --quiet/--no-quiet. Set to ``0`` to forward
+#               ``--no-quiet`` to ``record_yobx_model_validate.py`` so the
+#               underlying ``validate_model`` output is shown. Defaults to ``1``.
 
 set -euo pipefail
 
@@ -38,10 +41,11 @@ REF=""
 PYTHON_BIN="${PYTHON:-python}"
 SKIP_INSTALL=0
 DUMP_FOLDER="${DUMP_FOLDER:-}"
+QUIET="${QUIET:-1}"
 EXTRA_ARGS=()
 
 usage() {
-    sed -n '2,30p' "$0"
+    sed -n '2,35p' "$0"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +69,14 @@ while [[ $# -gt 0 ]]; do
         --dump-folder)
             DUMP_FOLDER="$2"
             shift 2
+            ;;
+        --quiet)
+            QUIET=1
+            shift
+            ;;
+        --no-quiet)
+            QUIET=0
+            shift
             ;;
         -h|--help)
             usage
@@ -125,8 +137,16 @@ if [[ -n "$DUMP_FOLDER" ]]; then
     DUMP_ARGS=(--dump-folder "$DUMP_FOLDER")
     echo ">>> Using dump folder: $DUMP_FOLDER"
 fi
+QUIET_ARGS=()
+if [[ "$QUIET" -eq 0 ]]; then
+    QUIET_ARGS=(--no-quiet)
+    echo ">>> Forwarding --no-quiet to record_yobx_model_validate.py"
+else
+    QUIET_ARGS=(--quiet)
+fi
 YOBX_COMMIT="$commit_sha" "$PYTHON_BIN" -u scripts/record_yobx_model_validate.py \
     ${DUMP_ARGS[@]+"${DUMP_ARGS[@]}"} \
+    ${QUIET_ARGS[@]+"${QUIET_ARGS[@]}"} \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo ">>> Done. Snapshot written under $SITE_DIR/cache_data/yet-another-onnx-builder/"

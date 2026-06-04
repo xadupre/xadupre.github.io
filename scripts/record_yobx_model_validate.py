@@ -385,6 +385,7 @@ def run_validate_one(
     exporter_cfg: Dict[str, str],
     verbose: int = 0,
     dump_folder: Optional[str] = None,
+    quiet: bool = True,
 ) -> Any:
     """Run :func:`yobx.torch.validate.validate_model` for one (model, exporter)."""
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
@@ -397,7 +398,7 @@ def run_validate_one(
         dtype=entry.get("dtype", DEFAULT_DTYPE),
         device=entry.get("device", DEFAULT_DEVICE),
         do_run=True,
-        quiet=True,
+        quiet=quiet,
         verbose=verbose,
         patch="transformers",
         dump_folder=dump_folder,
@@ -431,6 +432,7 @@ def run_all(
     limit: Optional[int] = None,
     verbose: int = 0,
     dump_folder: Optional[str] = None,
+    quiet: bool = True,
 ) -> List[Tuple[str, Dict[str, str], Any, float]]:
     """Run ``validate_model`` for every (model, exporter) combination."""
     import shutil
@@ -472,6 +474,7 @@ def run_all(
                     exporter_cfg,
                     verbose=verbose,
                     dump_folder=effective_dump,
+                    quiet=quiet,
                 )
             except Exception as exc:  # noqa: BLE001 - we never want to crash CI
                 _log(f"  -> raised: {type(exc).__name__}: {exc}")
@@ -637,6 +640,25 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Verbosity level forwarded to validate_model (default: 0).",
     )
     parser.add_argument(
+        "--quiet",
+        dest="quiet",
+        action="store_true",
+        default=True,
+        help=(
+            "Forward quiet=True to validate_model so per-model output is "
+            "suppressed (default)."
+        ),
+    )
+    parser.add_argument(
+        "--no-quiet",
+        dest="quiet",
+        action="store_false",
+        help=(
+            "Forward quiet=False to validate_model so the underlying "
+            "tracebacks and progress output are shown."
+        ),
+    )
+    parser.add_argument(
         "--dump-folder",
         default=None,
         help=(
@@ -689,6 +711,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         limit=args.limit,
         verbose=args.verbose,
         dump_folder=dump_folder,
+        quiet=args.quiet,
     )
     payload = build_payload(
         raw_results=raw_results,
