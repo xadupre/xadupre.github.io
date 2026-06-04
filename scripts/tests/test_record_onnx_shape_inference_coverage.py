@@ -328,11 +328,13 @@ class TestBuildPayload(unittest.TestCase):
         ]
         outcomes = {
             ("model_a", "onnx-light"): {"success": True, "correct": 1, "total": 1},
+            ("model_a", "onnx-light-onnx-optim"): {"success": True, "correct": 1, "total": 1},
             ("model_a", "onnx"): {"success": True, "correct": 1, "total": 1},
             ("model_a", "onnx-shape-inference"): {
                 "success": False, "correct": 0, "total": 1, "error": "x", "error_step": "run",
             },
             ("model_b", "onnx-light"): {"success": False, "correct": 1, "total": 2, "error": "1/2"},
+            ("model_b", "onnx-light-onnx-optim"): {"success": True, "correct": 2, "total": 2},
             ("model_b", "onnx"): {"success": True, "correct": 2, "total": 2},
             ("model_b", "onnx-shape-inference"): {
                 "success": False, "correct": 0, "total": 2, "error": "x", "error_step": "run",
@@ -356,6 +358,9 @@ class TestBuildPayload(unittest.TestCase):
         })
         self.assertEqual(payload["totals"]["onnx-light"], {
             "correct": 2, "total": 3, "tests_pass": 1, "tests_fail": 1,
+        })
+        self.assertEqual(payload["totals"]["onnx-light-onnx-optim"], {
+            "correct": 3, "total": 3, "tests_pass": 2, "tests_fail": 0,
         })
         self.assertEqual(payload["totals"]["onnx-shape-inference"], {
             "correct": 0, "total": 3, "tests_pass": 0, "tests_fail": 2,
