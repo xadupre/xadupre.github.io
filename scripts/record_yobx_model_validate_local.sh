@@ -12,6 +12,7 @@
 #
 #     scripts/record_yobx_model_validate_local.sh [--yobx-dir DIR]
 #         [--ref REF] [--python BIN] [--skip-install]
+#         [--dump-folder DIR]
 #         [-- ...extra args forwarded to record_yobx_model_validate.py]
 #
 # Examples::
@@ -27,6 +28,8 @@
 # Environment variables:
 #   YOBX_DIR    Same as --yobx-dir. Defaults to ``../yet-another-onnx-builder``.
 #   PYTHON      Same as --python. Defaults to ``python``.
+#   DUMP_FOLDER Same as --dump-folder. When set, the recorder script ``chdir``s
+#               into this folder and writes intermediate artefacts there.
 
 set -euo pipefail
 
@@ -34,6 +37,7 @@ YOBX_DIR="${YOBX_DIR:-../yet-another-onnx-builder}"
 REF=""
 PYTHON_BIN="${PYTHON:-python}"
 SKIP_INSTALL=0
+DUMP_FOLDER="${DUMP_FOLDER:-}"
 EXTRA_ARGS=()
 
 usage() {
@@ -57,6 +61,10 @@ while [[ $# -gt 0 ]]; do
         --skip-install)
             SKIP_INSTALL=1
             shift
+            ;;
+        --dump-folder)
+            DUMP_FOLDER="$2"
+            shift 2
             ;;
         -h|--help)
             usage
@@ -112,7 +120,13 @@ echo ">>> pip freeze"
 commit_sha="$(git -C "$YOBX_DIR" rev-parse HEAD)"
 echo ">>> Recording model validate snapshot (yobx commit ${commit_sha})"
 cd "$SITE_DIR"
+DUMP_ARGS=()
+if [[ -n "$DUMP_FOLDER" ]]; then
+    DUMP_ARGS=(--dump-folder "$DUMP_FOLDER")
+    echo ">>> Using dump folder: $DUMP_FOLDER"
+fi
 YOBX_COMMIT="$commit_sha" "$PYTHON_BIN" -u scripts/record_yobx_model_validate.py \
+    ${DUMP_ARGS[@]+"${DUMP_ARGS[@]}"} \
     ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
 
 echo ">>> Done. Snapshot written under $SITE_DIR/cache_data/yet-another-onnx-builder/"
