@@ -93,13 +93,17 @@ if [[ -n "$REF" ]]; then
 fi
 
 if [[ "$SKIP_INSTALL" -eq 0 ]]; then
-    echo ">>> Installing yet-another-onnx-builder from $YOBX_DIR"
-    # Mirrors the install step of record_yobx_model_validate.yml. ``pandas``,
-    # ``openpyxl`` and ``optree`` are required at runtime by
-    # ``validate_model`` and recent ``torch`` releases respectively.
-    "$PYTHON_BIN" -m pip install --upgrade pip
-    "$PYTHON_BIN" -m pip install -e "$YOBX_DIR[torch,transformers,onnxscript]" \
-        pandas openpyxl optree
+    if "$PYTHON_BIN" -m yobx --help >/dev/null 2>&1; then
+        echo ">>> yobx already installed, skipping install"
+    else
+        echo ">>> Installing yet-another-onnx-builder from $YOBX_DIR"
+        # Mirrors the install step of record_yobx_model_validate.yml. ``pandas``,
+        # ``openpyxl`` and ``optree`` are required at runtime by
+        # ``validate_model`` and recent ``torch`` releases respectively.
+        "$PYTHON_BIN" -m pip install --upgrade pip
+        "$PYTHON_BIN" -m pip install -e "$YOBX_DIR[torch,transformers,onnxscript]" \
+            pandas openpyxl optree
+    fi
 fi
 
 echo ">>> pip freeze"
