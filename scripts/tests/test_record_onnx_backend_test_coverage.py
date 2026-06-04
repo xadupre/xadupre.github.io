@@ -261,6 +261,75 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(result["error_step"], "load")
         self.assertIn("unknown backend", result["error"])
 
+    def test_row_from_results_includes_tag_when_provided(self):
+        row = rbc._row_from_results(
+            "test_qlinearmatmul",
+            {
+                "onnxruntime": {"success": True, "error": "", "error_step": ""},
+                "reference": {"success": True, "error": "", "error_step": ""},
+            },
+            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now_iso="2024-05-06T07:08:09Z",
+            tag="quantization",
+        )
+        self.assertEqual(row["tag"], "quantization")
+
+    def test_row_from_results_omits_empty_tag(self):
+        row = rbc._row_from_results(
+            "test_relu",
+            {
+                "onnxruntime": {"success": True, "error": "", "error_step": ""},
+                "reference": {"success": True, "error": "", "error_step": ""},
+            },
+            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now_iso="2024-05-06T07:08:09Z",
+        )
+        self.assertNotIn("tag", row)
+
+    def test_row_from_results_carries_previous_tag_when_current_missing(self):
+        row = rbc._row_from_results(
+            "test_qlinearmatmul",
+            {
+                "onnxruntime": {"success": False, "error": "boom", "error_step": "run"},
+                "reference": {"success": False, "error": "boom", "error_step": "run"},
+            },
+            previous={"name": "test_qlinearmatmul", "tag": "quantization"},
+            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            now_iso="2024-05-06T07:08:09Z",
+        )
+        self.assertEqual(row["tag"], "quantization")
+
+    def test_build_payload_propagates_tag_from_discover(self):
+        tests = [
+            {
+                "name": "test_a",
+                "model": "model_a",
+                "data_sets": [],
+                "tag": "inference",
+            },
+            {
+                "name": "test_b",
+                "model": "model_b",
+                "data_sets": [],
+                "tag": "quantization",
+            },
+            {"name": "test_c", "model": "model_c", "data_sets": []},
+        ]
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            return {"success": True, "error": "", "error_step": ""}
+
+        payload = rbc.build_payload(
+            kind="node",
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        by_name = {row["name"]: row for row in payload["tests"]}
+        self.assertEqual(by_name["test_a"]["tag"], "inference")
+        self.assertEqual(by_name["test_b"]["tag"], "quantization")
+        self.assertNotIn("tag", by_name["test_c"])
+
     def test_discover_node_tests_loads_from_onnx_light(self):
         """``discover_node_tests`` must materialise onnx-light test cases."""
         import types
@@ -286,6 +355,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         node_tc = types.SimpleNamespace(
             name="test_relu_light",
             kind="node",
+            tag="inference",
             model=model,
             data_sets=[(inputs, outputs)],
             model_dir=None,
@@ -336,6 +406,9 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         loaded_inputs, loaded_outputs = entry["data_sets"][0]
         np.testing.assert_array_equal(loaded_inputs[0], inputs[0])
         np.testing.assert_array_equal(loaded_outputs[0], outputs[0])
+        # The tag attached to the onnx-light test case is propagated so
+        # the dashboard can group rows by tag.
+        self.assertEqual(entry["tag"], "inference")
 
     def test_compare_outputs_detects_shape_mismatch(self):
         import numpy as np
