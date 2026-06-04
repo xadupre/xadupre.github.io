@@ -390,27 +390,60 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     Non plain-tensor entries (sequence/optional/map) are skipped since
     they cannot be scored against a simple ``elem_type`` + ``shape``
     contract.
+
+    Entries are returned in the order they appear in the model: the
+    graph nodes are walked in declaration order and each output they
+    produce yields one entry. Graph outputs that are not produced by any
+    node are appended at the end, preserving their relative order in
+    ``model.graph.output``.
     """
+    output_names = {vi.name for vi in model.graph.output}
+    by_name: Dict[str, Tuple[str, Any]] = {}
+    for vi in model.graph.value_info:
+        kind = "output" if vi.name in output_names else "value_info"
+        by_name[vi.name] = (kind, vi)
+    for vi in model.graph.output:
+        by_name[vi.name] = ("output", vi)
+
+    # Walk the graph nodes in declaration order so that each
+    # intermediate (and any graph output produced by a node) appears in
+    # the order it is computed by the model. Graph outputs that are not
+    # produced by any node (rare; e.g. directly aliasing an input or an
+    # initializer) are appended at the end, preserving their relative
+    # order in ``model.graph.output``.
+    ordered_names: List[str] = []
+    seen: set = set()
+    for node in model.graph.node:
+        for out_name in node.output:
+            if not out_name or out_name in seen:
+                continue
+            if out_name not in by_name:
+                continue
+            ordered_names.append(out_name)
+            seen.add(out_name)
+    for vi in model.graph.output:
+        if vi.name in seen or vi.name not in by_name:
+            continue
+        ordered_names.append(vi.name)
+        seen.add(vi.name)
+
     snapshots: List[Dict[str, Any]] = []
-    for kind, container in (
-        ("output", model.graph.output),
-        ("value_info", model.graph.value_info),
-    ):
-        for vi in container:
-            if not vi.HasField("type"):
-                continue
-            if not vi.type.HasField("tensor_type"):
-                continue
-            has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
-            snapshots.append(
-                {
-                    "name": vi.name,
-                    "kind": kind,
-                    "elem_type": int(vi.type.tensor_type.elem_type),
-                    "has_shape": has_shape,
-                    "shape": dims,
-                }
-            )
+    for name in ordered_names:
+        kind, vi = by_name[name]
+        if not vi.HasField("type"):
+            continue
+        if not vi.type.HasField("tensor_type"):
+            continue
+        has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
+        snapshots.append(
+            {
+                "name": vi.name,
+                "kind": kind,
+                "elem_type": int(vi.type.tensor_type.elem_type),
+                "has_shape": has_shape,
+                "shape": dims,
+            }
+        )
     return snapshots
 
 
