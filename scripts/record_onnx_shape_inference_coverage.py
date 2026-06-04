@@ -38,6 +38,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -74,7 +75,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy", "yobx"):
+    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -107,22 +108,173 @@ def _onnx_light_model_to_onnx(model):
     return out
 
 
+def _mermaid_escape(text: str) -> str:
+    """Escape ``text`` so it can appear inside a Mermaid ``"..."`` label."""
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace("\"", "&quot;")
+        .replace("\n", " ")
+    )
+
+
+def _mermaid_dtype_name(onnx_mod: Any, dtype: int) -> str:
+    if not dtype:
+        return ""
+    try:
+        return onnx_mod.TensorProto.DataType.Name(dtype)
+    except Exception:  # noqa: BLE001 - unknown enum value
+        return str(dtype)
+
+
+def _mermaid_format_type(onnx_mod: Any, type_proto: Any) -> str:
+    """Render an ``onnx.TypeProto`` as ``DTYPE[d0,d1,...]``."""
+    if type_proto is None:
+        return ""
+    tensor_type = getattr(type_proto, "tensor_type", None)
+    if tensor_type is None or not getattr(tensor_type, "elem_type", 0):
+        return ""
+    dtype = _mermaid_dtype_name(onnx_mod, tensor_type.elem_type)
+    dims: List[str] = []
+    if tensor_type.HasField("shape"):
+        for dim in tensor_type.shape.dim:
+            if dim.HasField("dim_value"):
+                dims.append(str(dim.dim_value))
+            elif dim.HasField("dim_param") and dim.dim_param:
+                dims.append(dim.dim_param)
+            else:
+                dims.append("?")
+    return f"{dtype}[{','.join(dims)}]" if dims else dtype
+
+
+def _render_model_as_mermaid(model: Any) -> str:
+    """Self-contained ``onnx.ModelProto`` to Mermaid ``flowchart TD`` renderer.
+
+    The output is a textual Mermaid graph the dashboard can render
+    client-side. Each input is drawn as a stadium-shape node, each
+    initializer as a cylinder, each operator as a rectangle labelled
+    with its ``op_type`` (and ``name`` when present), and each graph
+    output as a stadium-shape node. Edges are labelled with the tensor
+    name and, when shape inference succeeds, with their inferred
+    ``DTYPE[shape]``.
+    """
+    import onnx
+
+    if not hasattr(model, "graph"):
+        return ""
+
+    annotated = model
+    try:
+        annotated = onnx.shape_inference.infer_shapes(
+            model, strict_mode=False, check_type=False
+        )
+    except Exception:  # noqa: BLE001 - shape inference is best-effort
+        annotated = model
+
+    graph = annotated.graph
+
+    edge_types: Dict[str, str] = {}
+    for value_info in list(graph.input) + list(graph.output) + list(graph.value_info):
+        label = _mermaid_format_type(onnx, value_info.type)
+        if label:
+            edge_types[value_info.name] = label
+
+    initializer_names = {init.name for init in graph.initializer}
+
+    used_ids: set = set()
+
+    def _make_id(prefix: str, name: str) -> str:
+        sanitized = re.sub(r"[^0-9A-Za-z_]", "_", name) or "x"
+        base = f"{prefix}_{sanitized}"
+        candidate = base
+        index = 1
+        while candidate in used_ids:
+            index += 1
+            candidate = f"{base}_{index}"
+        used_ids.add(candidate)
+        return candidate
+
+    lines: List[str] = ["flowchart TD"]
+    tensor_source: Dict[str, str] = {}
+
+    for value_info in graph.input:
+        if value_info.name in initializer_names:
+            continue
+        node_id = _make_id("in", value_info.name)
+        type_label = edge_types.get(value_info.name, "")
+        label = value_info.name + (f"<br>{type_label}" if type_label else "")
+        lines.append(f'    {node_id}(["{_mermaid_escape(label)}"])')
+        tensor_source[value_info.name] = node_id
+
+    for initializer in graph.initializer:
+        node_id = _make_id("init", initializer.name)
+        dtype = _mermaid_dtype_name(onnx, initializer.data_type)
+        dims = ",".join(str(d) for d in initializer.dims)
+        label = initializer.name + (f"<br>{dtype}[{dims}]" if dtype else "")
+        lines.append(f'    {node_id}[("{_mermaid_escape(label)}")]')
+        tensor_source[initializer.name] = node_id
+
+    op_ids: List[str] = []
+    for index, node in enumerate(graph.node):
+        node_id = _make_id("op", node.name or f"{node.op_type}_{index}")
+        op_ids.append(node_id)
+        label = node.op_type + (f"<br>{node.name}" if node.name else "")
+        lines.append(f'    {node_id}["{_mermaid_escape(label)}"]')
+        for out_name in node.output:
+            if out_name:
+                tensor_source.setdefault(out_name, node_id)
+
+    output_entries: List[Tuple[str, str]] = []
+    for value_info in graph.output:
+        node_id = _make_id("out", value_info.name)
+        output_entries.append((value_info.name, node_id))
+        type_label = edge_types.get(value_info.name, "")
+        label = value_info.name + (f"<br>{type_label}" if type_label else "")
+        lines.append(f'    {node_id}(["{_mermaid_escape(label)}"])')
+
+    for node_id, node in zip(op_ids, graph.node):
+        for in_name in node.input:
+            if not in_name:
+                continue
+            source_id = tensor_source.get(in_name)
+            if not source_id:
+                continue
+            type_label = edge_types.get(in_name, "")
+            edge_label = in_name + (f" : {type_label}" if type_label else "")
+            lines.append(
+                f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {node_id}'
+            )
+
+    for out_name, out_id in output_entries:
+        source_id = tensor_source.get(out_name)
+        if not source_id or source_id == out_id:
+            continue
+        type_label = edge_types.get(out_name, "")
+        edge_label = out_name + (f" : {type_label}" if type_label else "")
+        lines.append(
+            f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {out_id}'
+        )
+
+    return "\n".join(lines)
+
+
 def model_to_mermaid(model: Any) -> str:
     """Return a Mermaid ``flowchart TD`` string for ``model``.
 
-    Uses :func:`yobx.helpers.mermaid_helper.to_mermaid` from the
-    ``yet-another-onnx-builder`` package. Returns an empty string when
-    ``yobx`` is not installed or when rendering fails (rendering is a
-    best-effort visualisation aid, never a hard requirement for the
+    Self-contained renderer that only relies on the ``onnx`` package and
+    therefore works without any optional dependency. Returns an empty
+    string when ``onnx`` cannot be imported, when ``model`` is not a
+    usable ``onnx.ModelProto`` or when rendering fails (graph
+    visualisation is best-effort, never a hard requirement for the
     coverage data itself).
     """
     try:
-        from yobx.helpers.mermaid_helper import to_mermaid
-    except Exception:  # noqa: BLE001 - optional dependency
+        import onnx  # noqa: F401
+    except ImportError:
         return ""
     try:
-        return to_mermaid(model)
-    except Exception:  # noqa: BLE001 - best effort
+        return _render_model_as_mermaid(model)
+    except Exception:  # noqa: BLE001 - best effort rendering
         return ""
 
 
@@ -133,7 +285,7 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
     where ``model`` is an ``onnx.ModelProto``, ``expected`` is the list
     of snapshotted intermediates (see :func:`snapshot_intermediates`)
     and ``mermaid`` is a Mermaid ``flowchart TD`` rendering of ``model``
-    (empty string when ``yobx`` is unavailable).
+    (empty string when rendering fails).
     """
     from onnx_light.backend.test.case import collect_test_case
 
@@ -480,9 +632,10 @@ def _row_from_results(
     if mermaid:
         row["mermaid"] = mermaid
     elif isinstance(previous, dict):
-        # Preserve any previously rendered mermaid graph when yobx is not
-        # available in the current environment, so the dashboard keeps
-        # showing the graph for tests that already have one.
+        # Preserve any previously rendered mermaid graph when the current
+        # rendering returned an empty string (for instance when the model
+        # could not be parsed), so the dashboard keeps showing the graph
+        # for tests that already have one.
         prev_mermaid = previous.get("mermaid")
         if isinstance(prev_mermaid, str) and prev_mermaid:
             row["mermaid"] = prev_mermaid

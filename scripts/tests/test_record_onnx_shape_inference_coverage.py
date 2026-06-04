@@ -307,18 +307,42 @@ class TestBuildPayload(unittest.TestCase):
 
 
 class TestMermaid(unittest.TestCase):
-    def test_model_to_mermaid_returns_string_or_empty(self):
+    def test_model_to_mermaid_returns_flowchart(self):
         model = _make_simple_model()
         out = rsi.model_to_mermaid(model)
         self.assertIsInstance(out, str)
-        # When yobx is available, the output must be a Mermaid flowchart;
-        # otherwise the helper returns an empty string.
-        try:
-            import yobx  # noqa: F401
-        except ImportError:
-            self.assertEqual(out, "")
-        else:
-            self.assertIn("flowchart", out.lower())
+        # The helper is now self-contained (only depends on ``onnx``),
+        # so it must always return a non-empty Mermaid ``flowchart TD``
+        # block for a valid model.
+        self.assertTrue(out.startswith("flowchart TD"))
+        # Inputs, the two Identity nodes and the output all appear.
+        self.assertIn("X", out)
+        self.assertIn("Identity", out)
+        self.assertIn("Z", out)
+
+    def test_model_to_mermaid_returns_empty_on_invalid_model(self):
+        # Non-model inputs are tolerated and produce an empty string.
+        self.assertEqual(rsi.model_to_mermaid(None), "")
+        self.assertEqual(rsi.model_to_mermaid("not a model"), "")
+
+    def test_model_to_mermaid_escapes_quotes_in_names(self):
+        import onnx
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info('X"weird', TensorProto.FLOAT, [1])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [1])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ['X"weird'], ["Z"])],
+            "weird",
+            [inp],
+            [out],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+        model.ir_version = 7
+        rendered = rsi.model_to_mermaid(model)
+        # The double-quote is escaped so it cannot terminate the Mermaid label.
+        self.assertNotIn('X"weird"', rendered)
+        self.assertIn("&quot;weird", rendered)
 
     def test_row_includes_mermaid_when_provided(self):
         row = rsi._row_from_results(
