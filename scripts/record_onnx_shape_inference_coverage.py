@@ -300,9 +300,33 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
             for i, (got, exp) in enumerate(zip(inferred_dims, expected_shape)):
                 got_concrete = isinstance(got, int) and got >= 0
                 exp_concrete = isinstance(exp, int) and exp >= 0
-                if got_concrete and exp_concrete and got != exp:
+                got_symbolic = isinstance(got, str)
+                exp_symbolic = isinstance(exp, str)
+                # Unknown expected dim (``-1``) carries no information,
+                # so accept whatever was inferred. For every other case a
+                # perfect match requires the same concrete value or the
+                # same symbolic dim name.
+                if exp_concrete and got_concrete:
+                    if got != exp:
+                        mismatch = (
+                            f"dim[{i}] mismatch: expected {exp}, got {got}"
+                        )
+                        break
+                elif exp_symbolic and got_symbolic:
+                    if got != exp:
+                        mismatch = (
+                            f"dim[{i}] mismatch: expected {exp!r}, "
+                            f"got {got!r}"
+                        )
+                        break
+                elif exp_concrete and not got_concrete:
                     mismatch = (
-                        f"dim[{i}] mismatch: expected {exp}, got {got}"
+                        f"dim[{i}] mismatch: expected {exp}, got {got!r}"
+                    )
+                    break
+                elif exp_symbolic and not got_symbolic:
+                    mismatch = (
+                        f"dim[{i}] mismatch: expected {exp!r}, got {got}"
                     )
                     break
             if mismatch is not None:
