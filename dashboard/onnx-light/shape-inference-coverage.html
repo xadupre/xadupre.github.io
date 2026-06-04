@@ -167,6 +167,26 @@ table.comparison th .arrow {
 .message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
 .message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
 .empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+.detail-graph {
+  margin-top: 0.8em;
+  padding: 0.6em 0.8em;
+  background: #ffffff;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  overflow-x: auto;
+}
+.detail-graph-title {
+  color: #8b949e;
+  font-size: 0.8em;
+  margin-bottom: 0.4em;
+}
+.detail-graph .mermaid { text-align: center; }
+.detail-graph-error {
+  color: #f85149;
+  font-size: 0.8em;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
 </style>
 </head>
 <body>
@@ -500,7 +520,53 @@ function renderDetailFor(row) {
   }
   table.appendChild(tbody);
   wrap.appendChild(table);
+
+  if (row.mermaid) {
+    const graphWrap = document.createElement("div");
+    graphWrap.className = "detail-graph";
+    const title = document.createElement("div");
+    title.className = "detail-graph-title";
+    title.textContent = "Model graph (rendered with yobx.helpers.mermaid_helper.to_mermaid)";
+    graphWrap.appendChild(title);
+    const mermaidDiv = document.createElement("div");
+    mermaidDiv.className = "mermaid";
+    mermaidDiv.textContent = row.mermaid;
+    graphWrap.appendChild(mermaidDiv);
+    wrap.appendChild(graphWrap);
+    renderMermaid(mermaidDiv);
+  }
+
   return wrap;
+}
+
+let _mermaidLoader = null;
+function loadMermaid() {
+  if (_mermaidLoader) return _mermaidLoader;
+  _mermaidLoader = import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")
+    .then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({ startOnLoad: false, theme: "default", securityLevel: "loose" });
+      return mermaid;
+    });
+  return _mermaidLoader;
+}
+
+let _mermaidUid = 0;
+function renderMermaid(targetDiv) {
+  const source = targetDiv.textContent;
+  loadMermaid()
+    .then((mermaid) => mermaid.render("siCoverageMermaid_" + (++_mermaidUid), source))
+    .then(({ svg, bindFunctions }) => {
+      targetDiv.innerHTML = svg;
+      if (bindFunctions) bindFunctions(targetDiv);
+    })
+    .catch((err) => {
+      const errDiv = document.createElement("div");
+      errDiv.className = "detail-graph-error";
+      errDiv.textContent = "Failed to render Mermaid graph: " + (err && err.message ? err.message : err);
+      targetDiv.innerHTML = "";
+      targetDiv.appendChild(errDiv);
+    });
 }
 
 function renderRows() {

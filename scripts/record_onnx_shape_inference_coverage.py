@@ -74,7 +74,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy"):
+    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy", "yobx"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -107,12 +107,33 @@ def _onnx_light_model_to_onnx(model):
     return out
 
 
+def model_to_mermaid(model: Any) -> str:
+    """Return a Mermaid ``flowchart TD`` string for ``model``.
+
+    Uses :func:`yobx.helpers.mermaid_helper.to_mermaid` from the
+    ``yet-another-onnx-builder`` package. Returns an empty string when
+    ``yobx`` is not installed or when rendering fails (rendering is a
+    best-effort visualisation aid, never a hard requirement for the
+    coverage data itself).
+    """
+    try:
+        from yobx.helpers.mermaid_helper import to_mermaid
+    except Exception:  # noqa: BLE001 - optional dependency
+        return ""
+    try:
+        return to_mermaid(model)
+    except Exception:  # noqa: BLE001 - best effort
+        return ""
+
+
 def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
     """Return the list of backend tests tagged ``tag``.
 
-    Each entry is a dictionary ``{"name", "model", "expected"}`` where
-    ``model`` is an ``onnx.ModelProto`` and ``expected`` is the list of
-    snapshotted intermediates (see :func:`snapshot_intermediates`).
+    Each entry is a dictionary ``{"name", "model", "expected", "mermaid"}``
+    where ``model`` is an ``onnx.ModelProto``, ``expected`` is the list
+    of snapshotted intermediates (see :func:`snapshot_intermediates`)
+    and ``mermaid`` is a Mermaid ``flowchart TD`` rendering of ``model``
+    (empty string when ``yobx`` is unavailable).
     """
     from onnx_light.backend.test.case import collect_test_case
 
@@ -135,7 +156,12 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
             # used to score shape inference.
             continue
         discovered.append(
-            {"name": str(name), "model": onnx_model, "expected": expected}
+            {
+                "name": str(name),
+                "model": onnx_model,
+                "expected": expected,
+                "mermaid": model_to_mermaid(onnx_model),
+            }
         )
     discovered.sort(key=lambda d: d["name"])
     return discovered
@@ -432,6 +458,7 @@ def _row_from_results(
     previous: Optional[Dict[str, Any]] = None,
     versions: Optional[Dict[str, str]] = None,
     now_iso: Optional[str] = None,
+    mermaid: str = "",
 ) -> Dict[str, Any]:
     """Build a dashboard row carrying over per-backend ``last_pass`` info."""
     versions = versions or {}
@@ -450,6 +477,15 @@ def _row_from_results(
         ],
         "runtimes": {},
     }
+    if mermaid:
+        row["mermaid"] = mermaid
+    elif isinstance(previous, dict):
+        # Preserve any previously rendered mermaid graph when yobx is not
+        # available in the current environment, so the dashboard keeps
+        # showing the graph for tests that already have one.
+        prev_mermaid = previous.get("mermaid")
+        if isinstance(prev_mermaid, str) and prev_mermaid:
+            row["mermaid"] = prev_mermaid
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -579,6 +615,7 @@ def build_payload(
                 previous=previous_rows.get(name),
                 versions=version_map,
                 now_iso=now_iso,
+                mermaid=test.get("mermaid", "") or "",
             )
         )
         if (idx + 1) % 25 == 0:
