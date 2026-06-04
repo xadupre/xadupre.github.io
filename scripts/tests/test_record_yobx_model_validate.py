@@ -544,6 +544,56 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             self.assertIn(key, payload)
         self.assertIsInstance(payload["results"], list)
 
+    def test_is_rate_limit_error_detects_429(self):
+        self.assertTrue(
+            rymv._is_rate_limit_error(
+                Exception(
+                    "HTTP Error 429 thrown while requesting HEAD "
+                    "https://huggingface.co/mistralai/Mistral-7B-v0.3/"
+                    "resolve/main/config.json"
+                )
+            )
+        )
+        self.assertTrue(
+            rymv._is_rate_limit_error(Exception("429 Client Error: Too Many Requests"))
+        )
+
+        class _Resp:
+            status_code = 429
+
+        class _Err(Exception):
+            response = _Resp()
+
+        self.assertTrue(rymv._is_rate_limit_error(_Err("boom")))
+
+    def test_is_rate_limit_error_ignores_other_errors(self):
+        self.assertFalse(rymv._is_rate_limit_error(Exception("HTTP Error 404")))
+        self.assertFalse(rymv._is_rate_limit_error(ValueError("bad model")))
+
+    def test_run_all_aborts_on_http_429(self):
+        cfg = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
+
+        def boom(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
+            raise RuntimeError(
+                "HTTP Error 429 thrown while requesting HEAD "
+                "https://huggingface.co/mistralai/Mistral-7B-v0.3/"
+                "resolve/main/config.json"
+            )
+
+        original = rymv.run_validate_one
+        rymv.run_validate_one = boom
+        try:
+            with self.assertRaises(RuntimeError) as ctx:
+                rymv.run_all(
+                    models=({"model": "a/b", "dtype": "float16", "device": "cpu"},),
+                    exporters=(cfg,),
+                    dump_folder=None,
+                    quiet=True,
+                )
+            self.assertIn("429", str(ctx.exception))
+        finally:
+            rymv.run_validate_one = original
+
 
 if __name__ == "__main__":
     unittest.main()
