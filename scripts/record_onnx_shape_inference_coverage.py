@@ -1,7 +1,9 @@
-"""Record the shape-inference coverage of the three shape-inference
+"""Record the shape-inference coverage of the shape-inference
 implementations exercised by ``onnx-light`` (``onnx-light`` itself,
-the official ``onnx.shape_inference`` and the standalone
-``onnx-shape-inference`` package).
+``onnx_light.onnx_optim`` — the experimental shape inference shipped
+inside ``onnx-light``'s ``onnx_optim`` submodule, the official
+``onnx.shape_inference`` and the standalone ``onnx-shape-inference``
+package).
 
 The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
@@ -43,12 +45,18 @@ import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # Order matters: it drives the column order in the dashboard.
-BACKENDS: Tuple[str, ...] = ("onnx-light", "onnx", "onnx-shape-inference")
+BACKENDS: Tuple[str, ...] = (
+    "onnx-light",
+    "onnx-light-onnx-optim",
+    "onnx",
+    "onnx-shape-inference",
+)
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend.
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnx-light": "onnx_light",
+    "onnx-light-onnx-optim": "onnx_light",
     "onnx": "onnx",
     "onnx-shape-inference": "onnx_shape_inference",
 }
@@ -329,6 +337,26 @@ def _run_onnx_light(model):
     return out
 
 
+def _run_onnx_light_onnx_optim(model):
+    """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
+
+    The experimental shape inference shipped inside ``onnx-light``'s
+    ``onnx_optim`` submodule mutates the model in place; we round-trip
+    the result back to an ``onnx.ModelProto`` so the comparison helpers
+    can score it uniformly.
+    """
+    import onnx
+    import onnx_light.onnx as onnxl
+    from onnx_light.onnx_optim.shape_inference import infer_shapes_model
+
+    light = onnxl.ModelProto()
+    light.ParseFromString(model.SerializeToString())
+    infer_shapes_model(light)
+    out = onnx.ModelProto()
+    out.ParseFromString(light.SerializeToString())
+    return out
+
+
 def _run_onnx(model):
     """Run ``onnx.shape_inference.infer_shapes`` on ``model``."""
     import onnx.shape_inference
@@ -353,6 +381,7 @@ def _run_onnx_shape_inference(model):
 
 _BACKEND_RUNNERS: Dict[str, Callable[[Any], Any]] = {
     "onnx-light": _run_onnx_light,
+    "onnx-light-onnx-optim": _run_onnx_light_onnx_optim,
     "onnx": _run_onnx,
     "onnx-shape-inference": _run_onnx_shape_inference,
 }
