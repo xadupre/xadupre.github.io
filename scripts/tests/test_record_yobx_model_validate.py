@@ -591,6 +591,98 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertFalse(rymv._is_rate_limit_error(Exception("HTTP Error 404")))
         self.assertFalse(rymv._is_rate_limit_error(ValueError("bad model")))
 
+    def test_is_hf_hub_access_error_detects_offline_message(self):
+        msg = (
+            "We couldn't connect to 'https://huggingface.co' to load the "
+            "files, and couldn't find them in the cached files. Check "
+            "your internet connection or see how to run the library in "
+            "offline mode at "
+            "'https://huggingface.co/docs/transformers/installation"
+            "#offline-mode'."
+        )
+        self.assertTrue(rymv._is_hf_hub_access_error(msg))
+        self.assertTrue(rymv._is_hf_hub_access_error(Exception(msg)))
+
+    def test_is_hf_hub_access_error_ignores_unrelated_errors(self):
+        self.assertFalse(rymv._is_hf_hub_access_error(None))
+        self.assertFalse(rymv._is_hf_hub_access_error(""))
+        self.assertFalse(rymv._is_hf_hub_access_error("ValueError: bad model"))
+        # A rate-limit error mentions huggingface.co but is not a Hub
+        # access error in the sense detected here.
+        self.assertFalse(
+            rymv._is_hf_hub_access_error(
+                "HTTP Error 429 thrown while requesting HEAD "
+                "https://huggingface.co/x/y/resolve/main/config.json"
+            )
+        )
+
+    def test_run_all_short_circuits_subsequent_exporters_on_hub_access_error(self):
+        cfgs = (
+            {"label": "yobx", "exporter": "yobx", "optimization": "default"},
+            {"label": "dynamo-ir", "exporter": "dynamo", "optimization": "ir"},
+        )
+        offline_msg = (
+            "We couldn't connect to 'https://huggingface.co' to load the "
+            "files, and couldn't find them in the cached files. Check "
+            "your internet connection or see how to run the library in "
+            "offline mode."
+        )
+        calls = []
+
+        def fake(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
+            calls.append((entry["model"], exporter_cfg["label"]))
+            return {
+                "model_id": entry["model"],
+                "export": "FAILED",
+                "error_config": offline_msg,
+            }
+
+        original = rymv.run_validate_one
+        rymv.run_validate_one = fake
+        try:
+            out = rymv.run_all(
+                models=(
+                    {"model": "gated/model", "dtype": "float16", "device": "cpu"},
+                    {"model": "ok/model", "dtype": "float16", "device": "cpu"},
+                ),
+                exporters=cfgs,
+                dump_folder=None,
+                quiet=True,
+            )
+        finally:
+            rymv.run_validate_one = original
+
+        # Only the first exporter is executed for ``gated/model`` (the
+        # second is short-circuited), then both exporters run for the next
+        # model even though it also fails (each model is short-circuited
+        # independently).
+        self.assertEqual(
+            calls,
+            [
+                ("gated/model", "yobx"),
+                ("ok/model", "yobx"),
+            ],
+        )
+        # All four (model, exporter) cells are still present in the
+        # returned list so the dashboard payload keeps a full grid.
+        self.assertEqual(len(out), 4)
+        labels = [(model_id, cfg["label"]) for model_id, cfg, _, _ in out]
+        self.assertEqual(
+            labels,
+            [
+                ("gated/model", "yobx"),
+                ("gated/model", "dynamo-ir"),
+                ("ok/model", "yobx"),
+                ("ok/model", "dynamo-ir"),
+            ],
+        )
+        # The short-circuited cell carries the same error_config message
+        # so the dashboard still surfaces the root cause.
+        skipped_summary = out[1][2]
+        self.assertEqual(skipped_summary["export"], "FAILED")
+        self.assertEqual(skipped_summary["error_config"], offline_msg)
+        self.assertEqual(out[1][3], 0.0)
+
     def test_run_all_aborts_on_http_429(self):
         cfg = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
 

@@ -68,6 +68,38 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     return status == 429
 
 
+def _is_hf_hub_access_error(value: Any) -> bool:
+    """Return ``True`` when *value* looks like a HuggingFace Hub access error.
+
+    Both ``transformers`` and ``huggingface_hub`` surface a misleading
+    ``We couldn't connect to 'https://huggingface.co' to load the files,
+    and couldn't find them in the cached files`` message for *any* failure
+    to reach the Hub: a real network outage, a missing/invalid
+    ``HF_TOKEN``, or a gated model the current token is not allowed to
+    download (for example ``mistralai/Mistral-7B-v0.3``).
+
+    Detecting this pattern lets the recorder short-circuit the remaining
+    exporter cells for the same model: they would all fail at the same
+    ``error_config`` step with the same long message, producing redundant
+    noise in the dashboard and wasting rate-limit budget against the Hub.
+
+    *value* may be either an exception instance or a plain string (the
+    summary returned by ``validate_model`` stores the error as a string in
+    ``error_config``).
+    """
+    if value is None:
+        return False
+    text = str(value)
+    lower = text.lower()
+    if "huggingface.co" not in lower:
+        return False
+    return (
+        "couldn't connect to" in lower
+        or "couldn t connect to" in lower
+        or "offline mode" in lower
+    )
+
+
 def default_fp16_tg(model_id):
     return dict(
         model=model_id,
@@ -501,6 +533,12 @@ def run_all(
     if limit is not None:
         items = items[:limit]
     out: List[Tuple[str, Dict[str, str], Any, float]] = []
+    # Cache of synthetic "HuggingFace Hub access" summaries keyed by model id.
+    # Populated the first time a model fails at the ``error_config`` step with
+    # an unreachable-Hub / gated-model error so the remaining exporters for
+    # that same model can be short-circuited (they would all fail at the same
+    # config-loading step with the exact same message).
+    hub_access_failures: Dict[str, Dict[str, Any]] = {}
     for entry in items:
         model_id = entry["model"]
         for exporter_cfg in exporters:
@@ -510,6 +548,14 @@ def run_all(
                 f"exporter={exporter_cfg['exporter']} "
                 f"optimization={exporter_cfg['optimization']}..."
             )
+            cached = hub_access_failures.get(model_id)
+            if cached is not None:
+                _log(
+                    "  -> skipping: previous exporter already failed to "
+                    "reach the HuggingFace Hub for this model."
+                )
+                out.append((model_id, exporter_cfg, dict(cached), 0.0))
+                continue
             # For yobx, the export time we want to record is the
             # ``stat_time_export_and_post_processing`` metric stored in
             # the ``extra`` sheet of the workbook saved next to the
@@ -578,6 +624,20 @@ def run_all(
                 shutil.rmtree(tmp_dump, ignore_errors=True)
             _log(f"  -> done in {duration_s:.2f}s")
             out.append((model_id, exporter_cfg, summary, duration_s))
+            # If this cell failed at the ``error_config`` step because the
+            # HuggingFace Hub could not be reached (real network outage, or
+            # — more commonly in CI — a gated model that the available
+            # token cannot download), reuse the same synthetic summary for
+            # the remaining exporters of the same model instead of hitting
+            # the Hub three more times.
+            if model_id not in hub_access_failures:
+                step, message = _first_error(summary)
+                if step == "config" and _is_hf_hub_access_error(message):
+                    hub_access_failures[model_id] = {
+                        "model_id": model_id,
+                        "export": "FAILED",
+                        "error_config": message,
+                    }
     return out
 
 
