@@ -385,8 +385,11 @@ def snapshot_inputs(model) -> List[Dict[str, Any]]:
 def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     """Snapshot the shape information of every output / value_info.
 
-    Returns a list of dicts ``{"name", "kind", "elem_type", "has_shape",
-    "shape"}`` where ``kind`` is either ``"output"`` or ``"value_info"``.
+    Returns a list of dicts ``{"name", "kind", "op_type", "elem_type",
+    "has_shape", "shape"}`` where ``kind`` is either ``"output"`` or
+    ``"value_info"``. ``op_type`` is the type of the node that produces
+    the tensor (empty string if the tensor is not produced by any node,
+    e.g. a graph output directly aliasing an input or initializer).
     Non plain-tensor entries (sequence/optional/map) are skipped since
     they cannot be scored against a simple ``elem_type`` + ``shape``
     contract.
@@ -413,14 +416,20 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     # order in ``model.graph.output``.
     ordered_names: List[str] = []
     seen: set = set()
+    op_type_by_name: Dict[str, str] = {}
     for node in model.graph.node:
         for out_name in node.output:
             if not out_name or out_name in seen:
                 continue
             if out_name not in by_name:
+                # Still record producing op type so we know which node
+                # would have produced the tensor, even if its
+                # value_info is missing from the snapshot.
+                op_type_by_name.setdefault(out_name, node.op_type)
                 continue
             ordered_names.append(out_name)
             seen.add(out_name)
+            op_type_by_name.setdefault(out_name, node.op_type)
     for vi in model.graph.output:
         if vi.name in seen or vi.name not in by_name:
             continue
@@ -439,6 +448,7 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
             {
                 "name": vi.name,
                 "kind": kind,
+                "op_type": op_type_by_name.get(vi.name, ""),
                 "elem_type": int(vi.type.tensor_type.elem_type),
                 "has_shape": has_shape,
                 "shape": dims,
