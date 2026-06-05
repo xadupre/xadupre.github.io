@@ -37,7 +37,7 @@ DEFAULT_PACKAGES: tuple[str, ...] = (
     "skl2onnx",
     "onnxmltools",
     "onnxscript",
-    "ir-py",
+    "onnx-ir",
     "tf2onnx",
 )
 
