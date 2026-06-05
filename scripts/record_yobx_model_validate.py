@@ -23,6 +23,12 @@ following exporter configurations:
 * ``yobx`` with ``optimization='default+onnxruntime'``
 * ``dynamo`` with ``optimization='ir'``
 * ``onnx-dynamo`` with ``optimization='os_ort'``
+* ``yobx-to_onnx`` -- a custom function that calls
+  :func:`yobx.torch.to_onnx` with its default values (no
+  ``optimization``, no custom ``opset_version`` ...) and checks the
+  resulting ONNX model for discrepancies. This column answers the
+  question "does the no-frills, default :func:`to_onnx` call still
+  work?".
 
 Usage::
 
@@ -99,6 +105,17 @@ DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
         "label": "onnx-dynamo-os_ort",
         "exporter": "onnx-dynamo",
         "optimization": "os_ort",
+    },
+    # Custom column: call ``yobx.torch.to_onnx`` with default values
+    # (no ``optimization`` argument, no custom ``opset_version`` ...) and
+    # check the resulting ONNX model for discrepancies. The label and
+    # ``exporter`` field are used by ``run_validate_one`` to dispatch to
+    # :func:`run_to_onnx_default` instead of the standard
+    # ``validate_model`` call.
+    {
+        "label": "yobx-to_onnx",
+        "exporter": "yobx-to_onnx",
+        "optimization": "(defaults)",
     },
 )
 
@@ -440,6 +457,19 @@ def run_validate_one(
     quiet: bool = True,
 ) -> Any:
     """Run :func:`yobx.torch.validate.validate_model` for one (model, exporter)."""
+    # The "yobx-to_onnx" column does not use the standard
+    # ``validate_model`` dispatch but a custom function that calls
+    # :func:`yobx.torch.to_onnx` with its default values and then checks
+    # discrepancies. See :func:`run_to_onnx_default`.
+    if exporter_cfg.get("exporter") == "yobx-to_onnx":
+        return run_to_onnx_default(
+            entry,
+            exporter_cfg,
+            verbose=verbose,
+            dump_folder=dump_folder,
+            quiet=quiet,
+        )
+
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
@@ -447,6 +477,56 @@ def run_validate_one(
         model_id=entry["model"],
         exporter=exporter_cfg["exporter"],
         optimization=exporter_cfg["optimization"],
+        dtype=entry.get("dtype", DEFAULT_DTYPE),
+        device=entry.get("device", DEFAULT_DEVICE),
+        do_run=True,
+        quiet=quiet,
+        verbose=verbose,
+        patch="transformers",
+        dump_folder=dump_folder,
+        config_overrides={"num_hidden_layers": 2},
+        random_weights=True,
+    )
+    return summary
+
+
+def run_to_onnx_default(
+    entry: Dict[str, Any],
+    exporter_cfg: Dict[str, str],
+    verbose: int = 0,
+    dump_folder: Optional[str] = None,
+    quiet: bool = True,
+) -> Any:
+    """Custom export that calls :func:`yobx.torch.to_onnx` with default values.
+
+    Unlike :func:`run_validate_one` (which forwards an explicit
+    ``optimization`` argument to :func:`yobx.torch.to_onnx` via
+    :func:`yobx.torch.validate.validate_model`), this function exercises
+    the *default* arguments of :func:`yobx.torch.to_onnx`: no
+    ``options`` / ``optimization``, no custom ``target_opset``, ... — just
+    ``to_onnx(model, args, kwargs=kwargs, dynamic_shapes=...)``. The
+    resulting ONNX model is then compared to the original PyTorch model
+    via :meth:`yobx.torch.input_observer.InputObserver.check_discrepancies`
+    (the same machinery used by ``validate_model``).
+
+    Implementation note: ``validate_model`` already wires the input
+    capture, the export and the discrepancy check together; passing
+    ``optimization=None`` instructs its internal ``_export`` helper to
+    invoke :func:`to_onnx` *without* an ``optimization`` kwarg, which is
+    exactly the "call ``to_onnx`` with default values" path requested by
+    this column. Reusing ``validate_model`` (instead of re-implementing
+    the input capture and discrepancy check) keeps the dashboard
+    behaviour consistent across columns.
+    """
+    # Lazy import so ``--help`` works without the heavy ``torch`` stack.
+    from yobx.torch.validate import validate_model
+
+    summary, _data = validate_model(
+        model_id=entry["model"],
+        exporter="yobx",
+        # ``optimization=None`` makes ``_export`` call ``to_onnx`` without
+        # the ``options`` kwarg, so yobx uses its built-in defaults.
+        optimization=None,
         dtype=entry.get("dtype", DEFAULT_DTYPE),
         device=entry.get("device", DEFAULT_DEVICE),
         do_run=True,
@@ -517,7 +597,10 @@ def run_all(
             # always passed for yobx runs, even when the user did not
             # supply one (in which case we use a per-cell temporary
             # directory which is removed once the metric is read).
-            is_yobx = exporter_cfg["exporter"] == "yobx"
+            # ``yobx-to_onnx`` ultimately calls ``yobx.torch.to_onnx`` too,
+            # so it produces the same companion ``.xlsx`` workbook and the
+            # same export-time metric handling applies.
+            is_yobx = exporter_cfg["exporter"] in ("yobx", "yobx-to_onnx")
             tmp_dump: Optional[str] = None
             effective_dump = dump_folder
             if is_yobx and effective_dump is None:

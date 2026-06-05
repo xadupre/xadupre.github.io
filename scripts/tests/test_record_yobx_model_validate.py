@@ -32,6 +32,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertIn("yobx-ort", labels)
         self.assertIn("dynamo-ir", labels)
         self.assertIn("onnx-dynamo-os_ort", labels)
+        self.assertIn("yobx-to_onnx", labels)
         # Each exporter config must declare the three required fields.
         for cfg in rymv.DEFAULT_EXPORTERS:
             self.assertIn("label", cfg)
@@ -614,6 +615,41 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             self.assertIn("429", str(ctx.exception))
         finally:
             rymv.run_validate_one = original
+
+    def test_run_validate_one_dispatches_to_to_onnx_default(self):
+        """``yobx-to_onnx`` exporter routes to ``run_to_onnx_default``."""
+        cfg = {
+            "label": "yobx-to_onnx",
+            "exporter": "yobx-to_onnx",
+            "optimization": "(defaults)",
+        }
+        seen = {}
+
+        def fake_to_onnx_default(
+            entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
+        ):
+            seen["entry"] = entry
+            seen["exporter_cfg"] = exporter_cfg
+            seen["dump_folder"] = dump_folder
+            seen["quiet"] = quiet
+            return {"export": "OK", "discrepancies": "OK"}
+
+        original = rymv.run_to_onnx_default
+        rymv.run_to_onnx_default = fake_to_onnx_default
+        try:
+            result = rymv.run_validate_one(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                cfg,
+                dump_folder="/tmp/x",
+                quiet=True,
+            )
+        finally:
+            rymv.run_to_onnx_default = original
+        self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
+        self.assertEqual(seen["entry"]["model"], "a/b")
+        self.assertEqual(seen["exporter_cfg"]["exporter"], "yobx-to_onnx")
+        self.assertEqual(seen["dump_folder"], "/tmp/x")
+        self.assertTrue(seen["quiet"])
 
 
 if __name__ == "__main__":
