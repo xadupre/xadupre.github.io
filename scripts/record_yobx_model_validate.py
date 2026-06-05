@@ -499,37 +499,43 @@ def run_to_onnx_default(
 ) -> Any:
     """Custom export that calls :func:`yobx.torch.to_onnx` with default values.
 
-    Unlike :func:`run_validate_one` (which forwards an explicit
-    ``optimization`` argument to :func:`yobx.torch.to_onnx` via
-    :func:`yobx.torch.validate.validate_model`), this function exercises
-    the *default* arguments of :func:`yobx.torch.to_onnx`: no
-    ``options`` / ``optimization``, no custom ``target_opset``, ... — just
-    ``to_onnx(model, args, kwargs=kwargs, dynamic_shapes=...)``. The
+    Unlike :func:`run_validate_one` (which goes through
+    :func:`yobx.torch.validate.validate_model` to dispatch to an exporter
+    by name), this function explicitly invokes :func:`yobx.torch.to_onnx`
+    itself, with no ``options`` / ``optimization``, no custom
+    ``target_opset``, ... — just
+    ``to_onnx(model, (), kwargs=kwargs, dynamic_shapes=...)``. The
     resulting ONNX model is then compared to the original PyTorch model
-    via :meth:`yobx.torch.input_observer.InputObserver.check_discrepancies`
-    (the same machinery used by ``validate_model``).
+    via :meth:`yobx.torch.input_observer.InputObserver.check_discrepancies`.
 
-    Implementation note: ``validate_model`` already wires the input
-    capture, the export and the discrepancy check together; passing
-    ``optimization=None`` instructs its internal ``_export`` helper to
-    invoke :func:`to_onnx` *without* an ``optimization`` kwarg, which is
-    exactly the "call ``to_onnx`` with default values" path requested by
-    this column. Reusing ``validate_model`` (instead of re-implementing
-    the input capture and discrepancy check) keeps the dashboard
-    behaviour consistent across columns.
+    ``validate_model(..., do_run=False)`` is reused to load the model and
+    capture realistic inputs with :class:`InputObserver`, so the heavy
+    setup (config overrides, random weights, dtype/device, observer ...)
+    matches the other dashboard columns. The export performed internally
+    by ``validate_model`` is then re-done by a direct call to
+    :func:`to_onnx` with default arguments, which is the path this
+    column is meant to exercise.
     """
-    # Lazy import so ``--help`` works without the heavy ``torch`` stack.
+    # Lazy imports so ``--help`` works without the heavy ``torch`` stack.
+    import os
+    import tempfile
+    from collections import Counter
+
+    from yobx.torch import to_onnx
+    from yobx.torch.flatten import register_flattening_functions
+    from yobx.torch.patch import apply_patches_for_model
     from yobx.torch.validate import validate_model
 
-    summary, _data = validate_model(
+    # 1. Load the model and capture inputs via ``InputObserver``.
+    #    ``do_run=False`` skips the discrepancy check (we do our own
+    #    below, after the explicit ``to_onnx`` call).
+    summary, data = validate_model(
         model_id=entry["model"],
         exporter="yobx",
-        # ``optimization=None`` makes ``_export`` call ``to_onnx`` without
-        # the ``options`` kwarg, so yobx uses its built-in defaults.
         optimization=None,
         dtype=entry.get("dtype", DEFAULT_DTYPE),
         device=entry.get("device", DEFAULT_DEVICE),
-        do_run=True,
+        do_run=False,
         quiet=quiet,
         verbose=verbose,
         patch="transformers",
@@ -537,6 +543,85 @@ def run_to_onnx_default(
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
     )
+
+    # If the setup (config / model / observer) already failed inside
+    # ``validate_model``, propagate the summary unchanged.
+    model = getattr(data, "model", None)
+    observer = getattr(data, "observer", None)
+    captured_kwargs = getattr(data, "kwargs", None)
+    dynamic_shapes = getattr(data, "dynamic_shapes", None)
+    if model is None or observer is None or captured_kwargs is None:
+        return summary
+
+    # 2. Explicit, default call to ``yobx.torch.to_onnx``.
+    model_name = entry["model"].replace("/", "-")
+    filename = f"{model_name}.yobx-to_onnx.onnx"
+    if dump_folder is not None:
+        os.makedirs(dump_folder, exist_ok=True)
+        filename = os.path.join(dump_folder, filename)
+    else:
+        filename = os.path.join(tempfile.mkdtemp(), filename)
+
+    try:
+        with (
+            register_flattening_functions(patch_transformers=True),
+            apply_patches_for_model(
+                patch_torch=True, patch_transformers=True, model=model
+            ),
+        ):
+            to_onnx(
+                model,
+                (),
+                kwargs=captured_kwargs,
+                dynamic_shapes=dynamic_shapes,
+                filename=filename,
+            )
+        summary.export = "OK"
+        summary.error_export = None
+        data.filename = filename
+    except Exception as exc:  # noqa: BLE001
+        summary.export = "FAILED"
+        summary.error_export = str(exc)
+        if not quiet:
+            raise
+        return summary
+
+    # 3. Recompute node statistics for the freshly-exported file so the
+    #    dashboard reflects the ``to_onnx``-with-defaults graph.
+    if os.path.exists(filename):
+        try:
+            import onnx
+
+            onx = onnx.load(filename, load_external_data=False)
+            counts = Counter(n.op_type for n in onx.graph.node)
+            summary.n_nodes = sum(counts.values())
+            top = counts.most_common(5)
+            summary.top_op_types = ",".join(f"{op}:{cnt}" for op, cnt in top)
+        except Exception:  # noqa: BLE001 - statistics are best-effort
+            pass
+
+    # 4. Discrepancy check using the captured observer.
+    atol = 1e-4
+    try:
+        disc_data = observer.check_discrepancies(filename, atol=atol)
+    except Exception as exc:  # noqa: BLE001
+        summary.discrepancies = "FAILED"
+        summary.error_discrepancies = str(exc)
+        if not quiet:
+            raise
+        return summary
+
+    data.discrepancies = disc_data
+    n_ok = sum(1 for row in disc_data if row.get("SUCCESS", False))
+    n_total = len(disc_data)
+    summary.discrepancies_ok = n_ok
+    summary.discrepancies_total = n_total
+    summary.discrepancies = "OK" if n_ok == n_total else "FAILED"
+    summary.discrepancies_atol = atol
+    numeric_rows = [row for row in disc_data if "abs" in row]
+    if numeric_rows:
+        summary.discrepancies_max_abs = max(row["abs"] for row in numeric_rows)
+
     return summary
 
 
