@@ -38,6 +38,25 @@ def _make_simple_model():
 
 
 class TestSnapshotAndStrip(unittest.TestCase):
+    def test_snapshot_records_producing_op_type(self):
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+        mid = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 3])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [2, 3])
+        nodes = [
+            helper.make_node("Relu", ["X"], ["Y"]),
+            helper.make_node("Identity", ["Y"], ["Z"]),
+        ]
+        graph = helper.make_graph(nodes, "ops", [inp], [out], value_info=[mid])
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        op_types = {s["name"]: s["op_type"] for s in snap}
+        self.assertEqual(op_types, {"Y": "Relu", "Z": "Identity"})
+
     def test_snapshot_captures_outputs_and_value_info(self):
         model = _make_simple_model()
         snap = rsi.snapshot_intermediates(model)
