@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PyPI downloads</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.charts {
+  width: 100%;
+  max-width: 1400px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1em;
+}
+@media (max-width: 800px) {
+  .charts { grid-template-columns: 1fr; }
+}
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 0.75em;
+  box-sizing: border-box;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 28vh;
+  min-height: 220px;
+}
+h2.chart-title {
+  font-size: 1em;
+  margin: 0 0 0.5em;
+  text-align: center;
+  font-family: monospace;
+  color: #c9d1d9;
+  word-break: break-all;
+}
+.chart-meta {
+  font-size: 0.75em;
+  color: #8b949e;
+  text-align: center;
+  margin-bottom: 0.5em;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+  width: 100%;
+  max-width: 1400px;
+  box-sizing: border-box;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../index.html">&larr; back to home</a></div>
+  <h1>PyPI downloads &mdash; all projects</h1>
+</header>
+<div class="notice" style="max-width:1400px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental. Data fetched from <a href="https://pypistats.org">pypistats.org</a>.</div>
+<div id="message" class="message info"></div>
+<div id="charts" class="charts"></div>
+<script>
+const PACKAGES = [
+  "onnx",
+  "onnxruntime",
+  "onnxruntime-genai",
+  "skl2onnx",
+  "onnxmltools",
+  "onnxscript",
+  "ir-py",
+  "tf2onnx",
+];
+
+const PALETTE = [
+  "#58a6ff", "#f78166", "#3fb950", "#d2a8ff",
+  "#ffa657", "#79c0ff", "#ff7b72", "#56d364",
+];
+
+const METRIC_COLORS = {
+  last_day: "#58a6ff",
+  last_week: "#f78166",
+  last_month: "#3fb950",
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function parseCSVLine(line) {
+  const cols = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (inQuotes) {
+      if (c === "\"") {
+        if (line[i + 1] === "\"") { cur += "\""; i++; }
+        else { inQuotes = false; }
+      } else {
+        cur += c;
+      }
+    } else if (c === "\"") {
+      inQuotes = true;
+    } else if (c === ",") {
+      cols.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  cols.push(cur);
+  return cols;
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length === 0) return [];
+  const header = parseCSVLine(lines.shift());
+  const idx = {
+    date: header.indexOf("date"),
+    last_day: header.indexOf("last_day"),
+    last_week: header.indexOf("last_week"),
+    last_month: header.indexOf("last_month"),
+  };
+  const rows = [];
+  for (const line of lines) {
+    if (!line) continue;
+    const cols = parseCSVLine(line);
+    const date = cols[idx.date];
+    if (!date) continue;
+    rows.push({
+      date,
+      last_day: Number(cols[idx.last_day]),
+      last_week: Number(cols[idx.last_week]),
+      last_month: Number(cols[idx.last_month]),
+    });
+  }
+  rows.sort((a, b) => new Date(a.date) - new Date(b.date));
+  return rows;
+}
+
+function formatCount(n) {
+  if (!Number.isFinite(n)) return "n/a";
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(2) + "k";
+  return String(n);
+}
+
+function buildDataset(rows, key, color) {
+  const data = rows
+    .filter(r => Number.isFinite(r[key]))
+    .map(r => ({ x: r.date, y: r[key] }));
+  return {
+    label: key,
+    data,
+    borderColor: color,
+    backgroundColor: color,
+    pointBackgroundColor: color,
+    pointBorderColor: color,
+    tension: 0.15,
+    pointRadius: 2,
+    pointHoverRadius: 4,
+    borderWidth: 1.5,
+  };
+}
+
+function buildChart(canvas, packageName, rows) {
+  const datasets = [
+    buildDataset(rows, "last_day", METRIC_COLORS.last_day),
+    buildDataset(rows, "last_week", METRIC_COLORS.last_week),
+    buildDataset(rows, "last_month", METRIC_COLORS.last_month),
+  ];
+  const chart = new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "day", tooltipFormat: "yyyy-MM-dd HH:mm" },
+          title: { display: true, text: "date (UTC)", color: "#c9d1d9" },
+          ticks: { color: "#c9d1d9" },
+          grid: { color: "rgba(139,148,158,0.25)" },
+        },
+        y: {
+          title: { display: true, text: "downloads", color: "#c9d1d9" },
+          ticks: {
+            color: "#c9d1d9",
+            callback: (v) => formatCount(v),
+          },
+          grid: { color: "rgba(139,148,158,0.25)" },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: { display: true, labels: { color: "#c9d1d9" } },
+        tooltip: {
+          callbacks: {
+            label: (item) => item.dataset.label + ": " + formatCount(item.raw.y),
+          },
+        },
+        zoom: {
+          pan: { enabled: true, mode: "xy" },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: "xy",
+          },
+        },
+      },
+    },
+  });
+  canvas.ondblclick = () => chart.resetZoom();
+  return chart;
+}
+
+function renderPackage(packageName) {
+  const container = document.getElementById("charts");
+  const wrap = document.createElement("div");
+  wrap.className = "chart-wrap";
+  const title = document.createElement("h2");
+  title.className = "chart-title";
+  const titleLink = document.createElement("a");
+  titleLink.href = "https://pypi.org/project/" + packageName + "/";
+  titleLink.target = "_blank";
+  titleLink.rel = "noopener";
+  titleLink.textContent = packageName;
+  title.appendChild(titleLink);
+  wrap.appendChild(title);
+  const meta = document.createElement("div");
+  meta.className = "chart-meta";
+  wrap.appendChild(meta);
+  const cc = document.createElement("div");
+  cc.className = "chart-container";
+  const canvas = document.createElement("canvas");
+  cc.appendChild(canvas);
+  wrap.appendChild(cc);
+  const hint = document.createElement("div");
+  hint.className = "hint";
+  hint.textContent = "Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.";
+  wrap.appendChild(hint);
+  container.appendChild(wrap);
+
+  const csvUrl = "../cache_data/" + packageName + "/downloads.csv";
+  return fetch(csvUrl, { cache: "no-store" })
+    .then(r => {
+      if (r.status === 404) {
+        meta.textContent = "no data recorded yet";
+        cc.style.display = "none";
+        hint.style.display = "none";
+        return null;
+      }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    })
+    .then(text => {
+      if (text === null) return;
+      const rows = parseCSV(text);
+      if (rows.length === 0) {
+        meta.textContent = "no data recorded yet";
+        cc.style.display = "none";
+        hint.style.display = "none";
+        return;
+      }
+      const last = rows[rows.length - 1];
+      meta.textContent =
+        rows.length + " observation(s) \u2013 last on " +
+        last.date.replace("T", " ").replace("Z", "") +
+        " \u2013 last day " + formatCount(last.last_day) +
+        ", last week " + formatCount(last.last_week) +
+        ", last month " + formatCount(last.last_month);
+      buildChart(canvas, packageName, rows);
+    })
+    .catch(err => {
+      meta.textContent = "failed to load: " + (err && err.message ? err.message : err);
+      cc.style.display = "none";
+      hint.style.display = "none";
+    });
+}
+
+Promise.all(PACKAGES.map(renderPackage)).then(() => {
+  const wraps = document.querySelectorAll("#charts .chart-wrap");
+  if (wraps.length === 0) {
+    showMessage("No PyPI download statistics available yet.", "info");
+  }
+});
+</script>
+</body>
+</html>
