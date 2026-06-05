@@ -744,5 +744,127 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertTrue(seen["quiet"])
 
 
+    def test_run_validate_one_dispatches_to_olive_modelbuilder(self):
+        """``olive-modelbuilder`` exporter routes to ``run_olive_modelbuilder``."""
+        cfg = {
+            "label": "olive-modelbuilder",
+            "exporter": "olive-modelbuilder",
+            "optimization": "(modelbuilder)",
+        }
+        seen = {}
+
+        def fake_olive_modelbuilder(
+            entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
+        ):
+            seen["entry"] = entry
+            seen["exporter_cfg"] = exporter_cfg
+            seen["dump_folder"] = dump_folder
+            seen["quiet"] = quiet
+            return {"export": "OK", "discrepancies": "SKIPPED"}
+
+        original = rymv.run_olive_modelbuilder
+        rymv.run_olive_modelbuilder = fake_olive_modelbuilder
+        try:
+            result = rymv.run_validate_one(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                cfg,
+                dump_folder="/tmp/x",
+                quiet=True,
+            )
+        finally:
+            rymv.run_olive_modelbuilder = original
+        self.assertEqual(result, {"export": "OK", "discrepancies": "SKIPPED"})
+        self.assertEqual(seen["entry"]["model"], "a/b")
+        self.assertEqual(seen["exporter_cfg"]["exporter"], "olive-modelbuilder")
+        self.assertEqual(seen["dump_folder"], "/tmp/x")
+        self.assertTrue(seen["quiet"])
+
+    def test_is_cell_working_treats_skipped_discrepancies_as_ok(self):
+        """``SKIPPED`` discrepancies (e.g. ``olive-modelbuilder``) are working."""
+        self.assertTrue(
+            rymv.is_cell_working({"export": "OK", "discrepancies": "SKIPPED"})
+        )
+        self.assertFalse(
+            rymv.is_cell_working({"export": "FAILED", "discrepancies": "SKIPPED"})
+        )
+
+    def test_olive_precision_for_dtype(self):
+        self.assertEqual(rymv._olive_precision_for_dtype("float16"), "fp16")
+        self.assertEqual(rymv._olive_precision_for_dtype("fp16"), "fp16")
+        self.assertEqual(rymv._olive_precision_for_dtype("bfloat16"), "bf16")
+        self.assertEqual(rymv._olive_precision_for_dtype("int4"), "int4")
+        self.assertEqual(rymv._olive_precision_for_dtype("float32"), "fp32")
+        self.assertEqual(rymv._olive_precision_for_dtype(None), "fp32")
+
+    def test_default_exporters_include_olive_modelbuilder(self):
+        labels = {e["label"] for e in rymv.DEFAULT_EXPORTERS}
+        self.assertIn("olive-modelbuilder", labels)
+        # The exporter dispatch key must match the value handled by
+        # ``run_validate_one``.
+        cfg = next(
+            e for e in rymv.DEFAULT_EXPORTERS if e["label"] == "olive-modelbuilder"
+        )
+        self.assertEqual(cfg["exporter"], "olive-modelbuilder")
+
+    def test_parse_args_test_flag(self):
+        args = rymv.parse_args([])
+        self.assertFalse(args.test)
+        args = rymv.parse_args(["--test"])
+        self.assertTrue(args.test)
+
+    def test_run_olive_modelbuilder_when_cli_missing(self):
+        """``run_olive_modelbuilder`` returns a failed summary when the CLI is missing."""
+        import subprocess
+
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            raise FileNotFoundError("olive not installed")
+
+        subprocess.run = fake_run
+        try:
+            summary = rymv.run_olive_modelbuilder(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                {
+                    "label": "olive-modelbuilder",
+                    "exporter": "olive-modelbuilder",
+                    "optimization": "(modelbuilder)",
+                },
+            )
+        finally:
+            subprocess.run = original_run
+        self.assertEqual(summary["export"], "FAILED")
+        self.assertIn("olive", summary["error_export"].lower())
+
+    def test_run_olive_modelbuilder_non_zero_returncode(self):
+        """``run_olive_modelbuilder`` surfaces the CLI's stderr on failure."""
+        import subprocess
+
+        class _Proc:
+            returncode = 2
+            stdout = ""
+            stderr = "boom: missing model"
+
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            return _Proc()
+
+        subprocess.run = fake_run
+        try:
+            summary = rymv.run_olive_modelbuilder(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+            {
+                "label": "olive-modelbuilder",
+                "exporter": "olive-modelbuilder",
+                "optimization": "(modelbuilder)",
+            },
+            )
+        finally:
+            subprocess.run = original_run
+        self.assertEqual(summary["export"], "FAILED")
+        self.assertEqual(summary["error_export"], "boom: missing model")
+
+
 if __name__ == "__main__":
     unittest.main()
