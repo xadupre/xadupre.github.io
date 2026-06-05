@@ -709,7 +709,7 @@ def _olive_precision_for_dtype(dtype: Optional[str]) -> str:
         return "fp16"
     if text in ("bfloat16", "bf16"):
         return "bf16"
-    if text in ("int4",):
+    if text == "int4":
         return "int4"
     return "fp32"
 
