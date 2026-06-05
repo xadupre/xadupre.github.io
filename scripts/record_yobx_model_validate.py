@@ -23,6 +23,12 @@ following exporter configurations:
 * ``yobx`` with ``optimization='default+onnxruntime'``
 * ``dynamo`` with ``optimization='ir'``
 * ``onnx-dynamo`` with ``optimization='os_ort'``
+* ``yobx-to_onnx`` -- a custom function that calls
+  :func:`yobx.torch.to_onnx` with its default values (no
+  ``optimization``, no custom ``opset_version`` ...) and checks the
+  resulting ONNX model for discrepancies. This column answers the
+  question "does the no-frills, default :func:`to_onnx` call still
+  work?".
 
 Usage::
 
@@ -131,6 +137,17 @@ DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
         "label": "onnx-dynamo-os_ort",
         "exporter": "onnx-dynamo",
         "optimization": "os_ort",
+    },
+    # Custom column: call ``yobx.torch.to_onnx`` with default values
+    # (no ``optimization`` argument, no custom ``opset_version`` ...) and
+    # check the resulting ONNX model for discrepancies. The label and
+    # ``exporter`` field are used by ``run_validate_one`` to dispatch to
+    # :func:`run_to_onnx_default` instead of the standard
+    # ``validate_model`` call.
+    {
+        "label": "yobx-to_onnx",
+        "exporter": "yobx-to_onnx",
+        "optimization": "(defaults)",
     },
 )
 
@@ -472,6 +489,19 @@ def run_validate_one(
     quiet: bool = True,
 ) -> Any:
     """Run :func:`yobx.torch.validate.validate_model` for one (model, exporter)."""
+    # The "yobx-to_onnx" column does not use the standard
+    # ``validate_model`` dispatch but a custom function that calls
+    # :func:`yobx.torch.to_onnx` with its default values and then checks
+    # discrepancies. See :func:`run_to_onnx_default`.
+    if exporter_cfg.get("exporter") == "yobx-to_onnx":
+        return run_to_onnx_default(
+            entry,
+            exporter_cfg,
+            verbose=verbose,
+            dump_folder=dump_folder,
+            quiet=quiet,
+        )
+
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
@@ -489,6 +519,141 @@ def run_validate_one(
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
     )
+    return summary
+
+
+def run_to_onnx_default(
+    entry: Dict[str, Any],
+    exporter_cfg: Dict[str, str],
+    verbose: int = 0,
+    dump_folder: Optional[str] = None,
+    quiet: bool = True,
+) -> Any:
+    """Custom export that calls :func:`yobx.torch.to_onnx` with default values.
+
+    Unlike :func:`run_validate_one` (which goes through
+    :func:`yobx.torch.validate.validate_model` to dispatch to an exporter
+    by name), this function explicitly invokes :func:`yobx.torch.to_onnx`
+    itself, with no ``options`` / ``optimization``, no custom
+    ``target_opset``, ... — just
+    ``to_onnx(model, (), kwargs=kwargs, dynamic_shapes=...)``. The
+    resulting ONNX model is then compared to the original PyTorch model
+    via :meth:`yobx.torch.input_observer.InputObserver.check_discrepancies`.
+
+    ``validate_model(..., do_run=False)`` is reused to load the model and
+    capture realistic inputs with :class:`InputObserver`, so the heavy
+    setup (config overrides, random weights, dtype/device, observer ...)
+    matches the other dashboard columns. The export performed internally
+    by ``validate_model`` is then re-done by a direct call to
+    :func:`to_onnx` with default arguments, which is the path this
+    column is meant to exercise.
+    """
+    # Lazy imports so ``--help`` works without the heavy ``torch`` stack.
+    import os
+    import tempfile
+    from collections import Counter
+
+    from yobx.torch import to_onnx
+    from yobx.torch.flatten import register_flattening_functions
+    from yobx.torch.patch import apply_patches_for_model
+    from yobx.torch.validate import validate_model
+
+    # 1. Load the model and capture inputs via ``InputObserver``.
+    #    ``do_run=False`` skips the discrepancy check (we do our own
+    #    below, after the explicit ``to_onnx`` call).
+    summary, data = validate_model(
+        model_id=entry["model"],
+        exporter="yobx",
+        optimization=None,
+        dtype=entry.get("dtype", DEFAULT_DTYPE),
+        device=entry.get("device", DEFAULT_DEVICE),
+        do_run=False,
+        quiet=quiet,
+        verbose=verbose,
+        patch="transformers",
+        dump_folder=dump_folder,
+        config_overrides={"num_hidden_layers": 2},
+        random_weights=True,
+    )
+
+    # If the setup (config / model / observer) already failed inside
+    # ``validate_model``, propagate the summary unchanged.
+    model = getattr(data, "model", None)
+    observer = getattr(data, "observer", None)
+    captured_kwargs = getattr(data, "kwargs", None)
+    dynamic_shapes = getattr(data, "dynamic_shapes", None)
+    if model is None or observer is None or captured_kwargs is None:
+        return summary
+
+    # 2. Explicit, default call to ``yobx.torch.to_onnx``.
+    model_name = entry["model"].replace("/", "-")
+    filename = f"{model_name}.yobx-to_onnx.onnx"
+    if dump_folder is not None:
+        os.makedirs(dump_folder, exist_ok=True)
+        filename = os.path.join(dump_folder, filename)
+    else:
+        filename = os.path.join(tempfile.mkdtemp(), filename)
+
+    try:
+        with (
+            register_flattening_functions(patch_transformers=True),
+            apply_patches_for_model(
+                patch_torch=True, patch_transformers=True, model=model
+            ),
+        ):
+            to_onnx(
+                model,
+                (),
+                kwargs=captured_kwargs,
+                dynamic_shapes=dynamic_shapes,
+                filename=filename,
+            )
+        summary.export = "OK"
+        summary.error_export = None
+        data.filename = filename
+    except Exception as exc:  # noqa: BLE001
+        summary.export = "FAILED"
+        summary.error_export = str(exc)
+        if not quiet:
+            raise
+        return summary
+
+    # 3. Recompute node statistics for the freshly-exported file so the
+    #    dashboard reflects the ``to_onnx``-with-defaults graph.
+    if os.path.exists(filename):
+        try:
+            import onnx
+
+            onx = onnx.load(filename, load_external_data=False)
+            counts = Counter(n.op_type for n in onx.graph.node)
+            summary.n_nodes = sum(counts.values())
+            top = counts.most_common(5)
+            summary.top_op_types = ",".join(f"{op}:{cnt}" for op, cnt in top)
+        except Exception:  # noqa: BLE001 - statistics are best-effort
+            pass
+
+    # 4. Discrepancy check using the captured observer.
+    atol = 1e-4
+    try:
+        disc_data = observer.check_discrepancies(filename, atol=atol)
+    except Exception as exc:  # noqa: BLE001
+        summary.discrepancies = "FAILED"
+        summary.error_discrepancies = str(exc)
+        if not quiet:
+            raise
+        return summary
+
+    data.discrepancies = disc_data
+    n_ok = sum(1 for row in disc_data if row.get("SUCCESS", False))
+    n_total = len(disc_data)
+    summary.discrepancies_ok = n_ok
+    summary.discrepancies_total = n_total
+    summary.discrepancies = "OK" if n_ok == n_total else "FAILED"
+    summary.discrepancies_atol = atol
+    numeric_rows = [row for row in disc_data if "abs" in row]
+    if numeric_rows:
+        summary.discrepancies_max_abs = max(row["abs"] for row in numeric_rows)
+
     return summary
 
 
@@ -563,7 +728,10 @@ def run_all(
             # always passed for yobx runs, even when the user did not
             # supply one (in which case we use a per-cell temporary
             # directory which is removed once the metric is read).
-            is_yobx = exporter_cfg["exporter"] == "yobx"
+            # ``yobx-to_onnx`` ultimately calls ``yobx.torch.to_onnx`` too,
+            # so it produces the same companion ``.xlsx`` workbook and the
+            # same export-time metric handling applies.
+            is_yobx = exporter_cfg["exporter"] in ("yobx", "yobx-to_onnx")
             tmp_dump: Optional[str] = None
             effective_dump = dump_folder
             if is_yobx and effective_dump is None:
