@@ -23,7 +23,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
             "skl2onnx",
             "onnxmltools",
             "onnxscript",
-            "ir-py",
+            "onnx-ir",
             "tf2onnx",
         }
         self.assertEqual(set(rpd.DEFAULT_PACKAGES), expected)
@@ -40,7 +40,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
         self.assertEqual(set(row), set(rpd.CSV_FIELDS))
 
     def test_build_row_handles_missing_fields(self):
-        row = rpd.build_row("ir-py", {})
+        row = rpd.build_row("onnx-ir", {})
         self.assertEqual(row["last_day"], "")
         self.assertEqual(row["last_week"], "")
         self.assertEqual(row["last_month"], "")
@@ -86,7 +86,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
 
         def fake_fetch(package):
             calls.append(package)
-            if package == "ir-py":
+            if package == "onnx-ir":
                 raise RuntimeError("boom")
             return {"last_day": 1, "last_week": 2, "last_month": 3}
 
@@ -101,13 +101,13 @@ class TestRecordPypiDownloads(unittest.TestCase):
                         "--package",
                         "onnx",
                         "--package",
-                        "ir-py",
+                        "onnx-ir",
                         "--package",
                         "tf2onnx",
                     ]
                 )
                 self.assertEqual(code, 1)
-                self.assertEqual(calls, ["onnx", "ir-py", "tf2onnx"])
+                self.assertEqual(calls, ["onnx", "onnx-ir", "tf2onnx"])
                 self.assertTrue(
                     os.path.isfile(os.path.join(tmp, "onnx", "downloads.csv"))
                 )
@@ -115,7 +115,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
                     os.path.isfile(os.path.join(tmp, "tf2onnx", "downloads.csv"))
                 )
                 self.assertFalse(
-                    os.path.isfile(os.path.join(tmp, "ir-py", "downloads.csv"))
+                    os.path.isfile(os.path.join(tmp, "onnx-ir", "downloads.csv"))
                 )
         finally:
             rpd.fetch_recent_downloads = original
