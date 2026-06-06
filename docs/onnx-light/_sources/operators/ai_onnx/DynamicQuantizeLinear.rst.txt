@@ -1,0 +1,113 @@
+.. _op_ai_onnx_DynamicQuantizeLinear:
+
+DynamicQuantizeLinear
+=====================
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 11
+
+A Function to fuse calculation for Scale, Zero Point and FP32->8Bit conversion of FP32 Input data.
+Outputs Scale, ZeroPoint and Quantized Input for a given FP32 Input.
+Scale is calculated as:
+
+.. code-block::
+
+    y_scale = (maximum(0, max(x)) - minimum(0, min(x))) / (qmax - qmin)
+
+
+* where qmax and qmin are max and min values for quantization range i.e. [0, 255] in case of uint8
+* data range is adjusted to include 0.
+
+Zero point is calculated as:
+
+.. code-block::
+
+    intermediate_zero_point = qmin - min(x)/y_scale
+    y_zero_point = cast(round(saturate(intermediate_zero_point)))
+
+
+* where qmax and qmin are max and min values for quantization range .i.e [0, 255] in case of uint8
+* for saturation, it saturates to [0, 255] if it's uint8, or [-127, 127] if it's int8. Right now only uint8 is supported.
+* rounding to nearest ties to even.
+
+Data quantization formula is:
+
+.. code-block::
+
+    y = saturate (round (x / y_scale) + y_zero_point)
+
+
+* for saturation, it saturates to [0, 255] if it's uint8, or [-127, 127] if it's int8. Right now only uint8 is supported.
+* rounding to nearest ties to even.
+
+**Inputs**
+
+- **x** (*T1*): Input tensor
+
+**Outputs**
+
+- **y** (*T2*): Quantized output tensor
+- **y_scale** (*tensor(float)*): Output scale. It's a scalar, which means a per-tensor/layer quantization.
+- **y_zero_point** (*T2*): Output zero point. It's a scalar, which means a per-tensor/layer quantization.
+
+**Type Constraints**
+
+- **T1**: Constrain 'x' to float tensor.
+  Allowed types: tensor(float).
+- **T2**: Constrain 'y_zero_point' and 'y' to 8-bit unsigned integer tensor.
+  Allowed types: tensor(uint8).
+
+Examples
+--------
+
+**test_dynamicquantizelinear**
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(6,), dtype=float32
+        [ 0.  ,  2.  , -3.  , -2.5 ,  1.34,  0.5 ]
+
+    Outputs:
+      y: shape=(6,), dtype=uint8
+        [153, 255,   0,  26, 221, 179]
+      y_scale: shape=(), dtype=float32
+        0.01960784
+      y_zero_point: shape=(), dtype=uint8
+        153
+
+**test_dynamicquantizelinear_max_adjusted**
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(6,), dtype=float32
+        [-1.  , -2.1 , -1.3 , -2.5 , -3.34, -4.  ]
+
+    Outputs:
+      y: shape=(6,), dtype=uint8
+        [191, 121, 172,  96,  42,   0]
+      y_scale: shape=(), dtype=float32
+        0.01568628
+      y_zero_point: shape=(), dtype=uint8
+        255
+
+**test_dynamicquantizelinear_min_adjusted**
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(3, 4), dtype=float32
+        [[1.   , 2.1  , 1.3  , 2.5  ],
+         [3.34 , 4.   , 1.5  , 2.6  ],
+         [3.9  , 4.   , 3.   , 2.345]]
+
+    Outputs:
+      y: shape=(3, 4), dtype=uint8
+        [[ 64, 134,  83, 159],
+         [213, 255,  96, 166],
+         [249, 255, 191, 149]]
+      y_scale: shape=(), dtype=float32
+        0.01568628
+      y_zero_point: shape=(), dtype=uint8
+        0
