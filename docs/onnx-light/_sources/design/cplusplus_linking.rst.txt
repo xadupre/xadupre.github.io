@@ -70,19 +70,37 @@ converter), link the optim target instead, which transitively pulls in
     find_package(onnx_light REQUIRED)
     target_link_libraries(my_target PRIVATE onnx_light::lib_onnx_optim)
 
-To evaluate ONNX models in-process using the bundled reference kernels
-(backend test infrastructure: ``struct Tensor``, ``struct TestCase``,
-``expect()``, ``SplitMix64``-based deterministic RNG, ...), link:
+To evaluate ONNX nodes / graphs / models in-process using the bundled C++
+**reference implementation** of the ONNX operators (runtime
+``struct Tensor``, ``RunGraph`` / ``RunFunction`` / ``RunModel``, the
+``SplitMix64``-based deterministic RNG, ...), link the kernels target:
+
+.. code-block:: cmake
+
+    find_package(onnx_light REQUIRED)
+    target_link_libraries(my_target PRIVATE onnx_light::onnx_kernels)
+
+The kernels live under ``onnx_light/onnx_kernels/kernels/<group>/`` and
+form a self-contained runtime that only depends on
+``onnx_light::lib_onnx_proto``.  See
+:doc:`../api/cpp/onnx_kernels/index` for the full C++ API reference.
+
+To additionally pull in the backend-test infrastructure
+(``struct TestCase``, ``Expect()`` helper, per-operator
+``RegisterXxxCases`` registries used by every ``CollectTestCases``
+call), link:
 
 .. code-block:: cmake
 
     find_package(onnx_light REQUIRED)
     target_link_libraries(my_target PRIVATE onnx_light::onnx_backend_test)
 
-``onnx_light::onnx_backend_test`` is intentionally independent from
-``onnx_light::onnx_light`` / ``onnx_light::lib_onnx_op``; it can be combined
-with ``onnx_light::onnx_light`` when both schema validation and execution are
-needed in the same binary.
+``onnx_light::onnx_backend_test`` publicly depends on
+``onnx_light::onnx_kernels`` (which transitively brings in
+``onnx_light::lib_onnx_proto``) and is intentionally independent from
+``onnx_light::onnx_light`` / ``onnx_light::lib_onnx_op``; it can be
+combined with ``onnx_light::onnx_light`` when both schema validation and
+execution are needed in the same binary.
 
 This keeps downstream CMake files independent from hardcoded include paths and
 library file names. If *onnx-light* is installed to a non-standard prefix,
@@ -101,8 +119,9 @@ For monorepos or local development, a downstream CMake project can also include
     target_link_libraries(my_target PRIVATE lib_onnx_lib)
 
 Use the in-tree ``lib_onnx_proto`` target instead when only proto
-parsing/serialization is needed, or ``lib_onnx_op``, ``lib_onnx_optim`` or
-``lib_onnx_backend_test`` for the corresponding feature subset.  This uses the
+parsing/serialization is needed, or ``lib_onnx_op``, ``lib_onnx_optim``,
+``lib_onnx_kernels`` or ``lib_onnx_backend_test`` for the corresponding
+feature subset.  This uses the
 in-tree build targets directly instead of ``find_package``.
 
 Excerpt from the example project
@@ -122,8 +141,8 @@ The Python package ships five nanobind extension modules,
 ``onnx_light.onnx_py._onnxpyprotoop``,
 ``onnx_light.onnx_py._onnxpyprotolib``,
 ``onnx_light.onnx_py._onnxpyoptim``,
-``onnx_light.onnx_py._onnxkernels`` and
-``onnx_light.onnx_py._onnxbackend``.  All five need access to the proto
+``onnx_light.onnx_py._onnxpykernels`` and
+``onnx_light.onnx_py._onnxpybackend``.  All five need access to the proto
 classes (``ModelProto``, ``NodeProto``, ``TensorProto``, ...) defined in
 ``onnx_light/onnx_proto``.  How do the extensions agree on a single
 ``nb::class_<ModelProto>`` registration so that values can flow between
@@ -153,21 +172,21 @@ single ``std::type_info`` instance.  Consequently
 ``&typeid(ModelProto)`` evaluates to the same pointer in every
 extension, and nanobind's cross-module type registry resolves
 ``ModelProto`` references coming from ``_onnxpyoptim`` or
-``_onnxbackend`` against the
+``_onnxpybackend`` against the
 ``nb::class_<ModelProto>`` that ``_onnxpyprotoop`` registered.  In
 practice, only ``_onnxpyprotoop`` declares
 ``nb::class_<NodeProto>`` / ``nb::class_<ModelProto>`` / ...; the
-``_onnxpyprotolib``, ``_onnxpyoptim``, ``_onnxkernels`` and
-``_onnxbackend`` modules return proto values by
+``_onnxpyprotolib``, ``_onnxpyoptim``, ``_onnxpykernels`` and
+``_onnxpybackend`` modules return proto values by
 reference (for example
 ``TestCase.model``, see ``onnx_light/onnx_py/_onnxpy_backend_test.cc``)
 and let the shared registry produce a Python object backed by the same
 binding.  The package's ``onnx_light/onnx_py/_onnxpy.py`` shim imports
 ``_onnxpyprotoop`` before ``_onnxpyprotolib``, ``_onnxpyoptim``,
-``_onnxkernels`` and ``_onnxbackend`` to
+``_onnxpykernels`` and ``_onnxpybackend`` to
 guarantee that the
 ``ModelProto`` binding exists by the time any ``_onnxpyprotolib``,
-``_onnxpyoptim``, ``_onnxkernels`` or ``_onnxbackend`` accessor is used.
+``_onnxpyoptim``, ``_onnxpykernels`` or ``_onnxpybackend`` accessor is used.
 
 See also
 --------
