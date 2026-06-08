@@ -625,7 +625,7 @@ class TestMain(unittest.TestCase):
                 self.assertTrue(os.path.exists(p))
                 with open(p) as fh:
                     data = json.load(fh)
-                self.assertEqual(data["tag"], "inference")
+                self.assertEqual(data["tag"], rsi.DEFAULT_TAG)
         finally:
             rsi.build_payload = original_build
 
@@ -647,6 +647,122 @@ class TestMain(unittest.TestCase):
                 )
         finally:
             rsi.build_payload = original_build
+
+
+class TestTagFiltering(unittest.TestCase):
+    def test_default_tag_includes_inference_and_local_function(self):
+        self.assertEqual(rsi.DEFAULT_TAGS, ("inference", "local_function"))
+        self.assertEqual(
+            rsi._normalize_tags(rsi.DEFAULT_TAG),
+            ("inference", "local_function"),
+        )
+
+    def test_normalize_tags_accepts_various_shapes(self):
+        self.assertEqual(rsi._normalize_tags(None), ())
+        self.assertEqual(rsi._normalize_tags(""), ())
+        self.assertEqual(rsi._normalize_tags("inference"), ("inference",))
+        self.assertEqual(
+            rsi._normalize_tags("inference, local_function"),
+            ("inference", "local_function"),
+        )
+        self.assertEqual(
+            rsi._normalize_tags(["inference", "local_function"]),
+            ("inference", "local_function"),
+        )
+        self.assertEqual(
+            rsi._normalize_tags(("inference,local_function", "extra")),
+            ("inference", "local_function", "extra"),
+        )
+
+    def test_discover_inference_tests_filters_multiple_tags(self):
+        class Case:
+            def __init__(self, name, tag, model):
+                self.name = name
+                self.tag = tag
+                self.model = model
+
+        cases = {
+            "a": Case("a", "inference", "model_a"),
+            "b": Case("b", "local_function", "model_b"),
+            "c": Case("c", "other", "model_c"),
+        }
+
+        import types
+
+        fake_module = types.ModuleType("onnx_light.backend.test.case")
+        fake_module.collect_test_case = lambda: cases
+        parent_pkg = types.ModuleType("onnx_light.backend.test")
+        parent_pkg.case = fake_module
+        backend_pkg = types.ModuleType("onnx_light.backend")
+        backend_pkg.test = parent_pkg
+        root_pkg = types.ModuleType("onnx_light")
+        root_pkg.backend = backend_pkg
+
+        saved = {}
+        for name in (
+            "onnx_light",
+            "onnx_light.backend",
+            "onnx_light.backend.test",
+            "onnx_light.backend.test.case",
+        ):
+            saved[name] = sys.modules.get(name)
+        sys.modules["onnx_light"] = root_pkg
+        sys.modules["onnx_light.backend"] = backend_pkg
+        sys.modules["onnx_light.backend.test"] = parent_pkg
+        sys.modules["onnx_light.backend.test.case"] = fake_module
+
+        original_to_onnx = rsi._onnx_light_model_to_onnx
+        original_snapshot = rsi.snapshot_intermediates
+        original_snapshot_inputs = rsi.snapshot_inputs
+        original_mermaid = rsi.model_to_mermaid
+
+        rsi._onnx_light_model_to_onnx = lambda m: m
+        rsi.snapshot_intermediates = lambda m: [{"name": "Y"}]
+        rsi.snapshot_inputs = lambda m: []
+        rsi.model_to_mermaid = lambda m: ""
+
+        try:
+            discovered = rsi.discover_inference_tests("inference,local_function")
+            self.assertEqual([d["name"] for d in discovered], ["a", "b"])
+
+            discovered_single = rsi.discover_inference_tests("inference")
+            self.assertEqual([d["name"] for d in discovered_single], ["a"])
+
+            discovered_list = rsi.discover_inference_tests(
+                ["local_function", "other"]
+            )
+            self.assertEqual([d["name"] for d in discovered_list], ["b", "c"])
+        finally:
+            rsi._onnx_light_model_to_onnx = original_to_onnx
+            rsi.snapshot_intermediates = original_snapshot
+            rsi.snapshot_inputs = original_snapshot_inputs
+            rsi.model_to_mermaid = original_mermaid
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+    def test_build_payload_records_joined_tag(self):
+        tests = [{"name": "t", "model": "m", "expected": [{"name": "Y"}]}]
+
+        def fake_run(model, expected, backend):
+            return {
+                "success": True,
+                "correct": 1,
+                "total": 1,
+                "details": [],
+                "error": "",
+                "error_step": "",
+            }
+
+        payload = rsi.build_payload(
+            tag=["inference", "local_function"],
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertEqual(payload["tag"], "inference, local_function")
 
 
 if __name__ == "__main__":
