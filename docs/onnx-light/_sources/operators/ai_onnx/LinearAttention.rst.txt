@@ -1,0 +1,696 @@
+.. _op_ai_onnx_LinearAttention:
+
+LinearAttention
+===============
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 27
+
+Unified linear attention operator for autoregressive decoding (T=1) and prefill (T>1).
+
+The query, key, value, and (where applicable) decay/beta inputs use 3D packed format
+[B, T, H\*D], where heads are flattened into the last dimension; q_num_heads and
+kv_num_heads are always required and are used to unpack to 4D internally for computation.
+The optional past_state and present_state are 4D with shape (B, H_kv, d_k, d_v).
+
+Group-query attention (GQA) is supported: q_num_heads must be a positive multiple of
+kv_num_heads. When q_num_heads == kv_num_heads this reduces to multi-headed linear
+attention; when q_num_heads > kv_num_heads each KV head (and its recurrent state) is
+shared by ``q_num_heads / kv_num_heads`` query heads (multi-query attention is the
+special case kv_num_heads == 1).
+
+The update_rule attribute selects the recurrence type:
+
+- "linear": S_t = S{t-1} + k_t ⊗ v_t; o_t = scale \* q_t^T S_t
+- "gated": S_t = exp(g_t) \* S{t-1} + k_t ⊗ v_t; o_t = scale \* q_t^T S_t
+- "delta": S_t = S{t-1} + β_t \* k_t ⊗ (v_t - S{t-1}^T k_t); o_t = scale \* q_t^T S_t
+- "gated_delta": S_t = exp(g_t) \* S{t-1} + β_t \* k_t ⊗ (v_t - exp(g_t) \* S{t-1}^T k_t); o_t = scale \* q_t^T S_t
+
+where g_t is the decay (in log-space), β_t is the update rate, and ⊗ denotes outer product.
+
+Semantics: Equivalent to running the recurrent update sequentially for each token,
+but may be implemented using chunk-parallel algorithms for GPU efficiency.
+
+**Inputs**
+
+- **query** (*T*): Query vectors with 3D packed shape (B, T, H_q \* d_k). Heads are packed into the last dimension.
+- **key** (*T*): Key vectors with 3D packed shape (B, T, H_kv \* d_k). Should be L2-normalized for delta/gated_delta modes.
+- **value** (*T*): Value vectors with 3D packed shape (B, T, H_kv \* d_v).
+- **past_state** (*S*): Recurrent state from previous step with shape (B, H_kv, d_k, d_v). Always 4D. If not provided, defaults to zeros.
+- **decay** (*T*): Exponential decay gate in log-space. 3D packed shape: (B, T, H_kv \* d_k) for per-key-dimension decay (GLA/RWKV-6), or (B, T, H_kv) for per-head scalar decay (DeltaNet/RetNet). Required for 'gated' and 'gated_delta' modes.
+- **beta** (*T*): Update rate (sigmoid output). 3D packed shape: (B, T, H_kv) or (B, T, 1). Required for 'delta' and 'gated_delta' modes.
+
+**Outputs**
+
+- **output** (*T*): Attention output with 3D packed shape (B, T, H_q \* d_v).
+- **present_state** (*S*): Updated recurrent state with shape (B, H_kv, d_k, d_v). Always 4D.
+
+**Attributes**
+
+- **chunk_size** (*int*): Chunk size for the chunk-parallel WY decomposition during prefill (T>1). Tuning hint; does not affect output correctness.
+- **kv_num_heads** (*int*): Number of key/value heads. Always required.
+- **q_num_heads** (*int*): Number of query heads. Always required.
+- **scale** (*float*): Output scaling factor. When 0.0 (default), derives d_k = query.shape[-1] / q_num_heads and uses 1/sqrt(d_k). Set explicitly to override.
+- **update_rule** (*string*): The update rule for the linear attention recurrence. One of: 'linear', 'gated', 'delta', 'gated_delta'. Default is 'gated_delta'.
+
+**Type Constraints**
+
+- **T**: Constrain activation input and output types to float16, bfloat16, or float32 tensors.
+  Allowed types: tensor(bfloat16), tensor(float), tensor(float16).
+- **S**: Constrain state types to float16, bfloat16, or float32 tensors. Should be float32 or the same as T for numerical stability on long sequences.
+  Allowed types: tensor(bfloat16), tensor(float), tensor(float16).
+
+Examples
+--------
+
+**test_cc_linear_attention_decode_step**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, past_state, decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 1, 4), dtype=float32
+        [[[1. , 0. , 0.5, 0.5]]]
+      key: shape=(1, 1, 4), dtype=float32
+        [[[1. , 0. , 0.5, 0.5]]]
+      value: shape=(1, 1, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5]]]
+      past_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5, -0.5],
+           [ 0. ,  0.5]],
+        
+          [[ 1. ,  0. ],
+           [-0.5,  1. ]]]]
+      decay: shape=(1, 1, 4), dtype=float32
+        [[[-0.1, -0.2, -0.3, -0.4]]]
+      beta: shape=(1, 1, 2), dtype=float32
+        [[[0.8, 0.9]]]
+
+    Outputs:
+      output: shape=(1, 1, 4), dtype=float32
+        [[[ 0.6296671 ,  1.0673892 ,  0.23798102, -0.02875237]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.89048374,  1.5095164 ],
+           [ 0.        ,  0.4093654 ]],
+        
+          [[ 0.8745451 , -0.375822  ],
+           [-0.2014331 ,  0.29449803]]]]
+
+**test_cc_linear_attention_delta**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", "", beta) -> (output, present_state)
+      Attributes:
+        update_rule = "delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      beta: shape=(1, 2, 2), dtype=float32
+        [[[0.8, 0.9],
+          [0.7, 0.6]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.15909901, -0.15909901],
+          [ 1.4849242 ,  1.9798989 ,  0.42426407, -0.42426407]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.8       ,  1.6       ],
+           [ 2.1       ,  2.8       ]],
+        
+          [[ 0.525     , -0.525     ],
+           [-0.07500002,  0.07500002]]]]
+
+**test_cc_linear_attention_explicit_scale**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value) -> (output, present_state)
+      Attributes:
+        update_rule = "linear"
+        q_num_heads = 2
+        kv_num_heads = 2
+        scale = 2.0
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 2. ,  4. ,  0.5, -0.5],
+          [ 6. ,  8. ,  2. , -2. ]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.  ,  2.  ],
+           [ 3.  ,  4.  ]],
+        
+          [[ 0.75, -0.75],
+           [-0.25,  0.25]]]]
+
+**test_cc_linear_attention_gated**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay) -> (output, present_state)
+      Attributes:
+        update_rule = "gated"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 2), dtype=float32
+        [[[-0.1 , -0.2 ],
+          [-0.3 , -0.05]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.17677669, -0.17677669],
+          [ 2.1213202 ,  2.828427  ,  0.70710677, -0.70710677]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.7408182 ,  1.4816364 ],
+           [ 3.        ,  4.        ]],
+        
+          [[ 0.7378074 , -0.7378074 ],
+           [-0.26219264,  0.26219264]]]]
+
+**test_cc_linear_attention_gated_delta**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 2), dtype=float32
+        [[[-0.1 , -0.2 ],
+          [-0.3 , -0.05]]]
+      beta: shape=(1, 2, 2), dtype=float32
+        [[[0.8, 0.9],
+          [0.7, 0.6]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.15909901, -0.15909901],
+          [ 1.4849242 ,  1.9798989 ,  0.42426407, -0.42426407]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5926546 ,  1.1853092 ],
+           [ 2.1       ,  2.8       ]],
+        
+          [[ 0.51402664, -0.51402664],
+           [-0.0859734 ,  0.0859734 ]]]]
+
+**test_cc_linear_attention_gated_delta_beta_scalar**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 4), dtype=float32
+        [[[-0.1 , -0.2 , -0.3 , -0.4 ],
+          [-0.05, -0.1 , -0.15, -0.2 ]]]
+      beta: shape=(1, 2, 1), dtype=float32
+        [[[0.8],
+          [0.7]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.14142136, -0.14142136],
+          [ 1.4849242 ,  1.9798989 ,  0.49883345, -0.49883345]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.7609836 ,  1.5219672 ],
+           [ 2.1       ,  2.8       ]],
+        
+          [[ 0.5206724 , -0.5206724 ],
+           [-0.18478464,  0.18478464]]]]
+
+**test_cc_linear_attention_gated_delta_gqa**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 4
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 8), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5, -1. ,  1. ,  0.2,  0.3],
+          [ 0. ,  1. ,  1. , -1. ,  0.5,  0.5, -0.5,  0.5]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 4), dtype=float32
+        [[[-0.1 , -0.2 , -0.3 , -0.4 ],
+          [-0.05, -0.1 , -0.15, -0.2 ]]]
+      beta: shape=(1, 2, 2), dtype=float32
+        [[[0.8, 0.9],
+          [0.7, 0.6]]]
+
+    Outputs:
+      output: shape=(1, 2, 8), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.28284273,  0.56568545,  0.        ,
+            0.        ,  0.07954951, -0.07954951],
+          [ 1.4849242 ,  1.9798989 , -0.94682753, -0.90370566,  0.13359852,
+           -0.13359852, -0.21446955,  0.21446955]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.7609836 ,  1.5219672 ],
+           [ 2.1       ,  2.8       ]],
+        
+          [[ 0.49224257, -0.49224257],
+           [-0.11436889,  0.11436889]]]]
+
+**test_cc_linear_attention_gated_delta_mqa**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 4
+        kv_num_heads = 1
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 8), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5, -1. ,  1. ,  0.2,  0.3],
+          [ 0. ,  1. ,  1. , -1. ,  0.5,  0.5, -0.5,  0.5]]]
+      key: shape=(1, 2, 2), dtype=float32
+        [[[1., 0.],
+          [0., 1.]]]
+      value: shape=(1, 2, 2), dtype=float32
+        [[[1., 2.],
+          [3., 4.]]]
+      decay: shape=(1, 2, 2), dtype=float32
+        [[[-0.1 , -0.2 ],
+          [-0.05, -0.1 ]]]
+      beta: shape=(1, 2, 1), dtype=float32
+        [[[0.8],
+          [0.7]]]
+
+    Outputs:
+      output: shape=(1, 2, 8), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.28284273,  0.56568545, -0.56568545,
+           -1.1313709 ,  0.11313709,  0.22627418],
+          [ 1.4849242 ,  1.9798989 , -0.94682753, -0.90370566,  1.0115104 ,
+            1.5280461 ,  0.47341377,  0.45185283]]]
+      present_state: shape=(1, 1, 2, 2), dtype=float32
+        [[[[0.7609836, 1.5219672],
+           [2.1      , 2.8      ]]]]
+
+**test_cc_linear_attention_gated_per_head_decay**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay) -> (output, present_state)
+      Attributes:
+        update_rule = "gated"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 2), dtype=float32
+        [[[-0.1 , -0.2 ],
+          [-0.3 , -0.05]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.17677669, -0.17677669],
+          [ 2.1213202 ,  2.828427  ,  0.70710677, -0.70710677]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.7408182 ,  1.4816364 ],
+           [ 3.        ,  4.        ]],
+        
+          [[ 0.7378074 , -0.7378074 ],
+           [-0.26219264,  0.26219264]]]]
+
+**test_cc_linear_attention_gated_perdim_decay**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, "", decay) -> (output, present_state)
+      Attributes:
+        update_rule = "gated"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      decay: shape=(1, 2, 4), dtype=float32
+        [[[-0.1 , -0.2 , -0.3 , -0.4 ],
+          [-0.05, -0.1 , -0.15, -0.2 ]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.17677669, -0.17677669],
+          [ 2.1213202 ,  2.828427  ,  0.7145273 , -0.7145273 ]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.95122945,  1.9024589 ],
+           [ 3.        ,  4.        ]],
+        
+          [[ 0.715177  , -0.715177  ],
+           [-0.2953173 ,  0.2953173 ]]]]
+
+**test_cc_linear_attention_gqa**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value) -> (output, present_state)
+      Attributes:
+        update_rule = "linear"
+        q_num_heads = 4
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 8), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5, -1. ,  1. ,  0.2,  0.3],
+          [ 0. ,  1. ,  1. , -1. ,  0.5,  0.5, -0.5,  0.5]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+
+    Outputs:
+      output: shape=(1, 2, 8), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.35355338,  0.70710677,  0.        ,
+            0.        ,  0.08838835, -0.08838835],
+          [ 2.1213202 ,  2.828427  , -1.4142135 , -1.4142135 ,  0.17677669,
+           -0.17677669, -0.35355338,  0.35355338]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.  ,  2.  ],
+           [ 3.  ,  4.  ]],
+        
+          [[ 0.75, -0.75],
+           [-0.25,  0.25]]]]
+
+**test_cc_linear_attention_linear**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value) -> (output, present_state)
+      Attributes:
+        update_rule = "linear"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.17677669, -0.17677669],
+          [ 2.1213202 ,  2.828427  ,  0.70710677, -0.70710677]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.  ,  2.  ],
+           [ 3.  ,  4.  ]],
+        
+          [[ 0.75, -0.75],
+           [-0.25,  0.25]]]]
+
+**test_cc_linear_attention_linear_t1_no_past**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value) -> (output, present_state)
+      Attributes:
+        update_rule = "linear"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 1, 4), dtype=float32
+        [[[1. , 0. , 0.5, 0.5]]]
+      key: shape=(1, 1, 4), dtype=float32
+        [[[1. , 0. , 0.5, 0.5]]]
+      value: shape=(1, 1, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5]]]
+
+    Outputs:
+      output: shape=(1, 1, 4), dtype=float32
+        [[[ 0.70710677,  1.4142135 ,  0.17677669, -0.17677669]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.  ,  2.  ],
+           [ 0.  ,  0.  ]],
+        
+          [[ 0.25, -0.25],
+           [ 0.25, -0.25]]]]
+
+**test_cc_linear_attention_no_past_explicit_zeros**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, past_state, decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      past_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[0., 0.],
+           [0., 0.]],
+        
+          [[0., 0.],
+           [0., 0.]]]]
+      decay: shape=(1, 2, 4), dtype=float32
+        [[[-0.1 , -0.2 , -0.3 , -0.4 ],
+          [-0.05, -0.1 , -0.15, -0.2 ]]]
+      beta: shape=(1, 2, 2), dtype=float32
+        [[[0.8, 0.9],
+          [0.7, 0.6]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.56568545,  1.1313709 ,  0.15909901, -0.15909901],
+          [ 1.4849242 ,  1.9798989 ,  0.4289391 , -0.4289391 ]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.7609836 ,  1.5219672 ],
+           [ 2.1       ,  2.8       ]],
+        
+          [[ 0.49224257, -0.49224257],
+           [-0.11436889,  0.11436889]]]]
+
+**test_cc_linear_attention_prefill_with_past**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, past_state, decay, beta) -> (output, present_state)
+      Attributes:
+        update_rule = "gated_delta"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      past_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5, -0.5],
+           [ 0. ,  0.5]],
+        
+          [[ 1. ,  0. ],
+           [-0.5,  1. ]]]]
+      decay: shape=(1, 2, 4), dtype=float32
+        [[[-0.1 , -0.2 , -0.3 , -0.4 ],
+          [-0.05, -0.1 , -0.15, -0.2 ]]]
+      beta: shape=(1, 2, 2), dtype=float32
+        [[[0.8, 0.9],
+          [0.7, 0.6]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 0.6296671 ,  1.0673892 ,  0.23798102, -0.02875237],
+          [ 1.4849242 ,  2.0584745 ,  0.8784764 , -0.7037207 ]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.84705436,  1.4358964 ],
+           [ 2.1       ,  2.9111228 ]],
+        
+          [[ 0.9150809 , -0.53878486],
+           [-0.32727236,  0.45642647]]]]
+
+**test_cc_linear_attention_with_past_state**
+
+.. code-block:: text
+
+    Node:
+      LinearAttention(query, key, value, past_state) -> (output, present_state)
+      Attributes:
+        update_rule = "linear"
+        q_num_heads = 2
+        kv_num_heads = 2
+
+.. code-block:: text
+
+    Inputs:
+      query: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. ,  1. , -1. ]]]
+      key: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  0. ,  0.5,  0.5],
+          [ 0. ,  1. , -0.5,  0.5]]]
+      value: shape=(1, 2, 4), dtype=float32
+        [[[ 1. ,  2. ,  0.5, -0.5],
+          [ 3. ,  4. , -1. ,  1. ]]]
+      past_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 0.5, -0.5],
+           [ 0. ,  0.5]],
+        
+          [[ 1. ,  0. ],
+           [-0.5,  1. ]]]]
+
+    Outputs:
+      output: shape=(1, 2, 4), dtype=float32
+        [[[ 1.0606601 ,  1.0606601 ,  0.35355338,  0.17677669],
+          [ 2.1213202 ,  3.1819804 ,  1.767767  , -1.4142135 ]]]
+      present_state: shape=(1, 2, 2, 2), dtype=float32
+        [[[[ 1.5 ,  1.5 ],
+           [ 3.  ,  4.5 ]],
+        
+          [[ 1.75, -0.75],
+           [-0.75,  1.25]]]]
