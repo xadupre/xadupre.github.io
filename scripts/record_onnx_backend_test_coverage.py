@@ -6,8 +6,10 @@ The script walks every backend node test bundled with the installed
 ``onnx_light.backend.test.case.collect_test_case``), runs each one
 against:
 
-* ``onnxruntime`` (CPU execution provider) and
-* the ONNX Python reference implementation (``onnx.reference``),
+* ``onnxruntime`` (CPU execution provider),
+* the ONNX Python reference implementation (``onnx.reference``) and
+* the ``onnx-light`` reference implementation backed by the C++
+  ``KernelDispatchTable`` (``onnx_light.reference``),
 
 and records whether the produced outputs match the expected ones. The
 resulting per-test status is persisted to
@@ -31,14 +33,16 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference")
+BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference", "onnx_light")
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend. ``onnxruntime`` runs the model with the ``onnxruntime``
-# package while the reference implementation lives in ``onnx``.
+# package, the ``reference`` implementation lives in ``onnx`` and
+# ``onnx_light`` ships its own C++-backed reference evaluator.
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnxruntime": "onnxruntime",
     "reference": "onnx",
+    "onnx_light": "onnx_light",
 }
 
 # Default numerical tolerances when comparing produced outputs with the
@@ -67,7 +71,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnxruntime", "numpy"):
+    for name in ("onnx", "onnxruntime", "onnx_light", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort, optional packages
@@ -305,9 +309,32 @@ def _run_with_reference(model) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
+def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
+    """Run ``model`` with ``onnx_light.reference.ReferenceEvaluator``.
+
+    ``onnx_light`` ships its own ``ModelProto`` (and matching
+    ``ReferenceEvaluator``) that is wire-format compatible with the
+    official ``onnx`` package but distinct at the Python type level. The
+    in-memory ``onnx.ModelProto`` produced by :func:`discover_node_tests`
+    is therefore serialised and re-parsed by the evaluator so it sees a
+    proto of its own type.
+    """
+    from onnx_light.reference import ReferenceEvaluator
+
+    evaluator = ReferenceEvaluator(model.SerializeToString())
+    input_names = _model_input_names(model)
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        feeds = {name: value for name, value in zip(input_names, inputs)}
+        return list(evaluator.run(None, feeds))
+
+    return _run
+
+
 _BACKEND_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
     "onnxruntime": _run_with_onnxruntime,
     "reference": _run_with_reference,
+    "onnx_light": _run_with_onnx_light,
 }
 
 
