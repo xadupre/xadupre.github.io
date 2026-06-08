@@ -63,7 +63,7 @@
     <link rel="icon" href="../_static/logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Using backend tests to evaluate a runtime" href="backend_tests.html" />
+    <link rel="next" title="C++ Kernels" href="kernels.html" />
     <link rel="prev" title="How the C++ libraries are split" href="library_split.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -400,6 +400,10 @@
 <li class="toctree-l1"><a class="reference internal" href="library_split.html">How the C++ libraries are split</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Linking <em>onnx-light</em> in C++</a></li>
 </ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Kernels</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="kernels.html">C++ Kernels</a></li>
+</ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Backend</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="backend_tests.html">Using backend tests to evaluate a runtime</a></li>
@@ -527,17 +531,32 @@ converter), link the optim target instead, which transitively pulls in
 <span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::lib_onnx_optim</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>To evaluate ONNX models in-process using the bundled reference kernels
-(backend test infrastructure: <code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">TestCase</span></code>,
-<code class="docutils literal notranslate"><span class="pre">expect()</span></code>, <code class="docutils literal notranslate"><span class="pre">SplitMix64</span></code>-based deterministic RNG, …), link:</p>
+<p>To evaluate ONNX nodes / graphs / models in-process using the bundled C++
+<strong>reference implementation</strong> of the ONNX operators (runtime
+<code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">RunGraph</span></code> / <code class="docutils literal notranslate"><span class="pre">RunFunction</span></code> / <code class="docutils literal notranslate"><span class="pre">RunModel</span></code>, the
+<code class="docutils literal notranslate"><span class="pre">SplitMix64</span></code>-based deterministic RNG, …), link the kernels target:</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">find_package</span><span class="p">(</span><span class="s">onnx_light</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
+<span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::onnx_kernels</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The kernels live under <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_kernels/kernels/&lt;group&gt;/</span></code> and
+form a self-contained runtime that only depends on
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>.  See
+<a class="reference internal" href="../api/cpp/onnx_kernels/index.html"><span class="doc">onnx_kernels</span></a> for the full C++ API reference.</p>
+<p>To additionally pull in the backend-test infrastructure
+(<code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">TestCase</span></code>, <code class="docutils literal notranslate"><span class="pre">Expect()</span></code> helper, per-operator
+<code class="docutils literal notranslate"><span class="pre">RegisterXxxCases</span></code> registries used by every <code class="docutils literal notranslate"><span class="pre">CollectTestCases</span></code>
+call), link:</p>
 <div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">find_package</span><span class="p">(</span><span class="s">onnx_light</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
 <span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::onnx_backend_test</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_backend_test</span></code> is intentionally independent from
-<code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_light</span></code> / <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_op</span></code>; it can be combined
-with <code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_light</span></code> when both schema validation and execution are
-needed in the same binary.</p>
+<p><code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_backend_test</span></code> publicly depends on
+<code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_kernels</span></code> (which transitively brings in
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>) and is intentionally independent from
+<code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_light</span></code> / <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_op</span></code>; it can be
+combined with <code class="docutils literal notranslate"><span class="pre">onnx_light::onnx_light</span></code> when both schema validation and
+execution are needed in the same binary.</p>
 <p>This keeps downstream CMake files independent from hardcoded include paths and
 library file names. If <em>onnx-light</em> is installed to a non-standard prefix,
 configure the downstream project with <code class="docutils literal notranslate"><span class="pre">-DCMAKE_PREFIX_PATH=&lt;prefix&gt;</span></code>.</p>
@@ -552,8 +571,9 @@ configure the downstream project with <code class="docutils literal notranslate"
 </pre></div>
 </div>
 <p>Use the in-tree <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> target instead when only proto
-parsing/serialization is needed, or <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_optim</span></code> or
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> for the corresponding feature subset.  This uses the
+parsing/serialization is needed, or <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_optim</span></code>,
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> or <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> for the corresponding
+feature subset.  This uses the
 in-tree build targets directly instead of <code class="docutils literal notranslate"><span class="pre">find_package</span></code>.</p>
 </section>
 <section id="excerpt-from-the-example-project">
@@ -579,8 +599,8 @@ that pattern:</p>
 <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpyprotoop</span></code>,
 <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpyprotolib</span></code>,
 <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpyoptim</span></code>,
-<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxkernels</span></code> and
-<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxbackend</span></code>.  All five need access to the proto
+<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpykernels</span></code> and
+<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_py._onnxpybackend</span></code>.  All five need access to the proto
 classes (<code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>, <code class="docutils literal notranslate"><span class="pre">NodeProto</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>, …) defined in
 <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_proto</span></code>.  How do the extensions agree on a single
 <code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> registration so that values can flow between
@@ -607,21 +627,21 @@ single <code class="docutils literal notranslate"><span class="pre">std::type_in
 <code class="docutils literal notranslate"><span class="pre">&amp;typeid(ModelProto)</span></code> evaluates to the same pointer in every
 extension, and nanobind’s cross-module type registry resolves
 <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> references coming from <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code> or
-<code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> against the
+<code class="docutils literal notranslate"><span class="pre">_onnxpybackend</span></code> against the
 <code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> that <code class="docutils literal notranslate"><span class="pre">_onnxpyprotoop</span></code> registered.  In
 practice, only <code class="docutils literal notranslate"><span class="pre">_onnxpyprotoop</span></code> declares
 <code class="docutils literal notranslate"><span class="pre">nb::class_&lt;NodeProto&gt;</span></code> / <code class="docutils literal notranslate"><span class="pre">nb::class_&lt;ModelProto&gt;</span></code> / …; the
-<code class="docutils literal notranslate"><span class="pre">_onnxpyprotolib</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxkernels</span></code> and
-<code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> modules return proto values by
+<code class="docutils literal notranslate"><span class="pre">_onnxpyprotolib</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxpykernels</span></code> and
+<code class="docutils literal notranslate"><span class="pre">_onnxpybackend</span></code> modules return proto values by
 reference (for example
 <code class="docutils literal notranslate"><span class="pre">TestCase.model</span></code>, see <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_py/_onnxpy_backend_test.cc</span></code>)
 and let the shared registry produce a Python object backed by the same
 binding.  The package’s <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_py/_onnxpy.py</span></code> shim imports
 <code class="docutils literal notranslate"><span class="pre">_onnxpyprotoop</span></code> before <code class="docutils literal notranslate"><span class="pre">_onnxpyprotolib</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code>,
-<code class="docutils literal notranslate"><span class="pre">_onnxkernels</span></code> and <code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> to
+<code class="docutils literal notranslate"><span class="pre">_onnxpykernels</span></code> and <code class="docutils literal notranslate"><span class="pre">_onnxpybackend</span></code> to
 guarantee that the
 <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> binding exists by the time any <code class="docutils literal notranslate"><span class="pre">_onnxpyprotolib</span></code>,
-<code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxkernels</span></code> or <code class="docutils literal notranslate"><span class="pre">_onnxbackend</span></code> accessor is used.</p>
+<code class="docutils literal notranslate"><span class="pre">_onnxpyoptim</span></code>, <code class="docutils literal notranslate"><span class="pre">_onnxpykernels</span></code> or <code class="docutils literal notranslate"><span class="pre">_onnxpybackend</span></code> accessor is used.</p>
 </section>
 <section id="see-also">
 <h2>See also<a class="headerlink" href="#see-also" title="Link to this heading">#</a></h2>
@@ -652,11 +672,11 @@ guarantee that the
       </div>
     </a>
     <a class="right-next"
-       href="backend_tests.html"
+       href="kernels.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Using backend tests to evaluate a runtime</p>
+        <p class="prev-next-title">C++ Kernels</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
