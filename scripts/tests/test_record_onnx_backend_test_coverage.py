@@ -34,20 +34,29 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "error": "boom",
                     "error_step": "run",
                 },
+                "onnx_light": {"success": True, "error": "", "error_step": ""},
             },
-            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            versions={
+                "onnxruntime": "1.20.0",
+                "onnx": "1.17.0",
+                "onnx_light": "0.1.0",
+            },
             now_iso="2024-05-06T07:08:09Z",
         )
         self.assertEqual(row["name"], "test_relu")
         self.assertTrue(row["onnxruntime"])
         self.assertFalse(row["reference"])
+        self.assertTrue(row["onnx_light"])
         self.assertNotIn("onnxruntime_error", row)
         self.assertNotIn("onnxruntime_error_step", row)
         self.assertEqual(row["reference_error"], "boom")
         self.assertEqual(row["reference_error_step"], "run")
+        self.assertNotIn("onnx_light_error", row)
         # Passing backend records its last-pass date + matching package version.
         self.assertEqual(row["onnxruntime_last_pass_date"], "2024-05-06T07:08:09Z")
         self.assertEqual(row["onnxruntime_last_pass_version"], "1.20.0")
+        self.assertEqual(row["onnx_light_last_pass_date"], "2024-05-06T07:08:09Z")
+        self.assertEqual(row["onnx_light_last_pass_version"], "0.1.0")
         # Failing backend has no recorded last-pass when there is no history.
         self.assertNotIn("reference_last_pass_date", row)
         self.assertNotIn("reference_last_pass_version", row)
@@ -67,9 +76,18 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "error": "boom",
                     "error_step": "run",
                 },
+                "onnx_light": {
+                    "success": False,
+                    "error": "boom",
+                    "error_step": "run",
+                },
             },
             previous=previous,
-            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            versions={
+                "onnxruntime": "1.20.0",
+                "onnx": "1.17.0",
+                "onnx_light": "0.1.0",
+            },
             now_iso="2024-05-06T07:08:09Z",
         )
         # Current pass refreshes the onnxruntime entry, prior reference pass is kept.
@@ -85,29 +103,29 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {"name": "test_c", "model": "model_c", "data_sets": [("in_c", "out_c")]},
         ]
         # Map of (model, backend) -> result dict
+        ok = {"success": True, "error": "", "error_step": ""}
         outcomes = {
-            ("model_a", "onnxruntime"): {
-                "success": True,
-                "error": "",
-                "error_step": "",
-            },
-            ("model_a", "reference"): {"success": True, "error": "", "error_step": ""},
-            ("model_b", "onnxruntime"): {
-                "success": True,
-                "error": "",
-                "error_step": "",
-            },
+            ("model_a", "onnxruntime"): ok,
+            ("model_a", "reference"): ok,
+            ("model_a", "onnx_light"): ok,
+            ("model_b", "onnxruntime"): ok,
             ("model_b", "reference"): {
                 "success": False,
                 "error": "not implemented",
                 "error_step": "run",
             },
+            ("model_b", "onnx_light"): ok,
             ("model_c", "onnxruntime"): {
                 "success": False,
                 "error": "kernel missing",
                 "error_step": "load",
             },
-            ("model_c", "reference"): {"success": True, "error": "", "error_step": ""},
+            ("model_c", "reference"): ok,
+            ("model_c", "onnx_light"): {
+                "success": False,
+                "error": "kernel missing in onnx-light",
+                "error_step": "run",
+            },
         }
 
         def fake_run(model, data_sets, backend, rtol, atol):
@@ -127,6 +145,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {
                 "onnxruntime": {"pass": 2, "fail": 1},
                 "reference": {"pass": 2, "fail": 1},
+                "onnx_light": {"pass": 2, "fail": 1},
             },
         )
         names = [row["name"] for row in payload["tests"]]
@@ -134,11 +153,17 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         by_name = {row["name"]: row for row in payload["tests"]}
         self.assertTrue(by_name["test_a"]["onnxruntime"])
         self.assertTrue(by_name["test_a"]["reference"])
+        self.assertTrue(by_name["test_a"]["onnx_light"])
         self.assertFalse(by_name["test_b"]["reference"])
         self.assertEqual(by_name["test_b"]["reference_error"], "not implemented")
         self.assertEqual(by_name["test_b"]["reference_error_step"], "run")
+        self.assertTrue(by_name["test_b"]["onnx_light"])
         self.assertFalse(by_name["test_c"]["onnxruntime"])
         self.assertEqual(by_name["test_c"]["onnxruntime_error_step"], "load")
+        self.assertFalse(by_name["test_c"]["onnx_light"])
+        self.assertEqual(
+            by_name["test_c"]["onnx_light_error"], "kernel missing in onnx-light"
+        )
 
     def test_build_payload_honours_limit(self):
         tests = [
@@ -162,6 +187,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {
                 "onnxruntime": {"pass": 2, "fail": 0},
                 "reference": {"pass": 2, "fail": 0},
+                "onnx_light": {"pass": 2, "fail": 0},
             },
         )
 
@@ -180,13 +206,16 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         row = payload["tests"][0]
         self.assertFalse(row["onnxruntime"])
         self.assertFalse(row["reference"])
+        self.assertFalse(row["onnx_light"])
         self.assertEqual(row["onnxruntime_error"], "unexpected")
         self.assertEqual(row["reference_error_step"], "run")
+        self.assertEqual(row["onnx_light_error_step"], "run")
         self.assertEqual(
             payload["totals"],
             {
                 "onnxruntime": {"pass": 0, "fail": 1},
                 "reference": {"pass": 0, "fail": 1},
+                "onnx_light": {"pass": 0, "fail": 1},
             },
         )
 
@@ -260,6 +289,74 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_step"], "load")
         self.assertIn("unknown backend", result["error"])
+
+    def test_backends_include_onnx_light_reference_evaluator(self):
+        """``onnx_light`` must be one of the recorded backends."""
+        self.assertIn("onnx_light", rbc.BACKENDS)
+        self.assertIn("onnx_light", rbc._BACKEND_FACTORIES)
+        self.assertEqual(rbc.BACKEND_PACKAGE["onnx_light"], "onnx_light")
+
+    def test_run_with_onnx_light_uses_onnx_light_reference_evaluator(self):
+        """``_run_with_onnx_light`` builds and drives the onnx-light evaluator.
+
+        ``onnx-light`` is not installed in the unit test environment, so the
+        test injects a fake ``onnx_light.reference`` module exposing a
+        ``ReferenceEvaluator`` mock and checks that the factory feeds it the
+        serialised model bytes (since ``onnx-light`` ships its own
+        ``ModelProto`` type, distinct from ``onnx.ModelProto``).
+        """
+        import types
+
+        import numpy as np
+        import onnx
+        from onnx import helper
+
+        node = helper.make_node("Identity", ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+
+        constructed: dict = {}
+
+        class _FakeEvaluator:
+            def __init__(self, proto):
+                constructed["proto"] = proto
+
+            def run(self, output_names, feeds):
+                constructed["feeds"] = feeds
+                return [feeds["x"] * 2]
+
+        fake_reference = types.ModuleType("onnx_light.reference")
+        fake_reference.ReferenceEvaluator = _FakeEvaluator
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.reference", fake_reference),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            runner = rbc._run_with_onnx_light(model)
+            inputs = [np.array([1.0, 2.0], dtype=np.float32)]
+            actual = runner(inputs)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # The evaluator must be built from serialised bytes so it sees a
+        # proto of its own (onnx-light's) ``ModelProto`` type.
+        self.assertEqual(constructed["proto"], model.SerializeToString())
+        np.testing.assert_array_equal(constructed["feeds"]["x"], inputs[0])
+        np.testing.assert_array_equal(actual[0], np.array([2.0, 4.0], dtype=np.float32))
 
     def test_row_from_results_includes_tag_when_provided(self):
         row = rbc._row_from_results(
@@ -482,8 +579,16 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "totals": {
                     "onnxruntime": {"pass": 1, "fail": 0},
                     "reference": {"pass": 1, "fail": 0},
+                    "onnx_light": {"pass": 1, "fail": 0},
                 },
-                "tests": [{"name": "test_x", "onnxruntime": True, "reference": True}],
+                "tests": [
+                    {
+                        "name": "test_x",
+                        "onnxruntime": True,
+                        "reference": True,
+                        "onnx_light": True,
+                    }
+                ],
             }
 
         rbc.build_payload = fake_build
