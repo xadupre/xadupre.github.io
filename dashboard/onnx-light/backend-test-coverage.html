@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>onnx-light &mdash; backend test coverage (onnxruntime vs reference)</title>
+<title>onnx-light &mdash; backend test coverage (onnxruntime vs reference vs onnx-light)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="../../logo.svg" />
 <style>
@@ -67,6 +67,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 }
 .ratio-card.ort .ratio-value { color: #79c0ff; }
 .ratio-card.ref .ratio-value { color: #d2a8ff; }
+.ratio-card.light .ratio-value { color: #ffa657; }
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -141,6 +142,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 }
 .legend .swatch.ort-only { background: rgba(121, 192, 255, 0.25); border: 1px solid rgba(121, 192, 255, 0.5); }
 .legend .swatch.ref-only { background: rgba(210, 168, 255, 0.25); border: 1px solid rgba(210, 168, 255, 0.5); }
+.legend .swatch.light-only { background: rgba(255, 166, 87, 0.25); border: 1px solid rgba(255, 166, 87, 0.5); }
 .legend .swatch.both-fail { background: rgba(248, 81, 73, 0.18); border: 1px solid rgba(248, 81, 73, 0.5); }
 .table-wrap { overflow-x: auto; }
 table.comparison {
@@ -189,6 +191,7 @@ table.comparison th .arrow {
 table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
 table.comparison tbody tr.ort-only { background: rgba(121, 192, 255, 0.12); }
 table.comparison tbody tr.ref-only { background: rgba(210, 168, 255, 0.12); }
+table.comparison tbody tr.light-only { background: rgba(255, 166, 87, 0.12); }
 table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
 .message {
   display: none;
@@ -212,10 +215,12 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
     Pass / fail status of every ONNX backend node test (the same tests
     exercised by <a href="https://github.com/xadupre/onnx-light"><code>xadupre/onnx-light</code></a>'s
     reference implementation) when executed against
-    <a href="https://onnxruntime.ai/"><code>onnxruntime</code></a> and the
+    <a href="https://onnxruntime.ai/"><code>onnxruntime</code></a>, the
     Python reference implementation shipped with
     <a href="https://github.com/onnx/onnx"><code>onnx</code></a>
-    (<code>onnx.reference.ReferenceEvaluator</code>).
+    (<code>onnx.reference.ReferenceEvaluator</code>) and the
+    <code>onnx-light</code> reference evaluator backed by its C++ kernel
+    dispatch table (<code>onnx_light.reference.ReferenceEvaluator</code>).
     Use the filter below to narrow the table to tests matching a regular
     expression &mdash; the pass ratio is recomputed for the selection.
   </p>
@@ -249,6 +254,11 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
       <div class="ratio-value" id="refRatio">&mdash;</div>
       <div class="ratio-detail" id="refDetail"></div>
     </div>
+    <div class="ratio-card light">
+      <div class="ratio-label">onnx-light &mdash; pass ratio</div>
+      <div class="ratio-value" id="lightRatio">&mdash;</div>
+      <div class="ratio-detail" id="lightDetail"></div>
+    </div>
     <div class="ratio-card">
       <div class="ratio-label">selected tests</div>
       <div class="ratio-value" id="selectedCount">0</div>
@@ -258,7 +268,8 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
   <div class="legend">
     <span><span class="swatch ort-only"></span>passes only on onnxruntime</span>
     <span><span class="swatch ref-only"></span>passes only on the reference</span>
-    <span><span class="swatch both-fail"></span>fails on both</span>
+    <span><span class="swatch light-only"></span>passes only on onnx-light</span>
+    <span><span class="swatch both-fail"></span>fails on all backends</span>
   </div>
   <div class="table-wrap">
     <table class="comparison">
@@ -267,6 +278,7 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
           <th data-key="name">Test <span class="arrow"></span></th>
           <th data-key="onnxruntime" class="center"><code>onnxruntime</code> <span class="arrow"></span></th>
           <th data-key="reference" class="center"><code>reference</code> <span class="arrow"></span></th>
+          <th data-key="onnx_light" class="center"><code>onnx-light</code> <span class="arrow"></span></th>
           <th data-key="errors">errors <span class="arrow"></span></th>
         </tr>
       </thead>
@@ -434,9 +446,11 @@ function formatRatio(passed, total) {
 function renderRatios(filtered) {
   let ortPass = 0;
   let refPass = 0;
+  let lightPass = 0;
   for (const r of filtered) {
     if (r.onnxruntime) ortPass++;
     if (r.reference) refPass++;
+    if (r.onnx_light) lightPass++;
   }
   const total = filtered.length;
   document.getElementById("ortRatio").textContent = formatRatio(ortPass, total);
@@ -445,6 +459,9 @@ function renderRatios(filtered) {
   document.getElementById("refRatio").textContent = formatRatio(refPass, total);
   document.getElementById("refDetail").textContent =
     refPass + " / " + total + " tests passing";
+  document.getElementById("lightRatio").textContent = formatRatio(lightPass, total);
+  document.getElementById("lightDetail").textContent =
+    lightPass + " / " + total + " tests passing";
   document.getElementById("selectedCount").textContent = String(total);
   document.getElementById("selectedDetail").textContent =
     "of " + state.rows.length + " tests in snapshot";
@@ -471,7 +488,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 4;
+    td.colSpan = 5;
     td.textContent = state.regexError
       ? "Fix the filter regex to see results."
       : state.search
@@ -482,12 +499,19 @@ function renderRows() {
   } else {
     for (const r of filtered) {
       const tr = document.createElement("tr");
-      if (r.onnxruntime && !r.reference) tr.classList.add("ort-only");
-      else if (r.reference && !r.onnxruntime) tr.classList.add("ref-only");
-      else if (!r.onnxruntime && !r.reference) tr.classList.add("both-fail");
+      const ortOnly = r.onnxruntime && !r.reference && !r.onnx_light;
+      const refOnly = r.reference && !r.onnxruntime && !r.onnx_light;
+      const lightOnly = r.onnx_light && !r.onnxruntime && !r.reference;
+      const allFail = !r.onnxruntime && !r.reference && !r.onnx_light;
+      if (ortOnly) tr.classList.add("ort-only");
+      else if (refOnly) tr.classList.add("ref-only");
+      else if (lightOnly) tr.classList.add("light-only");
+      else if (allFail) tr.classList.add("both-fail");
+
       tr.appendChild(cellText(r.name));
       tr.appendChild(cellCheck(r.onnxruntime));
       tr.appendChild(cellCheck(r.reference));
+      tr.appendChild(cellCheck(r.onnx_light));
       tr.appendChild(cellErrors(r));
       body.appendChild(tr);
     }
@@ -519,6 +543,8 @@ function collectErrors(row) {
   if (ort) entries.push({ runtime: "onnxruntime", message: ort });
   const ref = formatErrorMessage(row.reference_error, row.reference_error_step);
   if (ref) entries.push({ runtime: "reference", message: ref });
+  const light = formatErrorMessage(row.onnx_light_error, row.onnx_light_error_step);
+  if (light) entries.push({ runtime: "onnx-light", message: light });
   return entries;
 }
 
