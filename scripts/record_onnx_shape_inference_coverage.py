@@ -64,7 +64,7 @@ BACKEND_PACKAGE: Dict[str, str] = {
 
 # Default tag used by ``onnx-light`` to mark backend cases that are
 # specifically designed to exercise shape inference.
-DEFAULT_TAG = "shape"
+DEFAULT_TAG = "inference"
 
 
 def _log(message: str) -> None:
