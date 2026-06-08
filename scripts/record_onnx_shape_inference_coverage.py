@@ -8,7 +8,8 @@ package).
 The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
 ``onnx_light.backend.test.case.collect_test_case``) and keeps only the
-cases whose ``tag`` is ``"inference"`` (the family of tests dedicated to
+cases whose ``tag`` matches one of the requested tags (by default the
+``"inference"`` and ``"local_function"`` families of tests dedicated to
 shape inference, mirroring
 ``unittests/backend/test_backend_with_shape_inference.py`` in the
 ``xadupre/onnx-light`` repository).
@@ -62,9 +63,33 @@ BACKEND_PACKAGE: Dict[str, str] = {
     "onnx-shape-inference": "onnx_shape_inference",
 }
 
-# Default tag used by ``onnx-light`` to mark backend cases that are
-# specifically designed to exercise shape inference.
-DEFAULT_TAG = "inference"
+# Default tags used by ``onnx-light`` to mark backend cases that are
+# specifically designed to exercise shape inference. A test case is
+# selected when its ``tag`` attribute matches any of these values.
+DEFAULT_TAGS: Tuple[str, ...] = ("inference", "local_function")
+# Backwards-compatible alias kept for callers that import a single tag.
+DEFAULT_TAG = ",".join(DEFAULT_TAGS)
+
+
+def _normalize_tags(tag) -> Tuple[str, ...]:
+    """Normalize a tag filter into a tuple of non-empty tag names.
+
+    Accepts ``None``, a single tag (``str``) – optionally a
+    comma-separated list such as ``"inference,local_function"`` – or an
+    iterable of strings. Empty entries and surrounding whitespace are
+    stripped. An empty result means "do not filter by tag".
+    """
+    if tag is None:
+        return ()
+    if isinstance(tag, str):
+        parts = tag.split(",")
+    else:
+        parts = []
+        for item in tag:
+            if item is None:
+                continue
+            parts.extend(str(item).split(","))
+    return tuple(p.strip() for p in parts if p and p.strip())
 
 
 def _log(message: str) -> None:
@@ -286,8 +311,14 @@ def model_to_mermaid(model: Any) -> str:
         return ""
 
 
-def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
-    """Return the list of backend tests tagged ``tag``.
+def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
+    """Return the list of backend tests whose ``tag`` matches.
+
+    ``tag`` can be a single tag name, a comma-separated list of tag
+    names (e.g. ``"inference,local_function"``) or an iterable of tag
+    names. A test case is retained when its ``tag`` attribute matches
+    any of the requested tags. Passing an empty value disables tag
+    filtering.
 
     Each entry is a dictionary ``{"name", "model", "expected", "mermaid"}``
     where ``model`` is an ``onnx.ModelProto``, ``expected`` is the list
@@ -297,13 +328,14 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
     """
     from onnx_light.backend.test.case import collect_test_case
 
+    tags = _normalize_tags(tag)
     cases = collect_test_case()
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:
             continue
         case_tag = getattr(tc, "tag", "") or ""
-        if tag and case_tag != tag:
+        if tags and case_tag not in tags:
             continue
         model = getattr(tc, "model", None)
         if model is None:
@@ -852,21 +884,28 @@ def _index_previous_rows(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def build_payload(
-    tag: str = DEFAULT_TAG,
+    tag=DEFAULT_TAGS,
     limit: Optional[int] = None,
-    discover: Callable[[str], List[Dict[str, Any]]] = discover_inference_tests,
+    discover: Callable[..., List[Dict[str, Any]]] = discover_inference_tests,
     run: Callable[..., Dict[str, Any]] = run_test_with_backend,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
     previous: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Discover tests, run each backend on each test and return a payload."""
+    """Discover tests, run each backend on each test and return a payload.
+
+    ``tag`` accepts a single tag name, a comma-separated list of tag
+    names or an iterable of tag names. See :func:`discover_inference_tests`
+    for details.
+    """
     if versions is None:
         versions = collect_versions
     tests = discover(tag)
     if limit is not None and limit >= 0:
         tests = tests[:limit]
-    _log(f"Discovered {len(tests)} backend tests tagged {tag!r}.")
+    tags = _normalize_tags(tag)
+    tag_display = ", ".join(tags)
+    _log(f"Discovered {len(tests)} backend tests tagged {tag_display!r}.")
 
     now_dt = now or dt.datetime.now(tz=dt.timezone.utc)
     now_iso = _format_iso(now_dt)
@@ -924,7 +963,7 @@ def build_payload(
 
     return {
         "date": now_iso,
-        "tag": tag,
+        "tag": tag_display,
         "versions": version_map,
         "totals": totals,
         "tests": rows,
@@ -949,7 +988,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--tag",
         default=DEFAULT_TAG,
         help=(
-            "Filter backend cases by their ``tag`` attribute "
+            "Filter backend cases by their ``tag`` attribute. Accepts a "
+            "single tag or a comma-separated list of tags; a case is "
+            "retained when its tag matches any of the provided values "
             "(default: %(default)s)."
         ),
     )
