@@ -136,15 +136,53 @@ class TestRecordWheelSizes(unittest.TestCase):
                 rws.read_existing(os.path.join(tmp, "missing.csv")), set()
             )
 
-    def test_process_run_skips_unfinished_or_failed(self):
+    def test_process_run_skips_unfinished(self):
         for run in (
             {"id": 1, "status": "in_progress", "conclusion": None},
-            {"id": 2, "status": "completed", "conclusion": "failure"},
-            {"id": 3, "status": "completed", "conclusion": "cancelled"},
+            {"id": 2, "status": "queued", "conclusion": None},
         ):
             with mock.patch.object(rws, "list_run_artifacts") as m:
                 self.assertEqual(rws.process_run(run, "o/r", None), [])
                 m.assert_not_called()
+
+    def test_process_run_collects_rows_from_failed_run_with_artifacts(self):
+        # A completed run whose conclusion is not "success" can still have
+        # uploaded wheel artifacts before a later step failed; those wheels
+        # must be recorded so the dashboard does not silently hide them.
+        run = {
+            "id": 7,
+            "status": "completed",
+            "conclusion": "failure",
+            "created_at": "2024-05-02T10:00:00Z",
+            "head_sha": "cafef00d",
+        }
+        artifact = {
+            "id": 200,
+            "name": "wheels-linux-x86_64",
+            "expired": False,
+            "archive_download_url": "https://api/artifact/200",
+        }
+        zip_bytes = _make_artifact_zip(
+            {"onnx_light-0.1-cp312-cp312-linux_x86_64.whl": b"z" * 64}
+        )
+        with mock.patch.object(
+            rws, "list_run_artifacts", return_value=[artifact]
+        ), mock.patch.object(
+            rws, "_download", return_value=zip_bytes
+        ):
+            rows = rws.process_run(run, "o/r", None)
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "date": "2024-05-02T10:00:00Z",
+                    "commit": "cafef00d",
+                    "run_id": "7",
+                    "size": "64",
+                    "name": "onnx_light-0.1-cp312-cp312-linux_x86_64.whl",
+                }
+            ],
+        )
 
     def test_process_run_collects_rows_from_each_artifact(self):
         run = {
