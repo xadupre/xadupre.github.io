@@ -686,6 +686,8 @@ class TestTagFiltering(unittest.TestCase):
             "a": Case("a", "shape", "model_a"),
             "b": Case("b", "local_function", "model_b"),
             "c": Case("c", "other", "model_c"),
+            "d": Case("d", ("misc", "local_function"), "model_d"),
+            "e": Case("e", "misc, inference", "model_e"),
         }
 
         import types
@@ -724,7 +726,7 @@ class TestTagFiltering(unittest.TestCase):
 
         try:
             discovered = rsi.discover_inference_tests("shape,local_function")
-            self.assertEqual([d["name"] for d in discovered], ["a", "b"])
+            self.assertEqual([d["name"] for d in discovered], ["a", "b", "d"])
 
             discovered_single = rsi.discover_inference_tests("shape")
             self.assertEqual([d["name"] for d in discovered_single], ["a"])
@@ -732,7 +734,7 @@ class TestTagFiltering(unittest.TestCase):
             discovered_list = rsi.discover_inference_tests(
                 ["local_function", "other"]
             )
-            self.assertEqual([d["name"] for d in discovered_list], ["b", "c"])
+            self.assertEqual([d["name"] for d in discovered_list], ["b", "c", "d"])
         finally:
             rsi._onnx_light_model_to_onnx = original_to_onnx
             rsi.snapshot_intermediates = original_snapshot
