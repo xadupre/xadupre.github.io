@@ -334,8 +334,8 @@ def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     for name, tc in cases.items():
         if not name:
             continue
-        case_tag = getattr(tc, "tag", "") or ""
-        if tags and case_tag not in tags:
+        case_tags = _normalize_tags(getattr(tc, "tag", "") or "")
+        if tags and not any(t in tags for t in case_tags):
             continue
         model = getattr(tc, "model", None)
         if model is None:
