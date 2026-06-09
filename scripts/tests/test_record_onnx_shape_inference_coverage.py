@@ -650,28 +650,29 @@ class TestMain(unittest.TestCase):
 
 
 class TestTagFiltering(unittest.TestCase):
-    def test_default_tag_includes_inference_and_local_function(self):
-        self.assertEqual(rsi.DEFAULT_TAGS, ("inference", "local_function"))
+    def test_default_tag_includes_shape_local_function_and_inference(self):
+        self.assertEqual(rsi.DEFAULT_TAGS, ("shape", "local_function", "inference"))
         self.assertEqual(
             rsi._normalize_tags(rsi.DEFAULT_TAG),
-            ("inference", "local_function"),
+            ("shape", "local_function", "inference"),
         )
 
     def test_normalize_tags_accepts_various_shapes(self):
         self.assertEqual(rsi._normalize_tags(None), ())
         self.assertEqual(rsi._normalize_tags(""), ())
+        self.assertEqual(rsi._normalize_tags("shape"), ("shape",))
         self.assertEqual(rsi._normalize_tags("inference"), ("inference",))
         self.assertEqual(
-            rsi._normalize_tags("inference, local_function"),
-            ("inference", "local_function"),
+            rsi._normalize_tags("shape, local_function"),
+            ("shape", "local_function"),
         )
         self.assertEqual(
-            rsi._normalize_tags(["inference", "local_function"]),
-            ("inference", "local_function"),
+            rsi._normalize_tags(["shape", "local_function"]),
+            ("shape", "local_function"),
         )
         self.assertEqual(
-            rsi._normalize_tags(("inference,local_function", "extra")),
-            ("inference", "local_function", "extra"),
+            rsi._normalize_tags(("shape,local_function", "extra")),
+            ("shape", "local_function", "extra"),
         )
 
     def test_discover_inference_tests_filters_multiple_tags(self):
@@ -682,7 +683,7 @@ class TestTagFiltering(unittest.TestCase):
                 self.model = model
 
         cases = {
-            "a": Case("a", "inference", "model_a"),
+            "a": Case("a", "shape", "model_a"),
             "b": Case("b", "local_function", "model_b"),
             "c": Case("c", "other", "model_c"),
             "d": Case("d", ("misc", "local_function"), "model_d"),
@@ -724,11 +725,11 @@ class TestTagFiltering(unittest.TestCase):
         rsi.model_to_mermaid = lambda m: ""
 
         try:
-            discovered = rsi.discover_inference_tests("inference,local_function")
-            self.assertEqual([d["name"] for d in discovered], ["a", "b", "d", "e"])
+            discovered = rsi.discover_inference_tests("shape,local_function")
+            self.assertEqual([d["name"] for d in discovered], ["a", "b", "d"])
 
-            discovered_single = rsi.discover_inference_tests("inference")
-            self.assertEqual([d["name"] for d in discovered_single], ["a", "e"])
+            discovered_single = rsi.discover_inference_tests("shape")
+            self.assertEqual([d["name"] for d in discovered_single], ["a"])
 
             discovered_list = rsi.discover_inference_tests(
                 ["local_function", "other"]
@@ -759,12 +760,12 @@ class TestTagFiltering(unittest.TestCase):
             }
 
         payload = rsi.build_payload(
-            tag=["inference", "local_function"],
+            tag=["shape", "local_function"],
             discover=lambda tag: tests,
             run=fake_run,
             versions=lambda: {},
         )
-        self.assertEqual(payload["tag"], "inference, local_function")
+        self.assertEqual(payload["tag"], "shape, local_function")
 
 
 if __name__ == "__main__":

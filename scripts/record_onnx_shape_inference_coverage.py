@@ -9,8 +9,8 @@ The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
 ``onnx_light.backend.test.case.collect_test_case``) and keeps only the
 cases whose ``tag`` matches one of the requested tags (by default the
-``"inference"`` and ``"local_function"`` families of tests dedicated to
-shape inference, mirroring
+``"shape"``, ``"local_function"`` and legacy ``"inference"`` families
+of tests dedicated to shape inference, mirroring
 ``unittests/backend/test_backend_with_shape_inference.py`` in the
 ``xadupre/onnx-light`` repository).
 
@@ -66,7 +66,7 @@ BACKEND_PACKAGE: Dict[str, str] = {
 # Default tags used by ``onnx-light`` to mark backend cases that are
 # specifically designed to exercise shape inference. A test case is
 # selected when its ``tag`` attribute matches any of these values.
-DEFAULT_TAGS: Tuple[str, ...] = ("inference", "local_function")
+DEFAULT_TAGS: Tuple[str, ...] = ("shape", "local_function", "inference")
 # Backwards-compatible alias kept for callers that import a single tag.
 DEFAULT_TAG = ",".join(DEFAULT_TAGS)
 
