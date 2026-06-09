@@ -2,8 +2,9 @@
 implementations exercised by ``onnx-light`` (``onnx-light`` itself,
 ``onnx_light.onnx_optim`` — the experimental shape inference shipped
 inside ``onnx-light``'s ``onnx_optim`` submodule, the official
-``onnx.shape_inference`` and the standalone ``onnx-shape-inference``
-package).
+``onnx.shape_inference``, the standalone ``onnx-shape-inference``
+package and the symbolic shape inference shipped with
+``onnxruntime.transformers``).
 
 The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
@@ -52,6 +53,7 @@ BACKENDS: Tuple[str, ...] = (
     "onnx-light-onnx-optim",
     "onnx",
     "onnx-shape-inference",
+    "onnxruntime-transformers",
 )
 
 # Package whose version is recorded alongside the ``last_pass`` date for
@@ -61,6 +63,7 @@ BACKEND_PACKAGE: Dict[str, str] = {
     "onnx-light-onnx-optim": "onnx_light",
     "onnx": "onnx",
     "onnx-shape-inference": "onnx_shape_inference",
+    "onnxruntime-transformers": "onnxruntime",
 }
 
 # Default tags used by ``onnx-light`` to mark backend cases that are
@@ -108,7 +111,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy"):
+    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "onnxruntime", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -696,11 +699,33 @@ def _run_onnx_shape_inference(model):
     return ir.serde.serialize_model(inferred)
 
 
+def _run_onnxruntime_transformers(model):
+    """Run the symbolic shape inference shipped with ``onnxruntime.transformers``.
+
+    The implementation lives in ``onnxruntime/tools/symbolic_shape_infer.py``
+    and is re-exported via ``onnxruntime.transformers.shape_infer_helper``;
+    importing the helper takes care of inserting the ``tools`` directory
+    on ``sys.path`` so ``symbolic_shape_infer`` is importable. The
+    ``SymbolicShapeInference.infer_shapes`` static method takes an
+    ``onnx.ModelProto`` and returns one with shapes filled in.
+    """
+    # Importing this module has the side-effect of inserting
+    # ``onnxruntime/tools`` (or ``onnxruntime/transformers/..``) on
+    # ``sys.path`` so that ``symbolic_shape_infer`` becomes importable
+    # from a regular ``onnxruntime`` wheel — the helper class itself is
+    # not used here.
+    import onnxruntime.transformers.shape_infer_helper  # noqa: F401
+    from symbolic_shape_infer import SymbolicShapeInference
+
+    return SymbolicShapeInference.infer_shapes(model, auto_merge=True)
+
+
 _BACKEND_RUNNERS: Dict[str, Callable[[Any], Any]] = {
     "onnx-light": _run_onnx_light,
     "onnx-light-onnx-optim": _run_onnx_light_onnx_optim,
     "onnx": _run_onnx,
     "onnx-shape-inference": _run_onnx_shape_inference,
+    "onnxruntime-transformers": _run_onnxruntime_transformers,
 }
 
 
