@@ -239,12 +239,15 @@ def process_run(
 ) -> list[dict]:
     """Return CSV rows for every wheel artifact attached to ``run``.
 
-    Returns an empty list when the run is not completed, did not succeed,
-    or has no wheel artifacts. Artifacts whose download fails are skipped
-    with a warning so that one broken artifact does not abort the rest of
-    the run.
+    Returns an empty list when the run is not completed or has no wheel
+    artifacts. Runs whose conclusion is not ``success`` are still inspected
+    because the upstream workflow may have uploaded wheel artifacts before
+    a later step failed; skipping them would silently hide otherwise-valid
+    wheel size measurements from the dashboard. Artifacts whose download
+    fails are skipped with a warning so that one broken artifact does not
+    abort the rest of the run.
     """
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
+    if run.get("status") != "completed":
         return []
     run_id = str(run.get("id", ""))
     if not run_id:
