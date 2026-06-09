@@ -709,12 +709,12 @@ def _run_onnxruntime_transformers(model):
     ``SymbolicShapeInference.infer_shapes`` static method takes an
     ``onnx.ModelProto`` and returns one with shapes filled in.
     """
-    # Importing the helper has the side-effect of making
-    # ``symbolic_shape_infer`` importable from regular ``onnxruntime``
-    # wheels (the module sits in ``onnxruntime/tools``).
-    from onnxruntime.transformers.shape_infer_helper import (  # noqa: F401
-        SymbolicShapeInferenceHelper,
-    )
+    # Importing this module has the side-effect of inserting
+    # ``onnxruntime/tools`` (or ``onnxruntime/transformers/..``) on
+    # ``sys.path`` so that ``symbolic_shape_infer`` becomes importable
+    # from a regular ``onnxruntime`` wheel — the helper class itself is
+    # not used here.
+    import onnxruntime.transformers.shape_infer_helper  # noqa: F401
     from symbolic_shape_infer import SymbolicShapeInference
 
     return SymbolicShapeInference.infer_shapes(model, auto_merge=True)
