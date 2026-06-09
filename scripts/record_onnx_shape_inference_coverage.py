@@ -489,18 +489,27 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     return snapshots
 
 
-def strip_shapes(model):
+def strip_shapes(model, keep_outputs: bool = False):
     """Return a deep copy of ``model`` with output / value_info shapes stripped.
 
     Only the ``elem_type`` is kept on plain ``tensor_type`` entries; the
     ``shape`` field is cleared so that shape inference must rebuild it.
     Non plain-tensor entries (sequence/optional/map) are left untouched.
+
+    When ``keep_outputs`` is ``True``, only ``graph.value_info`` shapes are
+    cleared and ``graph.output`` shapes are preserved. This is used to feed
+    backends (e.g. ``onnx-light``) that can take advantage of the known
+    output shape as a prefill hint when running shape inference.
     """
     import onnx
 
     stripped = onnx.ModelProto()
     stripped.CopyFrom(model)
-    for container in (stripped.graph.output, stripped.graph.value_info):
+    if keep_outputs:
+        containers = (stripped.graph.value_info,)
+    else:
+        containers = (stripped.graph.output, stripped.graph.value_info)
+    for container in containers:
         for vi in container:
             if not vi.HasField("type"):
                 continue
@@ -726,7 +735,12 @@ def run_test_with_backend(
             "details": [],
         }
     try:
-        stripped = strip_shapes(model)
+        # ``onnx-light``'s shape inference can take advantage of the
+        # known graph output shapes as a prefill hint: only clean
+        # ``graph.value_info`` and keep ``graph.output`` shapes so they
+        # are passed through to the backend as initial constraints.
+        keep_outputs = backend == "onnx-light"
+        stripped = strip_shapes(model, keep_outputs=keep_outputs)
     except Exception as exc:  # noqa: BLE001
         return {
             "success": False,

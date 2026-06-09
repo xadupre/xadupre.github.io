@@ -148,6 +148,27 @@ class TestSnapshotAndStrip(unittest.TestCase):
         for vi in list(model.graph.output) + list(model.graph.value_info):
             self.assertTrue(vi.type.tensor_type.HasField("shape"))
 
+    def test_strip_shapes_keep_outputs_only_clears_value_info(self):
+        model = _make_simple_model()
+        stripped = rsi.strip_shapes(model, keep_outputs=True)
+        # value_info shapes are stripped...
+        for vi in stripped.graph.value_info:
+            tt = vi.type.tensor_type
+            self.assertEqual(tt.elem_type, 1)
+            self.assertFalse(
+                tt.HasField("shape"),
+                f"value_info shape should be stripped on {vi.name!r}",
+            )
+        # ...but output shapes are preserved as a prefill hint.
+        for vi in stripped.graph.output:
+            self.assertTrue(
+                vi.type.tensor_type.HasField("shape"),
+                f"output shape should be preserved on {vi.name!r}",
+            )
+        # The original model is untouched.
+        for vi in list(model.graph.output) + list(model.graph.value_info):
+            self.assertTrue(vi.type.tensor_type.HasField("shape"))
+
 
 class TestCompareSnapshotWithModel(unittest.TestCase):
     def test_matching_shapes_are_scored_ok(self):
