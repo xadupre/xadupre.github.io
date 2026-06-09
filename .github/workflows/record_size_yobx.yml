@@ -1,0 +1,176 @@
+name: DATA yobx size and loc
+
+# Runs on a weekly schedule and can also be triggered manually. Only the
+# repository owner (xadupre) is allowed to actually run the build when it is
+# triggered manually; any other actor will see the job skipped. Scheduled
+# runs always proceed because they are initiated by GitHub itself.
+on:
+  schedule:
+    # Run once a week, Monday at 06:17 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the hour is offset from
+    # the other weekly recording workflows so they do not compete for the
+    # same runner slot.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/yet-another-onnx-builder to build"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish documentation, but
+    # scheduled runs (initiated by GitHub itself) are always allowed.
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the rebuilt docs.
+          fetch-depth: 0
+          # Use a dedicated bot token (when available) so that the push
+          # below is allowed to bypass branch protection rules. Falls
+          # back to the default ``GITHUB_TOKEN`` when ``BOT_TOKEN`` is
+          # not configured.
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout yet-another-onnx-builder
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/yet-another-onnx-builder
+          ref: ${{ inputs.ref || 'main' }}
+          path: yet-another-onnx-builder
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install build tool
+        run: python -m pip install --upgrade pip build
+
+      - name: Build yet-another-onnx-builder wheel
+        working-directory: yet-another-onnx-builder
+        run: |
+          # Build the wheel (and source distribution) so that the size of
+          # the published artefact can be tracked over time. ``python -m
+          # build`` runs the project's standard PEP 517 build front-end in
+          # an isolated environment, so no project dependencies need to be
+          # installed beforehand.
+          python -m build --wheel --outdir dist
+
+      - name: Record yobx wheel size
+        working-directory: yet-another-onnx-builder
+        run: |
+          # Record the size of every wheel produced under dist/ so that the
+          # evolution of the published package size can be tracked over
+          # time. The data is appended (one CSV row per .whl file) to
+          # cache_data/yet-another-onnx-builder/wheel_sizes.csv inside the
+          # xadupre.github.io checkout so that the existing "Commit and
+          # push cache data" step below picks it up and pushes it back to
+          # this repository.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/yet-another-onnx-builder"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,size,name" > "$out"
+          fi
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          found=0
+          while IFS= read -r -d '' f; do
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
+          done < <(find dist -maxdepth 1 -type f -name '*.whl' -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No wheel found under dist/; nothing to record."
+          fi
+
+      - name: Record Python and C++ lines of code
+        run: |
+          # Count the lines of Python and C++ source code in the
+          # yet-another-onnx-builder checkout and append one row per
+          # language to cache_data/yet-another-onnx-builder/loc.csv inside
+          # the xadupre.github.io checkout. The "Commit and push cache
+          # data" step below will then publish the new rows alongside the
+          # wheel sizes.
+          python "${GITHUB_WORKSPACE}/site/scripts/record_loc.py" \
+            --source-dir "${GITHUB_WORKSPACE}/yet-another-onnx-builder" \
+            --output "${GITHUB_WORKSPACE}/site/cache_data/yet-another-onnx-builder/loc.csv"
+
+      - name: Commit and push cache data
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/yet-another-onnx-builder
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            built_sha="$(git -C ../yet-another-onnx-builder rev-parse HEAD)"
+            git commit -m "Update yet-another-onnx-builder size/loc data (from ${built_sha})"
+            # Retry the push a few times, rebasing on top of any new commits
+            # that may have landed on the remote in the meantime. This avoids
+            # "fetch first" / non-fast-forward push failures when another
+            # workflow run pushed to the same branch concurrently.
+            branch="${GITHUB_REF_NAME:-main}"
+            attempts=5
+            for i in $(seq 1 "$attempts"); do
+              push_err="$(mktemp)"
+              if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+                echo "Push succeeded on attempt ${i}."
+                rm -f "$push_err"
+                exit 0
+              fi
+              # A permission error (HTTP 403) is not a transient race and will not be
+              # fixed by retrying. Fail fast with a pointer to the README section that
+              # explains which GitHub setting needs to be changed.
+              if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+                rm -f "$push_err"
+                echo "" >&2
+                echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+                echo "Retrying will not help: the authenticated user shown above is" >&2
+                echo "not allowed to push to ${branch}." >&2
+                echo "" >&2
+                echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+                echo "setting to change:" >&2
+                echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+                exit 1
+              fi
+              rm -f "$push_err"
+              echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+              # Drop any leftover working-tree or untracked changes so that
+              # the rebase below does not abort with "cannot rebase: You
+              # have unstaged changes." Everything we want to publish has
+              # already been committed above, so any remainder is safe to
+              # set aside.
+              git stash push --include-untracked --quiet -- || true
+              git fetch origin "${branch}"
+              # Rebase our single data commit on top of the latest remote
+              # state. Prefer our version for the cache data directory in
+              # case of conflicts, since we just regenerated it.
+              if ! git rebase -X ours "origin/${branch}"; then
+                echo "Rebase failed; aborting."
+                git rebase --abort || true
+                exit 1
+              fi
+              sleep $((i * 5))
+            done
+            echo "Failed to push after ${attempts} attempts." >&2
+            exit 1
+          fi
