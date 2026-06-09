@@ -50,20 +50,20 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # Order matters: it drives the column order in the dashboard.
 BACKENDS: Tuple[str, ...] = (
     "onnx-light",
-    "onnx-light-onnx-optim",
+    "onnx-light-optim",
     "onnx",
     "onnx-shape-inference",
-    "onnxruntime-transformers",
+    "ort-transformers",
 )
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend.
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnx-light": "onnx_light",
-    "onnx-light-onnx-optim": "onnx_light",
+    "onnx-light-optim": "onnx_light",
     "onnx": "onnx",
     "onnx-shape-inference": "onnx_shape_inference",
-    "onnxruntime-transformers": "onnxruntime",
+    "ort-transformers": "onnxruntime",
 }
 
 # Default tags used by ``onnx-light`` to mark backend cases that are
@@ -657,7 +657,7 @@ def _run_onnx_light(model):
     return out
 
 
-def _run_onnx_light_onnx_optim(model):
+def _run_onnx_light_optim(model):
     """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
 
     The experimental shape inference shipped inside ``onnx-light``'s
@@ -699,7 +699,7 @@ def _run_onnx_shape_inference(model):
     return ir.serde.serialize_model(inferred)
 
 
-def _run_onnxruntime_transformers(model):
+def _run_ort_transformers(model):
     """Run the symbolic shape inference shipped with ``onnxruntime.transformers``.
 
     The implementation lives in ``onnxruntime/tools/symbolic_shape_infer.py``
@@ -722,10 +722,10 @@ def _run_onnxruntime_transformers(model):
 
 _BACKEND_RUNNERS: Dict[str, Callable[[Any], Any]] = {
     "onnx-light": _run_onnx_light,
-    "onnx-light-onnx-optim": _run_onnx_light_onnx_optim,
+    "onnx-light-optim": _run_onnx_light_optim,
     "onnx": _run_onnx,
     "onnx-shape-inference": _run_onnx_shape_inference,
-    "onnxruntime-transformers": _run_onnxruntime_transformers,
+    "ort-transformers": _run_ort_transformers,
 }
 
 

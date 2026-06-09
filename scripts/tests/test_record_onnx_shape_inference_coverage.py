@@ -299,13 +299,13 @@ class TestRunTestWithBackend(unittest.TestCase):
         self.assertFalse(info["success"])
         self.assertEqual(info["error_step"], "load")
 
-    def test_onnxruntime_transformers_backend_registered(self):
+    def test_ort_transformers_backend_registered(self):
         # The symbolic shape inference shipped in ``onnxruntime.transformers``
         # is exposed as a dedicated backend in the coverage script.
-        self.assertIn("onnxruntime-transformers", rsi.BACKENDS)
-        self.assertIn("onnxruntime-transformers", rsi._BACKEND_RUNNERS)
+        self.assertIn("ort-transformers", rsi.BACKENDS)
+        self.assertIn("ort-transformers", rsi._BACKEND_RUNNERS)
         self.assertEqual(
-            rsi.BACKEND_PACKAGE["onnxruntime-transformers"], "onnxruntime"
+            rsi.BACKEND_PACKAGE["ort-transformers"], "onnxruntime"
         )
 
     def test_empty_expected(self):
@@ -465,21 +465,21 @@ class TestBuildPayload(unittest.TestCase):
         ]
         outcomes = {
             ("model_a", "onnx-light"): {"success": True, "correct": 1, "total": 1},
-            ("model_a", "onnx-light-onnx-optim"): {"success": True, "correct": 1, "total": 1},
+            ("model_a", "onnx-light-optim"): {"success": True, "correct": 1, "total": 1},
             ("model_a", "onnx"): {"success": True, "correct": 1, "total": 1},
             ("model_a", "onnx-shape-inference"): {
                 "success": False, "correct": 0, "total": 1, "error": "x", "error_step": "run",
             },
-            ("model_a", "onnxruntime-transformers"): {
+            ("model_a", "ort-transformers"): {
                 "success": True, "correct": 1, "total": 1,
             },
             ("model_b", "onnx-light"): {"success": False, "correct": 1, "total": 2, "error": "1/2"},
-            ("model_b", "onnx-light-onnx-optim"): {"success": True, "correct": 2, "total": 2},
+            ("model_b", "onnx-light-optim"): {"success": True, "correct": 2, "total": 2},
             ("model_b", "onnx"): {"success": True, "correct": 2, "total": 2},
             ("model_b", "onnx-shape-inference"): {
                 "success": False, "correct": 0, "total": 2, "error": "x", "error_step": "run",
             },
-            ("model_b", "onnxruntime-transformers"): {
+            ("model_b", "ort-transformers"): {
                 "success": False, "correct": 1, "total": 2, "error": "1/2",
             },
         }
@@ -502,13 +502,13 @@ class TestBuildPayload(unittest.TestCase):
         self.assertEqual(payload["totals"]["onnx-light"], {
             "correct": 2, "total": 3, "tests_pass": 1, "tests_fail": 1,
         })
-        self.assertEqual(payload["totals"]["onnx-light-onnx-optim"], {
+        self.assertEqual(payload["totals"]["onnx-light-optim"], {
             "correct": 3, "total": 3, "tests_pass": 2, "tests_fail": 0,
         })
         self.assertEqual(payload["totals"]["onnx-shape-inference"], {
             "correct": 0, "total": 3, "tests_pass": 0, "tests_fail": 2,
         })
-        self.assertEqual(payload["totals"]["onnxruntime-transformers"], {
+        self.assertEqual(payload["totals"]["ort-transformers"], {
             "correct": 2, "total": 3, "tests_pass": 1, "tests_fail": 1,
         })
         names = [r["name"] for r in payload["tests"]]
