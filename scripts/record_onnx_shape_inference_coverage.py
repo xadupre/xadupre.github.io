@@ -54,6 +54,7 @@ BACKENDS: Tuple[str, ...] = (
     "onnx",
     "onnx-shape-inference",
     "ort-transformers",
+    "yobx",
 )
 
 # Package whose version is recorded alongside the ``last_pass`` date for
@@ -64,6 +65,7 @@ BACKEND_PACKAGE: Dict[str, str] = {
     "onnx": "onnx",
     "onnx-shape-inference": "onnx_shape_inference",
     "ort-transformers": "onnxruntime",
+    "yobx": "yobx",
 }
 
 # Default tags used by ``onnx-light`` to mark backend cases that are
@@ -766,12 +768,65 @@ def _run_ort_transformers(model):
     return SymbolicShapeInference.infer_shapes(model, auto_merge=True)
 
 
+def _run_yobx(model):
+    """Run ``yobx.xshape.BasicShapeBuilder`` on ``model``.
+
+    :class:`yobx.xshape.BasicShapeBuilder` is the shape-inference engine
+    shipped with the ``yet-another-onnx-builder`` project. It walks the
+    graph and tracks shapes (potentially symbolic) for every
+    intermediate. ``update_shapes`` mutates the input ``ModelProto`` to
+    populate ``graph.value_info`` for the intermediates it managed to
+    infer; existing ``value_info`` entries (left in place by
+    ``strip_shapes`` with only ``elem_type`` set) and ``graph.output``
+    entries whose shape was stripped are also refilled here so the
+    shared comparison helpers can score them uniformly.
+    """
+    import onnx
+    from yobx.xshape import BasicShapeBuilder
+
+    builder = BasicShapeBuilder()
+    builder.run_model(model)
+    out = onnx.ModelProto()
+    out.CopyFrom(model)
+    builder.update_shapes(out)
+    # ``update_shapes`` skips both ``graph.output`` (so the caller's
+    # declared output shapes are preserved) and any name already
+    # appearing in ``graph.value_info`` (so the caller's annotations are
+    # preserved). Here ``strip_shapes`` left those entries shape-less,
+    # so refill them from the builder when possible.
+    for container in (out.graph.value_info, out.graph.output):
+        for vi in container:
+            if not vi.HasField("type") or not vi.type.HasField("tensor_type"):
+                continue
+            tt = vi.type.tensor_type
+            if tt.HasField("shape") and len(tt.shape.dim) > 0:
+                continue
+            if not builder.has_shape(vi.name):
+                continue
+            tt.ClearField("shape")
+            for d in builder.get_shape(vi.name):
+                new_d = tt.shape.dim.add()
+                if isinstance(d, int):
+                    # ``BasicShapeBuilder`` uses negative values (typically
+                    # ``-1``) as a placeholder for "unknown rank position";
+                    # leave the dim empty so the comparison helper treats it
+                    # as unknown rather than as a concrete dimension.
+                    if d >= 0:
+                        new_d.dim_value = d
+                else:
+                    new_d.dim_param = str(d)
+            if not tt.elem_type and builder.has_type(vi.name):
+                tt.elem_type = builder.get_type(vi.name)
+    return out
+
+
 _BACKEND_RUNNERS: Dict[str, Callable[[Any], Any]] = {
     "onnx-light": _run_onnx_light,
     "onnx-light-optim": _run_onnx_light_optim,
     "onnx": _run_onnx,
     "onnx-shape-inference": _run_onnx_shape_inference,
     "ort-transformers": _run_ort_transformers,
+    "yobx": _run_yobx,
 }
 
 

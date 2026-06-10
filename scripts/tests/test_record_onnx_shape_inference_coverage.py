@@ -413,6 +413,14 @@ class TestRunTestWithBackend(unittest.TestCase):
             rsi.BACKEND_PACKAGE["ort-transformers"], "onnxruntime"
         )
 
+    def test_yobx_backend_registered(self):
+        # The shape inference shipped in ``yet-another-onnx-builder``
+        # (``yobx.xshape.BasicShapeBuilder``) is exposed as a dedicated
+        # backend in the coverage script.
+        self.assertIn("yobx", rsi.BACKENDS)
+        self.assertIn("yobx", rsi._BACKEND_RUNNERS)
+        self.assertEqual(rsi.BACKEND_PACKAGE["yobx"], "yobx")
+
     def test_empty_expected(self):
         info = rsi.run_test_with_backend(None, [], "onnx")
         self.assertFalse(info["success"])
