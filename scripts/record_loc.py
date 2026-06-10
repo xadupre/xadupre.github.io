@@ -8,7 +8,12 @@ the dashboard.
 
 The CSV columns are::
 
-    date,commit,language,files,lines
+    date,commit,language,files,lines,code_lines,comment_lines
+
+``lines`` is the total number of physical lines (including blanks and
+comments) while ``code_lines`` and ``comment_lines`` count only lines
+that contain source code or comments respectively. A line that mixes
+code and a trailing comment is counted as a code line only.
 
 The script is intentionally dependency-free so that it can be invoked from
 any GitHub Actions workflow without having to install an external tool such
@@ -36,7 +41,15 @@ import subprocess
 import sys
 from typing import Iterable
 
-CSV_FIELDS = ("date", "commit", "language", "files", "lines")
+CSV_FIELDS = (
+    "date",
+    "commit",
+    "language",
+    "files",
+    "lines",
+    "code_lines",
+    "comment_lines",
+)
 
 # Mapping from language name to the set of file extensions (lower-case,
 # including the leading dot) that belong to it.
@@ -99,29 +112,193 @@ def _ext_to_language() -> dict[str, str]:
 
 
 def count_lines(path: str) -> int:
-    """Return the number of lines in *path*.
+    """Return the total number of physical lines in *path*.
 
     The file is opened in binary mode so that a stray decoding error in a
     source file does not interrupt the whole count.
     """
-    count = 0
+    total, _, _ = classify_file(path, language=None)
+    return total
+
+
+def _classify_python_line(stripped: bytes) -> tuple[bool, bool]:
+    """Return ``(has_code, has_comment)`` for a single Python line.
+
+    The line is expected to have been stripped of surrounding whitespace.
+    Blank lines yield ``(False, False)``. Triple-quoted strings used as
+    docstrings are counted as code because tracking string state across
+    lines reliably would require a full tokeniser.
+    """
+    if not stripped:
+        return False, False
+    if stripped.startswith(b"#"):
+        return False, True
+    # A trailing ``# ...`` comment after code keeps ``has_code`` True; we
+    # only need a best-effort detection of the ``#`` character outside of
+    # string literals.
+    has_comment = False
+    in_single = False
+    in_double = False
+    i = 0
+    n = len(stripped)
+    while i < n:
+        c = stripped[i:i + 1]
+        if in_single:
+            if c == b"\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == b"'":
+                in_single = False
+            i += 1
+            continue
+        if in_double:
+            if c == b"\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == b'"':
+                in_double = False
+            i += 1
+            continue
+        if c == b"'":
+            in_single = True
+        elif c == b'"':
+            in_double = True
+        elif c == b"#":
+            has_comment = True
+            break
+        i += 1
+    return True, has_comment
+
+
+def _classify_cpp_lines(data: bytes) -> tuple[int, int, int]:
+    """Return ``(total, code, comment)`` line counts for C/C++ *data*.
+
+    The classifier is intentionally lightweight: it tracks ``/* ... */``
+    block comments across lines and ``// ...`` line comments, and skips
+    over string and character literals so that ``//`` inside a string
+    does not start a comment.
+    """
+    total = 0
+    code_lines = 0
+    comment_lines = 0
+    in_block = False
+    n = len(data)
+    i = 0
+    # Process line by line while remembering block-comment state.
+    while i <= n:
+        # Find end of current line.
+        j = data.find(b"\n", i)
+        if j == -1:
+            line = data[i:]
+            advance = n
+            if not line and i == n:
+                break
+        else:
+            line = data[i:j]
+            advance = j + 1
+        total += 1
+        has_code = False
+        has_comment = False
+        k = 0
+        m = len(line)
+        in_string = 0  # 0 = none, 1 = ", 2 = '
+        while k < m:
+            c = line[k:k + 1]
+            if in_block:
+                has_comment = True
+                if c == b"*" and k + 1 < m and line[k + 1:k + 2] == b"/":
+                    in_block = False
+                    k += 2
+                    continue
+                k += 1
+                continue
+            if in_string:
+                if c == b"\\" and k + 1 < m:
+                    k += 2
+                    continue
+                if (in_string == 1 and c == b'"') or (
+                    in_string == 2 and c == b"'"
+                ):
+                    in_string = 0
+                k += 1
+                continue
+            if c == b"/" and k + 1 < m and line[k + 1:k + 2] == b"/":
+                has_comment = True
+                break
+            if c == b"/" and k + 1 < m and line[k + 1:k + 2] == b"*":
+                has_comment = True
+                in_block = True
+                k += 2
+                continue
+            if c in (b" ", b"\t", b"\r"):
+                k += 1
+                continue
+            has_code = True
+            if c == b'"':
+                in_string = 1
+            elif c == b"'":
+                in_string = 2
+            k += 1
+        if has_code:
+            code_lines += 1
+        elif has_comment:
+            comment_lines += 1
+        if j == -1:
+            break
+        i = advance
+    return total, code_lines, comment_lines
+
+
+def classify_file(path: str, language: str | None) -> tuple[int, int, int]:
+    """Return ``(total, code, comment)`` line counts for *path*.
+
+    When *language* is ``None`` only the total number of physical lines
+    is reported and ``code`` / ``comment`` are returned as ``0``.
+    """
     with open(path, "rb") as f:
-        for _ in f:
-            count += 1
-    return count
+        data = f.read()
+    if language == "C++":
+        return _classify_cpp_lines(data)
+    if not data:
+        return 0, 0, 0
+    # Split keeping behaviour consistent with iterating over the file:
+    # a trailing newline does not introduce an extra empty line.
+    lines = data.split(b"\n")
+    if lines and lines[-1] == b"":
+        lines.pop()
+    total = len(lines)
+    if language != "Python":
+        return total, 0, 0
+    code_lines = 0
+    comment_lines = 0
+    for raw in lines:
+        stripped = raw.strip()
+        has_code, has_comment = _classify_python_line(stripped)
+        if has_code:
+            code_lines += 1
+        elif has_comment:
+            comment_lines += 1
+    return total, code_lines, comment_lines
 
 
 def count_source_tree(source_dir: str) -> dict[str, dict[str, int]]:
     """Count files and lines per language under *source_dir*.
 
     Returns a dictionary mapping each language name in :data:`LANGUAGES`
-    to a ``{"files": int, "lines": int}`` dictionary. Languages with no
-    source file are still included with zero values so that the resulting
-    CSV always has a stable shape.
+    to a ``{"files": int, "lines": int, "code_lines": int,
+    "comment_lines": int}`` dictionary. Languages with no source file
+    are still included with zero values so that the resulting CSV
+    always has a stable shape.
     """
     ext_to_language = _ext_to_language()
     totals: dict[str, dict[str, int]] = {
-        language: {"files": 0, "lines": 0} for language in LANGUAGES
+        language: {
+            "files": 0,
+            "lines": 0,
+            "code_lines": 0,
+            "comment_lines": 0,
+        }
+        for language in LANGUAGES
     }
     for root, dirs, files in os.walk(source_dir):
         # Skip the directories listed above. ``dirs[:] = ...`` mutates the
@@ -134,13 +311,17 @@ def count_source_tree(source_dir: str) -> dict[str, dict[str, int]]:
             if language is None:
                 continue
             try:
-                lines = count_lines(os.path.join(root, name))
+                total, code, comment = classify_file(
+                    os.path.join(root, name), language=language
+                )
             except OSError:
                 # Broken symlinks or unreadable files are ignored rather
                 # than aborting the whole run.
                 continue
             totals[language]["files"] += 1
-            totals[language]["lines"] += lines
+            totals[language]["lines"] += total
+            totals[language]["code_lines"] += code
+            totals[language]["comment_lines"] += comment
     return totals
 
 
@@ -173,7 +354,10 @@ def append_rows(
     """
     rows: list[dict[str, str]] = []
     for language in LANGUAGES:
-        entry = totals.get(language, {"files": 0, "lines": 0})
+        entry = totals.get(
+            language,
+            {"files": 0, "lines": 0, "code_lines": 0, "comment_lines": 0},
+        )
         rows.append(
             {
                 "date": date_iso,
@@ -181,10 +365,14 @@ def append_rows(
                 "language": language,
                 "files": str(entry["files"]),
                 "lines": str(entry["lines"]),
+                "code_lines": str(entry.get("code_lines", 0)),
+                "comment_lines": str(entry.get("comment_lines", 0)),
             }
         )
     os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
     write_header = not os.path.exists(output) or os.path.getsize(output) == 0
+    if not write_header:
+        _migrate_csv_header(output)
     with open(output, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         if write_header:
@@ -192,6 +380,33 @@ def append_rows(
         for row in rows:
             writer.writerow(row)
     return rows
+
+
+def _migrate_csv_header(path: str) -> None:
+    """Rewrite *path* so that its header matches :data:`CSV_FIELDS`.
+
+    Existing rows are preserved; columns introduced after the file was
+    first created are back-filled with empty strings so that the dashboard
+    can still parse them.
+    """
+    with open(path, encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return
+        if tuple(header) == CSV_FIELDS:
+            return
+        existing_rows = list(reader)
+    indices = {name: header.index(name) if name in header else -1 for name in CSV_FIELDS}
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(CSV_FIELDS)
+        for row in existing_rows:
+            writer.writerow(
+                [row[indices[name]] if indices[name] != -1 and indices[name] < len(row) else ""
+                 for name in CSV_FIELDS]
+            )
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -235,7 +450,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     rows = append_rows(args.output, totals, date_iso=date_iso, commit=commit)
     for row in rows:
         print(
-            "Recorded {language}: {files} files, {lines} lines at {commit}.".format(
+            "Recorded {language}: {files} files, {lines} lines "
+            "({code_lines} code, {comment_lines} comment) at {commit}.".format(
                 **row
             )
         )
