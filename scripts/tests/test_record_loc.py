@@ -52,8 +52,53 @@ class TestRecordLoc(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._make_tree(tmp)
             totals = rl.count_source_tree(tmp)
-            self.assertEqual(totals["Python"], {"files": 2, "lines": 4})
-            self.assertEqual(totals["C++"], {"files": 2, "lines": 4})
+            self.assertEqual(
+                totals["Python"],
+                {"files": 2, "lines": 4, "code_lines": 4, "comment_lines": 0},
+            )
+            self.assertEqual(
+                totals["C++"],
+                {"files": 2, "lines": 4, "code_lines": 4, "comment_lines": 0},
+            )
+
+    def test_count_source_tree_distinguishes_code_and_comment_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "src"))
+            with open(os.path.join(tmp, "src", "a.py"), "w", encoding="utf-8") as f:
+                # 7 lines: 2 comment, 1 blank, 2 code, 1 code-with-trailing-comment,
+                # 1 code line with ``#`` inside a string (must be code, not comment).
+                f.write(
+                    "# header comment\n"
+                    "# another comment\n"
+                    "\n"
+                    "x = 1\n"
+                    "y = 2  # trailing comment\n"
+                    "z = '# not a comment'\n"
+                    "print(x + y)\n"
+                )
+            with open(os.path.join(tmp, "src", "a.cpp"), "w", encoding="utf-8") as f:
+                # 8 lines: 1 block-comment opening line, 1 inside block comment,
+                # 1 block-comment closing line, 1 code line, 1 line comment,
+                # 1 code-with-trailing-comment, 1 blank, 1 code with ``//`` in string.
+                f.write(
+                    "/* multi\n"
+                    " * line\n"
+                    " */\n"
+                    "int x = 1;\n"
+                    "// pure comment\n"
+                    "int y = 2; // trailing\n"
+                    "\n"
+                    "const char* s = \"http://example\";\n"
+                )
+            totals = rl.count_source_tree(tmp)
+            self.assertEqual(
+                totals["Python"],
+                {"files": 1, "lines": 7, "code_lines": 4, "comment_lines": 2},
+            )
+            self.assertEqual(
+                totals["C++"],
+                {"files": 1, "lines": 8, "code_lines": 3, "comment_lines": 4},
+            )
 
     def test_append_rows_writes_header_then_appends(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,6 +120,33 @@ class TestRecordLoc(unittest.TestCase):
             self.assertEqual(rows[-1]["commit"], "def")
             self.assertEqual(rows[0]["files"], "2")
             self.assertEqual(rows[0]["lines"], "4")
+            self.assertEqual(rows[0]["code_lines"], "4")
+            self.assertEqual(rows[0]["comment_lines"], "0")
+
+    def test_append_rows_migrates_legacy_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_tree(tmp)
+            out = os.path.join(tmp, "loc.csv")
+            # Simulate a CSV produced by a previous version of the script
+            # with only the original five columns.
+            with open(out, "w", encoding="utf-8", newline="") as f:
+                f.write("date,commit,language,files,lines\n")
+                f.write("2024-01-01T00:00:00Z,old,Python,5,42\n")
+            totals = rl.count_source_tree(tmp)
+            rl.append_rows(out, totals, date_iso="2024-02-01T00:00:00Z", commit="new")
+            with open(out, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            # Header is rewritten to include the new columns.
+            self.assertEqual(set(rows[0].keys()), set(rl.CSV_FIELDS))
+            # Legacy row is preserved with empty back-filled values.
+            legacy = next(r for r in rows if r["commit"] == "old")
+            self.assertEqual(legacy["lines"], "42")
+            self.assertEqual(legacy["code_lines"], "")
+            self.assertEqual(legacy["comment_lines"], "")
+            # New rows carry the additional columns.
+            for r in rows:
+                if r["commit"] == "new":
+                    self.assertEqual(r["code_lines"], "4")
 
     def test_main_records_rows_with_explicit_commit_and_date(self):
         with tempfile.TemporaryDirectory() as tmp:
