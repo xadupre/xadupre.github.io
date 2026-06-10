@@ -453,8 +453,19 @@ def job_to_row(job: dict, run: dict | None = None) -> dict | None:
     """Convert a job payload into a CSV row.
 
     Returns ``None`` for jobs that have not finished yet so that they are
-    re-fetched on the next invocation when their duration is known.
+    re-fetched on the next invocation when their duration is known. Also
+    returns ``None`` for jobs whose name still contains an unexpanded
+    GitHub Actions matrix expression (``${{ ... }}``): GitHub emits such a
+    single placeholder entry (typically with conclusion ``skipped``) when a
+    matrix job never runs because its ``needs:`` dependency failed and the
+    matrix therefore never expanded. Those entries do not represent a real
+    matrix combination and would otherwise create useless per-job CSV
+    files such as ``wheels_macos_matrix.arch.csv`` with no successful run
+    to plot.
     """
+    name = job.get("name") or ""
+    if "${{" in name:
+        return None
     conclusion = job.get("conclusion")
     status = job.get("status")
     if status != "completed" or not conclusion:
