@@ -126,16 +126,67 @@ jobs:
             echo "No shared library found under onnx_light/onnx_py/; nothing to record."
           fi
 
+      - name: Build and record onnx-light wheel size
+        working-directory: onnx-light
+        run: |
+          # Build a distributable wheel from the onnx-light checkout and
+          # append one CSV row per .whl file produced to
+          # cache_data/onnx-light/wheel_sizes.csv inside the
+          # xadupre.github.io checkout. This is the primary source of data
+          # for the wheel-size series on
+          # dashboard/onnx-light/package-size.html: it does not depend on
+          # the upstream ``build_release.yml`` workflow (which has had no
+          # successful artifact-producing run, leaving the chart empty
+          # before this step was added). The CSV columns
+          # (date,commit,run_id,size,name) match the schema produced by
+          # scripts/record_wheel_sizes.py so the dashboard can consume rows
+          # from either source interchangeably.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,run_id,size,name" > "$out"
+          fi
+          wheel_dir="${GITHUB_WORKSPACE}/wheel-out"
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          # ``pip wheel`` reuses the build artefacts already produced by the
+          # earlier ``setup.py build_ext --inplace`` step and writes one
+          # ``.whl`` per project to ``$wheel_dir``. ``--no-deps`` ensures we
+          # only build onnx-light itself; ``--no-build-isolation`` reuses
+          # the already-installed setuptools/nanobind/numpy/ml-dtypes
+          # toolchain rather than re-resolving them in a fresh env.
+          python -m pip wheel . \
+            --no-deps \
+            --no-build-isolation \
+            --wheel-dir "$wheel_dir"
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          run_id="${GITHUB_RUN_ID:-local}"
+          found=0
+          for f in "$wheel_dir"/*.whl; do
+            [ -f "$f" ] || continue
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${run_id},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded wheel ${name} (${size} bytes) at ${commit_sha}."
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No wheel was produced by 'pip wheel .'; nothing to record." >&2
+            exit 1
+          fi
+
       - name: Record wheel sizes from build_release.yml artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Pull the per-platform/per-Python wheel sizes from the most recent
-          # successful runs of the upstream ``build_release.yml`` workflow in
-          # xadupre/onnx-light and append them to
-          # cache_data/onnx-light/wheel_sizes.csv. The dashboard at
-          # dashboard/onnx-light/package-size.html plots these wheel sizes
-          # next to the local shared-library sizes recorded above.
+          # Complement the locally-built wheel size recorded above with the
+          # per-platform/per-Python wheel sizes published by successful runs
+          # of the upstream ``build_release.yml`` workflow in
+          # xadupre/onnx-light, when any are available. Both sources append
+          # to cache_data/onnx-light/wheel_sizes.csv using the same schema;
+          # the script deduplicates by ``run_id`` so re-running is safe.
           python -u "${GITHUB_WORKSPACE}/site/scripts/record_wheel_sizes.py" \
             --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
             --repo xadupre/onnx-light \
