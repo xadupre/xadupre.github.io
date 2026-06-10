@@ -137,6 +137,25 @@ class TestRecordBuildDurations(unittest.TestCase):
         job = {"id": 1, "status": "in_progress", "conclusion": None}
         self.assertIsNone(rbd.job_to_row(job))
 
+    def test_job_to_row_skips_unexpanded_matrix_placeholder(self):
+        # When a matrix job never runs because its ``needs:`` dependency
+        # failed, GitHub returns a single placeholder entry whose name
+        # still contains the literal ``${{ matrix.* }}`` expression. Such
+        # entries do not represent a real matrix combination and must be
+        # ignored to avoid creating useless per-job CSV files (e.g.
+        # ``wheels_macos_matrix.arch.csv``) that hold only skipped rows
+        # and produce empty graphs on the dashboard.
+        job = {
+            "id": 3,
+            "run_id": 7,
+            "name": "wheels (macos, ${{ matrix.arch }})",
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2024-01-01T00:00:00Z",
+            "completed_at": "2024-01-01T00:00:00Z",
+        }
+        self.assertIsNone(rbd.job_to_row(job))
+
     def test_job_to_row_computes_duration(self):
         run = {"id": 10, "name": "Build docs", "head_sha": "abc"}
         job = {
