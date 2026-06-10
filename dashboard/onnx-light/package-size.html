@@ -105,10 +105,10 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
 <div class="charts-grid">
 <div class="chart-wrap">
-  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time</h2>
-  <div id="message" class="message info"></div>
-  <div id="chartContainer" class="chart-container small"><canvas id="chart"></canvas></div>
-  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
+  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Lines of Python and C++ source code over time</h2>
+  <div id="locMessage" class="message info"></div>
+  <div id="locChartContainer" class="chart-container small"><canvas id="locChart"></canvas></div>
+  <div class="hint">Lines are counted directly from the onnx-light checkout (build artefacts, virtual environments and vendored code are excluded). Solid lines show source code lines, dashed lines show comment lines.</div>
 </div>
 <div class="chart-wrap">
   <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Wheel size over time</h2>
@@ -118,10 +118,10 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 </div>
 </div>
 <div class="chart-wrap" style="margin-top:1em;">
-  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Lines of Python and C++ source code over time</h2>
-  <div id="locMessage" class="message info"></div>
-  <div id="locChartContainer" class="chart-container"><canvas id="locChart"></canvas></div>
-  <div class="hint">Lines are counted directly from the onnx-light checkout (build artefacts, virtual environments and vendored code are excluded).</div>
+  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time</h2>
+  <div id="message" class="message info"></div>
+  <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
 </div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 10 observations</h2>
@@ -358,15 +358,21 @@ function parseLocCSV(text) {
     language: header.indexOf("language"),
     files: header.indexOf("files"),
     lines: header.indexOf("lines"),
+    code_lines: header.indexOf("code_lines"),
+    comment_lines: header.indexOf("comment_lines"),
   };
   return lines.map(line => {
     const cols = line.split(",");
+    const codeRaw = idx.code_lines >= 0 ? cols[idx.code_lines] : "";
+    const commentRaw = idx.comment_lines >= 0 ? cols[idx.comment_lines] : "";
     return {
       date: cols[idx.date],
       commit: cols[idx.commit],
       language: cols[idx.language],
       files: Number(cols[idx.files]),
       lines: Number(cols[idx.lines]),
+      code_lines: codeRaw === "" || codeRaw === undefined ? null : Number(codeRaw),
+      comment_lines: commentRaw === "" || commentRaw === undefined ? null : Number(commentRaw),
     };
   }).filter(r => r.date && r.language && !Number.isNaN(r.lines));
 }
@@ -393,29 +399,68 @@ fetch(LOC_URL, { cache: "no-store" })
     }
     const groups = new Map();
     for (const r of rows) {
-      if (!groups.has(r.language)) groups.set(r.language, []);
-      groups.get(r.language).push({
-        x: r.date,
-        y: r.lines,
-        files: r.files,
-        commit: r.commit,
-      });
+      if (!groups.has(r.language)) {
+        groups.set(r.language, { code: [], comment: [], total: [] });
+      }
+      const entry = groups.get(r.language);
+      const base = { x: r.date, files: r.files, commit: r.commit };
+      if (r.code_lines != null && !Number.isNaN(r.code_lines)) {
+        entry.code.push({ ...base, y: r.code_lines });
+      }
+      if (r.comment_lines != null && !Number.isNaN(r.comment_lines)) {
+        entry.comment.push({ ...base, y: r.comment_lines });
+      }
+      // Fallback for legacy rows that only carry the total line count.
+      if (
+        (r.code_lines == null || Number.isNaN(r.code_lines)) &&
+        (r.comment_lines == null || Number.isNaN(r.comment_lines))
+      ) {
+        entry.total.push({ ...base, y: r.lines });
+      }
     }
-    for (const arr of groups.values()) {
-      arr.sort((a, b) => new Date(a.x) - new Date(b.x));
+    for (const entry of groups.values()) {
+      entry.code.sort((a, b) => new Date(a.x) - new Date(b.x));
+      entry.comment.sort((a, b) => new Date(a.x) - new Date(b.x));
+      entry.total.sort((a, b) => new Date(a.x) - new Date(b.x));
     }
     const datasets = [];
-    for (const [language, data] of groups) {
+    for (const [language, entry] of groups) {
       const color = LOC_COLORS[language] || "#d2a8ff";
-      datasets.push({
-        label: language,
-        data,
-        borderColor: color,
-        backgroundColor: color,
-        tension: 0.15,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-      });
+      if (entry.code.length > 0) {
+        datasets.push({
+          label: language + " (code)",
+          data: entry.code,
+          borderColor: color,
+          backgroundColor: color,
+          tension: 0.15,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        });
+      }
+      if (entry.comment.length > 0) {
+        datasets.push({
+          label: language + " (comments)",
+          data: entry.comment,
+          borderColor: color,
+          backgroundColor: color,
+          borderDash: [4, 4],
+          tension: 0.15,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        });
+      }
+      if (entry.total.length > 0) {
+        datasets.push({
+          label: language + " (total)",
+          data: entry.total,
+          borderColor: color,
+          backgroundColor: color,
+          borderDash: [2, 2],
+          tension: 0.15,
+          pointRadius: 3,
+          pointHoverRadius: 5,
+        });
+      }
     }
     const ctx = document.getElementById("locChart").getContext("2d");
     const locChart = new Chart(ctx, {
