@@ -57,6 +57,111 @@ class TestSnapshotAndStrip(unittest.TestCase):
         op_types = {s["name"]: s["op_type"] for s in snap}
         self.assertEqual(op_types, {"Y": "Relu", "Z": "Identity"})
 
+    def test_snapshot_includes_unannotated_intermediates(self):
+        """Node outputs without ``value_info`` must still appear in the
+        snapshot as informational ``kind == "intermediate"`` entries so
+        the detailed report can show what each backend inferred for
+        them (e.g. the shape produced by a ``Shape`` operator)."""
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info(
+            "X", TensorProto.FLOAT, ["N", 3]
+        )
+        out = helper.make_tensor_value_info(
+            "Y", TensorProto.INT64, [2]
+        )
+        nodes = [
+            helper.make_node("Shape", ["X"], ["shp"]),
+            helper.make_node("Identity", ["shp"], ["Y"]),
+        ]
+        graph = helper.make_graph(nodes, "unannotated", [inp], [out])
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        by_name = {s["name"]: s for s in snap}
+        # The intermediate ``shp`` produced by the ``Shape`` node must
+        # be present even though the model has no ``value_info`` for
+        # it. It carries no expectation (``elem_type is None``) and is
+        # ordered after its producer.
+        self.assertIn("shp", by_name)
+        self.assertEqual(by_name["shp"]["kind"], "intermediate")
+        self.assertEqual(by_name["shp"]["op_type"], "Shape")
+        self.assertIsNone(by_name["shp"]["elem_type"])
+        self.assertFalse(by_name["shp"]["has_shape"])
+        self.assertEqual(by_name["shp"]["shape"], [])
+        # And ordering still follows node declaration order.
+        self.assertEqual([s["name"] for s in snap], ["shp", "Y"])
+
+    def test_compare_treats_intermediate_entries_as_informational(self):
+        """Entries with ``elem_type is None`` are surfaced in
+        ``details`` together with the inferred values but are never
+        flagged as a mismatch."""
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info(
+            "X", TensorProto.FLOAT, ["N", 3]
+        )
+        out = helper.make_tensor_value_info(
+            "Y", TensorProto.INT64, [2]
+        )
+        nodes = [
+            helper.make_node("Shape", ["X"], ["shp"]),
+            helper.make_node("Identity", ["shp"], ["Y"]),
+        ]
+        graph = helper.make_graph(nodes, "unannotated", [inp], [out])
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        import onnx.shape_inference
+
+        inferred = onnx.shape_inference.infer_shapes(model)
+        details = rsi._compare_snapshot_with_model(snap, inferred)
+        by_name = {d["name"]: d for d in details}
+        # The informational entry is marked ok and carries the
+        # inferred type/shape so the dashboard can display them.
+        self.assertTrue(by_name["shp"]["ok"])
+        self.assertIsNone(by_name["shp"]["expected_elem_type"])
+        self.assertFalse(by_name["shp"]["expected_has_shape"])
+        self.assertEqual(by_name["shp"]["elem_type"], int(TensorProto.INT64))
+        self.assertTrue(by_name["shp"]["has_shape"])
+
+    def test_run_excludes_intermediate_entries_from_score(self):
+        """``run_test_with_backend`` must not count informational
+        intermediates in ``correct``/``total``: the score should reflect
+        only entries that carry a real expectation."""
+        from onnx import TensorProto, helper
+
+        inp = helper.make_tensor_value_info(
+            "X", TensorProto.FLOAT, ["N", 3]
+        )
+        out = helper.make_tensor_value_info(
+            "Y", TensorProto.INT64, [2]
+        )
+        nodes = [
+            helper.make_node("Shape", ["X"], ["shp"]),
+            helper.make_node("Identity", ["shp"], ["Y"]),
+        ]
+        graph = helper.make_graph(nodes, "unannotated", [inp], [out])
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        snap = rsi.snapshot_intermediates(model)
+        info = rsi.run_test_with_backend(model, snap, "onnx")
+        # ``snap`` contains 2 entries (informational ``shp`` + ``Y``)
+        # but only ``Y`` is scored.
+        self.assertEqual(len(snap), 2)
+        self.assertEqual(info["total"], 1)
+        self.assertEqual(info["correct"], 1)
+        self.assertTrue(info["success"])
+        # Both entries are still surfaced in ``details``.
+        names = sorted(d["name"] for d in info["details"])
+        self.assertEqual(names, ["Y", "shp"])
+
     def test_snapshot_captures_outputs_and_value_info(self):
         model = _make_simple_model()
         snap = rsi.snapshot_intermediates(model)
