@@ -37,6 +37,22 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   height: 65vh;
   min-height: 360px;
 }
+.chart-container.small {
+  height: 45vh;
+  min-height: 280px;
+}
+.charts-grid {
+  width: 100%;
+  max-width: 1100px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1em;
+  box-sizing: border-box;
+}
+.charts-grid .chart-wrap { max-width: none; }
+@media (max-width: 800px) {
+  .charts-grid { grid-template-columns: 1fr; }
+}
 .hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
 .message {
   display: none;
@@ -87,11 +103,19 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   <h1>onnx-light &mdash; package size over time</h1>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
+<div class="charts-grid">
 <div class="chart-wrap">
+  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time</h2>
   <div id="message" class="message info"></div>
-  <div id="sourceNotices"></div>
-  <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
-  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Shared library (.so/.dylib/.pyd) sizes use dashed lines; wheel sizes use solid lines. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
+  <div id="chartContainer" class="chart-container small"><canvas id="chart"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
+</div>
+<div class="chart-wrap">
+  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Wheel size over time</h2>
+  <div id="wheelMessage" class="message info"></div>
+  <div id="wheelChartContainer" class="chart-container small"><canvas id="wheelChart"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
 </div>
 <div class="chart-wrap" style="margin-top:1em;">
   <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Lines of Python and C++ source code over time</h2>
@@ -112,17 +136,23 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 const SOURCES = [
   {
     kind: "shared library",
+    chartId: "chart",
+    containerId: "chartContainer",
+    messageId: "message",
     url: "../../cache_data/onnx-light/so_sizes.csv",
     dashed: true,
-    missingMessage:
+    emptyMessage:
       "No shared library (.so/.dylib/.pyd) size data is available yet. " +
       "The CSV file will appear once the build pipeline publishes its first measurements.",
   },
   {
     kind: "wheel",
+    chartId: "wheelChart",
+    containerId: "wheelChartContainer",
+    messageId: "wheelMessage",
     url: "../../cache_data/onnx-light/wheel_sizes.csv",
     dashed: false,
-    missingMessage:
+    emptyMessage:
       "No wheel size data is available yet. Wheel sizes are collected from " +
       "completed runs of the upstream build_release.yml workflow in " +
       "xadupre/onnx-light; if no such run has produced wheel artifacts " +
@@ -130,21 +160,11 @@ const SOURCES = [
   },
 ];
 
-function addSourceNotice(text, kind) {
-  const container = document.getElementById("sourceNotices");
-  const div = document.createElement("div");
-  div.className = "message visible " + (kind || "info");
-  div.style.marginTop = "0.5em";
-  div.style.marginBottom = "0.5em";
-  div.textContent = text;
-  container.appendChild(div);
-}
-
-function showMessage(text, kind) {
-  const msg = document.getElementById("message");
+function showMessage(text, kind, src) {
+  const msg = document.getElementById(src.messageId);
   msg.textContent = text;
   msg.className = "message visible " + (kind || "info");
-  document.getElementById("chartContainer").style.display = "none";
+  document.getElementById(src.containerId).style.display = "none";
 }
 
 function parseCSV(text) {
@@ -201,26 +221,96 @@ function fetchSource(src) {
     });
 }
 
+function renderSizeChart(src, rows) {
+  const groups = groupByName(rows);
+  const datasets = [];
+  let i = 0;
+  for (const [name, data] of groups) {
+    const color = PALETTE[i % PALETTE.length];
+    const isOnnxPy = name.startsWith("_onnxpy");
+    datasets.push({
+      label: src.kind + ": " + name,
+      data,
+      borderColor: color,
+      backgroundColor: color,
+      borderDash: src.dashed ? [4, 4] : [],
+      tension: 0.15,
+      pointStyle: isOnnxPy ? "cross" : "circle",
+      pointRadius: isOnnxPy ? 5 : 3,
+      pointHoverRadius: isOnnxPy ? 7 : 5,
+    });
+    i++;
+  }
+  const ctx = document.getElementById(src.chartId).getContext("2d");
+  const chart = new Chart(ctx, {
+    type: "line",
+    data: { datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: {
+          type: "time",
+          time: { unit: "day", tooltipFormat: "yyyy-MM-dd HH:mm" },
+          title: { display: true, text: "date", color: "#c9d1d9" },
+          ticks: { color: "#c9d1d9" },
+          grid: { color: "rgba(139,148,158,0.25)" },
+        },
+        y: {
+          title: { display: true, text: "size (MB)", color: "#c9d1d9" },
+          ticks: { color: "#c9d1d9" },
+          grid: { color: "rgba(139,148,158,0.25)" },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: {
+          labels: {
+            color: "#c9d1d9",
+            usePointStyle: true,
+          },
+        },
+        tooltip: {
+          callbacks: {
+            label: (item) => {
+              const r = item.raw;
+              const mb = r.y.toFixed(3) + " MB";
+              const c = r.commit ? " (" + r.commit.slice(0, 7) + ")" : "";
+              return item.dataset.label + ": " + mb + c;
+            },
+          },
+        },
+        zoom: {
+          pan: { enabled: true, mode: "xy" },
+          zoom: {
+            wheel: { enabled: true },
+            pinch: { enabled: true },
+            mode: "xy",
+          },
+        },
+      },
+    },
+  });
+  document.getElementById(src.chartId).ondblclick = function () {
+    chart.resetZoom();
+  };
+}
+
 Promise.all(SOURCES.map(fetchSource))
   .then(results => {
-    for (const res of results) {
-      if (res.rows.length === 0) {
-        addSourceNotice(res.src.missingMessage, "info");
-      }
-    }
     const allRows = [];
     for (const res of results) {
+      if (res.rows.length === 0) {
+        showMessage(res.src.emptyMessage, "info", res.src);
+      } else {
+        renderSizeChart(res.src, res.rows);
+      }
       for (const r of res.rows) {
         allRows.push({ ...r, kind: res.src.kind });
       }
     }
     if (allRows.length === 0) {
-      showMessage(
-        "No data available yet for the onnx-light package size. " +
-        "The CSV files have not been generated yet — they will appear once " +
-        "the build pipeline publishes its first measurements.",
-        "info"
-      );
       return;
     }
     const lastObservations = allRows
@@ -242,84 +332,11 @@ Promise.all(SOURCES.map(fetchSource))
     if (lastObservations.length > 0) {
       document.getElementById("lastObservations").style.display = "block";
     }
-    const datasets = [];
-    let i = 0;
-    for (const res of results) {
-      const groups = groupByName(res.rows);
-      for (const [name, data] of groups) {
-        const color = PALETTE[i % PALETTE.length];
-        const isOnnxPy = name.startsWith("_onnxpy");
-        datasets.push({
-          label: res.src.kind + ": " + name,
-          data,
-          borderColor: color,
-          backgroundColor: color,
-          borderDash: res.src.dashed ? [4, 4] : [],
-          tension: 0.15,
-          pointStyle: isOnnxPy ? "cross" : "circle",
-          pointRadius: isOnnxPy ? 5 : 3,
-          pointHoverRadius: isOnnxPy ? 7 : 5,
-        });
-        i++;
-      }
-    }
-    const ctx = document.getElementById("chart").getContext("2d");
-    const chart = new Chart(ctx, {
-      type: "line",
-      data: { datasets },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { mode: "nearest", intersect: false },
-        scales: {
-          x: {
-            type: "time",
-            time: { unit: "day", tooltipFormat: "yyyy-MM-dd HH:mm" },
-            title: { display: true, text: "date", color: "#c9d1d9" },
-            ticks: { color: "#c9d1d9" },
-            grid: { color: "rgba(139,148,158,0.25)" },
-          },
-          y: {
-            title: { display: true, text: "size (MB)", color: "#c9d1d9" },
-            ticks: { color: "#c9d1d9" },
-            grid: { color: "rgba(139,148,158,0.25)" },
-            beginAtZero: true,
-          },
-        },
-        plugins: {
-          legend: {
-            labels: {
-              color: "#c9d1d9",
-              usePointStyle: true,
-            },
-          },
-          tooltip: {
-            callbacks: {
-              label: (item) => {
-                const r = item.raw;
-                const mb = r.y.toFixed(3) + " MB";
-                const c = r.commit ? " (" + r.commit.slice(0, 7) + ")" : "";
-                return item.dataset.label + ": " + mb + c;
-              },
-            },
-          },
-          zoom: {
-            pan: { enabled: true, mode: "xy" },
-            zoom: {
-              wheel: { enabled: true },
-              pinch: { enabled: true },
-              mode: "xy",
-            },
-          },
-        },
-      },
-    });
-    document.getElementById("chart").ondblclick = function () {
-      chart.resetZoom();
-    };
   })
   .catch(err => {
-    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+    for (const src of SOURCES) {
+      showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error", src);
+    }
   });
 
 const LOC_URL = "../../cache_data/onnx-light/loc.csv";
