@@ -421,13 +421,21 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     """Snapshot the shape information of every output / value_info.
 
     Returns a list of dicts ``{"name", "kind", "op_type", "elem_type",
-    "has_shape", "shape"}`` where ``kind`` is either ``"output"`` or
-    ``"value_info"``. ``op_type`` is the type of the node that produces
-    the tensor (empty string if the tensor is not produced by any node,
-    e.g. a graph output directly aliasing an input or initializer).
-    Non plain-tensor entries (sequence/optional/map) are skipped since
-    they cannot be scored against a simple ``elem_type`` + ``shape``
-    contract.
+    "has_shape", "shape"}`` where ``kind`` is one of ``"output"``,
+    ``"value_info"`` or ``"intermediate"``. ``op_type`` is the type of
+    the node that produces the tensor (empty string if the tensor is
+    not produced by any node, e.g. a graph output directly aliasing an
+    input or initializer). Non plain-tensor entries
+    (sequence/optional/map) are skipped since they cannot be scored
+    against a simple ``elem_type`` + ``shape`` contract.
+
+    Node outputs that have no ``value_info`` in the original model (and
+    are not graph outputs) are still recorded with ``kind ==
+    "intermediate"``, ``elem_type == None`` and ``has_shape == False``
+    so the detailed report can show what each backend inferred for
+    them, even though there is no ground truth to compare against. Such
+    entries carry no expectation and are not counted towards the
+    correctness score (see :func:`_compare_snapshot_with_model`).
 
     Entries are returned in the order they appear in the model: the
     graph nodes are walked in declaration order and each output they
@@ -452,19 +460,22 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     ordered_names: List[str] = []
     seen: set = set()
     op_type_by_name: Dict[str, str] = {}
+    # Names of node outputs that have no ``value_info`` in the original
+    # model (i.e. unannotated intermediates). These are still surfaced
+    # in the snapshot so the detailed report can display the per-backend
+    # inferred shape for them, but they carry no expectation.
+    unannotated: set = set()
     for node in model.graph.node:
         for out_name in node.output:
             if not out_name or out_name in seen:
                 continue
+            op_type_by_name.setdefault(out_name, node.op_type)
             if out_name not in by_name:
-                # Still record producing op type so we know which node
-                # would have produced the tensor, even if its
-                # value_info is missing from the snapshot.
-                op_type_by_name.setdefault(out_name, node.op_type)
-                continue
+                if out_name in unannotated:
+                    continue
+                unannotated.add(out_name)
             ordered_names.append(out_name)
             seen.add(out_name)
-            op_type_by_name.setdefault(out_name, node.op_type)
     for vi in model.graph.output:
         if vi.name in seen or vi.name not in by_name:
             continue
@@ -473,22 +484,38 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
 
     snapshots: List[Dict[str, Any]] = []
     for name in ordered_names:
-        kind, vi = by_name[name]
-        if not vi.HasField("type"):
-            continue
-        if not vi.type.HasField("tensor_type"):
-            continue
-        has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
-        snapshots.append(
-            {
-                "name": vi.name,
-                "kind": kind,
-                "op_type": op_type_by_name.get(vi.name, ""),
-                "elem_type": int(vi.type.tensor_type.elem_type),
-                "has_shape": has_shape,
-                "shape": dims,
-            }
-        )
+        if name in by_name:
+            kind, vi = by_name[name]
+            if not vi.HasField("type"):
+                continue
+            if not vi.type.HasField("tensor_type"):
+                continue
+            has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
+            snapshots.append(
+                {
+                    "name": vi.name,
+                    "kind": kind,
+                    "op_type": op_type_by_name.get(vi.name, ""),
+                    "elem_type": int(vi.type.tensor_type.elem_type),
+                    "has_shape": has_shape,
+                    "shape": dims,
+                }
+            )
+        else:
+            # Unannotated node output: report it for visibility but
+            # without any expectation. ``_compare_snapshot_with_model``
+            # treats entries with ``elem_type is None`` as informational
+            # only and they are excluded from the correctness score.
+            snapshots.append(
+                {
+                    "name": name,
+                    "kind": "intermediate",
+                    "op_type": op_type_by_name.get(name, ""),
+                    "elem_type": None,
+                    "has_shape": False,
+                    "shape": [],
+                }
+            )
     return snapshots
 
 
@@ -550,6 +577,14 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         expected_elem = entry["elem_type"]
         had_shape = entry["has_shape"]
         expected_shape = entry["shape"]
+        # ``expected_elem is None`` flags a purely informational entry:
+        # a node output that has no ``value_info`` in the original model
+        # and therefore no ground truth to compare against. We still
+        # populate the inferred fields below so the dashboard can show
+        # what each backend produced, but we never mark it as a
+        # mismatch and ``run_test_with_backend`` excludes it from the
+        # correctness score.
+        informational = expected_elem is None
         detail: Dict[str, Any] = {
             "name": name,
             "kind": entry["kind"],
@@ -564,11 +599,17 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         }
         vi = by_name.get(name)
         if vi is None:
-            detail["reason"] = "missing from graph after inference"
+            if informational:
+                detail["ok"] = True
+            else:
+                detail["reason"] = "missing from graph after inference"
             details.append(detail)
             continue
         if not vi.HasField("type") or not vi.type.HasField("tensor_type"):
-            detail["reason"] = "lost tensor_type"
+            if informational:
+                detail["ok"] = True
+            else:
+                detail["reason"] = "lost tensor_type"
             details.append(detail)
             continue
         tt = vi.type.tensor_type
@@ -576,6 +617,11 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         detail["elem_type"] = int(tt.elem_type)
         detail["has_shape"] = inferred_has_shape
         detail["shape"] = list(inferred_dims)
+        if informational:
+            # Purely informational entry: any inferred value is fine.
+            detail["ok"] = True
+            details.append(detail)
+            continue
         if int(tt.elem_type) != expected_elem:
             detail["reason"] = (
                 f"elem_type mismatch: expected {expected_elem}, "
@@ -741,13 +787,19 @@ def run_test_with_backend(
     AND every snapshotted intermediate was recovered correctly.
     """
     runner = _BACKEND_RUNNERS.get(backend)
+    # ``len(expected)`` is used as a sensible upper bound for ``total``
+    # on early failure paths. Informational entries (no expectation) are
+    # excluded so the count reflects scoring as it would have been.
+    scored_total = sum(
+        1 for e in expected if e.get("elem_type") is not None
+    )
     if runner is None:
         return {
             "success": False,
             "error": f"unknown backend: {backend}",
             "error_step": "load",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     if not expected:
@@ -772,7 +824,7 @@ def run_test_with_backend(
             "error": _stringify_error(exc),
             "error_step": "strip",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     try:
@@ -783,7 +835,7 @@ def run_test_with_backend(
             "error": _stringify_error(exc),
             "error_step": "run",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     try:
@@ -794,11 +846,18 @@ def run_test_with_backend(
             "error": _stringify_error(exc),
             "error_step": "compare",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
-    correct = sum(1 for d in details if d["ok"])
-    total = len(details)
+    # Entries without an expectation (``expected_elem_type is None``) are
+    # purely informational: they show up in ``details`` so the dashboard
+    # can display the inferred shape for unannotated intermediates, but
+    # they are not counted towards the correctness score.
+    scored = [
+        d for d in details if d.get("expected_elem_type") is not None
+    ]
+    correct = sum(1 for d in scored if d["ok"])
+    total = len(scored)
     return {
         "success": total > 0 and correct == total,
         "error": "" if correct == total else f"{total - correct}/{total} intermediates mismatched",
@@ -838,6 +897,7 @@ def _row_from_results(
             {
                 "name": e.get("name"),
                 "kind": e.get("kind"),
+                "op_type": e.get("op_type", ""),
                 "elem_type": e.get("elem_type"),
                 "has_shape": e.get("has_shape", False),
                 "shape": list(e.get("shape", [])),
@@ -856,13 +916,16 @@ def _row_from_results(
         prev_mermaid = previous.get("mermaid")
         if isinstance(prev_mermaid, str) and prev_mermaid:
             row["mermaid"] = prev_mermaid
+    scored_count = sum(
+        1 for e in expected if e.get("elem_type") is not None
+    )
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
         runtime_entry: Dict[str, Any] = {
             "success": success,
             "correct": int(info.get("correct", 0)),
-            "total": int(info.get("total", len(expected))),
+            "total": int(info.get("total", scored_count)),
             "details": info.get("details", []) or [],
         }
         error = _stringify_error(info.get("error"))
