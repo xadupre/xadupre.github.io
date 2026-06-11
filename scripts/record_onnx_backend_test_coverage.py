@@ -9,7 +9,7 @@ against:
 * ``onnxruntime`` (CPU execution provider),
 * the ONNX Python reference implementation (``onnx.reference``) and
 * the ``onnx-light`` reference implementation backed by the C++
-  ``KernelDispatchTable`` (``onnx_light.reference``),
+  ``KernelDispatchTable`` (``onnx_light.onnx.reference``),
 
 and records whether the produced outputs match the expected ones. The
 resulting per-test status is persisted to
@@ -310,7 +310,7 @@ def _run_with_reference(model) -> Callable[[List[Any]], List[Any]]:
 
 
 def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
-    """Run ``model`` with ``onnx_light.reference.ReferenceEvaluator``.
+    """Run ``model`` with ``onnx_light.onnx.reference.ReferenceEvaluator``.
 
     ``onnx_light`` ships its own ``ModelProto`` (and matching
     ``ReferenceEvaluator``) that is wire-format compatible with the
@@ -319,7 +319,7 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
     is therefore serialised and re-parsed by the evaluator so it sees a
     proto of its own type.
     """
-    from onnx_light.reference import ReferenceEvaluator
+    from onnx_light.onnx.reference import ReferenceEvaluator
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
     input_names = _model_input_names(model)

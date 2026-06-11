@@ -300,7 +300,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         """``_run_with_onnx_light`` builds and drives the onnx-light evaluator.
 
         ``onnx-light`` is not installed in the unit test environment, so the
-        test injects a fake ``onnx_light.reference`` module exposing a
+        test injects a fake ``onnx_light.onnx.reference`` module exposing a
         ``ReferenceEvaluator`` mock and checks that the factory feeds it the
         serialised model bytes (since ``onnx-light`` ships its own
         ``ModelProto`` type, distinct from ``onnx.ModelProto``).
@@ -332,11 +332,12 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 constructed["feeds"] = feeds
                 return [feeds["x"] * 2]
 
-        fake_reference = types.ModuleType("onnx_light.reference")
+        fake_reference = types.ModuleType("onnx_light.onnx.reference")
         fake_reference.ReferenceEvaluator = _FakeEvaluator
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
-            ("onnx_light.reference", fake_reference),
+            ("onnx_light.onnx", types.ModuleType("onnx_light.onnx")),
+            ("onnx_light.onnx.reference", fake_reference),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}
         try:
