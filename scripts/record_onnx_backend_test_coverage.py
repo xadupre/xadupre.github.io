@@ -1,7 +1,7 @@
-"""Record the backend node test coverage of ``onnxruntime`` and the ONNX
+"""Record the backend test coverage of ``onnxruntime`` and the ONNX
 Python reference implementation.
 
-The script walks every backend node test bundled with the installed
+The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
 ``onnx_light.onnx_lib.backend.test.case.collect_test_case``), runs each one
 against:
@@ -11,16 +11,19 @@ against:
 * the ``onnx-light`` reference implementation backed by the C++
   ``KernelDispatchTable`` (``onnx_light.onnx.reference``),
 
-and records whether the produced outputs match the expected ones. The
-resulting per-test status is persisted to
-``cache_data/onnx-light/backend_test_coverage.json``. The dashboard at
-``dashboard/onnx-light/backend-test-coverage.html`` consumes that file to
-render the table and pass ratio requested in the tracking issue.
+and records whether the produced outputs match the expected ones. By
+default both the ``node`` (single-operator) and ``model`` (multi-node,
+including the ``test_cc_shape_inference_*`` family tagged ``inference``)
+backend test groups are exercised. The resulting per-test status is
+persisted to ``cache_data/onnx-light/backend_test_coverage.json``. The
+dashboard at ``dashboard/onnx-light/backend-test-coverage.html``
+consumes that file to render the table and pass ratio requested in the
+tracking issue.
 
 Usage::
 
     python scripts/record_onnx_backend_test_coverage.py [--cache-dir DIR]
-        [--kind node] [--limit N]
+        [--kind node,model] [--limit N]
 """
 
 from __future__ import annotations
@@ -52,6 +55,40 @@ BACKEND_PACKAGE: Dict[str, str] = {
 # regressions.
 DEFAULT_RTOL = 1e-3
 DEFAULT_ATOL = 1e-4
+
+# Default backend test groups to run. ``node`` covers the single-node
+# operator tests; ``model`` covers the multi-node models bundled with
+# ``onnx-light`` (in particular the ``test_cc_shape_inference_*`` family
+# tagged ``shape``/``inference``/``local_function``) so the dashboard
+# also reports backend-execution status for the shape-inference test
+# cases requested by issue #352.
+DEFAULT_KINDS: Tuple[str, ...] = ("node", "model")
+DEFAULT_KIND: str = ",".join(DEFAULT_KINDS)
+
+
+def _normalize_kinds(kind) -> Tuple[str, ...]:
+    """Normalize a ``kind`` filter into a tuple of non-empty kind names.
+
+    ``kind`` may be ``None``, an empty string (no filter), a single kind
+    name, a comma-separated list of kind names or an iterable of kind
+    names. Whitespace is stripped and duplicates are removed while
+    preserving the first-seen order.
+    """
+    if kind is None:
+        return ()
+    items: List[str] = []
+    if isinstance(kind, str):
+        items.extend(piece.strip() for piece in kind.split(","))
+    else:
+        for entry in kind:
+            if entry is None:
+                continue
+            items.extend(piece.strip() for piece in str(entry).split(","))
+    seen: Dict[str, None] = {}
+    for item in items:
+        if item and item not in seen:
+            seen[item] = None
+    return tuple(seen)
 
 
 def _log(message: str) -> None:
@@ -134,15 +171,24 @@ def _onnx_light_tensor_to_numpy(arr):
     return np.asarray(arr)
 
 
-def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
+def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
     """Return ``[{"name", "model", "data_sets"}, ...]`` for every backend test.
 
     The tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` which
     ships with the installed ``onnx-light`` package via
     :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`. ``kind``
-    selects the test group (``node``, ``simple``, ``pytorch-converted``,
-    ``pytorch-operator`` or ``real``); the default ``node`` matches the
-    tests exercised by ``onnx-light``'s reference implementation.
+    selects the test groups; it can be a single kind name (``"node"``,
+    ``"simple"``, ``"pytorch-converted"``, ``"pytorch-operator"``,
+    ``"real"``, ``"model"``...), a comma-separated list of kind names
+    or any iterable of kind names. A test case is retained when its
+    ``kind`` attribute matches any of the requested kinds. Passing an
+    empty value disables kind filtering and keeps every collected test.
+
+    The default :data:`DEFAULT_KIND` covers both ``node`` (the single
+    operator tests exercised by ``onnx-light``'s reference
+    implementation) and ``model`` (multi-node models, in particular the
+    ``test_cc_shape_inference_*`` family tagged ``inference`` that the
+    onnx-light dashboard requested via issue #352).
 
     Test cases collected by ``onnx-light`` carry their ``ModelProto`` and
     expected input / output tensors in memory. They are converted to the
@@ -154,12 +200,14 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     """
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
+    kinds = _normalize_kinds(kind)
     cases = collect_test_case()
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:
             continue
-        if kind and getattr(tc, "kind", None) != kind:
+        case_kind = getattr(tc, "kind", None)
+        if kinds and case_kind not in kinds:
             continue
         model = getattr(tc, "model", None)
         data_sets = getattr(tc, "data_sets", None) or []
@@ -576,10 +624,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kind",
-        default="node",
+        default=DEFAULT_KIND,
         help=(
-            "Backend test group to run (default: %(default)s). "
-            "Common values: node, simple, pytorch-converted, "
+            "Backend test group(s) to run (default: %(default)s). "
+            "Accepts a single value or a comma-separated list. "
+            "Common values: node, model, simple, pytorch-converted, "
             "pytorch-operator, real."
         ),
     )
