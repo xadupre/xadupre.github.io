@@ -665,7 +665,12 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                         )
                         break
                 elif exp_symbolic and got_symbolic:
-                    if got != exp:
+                    # Symbolic dims may carry expressions such as
+                    # ``"a + b"`` whose exact spacing varies between
+                    # shape-inference implementations. Strip whitespace
+                    # from both sides before comparing so that
+                    # ``"a + b"`` and ``"a+b"`` are treated as equal.
+                    if "".join(got.split()) != "".join(exp.split()):
                         mismatch = (
                             f"dim[{i}] mismatch: expected {exp!r}, "
                             f"got {got!r}"
