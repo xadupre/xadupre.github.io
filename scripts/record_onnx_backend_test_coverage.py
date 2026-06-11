@@ -3,7 +3,7 @@ Python reference implementation.
 
 The script walks every backend node test bundled with the installed
 ``onnx-light`` package (collected via
-``onnx_light.backend.test.case.collect_test_case``), runs each one
+``onnx_light.onnx_lib.backend.test.case.collect_test_case``), runs each one
 against:
 
 * ``onnxruntime`` (CPU execution provider),
@@ -137,9 +137,9 @@ def _onnx_light_tensor_to_numpy(arr):
 def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     """Return ``[{"name", "model", "data_sets"}, ...]`` for every backend test.
 
-    The tests are loaded from ``onnx_light.backend.test.case`` which
+    The tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` which
     ships with the installed ``onnx-light`` package via
-    :func:`onnx_light.backend.test.case.collect_test_case`. ``kind``
+    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`. ``kind``
     selects the test group (``node``, ``simple``, ``pytorch-converted``,
     ``pytorch-operator`` or ``real``); the default ``node`` matches the
     tests exercised by ``onnx-light``'s reference implementation.
@@ -152,7 +152,7 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     test cases that only carry a ``model_dir`` are loaded from disk on
     the fly into the same in-memory shape.
     """
-    from onnx_light.backend.test.case import collect_test_case
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
     cases = collect_test_case()
     discovered: List[Dict[str, Any]] = []
