@@ -90,6 +90,22 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   border-color: #f85149;
   color: #f85149;
 }
+.controls select {
+  padding: 0.4em 0.6em;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 0.95em;
+}
+.controls label.failure-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.85em;
+  color: #c9d1d9;
+}
 .filter-status {
   font-size: 0.8em;
   color: #8b949e;
@@ -191,6 +207,41 @@ table.comparison td.error .error-runtime {
   font-weight: bold;
   margin-right: 0.3em;
 }
+table.comparison td.error .error-actions {
+  margin-top: 0.3em;
+  display: flex;
+  gap: 0.4em;
+  flex-wrap: wrap;
+}
+table.comparison td.error .error-actions button {
+  background: rgba(13, 17, 23, 0.7);
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 0.1em 0.5em;
+  font-size: 0.85em;
+  font-family: inherit;
+  cursor: pointer;
+}
+table.comparison td.error .error-actions button:hover {
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+table.comparison td.error pre.error-full {
+  margin: 0.3em 0 0;
+  padding: 0.4em 0.6em;
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  color: #c9d1d9;
+  user-select: text;
+}
 table.comparison tbody tr.ort-only { background: rgba(121, 192, 255, 0.07); }
 table.comparison tbody tr.ref-only { background: rgba(210, 168, 255, 0.07); }
 table.comparison tbody tr.light-only { background: rgba(255, 166, 87, 0.07); }
@@ -249,6 +300,16 @@ table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
   <div id="tabs" class="tabs" style="display:none;"></div>
   <div class="controls">
     <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_relu)…" autocomplete="off" />
+    <label class="failure-filter" for="failureFilter">show:
+      <select id="failureFilter">
+        <option value="">all tests</option>
+        <option value="any">any failure</option>
+        <option value="onnxruntime">fails on onnxruntime</option>
+        <option value="reference">fails on reference</option>
+        <option value="onnx_light">fails on onnx-light</option>
+        <option value="yobx">fails on yobx</option>
+      </select>
+    </label>
     <div id="filterStatus" class="filter-status"></div>
   </div>
   <div class="ratios" id="ratiosContainer">
@@ -313,6 +374,7 @@ const state = {
   sort: { key: "name", dir: "asc" },
   tags: [],
   activeTag: "__all__",
+  failureFilter: "",
 };
 
 function showMessage(text, kind) {
@@ -371,6 +433,14 @@ function rowMatches(row) {
   if (state.activeTag !== "__all__") {
     const tag = row.tag || "";
     if (tag !== state.activeTag) return false;
+  }
+  if (state.failureFilter) {
+    if (state.failureFilter === "any") {
+      const anyFail = !row.onnxruntime || !row.reference || !row.onnx_light || !row.yobx;
+      if (!anyFail) return false;
+    } else if (row[state.failureFilter]) {
+      return false;
+    }
   }
   if (state.regexError) {
     return false;
@@ -580,7 +650,9 @@ function cellErrors(row) {
     td.textContent = "";
     return td;
   }
-  const titleParts = [];
+  const fullText = entries.map(e => e.runtime + ": " + e.message).join("\n\n");
+  const summary = document.createElement("div");
+  summary.className = "error-summary";
   for (const entry of entries) {
     const span = document.createElement("span");
     span.className = "error-entry";
@@ -589,11 +661,68 @@ function cellErrors(row) {
     label.textContent = entry.runtime + ":";
     span.appendChild(label);
     span.appendChild(document.createTextNode(" " + shortenError(entry.message)));
-    td.appendChild(span);
-    titleParts.push(entry.runtime + ": " + entry.message);
+    summary.appendChild(span);
   }
-  td.title = titleParts.join("\n");
+  td.appendChild(summary);
+
+  const full = document.createElement("pre");
+  full.className = "error-full";
+  full.textContent = fullText;
+  full.style.display = "none";
+  td.appendChild(full);
+
+  const actions = document.createElement("div");
+  actions.className = "error-actions";
+  const toggleBtn = document.createElement("button");
+  toggleBtn.type = "button";
+  toggleBtn.textContent = "expand";
+  const copyBtn = document.createElement("button");
+  copyBtn.type = "button";
+  copyBtn.textContent = "copy";
+  actions.appendChild(toggleBtn);
+  actions.appendChild(copyBtn);
+  td.appendChild(actions);
+
+  toggleBtn.addEventListener("click", () => {
+    const expanded = full.style.display !== "none";
+    full.style.display = expanded ? "none" : "block";
+    summary.style.display = expanded ? "" : "none";
+    toggleBtn.textContent = expanded ? "expand" : "collapse";
+  });
+  copyBtn.addEventListener("click", () => {
+    copyText(fullText, copyBtn);
+  });
   return td;
+}
+
+function copyText(text, button) {
+  const originalLabel = button.textContent;
+  const done = (ok) => {
+    button.textContent = ok ? "copied!" : "copy failed";
+    setTimeout(() => { button.textContent = originalLabel; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => fallbackCopy(text, done));
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+
+function fallbackCopy(text, done) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "absolute";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    done(ok);
+  } catch (err) {
+    done(false);
+  }
 }
 
 function shortenError(text) {
@@ -640,6 +769,13 @@ function bindSearch() {
     compileRegex(input.value);
     renderRows();
   });
+  const failureFilter = document.getElementById("failureFilter");
+  if (failureFilter) {
+    failureFilter.addEventListener("change", () => {
+      state.failureFilter = failureFilter.value;
+      renderRows();
+    });
+  }
 }
 
 fetch(JSON_URL, { cache: "no-store" })
