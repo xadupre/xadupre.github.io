@@ -7,7 +7,7 @@ The script walks every backend node test bundled with the installed
 * ``onnxruntime`` (CPU execution provider),
 * the ONNX Python reference implementation (``onnx.reference``),
 * the ``onnx-light`` reference implementation backed by the C++
-  ``KernelDispatchTable`` (``onnx_light.reference``) and
+  ``KernelDispatchTable`` (``onnx_light.onnx.reference``) and
 * the extended ``yobx`` reference implementation
   (``yobx.reference.ExtendedReferenceEvaluator``).
 
