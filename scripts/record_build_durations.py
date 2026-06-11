@@ -349,6 +349,49 @@ def safe_job_filename(name: str) -> str:
     return cleaned or "job"
 
 
+def prune_placeholder_job_files(jobs_dir: str) -> int:
+    """Delete per-job CSVs that hold only unexpanded matrix placeholders.
+
+    Older versions of this script created one CSV file per distinct job
+    ``name`` returned by the GitHub API, including the synthetic placeholder
+    entry GitHub emits when a matrix job never expands because its
+    ``needs:`` dependency failed (for instance
+    ``core (${{ matrix.os }}, py${{ matrix.python-version }})``). Those
+    files only ever contain skipped or cancelled rows and therefore render
+    as empty graphs on the dashboard. :func:`job_to_row` now drops such
+    rows at write time, but the previously recorded files survive on disk
+    and remain advertised in ``index.json``. Walk the directory once and
+    delete any CSV whose recorded ``job_name`` values all contain a
+    literal ``${{`` expression so the dashboard stops listing empty
+    charts. Returns the number of files removed.
+    """
+    if not os.path.isdir(jobs_dir):
+        return 0
+    removed = 0
+    for name in sorted(os.listdir(jobs_dir)):
+        if not name.endswith(".csv"):
+            continue
+        path = os.path.join(jobs_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                rows = list(reader)
+        except OSError:
+            continue
+        if not rows:
+            continue
+        if all("${{" in (row.get("job_name") or "") for row in rows):
+            try:
+                os.remove(path)
+            except OSError:
+                continue
+            removed += 1
+            _log(f"removed stale placeholder job file: {path}")
+    return removed
+
+
 def write_jobs_index(jobs_dir: str) -> int:
     """Write ``jobs_dir/index.json`` listing the per-job CSV files.
 
@@ -628,6 +671,14 @@ def process_repo(repo: str, cache_dir: str, months: int, token: str | None) -> i
         # repository that has previously cached per-job CSVs but whose
         # latest run triggered an error would never get its ``index.json``
         # written and the dashboard page would silently render nothing.
+        try:
+            prune_placeholder_job_files(jobs_dir)
+        except Exception as exc:  # pragma: no cover - defensive
+            print(
+                f"[{repo}] failed to prune placeholder job files: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
         try:
             n_indexed = write_jobs_index(jobs_dir)
             _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
