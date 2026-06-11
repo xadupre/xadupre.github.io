@@ -8,7 +8,7 @@ package and the symbolic shape inference shipped with
 
 The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
-``onnx_light.backend.test.case.collect_test_case``) and keeps only the
+``onnx_light.onnx_lib.backend.test.case.collect_test_case``) and keeps only the
 cases whose ``tag`` matches one of the requested tags (by default the
 ``"shape"``, ``"local_function"`` and legacy ``"inference"`` families
 of tests dedicated to shape inference, mirroring
@@ -331,7 +331,7 @@ def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     and ``mermaid`` is a Mermaid ``flowchart TD`` rendering of ``model``
     (empty string when rendering fails).
     """
-    from onnx_light.backend.test.case import collect_test_case
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
     tags = _normalize_tags(tag)
     cases = collect_test_case()

@@ -465,19 +465,20 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             data_sets=[(inputs, outputs)],
             model_dir=None,
         )
-        fake_module = types.ModuleType("onnx_light.backend.test.case")
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
         fake_module.collect_test_case = lambda: {
             "test_relu_light": node_tc,
             "test_simple_other": simple_tc,
         }
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
-            ("onnx_light.backend", types.ModuleType("onnx_light.backend")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
             (
-                "onnx_light.backend.test",
-                types.ModuleType("onnx_light.backend.test"),
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
             ),
-            ("onnx_light.backend.test.case", fake_module),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}
         try:
