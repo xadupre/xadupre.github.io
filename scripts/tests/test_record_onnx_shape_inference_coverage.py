@@ -356,6 +356,16 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         self.assertFalse(by_name["Y"]["ok"])
         self.assertIn("dim[0]", by_name["Y"]["reason"])
 
+    def test_symbolic_dim_name_ignores_whitespace(self):
+        # ``"a + b"`` and ``"a+b"`` describe the same symbolic dim;
+        # different shape-inference implementations format expression
+        # dims with different spacing, so whitespace must be stripped
+        # from both sides before comparing.
+        snap, wrong = self._make_symbolic_model("a + b", "a+b")
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
+
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
         details = rsi._compare_snapshot_with_model(snap, wrong)
