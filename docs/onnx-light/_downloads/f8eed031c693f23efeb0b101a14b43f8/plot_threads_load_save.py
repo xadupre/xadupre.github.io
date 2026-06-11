@@ -25,17 +25,16 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
-import onnx
-import onnx.helper as oh
-import onnx.numpy_helper as onh
 import pandas
 
+import onnx_light.onnx.helper as oh
+import onnx_light.onnx.numpy_helper as onh
 import onnx_light.onnx as onnxl
 
 N_INIT = 8 if os.environ.get("UNITTEST_GOING") == "1" else 40
 DIM = 128 if os.environ.get("UNITTEST_GOING") == "1" else 2048
 N_ITER = 2 if os.environ.get("UNITTEST_GOING") == "1" else 5
-THREAD_COUNTS = (1, 2, 3) if os.environ.get("UNITTEST_GOING") == "1" else (1, 2, 3, 4, 8)
+THREAD_COUNTS = (1, 2) if os.environ.get("UNITTEST_GOING") == "1" else (1, 2, 3, 4, 8)
 
 
 def _detect_processor_name() -> str:
@@ -55,17 +54,47 @@ def _detect_processor_name() -> str:
     return name or platform.machine() or "unknown"
 
 
+def _detect_physical_cores() -> int:
+    """Returns the number of physical CPU cores, or 0 if it cannot be determined."""
+    # On Linux, count unique (physical id, core id) pairs in ``/proc/cpuinfo``.
+    if os.path.exists("/proc/cpuinfo"):
+        try:
+            cores: set[tuple[str, str]] = set()
+            physical_id = ""
+            core_id = ""
+            with open("/proc/cpuinfo", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("physical id"):
+                        physical_id = line.split(":", 1)[1].strip()
+                    elif line.startswith("core id"):
+                        core_id = line.split(":", 1)[1].strip()
+                    elif line.strip() == "":
+                        if physical_id and core_id:
+                            cores.add((physical_id, core_id))
+                        physical_id = ""
+                        core_id = ""
+            if physical_id and core_id:
+                cores.add((physical_id, core_id))
+            if cores:
+                return len(cores)
+        except OSError:
+            pass
+    return 0
+
+
 CPU_COUNT = os.cpu_count() or 1
+PHYSICAL_CORE_COUNT = _detect_physical_cores()
 PROCESSOR_NAME = _detect_processor_name()
 print(f"Processor: {PROCESSOR_NAME}")
 print(f"Logical cores: {CPU_COUNT}")
+print(f"Physical cores: {PHYSICAL_CORE_COUNT or 'unknown'}")
 
 
-def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnx.ModelProto:
+def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnxl.ModelProto:
     """Builds a synthetic ONNX model with *n_init* dense ``Gemm`` weights."""
     initializers = []
     nodes = []
-    inputs = [oh.make_tensor_value_info("X", onnx.TensorProto.FLOAT, [None, dim])]
+    inputs = [oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, [None, dim])]
 
     prev = "X"
     for i in range(n_init):
@@ -76,7 +105,7 @@ def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnx.ModelProto:
         nodes.append(oh.make_node("Gemm", [prev, weight_name], [out_name], transB=1))
         prev = out_name
 
-    outputs = [oh.make_tensor_value_info(prev, onnx.TensorProto.FLOAT, [None, dim])]
+    outputs = [oh.make_tensor_value_info(prev, onnxl.TensorProto.FLOAT, [None, dim])]
     graph = oh.make_graph(nodes, "bench_graph", inputs, outputs, initializer=initializers)
     return oh.make_model(graph, opset_imports=[oh.make_opsetid("", 18)], ir_version=9)
 
@@ -115,7 +144,7 @@ multi_data = multi_path + ".data"
 # Build each reference file from the same in-memory ModelProto. We load
 # the freshly written single-file model back through onnx_light so the
 # external-data writers operate on an ``onnxl.ModelProto``.
-onnx.save(model, single_path)
+onnxl.save(model, single_path)
 onnxl_model = onnxl.load(single_path)
 onnxl.save(onnxl_model, two_path, location=two_data)
 
@@ -222,13 +251,16 @@ for ax, pivot, title in (
     ax.set_title(title)
     ax.set_xlabel("num_threads")
     ax.set_ylabel("time (ms, lower is better)")
+    ax.set_xlim(left=0)
     ax.set_xticks(list(THREAD_COUNTS))
     ax.grid(True, linestyle=":")
     ax.legend(title="layout")
 
 fig.suptitle(
     f"onnx_light load/save vs num_threads — model {size_mb:.1f} MB, "
-    f"{N_INIT} initializers\n{PROCESSOR_NAME} ({CPU_COUNT} logical cores)"
+    f"{N_INIT} initializers\n{PROCESSOR_NAME} "
+    f"({CPU_COUNT} logical cores, "
+    f"{PHYSICAL_CORE_COUNT or 'unknown'} physical cores)"
 )
 fig.tight_layout()
 fig.savefig("plot_threads_load_save.png")

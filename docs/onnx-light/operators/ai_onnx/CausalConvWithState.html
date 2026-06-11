@@ -164,7 +164,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../intro/index.html">
-    Introduction to ONNX with onnx-light
+    ONNX
   </a>
 </li>
 
@@ -324,7 +324,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../intro/index.html">
-    Introduction to ONNX with onnx-light
+    ONNX
   </a>
 </li>
 
@@ -1123,6 +1123,52 @@ after this operator to pack extra dimensions into the batch or channel axis.</p>
 <p>Weight layout: (channels, 1, k) for depthwise convolution.
 The carry state stores the last (k-1) positions for incremental decode.</p>
 <p>The optional activation attribute supports fused SiLU/Swish activation.</p>
+<section id="mathematical-definition">
+<h2>Mathematical definition<a class="headerlink" href="#mathematical-definition" title="Link to this heading">#</a></h2>
+<p>Let <code class="docutils literal notranslate"><span class="pre">`X``</span></code> be the input of shape <code class="docutils literal notranslate"><span class="pre">``(B,</span> <span class="pre">C,</span> <span class="pre">L)``</span></code>, <code class="docutils literal notranslate"><span class="pre">``W`</span></code> the weight of shape
+<code class="docutils literal notranslate"><span class="pre">`(C,</span> <span class="pre">1,</span> <span class="pre">k)``</span></code>, <code class="docutils literal notranslate"><span class="pre">``b``</span></code> the optional bias of shape <code class="docutils literal notranslate"><span class="pre">``(C)``</span></code>, and <code class="docutils literal notranslate"><span class="pre">``S_past`</span></code> the
+optional carry state of shape <code class="docutils literal notranslate"><span class="pre">`(B,</span> <span class="pre">C,</span> <span class="pre">k</span> <span class="pre">-</span> <span class="pre">1)`</span></code>. Define the padded sequence
+<code class="docutils literal notranslate"><span class="pre">`Xpad``</span></code> of shape <code class="docutils literal notranslate"><span class="pre">``(B,</span> <span class="pre">C,</span> <span class="pre">L</span> <span class="pre">+</span> <span class="pre">k</span> <span class="pre">-</span> <span class="pre">1)`</span></code> as the concatenation along the last
+axis of the carry state (or zero-padding when <code class="docutils literal notranslate"><span class="pre">`past_state`</span></code> is absent) and
+the input:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span> <span class="n">text</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>Xpad[b, c, t] = S_past[b, c, t]          if 0 &lt;= t &lt; k - 1 and past_state is present
+Xpad[b, c, t] = 0                        if 0 &lt;= t &lt; k - 1 and past_state is absent
+Xpad[b, c, t] = X[b, c, t - (k - 1)]     if k - 1 &lt;= t &lt; L + k - 1</p>
+</div></blockquote>
+<p>The convolution output is then:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span> <span class="n">text</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>Y[b, c, l] = sum_{j=0}^{k-1} W[c, 0, j] * Xpad[b, c, l + j]    for 0 &lt;= l &lt; L</p>
+</div></blockquote>
+<p>with the per-channel bias added when provided:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span> <span class="n">text</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>Y[b, c, l] += b[c]</p>
+</div></blockquote>
+<p>When <code class="docutils literal notranslate"><span class="pre">`activation``</span></code> is <a href="#id1"><span class="problematic" id="id2">``</span></a><code class="docutils literal notranslate"><span class="pre">&quot;silu&quot;``</span></code> or <a href="#id3"><span class="problematic" id="id4">``</span></a><code class="docutils literal notranslate"><span class="pre">&quot;swish&quot;`</span></code> the fused activation is
+applied element-wise:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span> <span class="n">text</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>Y[b, c, l] = Y[b, c, l] * sigmoid(Y[b, c, l])      where sigmoid(x) = 1 / (1 + exp(-x))</p>
+</div></blockquote>
+<p>The updated carry state collects the last <code class="docutils literal notranslate"><span class="pre">`k</span> <span class="pre">-</span> <span class="pre">1`</span></code> positions of the padded
+sequence so it can be fed back as <code class="docutils literal notranslate"><span class="pre">`past_state`</span></code> on the next call:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="o">..</span> <span class="n">code</span><span class="o">-</span><span class="n">block</span><span class="p">::</span> <span class="n">text</span>
+</pre></div>
+</div>
+<blockquote>
+<div><p>present_state[b, c, j] = Xpad[b, c, L + j]         for 0 &lt;= j &lt; k - 1</p>
+</div></blockquote>
 <p><strong>Inputs</strong></p>
 <ul class="simple">
 <li><p><strong>input</strong> (<em>T</em>): Input tensor with shape (batch_size, channels, length). Channels-first layout.</p></li>
@@ -1145,7 +1191,7 @@ The carry state stores the last (k-1) positions for incremental decode.</p>
 Allowed types: tensor(bfloat16), tensor(float), tensor(float16).</p></li>
 </ul>
 <section id="examples">
-<h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h2>
+<h3>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h3>
 <p><strong>test_cc_causal_conv_with_state_b1_c1_degenerate</strong></p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Node:
   CausalConvWithState(input, weight, &quot;&quot;, past_state) -&gt; (output, present_state)
@@ -1467,6 +1513,7 @@ Outputs:
 </div>
 </section>
 </section>
+</section>
 
 
                 </article>
@@ -1515,7 +1562,10 @@ Outputs:
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mathematical-definition">Mathematical definition</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 

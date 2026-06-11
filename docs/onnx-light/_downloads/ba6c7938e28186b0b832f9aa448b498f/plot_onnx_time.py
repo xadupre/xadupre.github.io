@@ -95,6 +95,7 @@ can still run in offline environments.
 """
 
 import argparse
+import importlib
 import math
 import os
 import pathlib
@@ -107,9 +108,9 @@ import urllib.request
 
 import numpy as np
 import pandas
-import onnx
-import onnx.helper as oh
-import onnx.numpy_helper as onh
+
+import onnx_light.onnx.helper as oh
+import onnx_light.onnx.numpy_helper as onh
 
 import onnxruntime as ort
 
@@ -117,7 +118,7 @@ _ort_sess_opts = ort.SessionOptions()
 _ort_sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
 
 import onnx_light.onnx as onnxl
-import onnx_light.onnx_lib.helper as onnxlh
+import onnx_light.onnx.helper as onnxlh
 from onnx_light.doc import (
     find_standalone_executable,
     get_cpu_topology,
@@ -262,11 +263,11 @@ def _run_scenario(name: str) -> bool:
     return name in SELECTED_SCENARIOS
 
 
-def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnx.ModelProto:
+def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnxl.ModelProto:
     """Returns a synthetic ONNX model with *n_init* Gemm initializers of size *dim*."""
     initializers = []
     nodes = []
-    inputs = [oh.make_tensor_value_info("X", onnx.TensorProto.FLOAT, [None, dim])]
+    inputs = [oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, [None, dim])]
 
     prev = "X"
     for i in range(n_init):
@@ -277,16 +278,16 @@ def make_model(n_init: int = N_INIT, dim: int = DIM) -> onnx.ModelProto:
         nodes.append(oh.make_node("Gemm", [prev, weight_name], [out_name], transB=1))
         prev = out_name
 
-    outputs = [oh.make_tensor_value_info(prev, onnx.TensorProto.FLOAT, [None, dim])]
+    outputs = [oh.make_tensor_value_info(prev, onnxl.TensorProto.FLOAT, [None, dim])]
     graph = oh.make_graph(nodes, "bench_graph", inputs, outputs, initializer=initializers)
     model = oh.make_model(graph, opset_imports=[oh.make_opsetid("", 18)], ir_version=9)
     return model
 
 
-def _tensor_data_bytes(tensor: onnx.TensorProto) -> int:
+def _tensor_data_bytes(tensor: onnxl.TensorProto) -> int:
     """Returns the in-memory byte count of a TensorProto's stored data.
 
-    Uses :func:`onnx_light.onnx_lib.helper.tensor_dtype_to_np_dtype` to map
+    Uses :func:`onnx_light.onnx.helper.tensor_dtype_to_np_dtype` to map
     the element type to a numpy dtype and derives the byte count from the
     tensor dimensions, avoiding a full array materialisation.
 
@@ -302,7 +303,7 @@ def _tensor_data_bytes(tensor: onnx.TensorProto) -> int:
     return int(np_dtype.itemsize * n_elements)
 
 
-def print_model_stats(model: onnx.ModelProto, file_path: str | None = None) -> None:
+def print_model_stats(model: onnxl.ModelProto, file_path: str | None = None) -> None:
     """Prints summary statistics for *model* to stdout.
 
     Args:
@@ -342,24 +343,45 @@ tmp_dir = "temp_plot_onnx_time"
 if not os.path.exists(tmp_dir):
     os.mkdir(tmp_dir)
 
+
+def onnx_load(onnx_path):
+    import onnx
+
+    return onnx.load(onnx_path)
+
+
+def onnx_save(model, onnx_path):
+    import onnx
+
+    assert isinstance(model, onnx.ModelProto), f"Unexpected type {type(model)}"
+    onnx.save(model, onnx_path)
+
+
+def _maybe_import_onnx_ir():
+    """Returns the optional ``onnx_ir`` module when available, otherwise ``None``."""
+    try:
+        return importlib.import_module("onnx_ir")
+    except ImportError:
+        return None
+
+
 if _CLI_MODEL_PATH is not None:
     onnx_path = os.path.abspath(_CLI_MODEL_PATH)
-    model = onnx.load(onnx_path)
     print(f"Using provided model: {onnx_path}")
 elif _CLI_MODEL_ID is not None:
     downloaded = _download_hf_model(_CLI_MODEL_ID, _CLI_MODEL_FILE, tmp_dir)
     if downloaded is not None:
         onnx_path = downloaded
-        model = onnx.load(onnx_path)
+        model = onnx_load(onnx_path)
         print(f"Using model from Hugging Face id {_CLI_MODEL_ID!r}: {onnx_path}")
     else:
         model = make_model()
         onnx_path = os.path.join(tmp_dir, "bench.onnx")
-        onnx.save(model, onnx_path)
+        onnxl.save(model, onnx_path)
 else:
     model = make_model()
     onnx_path = os.path.join(tmp_dir, "bench.onnx")
-    onnx.save(model, onnx_path)
+    onnxl.save(model, onnx_path)
 
 size_bytes = model.ByteSize()
 print(f"Model size: {size_bytes / 2 ** 20:.3f} MB")
@@ -367,9 +389,15 @@ print(f"Model size: {size_bytes / 2 ** 20:.3f} MB")
 file_size = os.path.getsize(onnx_path)
 print(f"File size : {file_size / 2 ** 20:.3f} MB")
 
-onx = onnx.load(onnx_path)
+onx = onnx_load(onnx_path)
 onxl = onnxl.load(onnx_path)
 onxl_x4 = onnxl.load(onnx_path, num_threads=4)
+onnx_ir_module = _maybe_import_onnx_ir()
+onx_ir = (
+    onnx_ir_module.load(onnx_path)
+    if onnx_ir_module is not None and (_run_scenario("load") or _run_scenario("save"))
+    else None
+)
 
 ext_load_onnx = os.path.abspath(os.path.join(tmp_dir, "ext_load.onnx"))
 ext_load_data = os.path.abspath(os.path.join(tmp_dir, "ext_load.onnx.data"))
@@ -607,8 +635,7 @@ data = []
 if _run_scenario("load"):
     # %%
     # Load with onnx.
-
-    data.append(measure("load/1filex1/onnx", lambda: onnx.load(onnx_path)))
+    data.append(measure("load/1filex1/onnx", lambda: onnx_load(onnx_path)))
     print_stats("load/1filex1/onnx", data[-1])
 
     # %%
@@ -648,6 +675,15 @@ if _run_scenario("load"):
         )
     )
     print_stats("load/1filex1/onnxlight-ifstream", data[-1])
+
+    # %%
+    # Load with ``ir-py`` when the optional ``onnx_ir`` package is installed.
+
+    if onnx_ir_module is not None:
+        data.append(measure("load/1filex1/ir-py", lambda: onnx_ir_module.load(onnx_path)))
+        print_stats("load/1filex1/ir-py", data[-1])
+    else:
+        print("onnx_ir is not installed, skipping ir-py single-file load benchmark.")
 
     # %%
     # Load with ``onnxruntime`` (all optimizations disabled).
@@ -702,8 +738,10 @@ if _run_scenario("serialize"):
 # ParseFromString comparison between ``onnx`` and ``onnx_light.onnx``.
 
 
-def _parse_onnx() -> onnx.ModelProto:
+def _parse_onnx() -> onnxl.ModelProto:
     """Parses ONNX bytes into a ModelProto."""
+    import onnx
+
     parsed = onnx.ModelProto()
     parsed.ParseFromString(serialized_onnx)
     return parsed
@@ -801,6 +839,7 @@ if _run_scenario("parse"):
 if _run_scenario("save"):
     # %%
     # Save with ``onnx``.
+    import onnx
 
     out_onnx = os.path.join(tmp_dir, "out_onnx.onnx")
     data.append(measure("save/1filex1/onnx", lambda: onnx.save(onx, out_onnx)))
@@ -833,6 +872,28 @@ if _run_scenario("save"):
     # The onnx file is modified to store the external data.
     # Let's make sure it is not used again.
     onx = None
+
+    # %%
+    # Save with ``ir-py`` when the optional ``onnx_ir`` package is installed.
+
+    if onnx_ir_module is not None and onx_ir is not None:
+        out_irpy = os.path.join(tmp_dir, "out_irpy.onnx")
+        data.append(measure("save/1filex1/ir-py", lambda: onnx_ir_module.save(onx_ir, out_irpy)))
+        print_stats("save/1filex1/ir-py", data[-1])
+
+        out_irpy_ext = os.path.join(tmp_dir, "out_irpy_ext.onnx")
+        out_irpy_ext_location = "out_irpy_ext.data"
+        out_irpy_ext_data = os.path.join(tmp_dir, out_irpy_ext_location)
+
+        def _save_ir_py_external_with_flush() -> None:
+            onnx_ir_module.save(onx_ir, out_irpy_ext, external_data=out_irpy_ext_location)
+            _flush_file(out_irpy_ext_data)
+            _flush_file(out_irpy_ext)
+
+        data.append(measure("save/2filex1/ir-py", _save_ir_py_external_with_flush, n=1, warmup=0))
+        print_stats("save/2filex1/ir-py", data[-1])
+    else:
+        print("onnx_ir is not installed, skipping ir-py save benchmarks.")
 
     # %%
     # Save with ``onnx_light.onnx``.
@@ -989,7 +1050,7 @@ if _run_scenario("cpp"):
 
 if _run_scenario("load"):
     data.append(
-        measure("load/2filex1/onnx", lambda: onnx.load(ext_load_onnx, load_external_data=True))
+        measure("load/2filex1/onnx", lambda: onnxl.load(ext_load_onnx, load_external_data=True))
     )
     print_stats("load/2filex1/onnx", data[-1])
 
@@ -1037,6 +1098,15 @@ if _run_scenario("load"):
     print_stats("load/2filex4/onnxlight", data[-1])
 
     # %%
+    # Load with ``ir-py`` using external data.
+
+    if onnx_ir_module is not None:
+        data.append(measure("load/2filex1/ir-py", lambda: onnx_ir_module.load(ext_load_onnx)))
+        print_stats("load/2filex1/ir-py", data[-1])
+    else:
+        print("onnx_ir is not installed, skipping ir-py external-data load benchmark.")
+
+    # %%
     # Load with ``onnxruntime`` using external data (all optimizations disabled).
     # Reload the external-data model with ``onnxruntime``, keeping
     # ``ORT_DISABLE_ALL`` so only loading overhead is measured.
@@ -1071,6 +1141,8 @@ _onnx_avg = "steelblue"
 _onnx_med = "lightsteelblue"
 _onnx_light_avg = "darkorange"
 _onnx_light_med = "moccasin"
+_ir_py_avg = "mediumpurple"
+_ir_py_med = "thistle"
 _ort_avg = "seagreen"
 _ort_med = "lightgreen"
 
@@ -1098,7 +1170,7 @@ ax = df[["avg", "median"]].plot.barh(
         f"benchmark key: <op>/<files>x<threads>/<lib>\n"
         f"op=load|save|parse|serialize, files=1|2, threads=1|4, "
         f"lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|"
-        f"onnxlight-nocopy|ort"
+        f"onnxlight-nocopy|ir-py|ort"
     ),
     xlabel="seconds",
     legend=False,
@@ -1114,6 +1186,11 @@ for container, col in zip(ax.containers, ["avg", "median"]):
                 bar.set_facecolor(_onnx_light_avg)
             elif col == "median":
                 bar.set_facecolor(_onnx_light_med)
+        elif "/ir-py" in name:
+            if col == "avg":
+                bar.set_facecolor(_ir_py_avg)
+            elif col == "median":
+                bar.set_facecolor(_ir_py_med)
         elif "/ort" in name:
             if col == "avg":
                 bar.set_facecolor(_ort_avg)
@@ -1143,6 +1220,8 @@ legend_handles = [
     mpatches.Patch(color=_onnx_med, label="onnx median"),
     mpatches.Patch(color=_onnx_light_avg, label="onnx_light avg"),
     mpatches.Patch(color=_onnx_light_med, label="onnx_light median"),
+    mpatches.Patch(color=_ir_py_avg, label="ir-py avg"),
+    mpatches.Patch(color=_ir_py_med, label="ir-py median"),
     mpatches.Patch(color=_ort_avg, label="ort avg"),
     mpatches.Patch(color=_ort_med, label="ort median"),
 ]
