@@ -844,27 +844,31 @@ class TestTagFiltering(unittest.TestCase):
 
         import types
 
-        fake_module = types.ModuleType("onnx_light.backend.test.case")
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
         fake_module.collect_test_case = lambda: cases
-        parent_pkg = types.ModuleType("onnx_light.backend.test")
+        parent_pkg = types.ModuleType("onnx_light.onnx_lib.backend.test")
         parent_pkg.case = fake_module
-        backend_pkg = types.ModuleType("onnx_light.backend")
+        backend_pkg = types.ModuleType("onnx_light.onnx_lib.backend")
         backend_pkg.test = parent_pkg
+        onnx_lib_pkg = types.ModuleType("onnx_light.onnx_lib")
+        onnx_lib_pkg.backend = backend_pkg
         root_pkg = types.ModuleType("onnx_light")
-        root_pkg.backend = backend_pkg
+        root_pkg.onnx_lib = onnx_lib_pkg
 
         saved = {}
         for name in (
             "onnx_light",
-            "onnx_light.backend",
-            "onnx_light.backend.test",
-            "onnx_light.backend.test.case",
+            "onnx_light.onnx_lib",
+            "onnx_light.onnx_lib.backend",
+            "onnx_light.onnx_lib.backend.test",
+            "onnx_light.onnx_lib.backend.test.case",
         ):
             saved[name] = sys.modules.get(name)
         sys.modules["onnx_light"] = root_pkg
-        sys.modules["onnx_light.backend"] = backend_pkg
-        sys.modules["onnx_light.backend.test"] = parent_pkg
-        sys.modules["onnx_light.backend.test.case"] = fake_module
+        sys.modules["onnx_light.onnx_lib"] = onnx_lib_pkg
+        sys.modules["onnx_light.onnx_lib.backend"] = backend_pkg
+        sys.modules["onnx_light.onnx_lib.backend.test"] = parent_pkg
+        sys.modules["onnx_light.onnx_lib.backend.test.case"] = fake_module
 
         original_to_onnx = rsi._onnx_light_model_to_onnx
         original_snapshot = rsi.snapshot_intermediates

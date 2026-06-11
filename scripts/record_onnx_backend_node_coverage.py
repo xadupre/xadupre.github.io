@@ -18,7 +18,7 @@ render the table and pass ratios.
 
 This is the counterpart of
 :mod:`scripts.record_onnx_backend_test_coverage`, which uses the
-``onnx-light`` test discovery (``onnx_light.backend.test.case``) and
+``onnx-light`` test discovery (``onnx_light.onnx_lib.backend.test.case``) and
 only compares three runtimes. The two scripts share most of their
 implementation; the differences are the discovery source and the list
 of backends.
