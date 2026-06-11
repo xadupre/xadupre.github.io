@@ -25,7 +25,7 @@ The three approaches compared here are:
   initializer *shapes* only; the ``[0, 0, -1]`` values are not
   propagated, so the Reshape output carries symbolic placeholders.
 * **node-by-node (with value propagation)** — additionally calls
-  :meth:`~onnx_light.onnx_py._onnxpy.shape_inference.OptimTensor.set_value_as_shape`
+  :meth:`~onnx_light.onnx_optim.shape_inference.OptimTensor.set_value_as_shape`
   for each initializer, enabling full resolution of ``Z``.
 
 The final plot shows the last inferred dimension for each tensor under
@@ -48,17 +48,21 @@ For systematic testing of shape inference across many test cases using
 
 from __future__ import annotations
 
-import numpy as np
-
 import onnx_light.onnx as onnxl
+import onnx_light.onnx.defs as defs
 import onnx_light.onnx.helper as oh
 import onnx_light.onnx.numpy_helper as onh
-from onnx_light.onnx_optim.shape_inference import infer_shapes_model
-from onnx_light.onnx_py._onnxpy import shape_inference as si
+from onnx_light.onnx_optim.shape_inference import (
+    check_inputs_available,
+    compute_shape_node,
+    infer_shapes_model,
+    OptimTensor,
+    ShapesContext,
+)
 
 # Make sure the built-in operator schemas are registered before running
 # shape inference (the C++ dispatch table looks them up).
-onnxl.defs.register_onnx_operator_set_schema()
+defs.register_onnx_operator_set_schema()
 
 
 #####################################
@@ -146,7 +150,7 @@ for name in TRACKED:
 
 def run_node_by_node(model, propagate_values: bool) -> dict:
     """Walk the graph and return ``{name: shape}`` for every tracked tensor."""
-    ctx = si.ShapesContext()
+    ctx = ShapesContext()
     for opset in model.opset_import:
         ctx.set_opset_version(opset.domain, opset.version)
 
@@ -154,11 +158,11 @@ def run_node_by_node(model, propagate_values: bool) -> dict:
     for inp in model.graph.input:
         tt = inp.type.tensor_type
         dims = [d.dim_value if d.dim_value else d.dim_param for d in tt.shape.dim]
-        ctx.set(inp.name, si.OptimTensor(tt.elem_type, dims))
+        ctx.set(inp.name, OptimTensor(tt.elem_type, dims))
 
     # Seed initializers, optionally propagating their values.
     for init in model.graph.initializer:
-        t = si.OptimTensor(init.data_type, list(init.dims))
+        t = OptimTensor(init.data_type, list(init.dims))
         if propagate_values:
             values = [int(v) for v in onh.to_array(init).flat]
             t.set_value_as_shape(values)
@@ -166,8 +170,8 @@ def run_node_by_node(model, propagate_values: bool) -> dict:
 
     results = {}
     for node in model.graph.node:
-        si.check_inputs_available(ctx, node)
-        si.compute_shape_node(ctx, node)
+        check_inputs_available(ctx, node)
+        compute_shape_node(ctx, node)
         for out_name in node.output:
             if not out_name:
                 continue
@@ -215,60 +219,43 @@ for name in TRACKED:
 
 
 #####################################
-# Plot
-# ++++
+# Text plot
+# +++++++++
 #
-# The grouped bar chart below shows the inferred last dimension for every
-# tracked tensor under each approach.  ``None`` (grey bar) marks a
-# dimension that could not be resolved to a concrete integer.
+# The text bar chart below shows the inferred last dimension for every
+# tracked tensor under each approach.  A ``?`` marks a dimension that
+# could not be resolved to a concrete integer.
 #
-# The gap for ``Z`` in the naïve column (grey) versus the concrete ``16``
-# in the model-level and enhanced columns makes the divergence immediately
+# The ``?`` for ``Z`` in the naïve row versus the concrete ``16``
+# in the model-level and enhanced rows makes the divergence immediately
 # visible.
 
-import matplotlib.pyplot as plt  # noqa: E402
-import matplotlib.patches as mpatches  # noqa: E402
-
 approaches = ["model-level", "naive", "enhanced"]
-colors = ["steelblue", "tomato", "darkorange"]
 
-# Collect data: last-dim per tensor per approach (use 0 as placeholder for None).
+# Collect data: last-dim per tensor per approach (None when unresolved).
 data = {
     "model-level": [last_dim_int(model_shapes.get(n) or []) for n in TRACKED],
     "naive": [last_dim_int(naive_shapes.get(n) or []) for n in TRACKED],
     "enhanced": [last_dim_int(enhanced_shapes.get(n) or []) for n in TRACKED],
 }
 
-x = np.arange(len(TRACKED))
-width = 0.25
+# Scale bars so the largest value is 30 characters wide.
+max_val = max((v for vals in data.values() for v in vals if v is not None), default=1)
+bar_width = 30
 
-fig, ax = plt.subplots(figsize=(9, 4))
 
-for i, (approach, color) in enumerate(zip(approaches, colors)):
-    vals = data[approach]
-    bar_vals = [v if v is not None else 0 for v in vals]
-    bars = ax.bar(x + i * width, bar_vals, width, label=approach, color=color)
-    # Mark unresolved bars with a "?" annotation.
-    for bar, v in zip(bars, vals):
-        if v is None:
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + 0.3,
-                "?",
-                ha="center",
-                va="bottom",
-                fontsize=12,
-                color="grey",
-            )
+def render_bar(value):
+    """Returns a text bar for *value* (``?`` when unresolved)."""
+    if value is None:
+        return "?".ljust(bar_width) + "   (unresolved)"
+    length = max(1, round(value / max_val * bar_width))
+    return "#" * length + " " * (bar_width - length) + f"   {value}"
 
-ax.set_xticks(x + width)
-ax.set_xticklabels(TRACKED)
-ax.set_ylabel("Last inferred dimension")
-ax.set_title(
-    "Shape inference: last dimension per tensor\n"
-    "(grey '?' = dimension not resolved to a concrete integer)"
-)
-ax.legend(handles=[mpatches.Patch(color=c, label=a) for a, c in zip(approaches, colors)])
-ax.grid(axis="y", linestyle="--", alpha=0.6)
-fig.tight_layout()
-fig.savefig("plot_shape_inference.png")
+
+print("\nShape inference: last dimension per tensor")
+print("(? = dimension not resolved to a concrete integer)\n")
+for approach in approaches:
+    print(f"  {approach}")
+    for name, value in zip(TRACKED, data[approach]):
+        print(f"    {name:<12} | {render_bar(value)}")
+    print()

@@ -6,11 +6,11 @@ Retrieve a backend test case and display its model and data
 
 The ONNX backend test suite shipped with ``onnx-light`` is exposed
 as a small C++ data model bound to Python under
-:mod:`onnx_light.backend_test`. Each entry is a ``TestCase`` made of
+:mod:`onnx_light.onnx.backend`. Each entry is a ``TestCase`` made of
 a ``ModelProto`` plus one or more ``DataSet`` (lists of reference
 input / output ``Tensor`` instances).
 
-:func:`onnx_light.backend_test.collect_test_cases` returns the C++
+:func:`onnx_light.onnx.backend.collect_test_cases` returns the C++
 test cases as a ``list``. When called with an operator type it
 returns only the cases whose top-level graph contains a node with
 that ``op_type``.
@@ -21,7 +21,7 @@ This example:
 * displays its ``ModelProto``,
 * displays the reference input and output tensors,
 * demonstrates how to use :func:`make_test_class` from
-  :mod:`onnx_light.backend.test.case` to systematically validate
+  :mod:`onnx_light.onnx.backend` to systematically validate
   shape inference across many backend test cases.
 """
 
@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from onnx_light.backend_test import collect_test_cases
+from onnx_light.onnx.backend import collect_test_cases
 
 #####################################
 # Retrieve a backend test case
@@ -93,7 +93,7 @@ for ds_idx, ds in enumerate(tc.data_sets):
 # ++++++++++++++++++++++++++++++++++++++++
 #
 # For comprehensive validation, you can use
-# :func:`~onnx_light.backend.test.case.make_test_class` to create a test
+# :func:`~onnx_light.onnx.backend.make_test_class` to create a test
 # class that runs shape inference on every backend test case.
 #
 # The function :func:`make_test_class` accepts a callable that receives a
@@ -104,7 +104,7 @@ for ds_idx, ds in enumerate(tc.data_sets):
 
 import onnx_light.onnx as onnxl  # noqa: E402
 from onnx_light.onnx_optim.shape_inference import infer_shapes_model  # noqa: E402
-from onnx_light.backend.test.case import make_test_class  # noqa: F401, E402
+from onnx_light.onnx.backend import make_test_class  # noqa: F401, E402
 
 
 def validate_shape_inference(model_with_expected_shapes: onnxl.ModelProto):
@@ -185,6 +185,21 @@ def validate_shape_inference(model_with_expected_shapes: onnxl.ModelProto):
 print("\nDemonstrating validation on the test_abs model:")
 try:
     validate_shape_inference(tc.model)
-    print("  ✓ Validation succeeded (no AssertionError raised)")
+    print("  Validation succeeded (no AssertionError raised)")
 except AssertionError as e:
-    print(f"  ✗ Validation failed: {e}")
+    print(f"  Validation failed: {e}")
+
+
+#####################################
+# Gallery thumbnail
+# +++++++++++++++++
+#
+# Render a simple text figure used as the sphinx-gallery thumbnail for this
+# example.
+
+import matplotlib.pyplot as plt  # noqa: E402
+
+fig, ax = plt.subplots(figsize=(4, 3))
+ax.text(0.5, 0.5, "Python\nBackend", ha="center", va="center", fontsize=28)
+ax.set_axis_off()
+fig.tight_layout()
