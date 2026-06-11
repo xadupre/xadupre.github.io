@@ -509,6 +509,116 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         # the dashboard can group rows by tag.
         self.assertEqual(entry["tag"], "inference")
 
+    def test_normalize_kinds_accepts_various_shapes(self):
+        self.assertEqual(rbc._normalize_kinds(None), ())
+        self.assertEqual(rbc._normalize_kinds(""), ())
+        self.assertEqual(rbc._normalize_kinds("node"), ("node",))
+        self.assertEqual(
+            rbc._normalize_kinds("node, model"), ("node", "model")
+        )
+        self.assertEqual(
+            rbc._normalize_kinds(["node", "model"]), ("node", "model")
+        )
+        # Duplicates are dropped, preserving first-seen order.
+        self.assertEqual(
+            rbc._normalize_kinds(("node,model", "node")), ("node", "model")
+        )
+
+    def test_default_kind_includes_node_and_model(self):
+        self.assertEqual(rbc.DEFAULT_KINDS, ("node", "model"))
+        self.assertEqual(
+            rbc._normalize_kinds(rbc.DEFAULT_KIND), ("node", "model")
+        )
+
+    def test_discover_node_tests_filters_multiple_kinds(self):
+        """``discover_node_tests`` keeps every case whose kind matches.
+
+        In particular the ``test_cc_shape_inference_*`` family ships with
+        ``kind="model"`` (see ``onnx-light``'s
+        ``onnx_backend_test/cases_for_shapes/inference/``) and must be
+        included in the backend-test-coverage page alongside the
+        single-node ``kind="node"`` tests so the dashboard reports
+        backend-execution status for the shape-inference cases too
+        (issue #352).
+        """
+        import types
+
+        class Case:
+            def __init__(self, name, kind, tag=""):
+                self.name = name
+                self.kind = kind
+                self.tag = tag
+                self.model = "model_proto"
+                self.data_sets = [([1], [1])]
+                self.model_dir = None
+
+        cases = {
+            "test_node": Case("test_node", "node"),
+            "test_cc_shape_inference_x": Case(
+                "test_cc_shape_inference_x", "model", "inference"
+            ),
+            "test_simple": Case("test_simple", "simple"),
+        }
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda: cases
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        original_model_to_onnx = rbc._onnx_light_model_to_onnx
+        original_tensor_to_numpy = rbc._onnx_light_tensor_to_numpy
+        rbc._onnx_light_model_to_onnx = lambda m: m
+        rbc._onnx_light_tensor_to_numpy = lambda a: a
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+
+            # Default kind keeps both ``node`` and ``model`` cases.
+            discovered_default = rbc.discover_node_tests()
+            self.assertEqual(
+                [d["name"] for d in discovered_default],
+                ["test_cc_shape_inference_x", "test_node"],
+            )
+
+            # Comma-separated string filter.
+            discovered_pair = rbc.discover_node_tests(kind="node,model")
+            self.assertEqual(
+                sorted(d["name"] for d in discovered_pair),
+                ["test_cc_shape_inference_x", "test_node"],
+            )
+
+            # Single-kind filter still works (backwards-compatible).
+            discovered_single = rbc.discover_node_tests(kind="model")
+            self.assertEqual(
+                [d["name"] for d in discovered_single],
+                ["test_cc_shape_inference_x"],
+            )
+
+            # Iterable filter.
+            discovered_iter = rbc.discover_node_tests(kind=["simple"])
+            self.assertEqual(
+                [d["name"] for d in discovered_iter], ["test_simple"]
+            )
+        finally:
+            rbc._onnx_light_model_to_onnx = original_model_to_onnx
+            rbc._onnx_light_tensor_to_numpy = original_tensor_to_numpy
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
     def test_compare_outputs_detects_shape_mismatch(self):
         import numpy as np
 
@@ -604,7 +714,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 ) as fh:
                     payload = json.load(fh)
                 self.assertEqual(payload["tests"][0]["name"], "test_x")
-                self.assertEqual(payload["kind"], "node")
+                self.assertEqual(payload["kind"], rbc.DEFAULT_KIND)
         finally:
             rbc.build_payload = original_build
 
