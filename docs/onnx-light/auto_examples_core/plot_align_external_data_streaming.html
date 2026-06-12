@@ -514,14 +514,24 @@ zero-copy in kernel space).</p></li>
 boundary.  This loads the full set of weights into memory before
 re-writing them.</p></li>
 </ol>
-<p>The example reports wall-clock time and peak Python-tracked heap usage
-(measured via <a class="reference external" href="https://docs.python.org/3/library/tracemalloc.html#module-tracemalloc" title="(in Python v3.14)"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tracemalloc</span></code></a>) for each approach.  At equal alignment
-the two outputs are byte-equivalent for the tensor payloads — only the
-peak memory footprint differs.</p>
+<p>The example reports wall-clock time and peak process-resident memory
+usage for each approach.  At equal alignment the two outputs are
+byte-equivalent for the tensor payloads — only the peak memory
+footprint differs.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Peak memory is sampled from the process’s resident set size (RSS),
+not from <a class="reference external" href="https://docs.python.org/3/library/tracemalloc.html#module-tracemalloc" title="(in Python v3.14)"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tracemalloc</span></code></a>.  <code class="docutils literal notranslate"><span class="pre">tracemalloc</span></code> only tracks the
+Python allocator (<code class="docutils literal notranslate"><span class="pre">pymalloc</span></code>), so it misses the C++-owned buffers
+where onnx-light stores tensor <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> — making both approaches
+appear similarly small and hiding the very overhead this example
+is meant to illustrate.  RSS captures both Python and C++
+allocations.</p>
+</div>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">shutil</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">threading</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">tracemalloc</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.patches</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mpatches</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
@@ -538,8 +548,8 @@ peak memory footprint differs.</p>
 <p>A handful of large initializers is enough to make the in-memory peak
 noticeably larger than the streaming peak.  The example runs with a
 smaller model under <code class="docutils literal notranslate"><span class="pre">UNITTEST_GOING=1</span></code> to keep CI fast.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">N_INIT</span></a> <span class="o">=</span> <span class="mi">8</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;UNITTEST_GOING&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="k">else</span> <span class="mi">24</span>
-<a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">DIM</span></a> <span class="o">=</span> <span class="mi">256</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;UNITTEST_GOING&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="k">else</span> <span class="mi">1024</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">N_INIT</span></a> <span class="o">=</span> <span class="mi">8</span> <span class="k">if</span> <a href="https://docs.python.org/3/library/os.html#module-os" title="builtins.os" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-module"><span class="n">os</span></a><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;UNITTEST_GOING&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="k">else</span> <span class="mi">24</span>
+<a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">DIM</span></a> <span class="o">=</span> <span class="mi">256</span> <span class="k">if</span> <a href="https://docs.python.org/3/library/os.html#module-os" title="builtins.os" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-module"><span class="n">os</span></a><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;UNITTEST_GOING&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;1&quot;</span> <span class="k">else</span> <span class="mi">1024</span>
 <a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">ALIGNMENT</span></a> <span class="o">=</span> <span class="mi">4096</span>
 
 
@@ -605,20 +615,72 @@ Source weights size   : 96.00 MB
 <section id="helpers">
 <h2>Helpers<a class="headerlink" href="#helpers" title="Link to this heading">#</a></h2>
 <p>Each benchmark is wrapped in a function that returns the elapsed wall
-time and the peak Python-tracked allocation reported by
-<a class="reference external" href="https://docs.python.org/3/library/tracemalloc.html#module-tracemalloc" title="(in Python v3.14)"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tracemalloc</span></code></a>.  <code class="docutils literal notranslate"><span class="pre">tracemalloc</span></code> only accounts for Python-side
-allocations, but the in-memory branch materialises every tensor as
-Python-owned <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> bytes during the load, which is exactly the
-overhead the streaming variant avoids.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">fn</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs *fn*, returns elapsed time (s) and peak allocation (MB).&quot;&quot;&quot;</span>
-    <a href="https://docs.python.org/3/library/tracemalloc.html#tracemalloc.start" title="tracemalloc.start" class="sphx-glr-backref-module-tracemalloc sphx-glr-backref-type-py-function"><span class="n">tracemalloc</span><span class="o">.</span><span class="n">start</span></a><span class="p">()</span>
-    <span class="n">t0</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/time.html#time.perf_counter" title="time.perf_counter" class="sphx-glr-backref-module-time sphx-glr-backref-type-py-function"><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span></a><span class="p">()</span>
-    <span class="n">fn</span><span class="p">()</span>
-    <span class="n">elapsed</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/time.html#time.perf_counter" title="time.perf_counter" class="sphx-glr-backref-module-time sphx-glr-backref-type-py-function"><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span></a><span class="p">()</span> <span class="o">-</span> <span class="n">t0</span>
-    <span class="n">_</span><span class="p">,</span> <span class="n">peak</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/tracemalloc.html#tracemalloc.get_traced_memory" title="tracemalloc.get_traced_memory" class="sphx-glr-backref-module-tracemalloc sphx-glr-backref-type-py-function"><span class="n">tracemalloc</span><span class="o">.</span><span class="n">get_traced_memory</span></a><span class="p">()</span>
-    <a href="https://docs.python.org/3/library/tracemalloc.html#tracemalloc.stop" title="tracemalloc.stop" class="sphx-glr-backref-module-tracemalloc sphx-glr-backref-type-py-function"><span class="n">tracemalloc</span><span class="o">.</span><span class="n">stop</span></a><span class="p">()</span>
-    <span class="n">peak_mb</span> <span class="o">=</span> <span class="n">peak</span> <span class="o">/</span> <span class="mi">2</span><span class="o">**</span><span class="mi">20</span>
+time and the peak process-resident memory (RSS) observed while the
+function runs.  RSS is sampled from <code class="docutils literal notranslate"><span class="pre">/proc/self/statm</span></code> (Linux) on a
+background thread; on platforms where <code class="docutils literal notranslate"><span class="pre">/proc</span></code> is unavailable the
+sampler falls back to <a class="reference external" href="https://docs.python.org/3/library/resource.html#resource.getrusage" title="(in Python v3.14)"><code class="xref py py-func docutils literal notranslate"><span class="pre">resource.getrusage()</span></code></a> (Unix) or reports
+<code class="docutils literal notranslate"><span class="pre">0</span></code>.  Unlike <a class="reference external" href="https://docs.python.org/3/library/tracemalloc.html#module-tracemalloc" title="(in Python v3.14)"><code class="xref py py-mod docutils literal notranslate"><span class="pre">tracemalloc</span></code></a>, RSS includes the C++-owned buffers
+where onnx-light stores tensor <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> during an in-memory load
+— which is exactly the overhead the streaming variant avoids.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_PAGE_SIZE</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/os.html#os.sysconf" title="os.sysconf" class="sphx-glr-backref-module-os sphx-glr-backref-type-py-function"><span class="n">os</span><span class="o">.</span><span class="n">sysconf</span></a><span class="p">(</span><span class="s2">&quot;SC_PAGE_SIZE&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><a href="https://docs.python.org/3/library/os.html#module-os" title="builtins.os" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-module"><span class="n">os</span></a><span class="p">,</span> <span class="s2">&quot;sysconf&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="mi">4096</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_read_rss_bytes</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns the current process resident set size in bytes (0 if unknown).&quot;&quot;&quot;</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="s2">&quot;/proc/self/statm&quot;</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;ascii&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">stream</span><span class="p">:</span>
+            <span class="k">return</span> <span class="nb">int</span><span class="p">(</span><span class="n">stream</span><span class="o">.</span><span class="n">read</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">()[</span><span class="mi">1</span><span class="p">])</span> <span class="o">*</span> <a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_PAGE_SIZE</span></a>
+    <span class="k">except</span> <span class="ne">OSError</span><span class="p">:</span>
+        <span class="k">pass</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="kn">import</span><span class="w"> </span><span class="nn">resource</span>
+
+        <span class="n">ru</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/resource.html#resource.getrusage" title="resource.getrusage" class="sphx-glr-backref-module-resource sphx-glr-backref-type-py-function"><span class="n">resource</span><span class="o">.</span><span class="n">getrusage</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/resource.html#resource.RUSAGE_SELF" title="resource.RUSAGE_SELF" class="sphx-glr-backref-module-resource sphx-glr-backref-type-py-data"><span class="n">resource</span><span class="o">.</span><span class="n">RUSAGE_SELF</span></a><span class="p">)</span><span class="o">.</span><span class="n">ru_maxrss</span>
+        <span class="c1"># Linux reports KiB, macOS reports bytes; both branches are &gt;= our usage scale.</span>
+        <span class="k">return</span> <span class="n">ru</span> <span class="o">*</span> <span class="mi">1024</span> <span class="k">if</span> <span class="n">ru</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="o">**</span><span class="mi">40</span> <span class="k">else</span> <span class="n">ru</span>
+    <span class="k">except</span> <span class="p">(</span><span class="ne">ImportError</span><span class="p">,</span> <span class="ne">OSError</span><span class="p">):</span>
+        <span class="k">return</span> <span class="mi">0</span>
+
+
+<span class="k">class</span><span class="w"> </span><span class="nc">_PeakRssSampler</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Samples process RSS on a background thread and records the peak observed.&quot;&quot;&quot;</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">interval</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.001</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_interval</span> <span class="o">=</span> <span class="n">interval</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stop</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/threading.html#threading.Event" title="threading.Event" class="sphx-glr-backref-module-threading sphx-glr-backref-type-py-class"><span class="n">threading</span><span class="o">.</span><span class="n">Event</span></a><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_thread</span><span class="p">:</span> <a href="https://docs.python.org/3/library/threading.html#threading.Thread" title="threading.Thread" class="sphx-glr-backref-module-threading sphx-glr-backref-type-py-class"><span class="n">threading</span><span class="o">.</span><span class="n">Thread</span></a> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">baseline</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">peak</span> <span class="o">=</span> <span class="mi">0</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__enter__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">baseline</span> <span class="o">=</span> <span class="n">_read_rss_bytes</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">peak</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">baseline</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_thread</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/threading.html#threading.Thread" title="threading.Thread" class="sphx-glr-backref-module-threading sphx-glr-backref-type-py-class"><span class="n">threading</span><span class="o">.</span><span class="n">Thread</span></a><span class="p">(</span><span class="n">target</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_run</span><span class="p">,</span> <span class="n">daemon</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_thread</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__exit__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="o">*</span><span class="n">_exc</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_stop</span><span class="o">.</span><span class="n">set</span><span class="p">()</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_thread</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_thread</span><span class="o">.</span><span class="n">join</span><span class="p">()</span>
+        <span class="n">cur</span> <span class="o">=</span> <span class="n">_read_rss_bytes</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">cur</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">peak</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">peak</span> <span class="o">=</span> <span class="n">cur</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_run</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">while</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">_stop</span><span class="o">.</span><span class="n">wait</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_interval</span><span class="p">):</span>
+            <span class="n">cur</span> <span class="o">=</span> <span class="n">_read_rss_bytes</span><span class="p">()</span>
+            <span class="k">if</span> <span class="n">cur</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">peak</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">peak</span> <span class="o">=</span> <span class="n">cur</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">fn</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Runs *fn* and returns elapsed time (s) and peak RSS delta (MB).&quot;&quot;&quot;</span>
+    <span class="k">with</span> <span class="n">_PeakRssSampler</span><span class="p">()</span> <span class="k">as</span> <span class="n">sampler</span><span class="p">:</span>
+        <span class="n">t0</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/time.html#time.perf_counter" title="time.perf_counter" class="sphx-glr-backref-module-time sphx-glr-backref-type-py-function"><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span></a><span class="p">()</span>
+        <span class="n">fn</span><span class="p">()</span>
+        <span class="n">elapsed</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/time.html#time.perf_counter" title="time.perf_counter" class="sphx-glr-backref-module-time sphx-glr-backref-type-py-function"><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span></a><span class="p">()</span> <span class="o">-</span> <span class="n">t0</span>
+    <span class="n">peak_mb</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="n">sampler</span><span class="o">.</span><span class="n">peak</span> <span class="o">-</span> <span class="n">sampler</span><span class="o">.</span><span class="n">baseline</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span> <span class="o">/</span> <span class="mi">2</span><span class="o">**</span><span class="mi">20</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">&lt;40</span><span class="si">}</span><span class="s2"> time=</span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">8.1f</span><span class="si">}</span><span class="s2"> ms   peak=</span><span class="si">{</span><span class="n">peak_mb</span><span class="si">:</span><span class="s2">7.2f</span><span class="si">}</span><span class="s2"> MB&quot;</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">{</span><span class="s2">&quot;name&quot;</span><span class="p">:</span> <span class="n">name</span><span class="p">,</span> <span class="s2">&quot;time_s&quot;</span><span class="p">:</span> <span class="n">elapsed</span><span class="p">,</span> <span class="s2">&quot;peak_mb&quot;</span><span class="p">:</span> <span class="n">peak_mb</span><span class="p">}</span>
 
@@ -683,8 +745,8 @@ same boundary.</p>
 <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">results</span></a><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">measure</span><span class="p">(</span><span class="s2">&quot;align/in-memory&quot;</span><span class="p">,</span> <span class="n">run_in_memory</span><span class="p">))</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>align/streaming                          time=    66.1 ms   peak=   0.00 MB
-align/in-memory                          time=   151.1 ms   peak=   0.00 MB
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>align/streaming                          time=    57.2 ms   peak=   0.01 MB
+align/in-memory                          time=   170.8 ms   peak=   0.00 MB
 </pre></div>
 </div>
 </section>
@@ -723,8 +785,8 @@ destination weights files.</p>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>                   time_s   peak_mb
 name
-align/in-memory  0.151127  0.004822
-align/streaming  0.066059  0.004295
+align/in-memory  0.170819  0.003906
+align/streaming  0.057177  0.007812
 </pre></div>
 </div>
 </section>
@@ -745,8 +807,8 @@ the model’s weight payload.</p>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">)</span>
 
 <span class="n">ax_mem</span><span class="o">.</span><span class="n">barh</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">row_names</span></a><span class="p">,</span> <span class="n">df</span><span class="p">[</span><span class="s2">&quot;peak_mb&quot;</span><span class="p">],</span> <span class="n">color</span><span class="o">=</span><a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">colors</span></a><span class="p">)</span>
-<span class="n">ax_mem</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;Peak Python heap (MB, lower is better)&quot;</span><span class="p">)</span>
-<span class="n">ax_mem</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;MB (tracemalloc)&quot;</span><span class="p">)</span>
+<span class="n">ax_mem</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;Peak RSS delta (MB, lower is better)&quot;</span><span class="p">)</span>
+<span class="n">ax_mem</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;MB (resident set size)&quot;</span><span class="p">)</span>
 <span class="n">ax_mem</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">)</span>
 
 <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span>
@@ -765,13 +827,13 @@ the model’s weight payload.</p>
 <span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;plot_align_external_data_streaming.png&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_align_external_data_streaming_001.png" srcset="../_images/sphx_glr_plot_align_external_data_streaming_001.png" alt="Alignment=4096B   weights=96.0 MB   #initializers=24, Wall time (s, lower is better), Peak Python heap (MB, lower is better)" class = "sphx-glr-single-img"/></section>
+<img src="../_images/sphx_glr_plot_align_external_data_streaming_001.png" srcset="../_images/sphx_glr_plot_align_external_data_streaming_001.png" alt="Alignment=4096B   weights=96.0 MB   #initializers=24, Wall time (s, lower is better), Peak RSS delta (MB, lower is better)" class = "sphx-glr-single-img"/></section>
 <section id="cleanup">
 <h2>Cleanup<a class="headerlink" href="#cleanup" title="Link to this heading">#</a></h2>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><a href="https://docs.python.org/3/library/shutil.html#shutil.rmtree" title="shutil.rmtree" class="sphx-glr-backref-module-shutil sphx-glr-backref-type-py-function"><span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">out_dir</span></a><span class="p">,</span> <span class="n">ignore_errors</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.382 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.426 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-core-plot-align-external-data-streaming-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/7395f78c9f087af411a54588759161eb/plot_align_external_data_streaming.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_align_external_data_streaming.ipynb</span></code></a></p>
@@ -784,15 +846,15 @@ the model’s weight payload.</p>
 </div>
 </div>
 <p class="rubric">Related examples</p>
-<div class="sphx-glr-thumbnails"><div class="sphx-glr-thumbcontainer" tooltip="This example profiles how long it takes to save a model with external data using onnx and onnx_light.onnx."><img alt="" src="../_images/sphx_glr_plot_save_external_data_time_thumb.png" />
-<p><a class="reference internal" href="plot_save_external_data_time.html"><span class="doc">Profiles ONNX external-data save time</span></a></p>
-  <div class="sphx-glr-thumbnail-title">Profiles ONNX external-data save time</div>
-</div><div class="sphx-glr-thumbcontainer" tooltip="This example demonstrates how to load and save ONNX models that store tensor weights in separate external data files.  The approach allows the graph structure to be inspected independently of the (potentially very large) weight payload and enables memory-mapping the weight file directly when the model is loaded back through onnx_light.onnx.load."><img alt="" src="../_images/sphx_glr_plot_load_save_external_thumb.png" />
-<p><a class="reference internal" href="plot_load_save_external.html"><span class="doc">Load and save ONNX models with external data</span></a></p>
-  <div class="sphx-glr-thumbnail-title">Load and save ONNX models with external data</div>
-</div><div class="sphx-glr-thumbcontainer" tooltip="This example benchmarks onnx_light.onnx.load and onnx_light.onnx.save while varying the num_threads parameter across three on-disk layouts:"><img alt="" src="../_images/sphx_glr_plot_threads_load_save_thumb.png" />
+<div class="sphx-glr-thumbnails"><div class="sphx-glr-thumbcontainer" tooltip="This example benchmarks onnx_light.onnx.load and onnx_light.onnx.save while varying the num_threads parameter across three on-disk layouts:"><img alt="" src="../_images/sphx_glr_plot_threads_load_save_thumb.png" />
 <p><a class="reference internal" href="plot_threads_load_save.html"><span class="doc">Number of threads used to load and save ONNX models</span></a></p>
   <div class="sphx-glr-thumbnail-title">Number of threads used to load and save ONNX models</div>
+</div><div class="sphx-glr-thumbcontainer" tooltip="This example profiles how long it takes to save a model with external data using onnx and onnx_light.onnx."><img alt="" src="../_images/sphx_glr_plot_save_external_data_time_thumb.png" />
+<p><a class="reference internal" href="plot_save_external_data_time.html"><span class="doc">Profiles ONNX external-data save time</span></a></p>
+  <div class="sphx-glr-thumbnail-title">Profiles ONNX external-data save time</div>
+</div><div class="sphx-glr-thumbcontainer" tooltip="This script builds a small ONNX model and benchmarks the time to load and save it using onnx, onnx_light.onnx, and onnxruntime. When the standalone C++ example executables load_onnx_time, load_onnx_light_time, and save_onnx_light_time are available, it also includes their timing output. The model structure is identical in all cases."><img alt="" src="../_images/sphx_glr_plot_onnx_time_thumb.png" />
+<p><a class="reference internal" href="plot_onnx_time.html"><span class="doc">Measures loading and saving time for an ONNX model</span></a></p>
+  <div class="sphx-glr-thumbnail-title">Measures loading and saving time for an ONNX model</div>
 </div></div><p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
 </section>
 </section>
