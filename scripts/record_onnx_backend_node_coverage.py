@@ -115,7 +115,7 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
                 continue
         if data_sets is None and model_dir:
             try:
-                data_sets = _load_test_data_sets(str(model_dir))
+                data_sets = _load_test_data_sets(str(model_dir), model)
             except Exception:  # noqa: BLE001 - skip unreadable data sets
                 data_sets = []
         if model is None:
