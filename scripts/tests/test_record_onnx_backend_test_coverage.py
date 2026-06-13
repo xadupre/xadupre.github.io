@@ -671,6 +671,93 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
         self.assertIsNotNone(msg)
 
+    def test_compare_outputs_handles_sequence_outputs(self):
+        import numpy as np
+
+        expected = [[np.array([1.0, 2.0]), np.array([3.0])]]
+        actual = [[np.array([1.0, 2.0]), np.array([3.0])]]
+        self.assertIsNone(
+            rbc._compare_outputs(expected, actual, rtol=1e-3, atol=1e-4)
+        )
+
+        mismatched = [[np.array([1.0, 2.0]), np.array([9.0])]]
+        msg = rbc._compare_outputs(expected, mismatched, rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+
+        shorter = [[np.array([1.0, 2.0])]]
+        msg = rbc._compare_outputs(expected, shorter, rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+        self.assertIn("length mismatch", msg)
+
+    def test_compare_outputs_handles_optional_none_outputs(self):
+        import numpy as np
+
+        self.assertIsNone(
+            rbc._compare_outputs([None], [None], rtol=1e-3, atol=1e-4)
+        )
+        msg = rbc._compare_outputs(
+            [None], [np.array([1.0])], rtol=1e-3, atol=1e-4
+        )
+        self.assertIsNotNone(msg)
+        self.assertIn("None", msg)
+
+    def test_load_test_data_sets_decodes_sequence_and_optional(self):
+        import numpy as np
+        import onnx
+        from onnx import helper, numpy_helper
+
+        tensor = numpy_helper.from_array(
+            np.array([1.0, 2.0], dtype=np.float32), name="t"
+        )
+        seq = onnx.SequenceProto()
+        seq.name = "s"
+        seq.elem_type = onnx.SequenceProto.TENSOR
+        seq.tensor_values.extend(
+            [numpy_helper.from_array(np.array([3.0], dtype=np.float32))]
+        )
+
+        tensor_type = helper.make_tensor_type_proto(onnx.TensorProto.FLOAT, [2])
+        seq_type = helper.make_sequence_type_proto(tensor_type)
+        opt_type = helper.make_optional_type_proto(tensor_type)
+
+        model = helper.make_model(
+            helper.make_graph(
+                nodes=[],
+                name="g",
+                inputs=[
+                    helper.make_value_info("tensor_in", tensor_type),
+                    helper.make_value_info("seq_in", seq_type),
+                ],
+                outputs=[helper.make_value_info("opt_out", opt_type)],
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ds_dir = os.path.join(tmp, "test_data_set_0")
+            os.makedirs(ds_dir)
+            with open(os.path.join(ds_dir, "input_0.pb"), "wb") as fh:
+                fh.write(tensor.SerializeToString())
+            with open(os.path.join(ds_dir, "input_1.pb"), "wb") as fh:
+                fh.write(seq.SerializeToString())
+            # A populated optional output decodes to its tensor value.
+            opt_out = onnx.OptionalProto()
+            opt_out.name = "opt_out"
+            opt_out.elem_type = onnx.OptionalProto.TENSOR
+            opt_out.tensor_value.CopyFrom(
+                numpy_helper.from_array(np.array([5.0], dtype=np.float32))
+            )
+            with open(os.path.join(ds_dir, "output_0.pb"), "wb") as fh:
+                fh.write(opt_out.SerializeToString())
+
+            data_sets = rbc._load_test_data_sets(tmp, model)
+
+        self.assertEqual(len(data_sets), 1)
+        inputs, outputs = data_sets[0]
+        self.assertIsInstance(inputs[0], np.ndarray)
+        self.assertIsInstance(inputs[1], list)
+        np.testing.assert_array_equal(inputs[1][0], np.array([3.0], dtype=np.float32))
+        np.testing.assert_array_equal(outputs[0], np.array([5.0], dtype=np.float32))
+
     def test_write_payload_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             json_path = os.path.join(tmp, "onnx-light", "backend_test_coverage.json")
