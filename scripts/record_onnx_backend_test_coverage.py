@@ -219,7 +219,7 @@ def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
             import onnx
 
             model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
-            data_sets = _load_test_data_sets(str(existing_dir))
+            data_sets = _load_test_data_sets(str(existing_dir), model)
         if model is None:
             continue
         onnx_model = _onnx_light_model_to_onnx(model)
@@ -243,23 +243,62 @@ def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
     return discovered
 
 
-def _load_tensor(path: str):
+def _load_proto(path: str, type_proto: Any = None):
+    """Load a serialised proto from ``path`` as a numpy value.
+
+    ``type_proto`` is the matching ``onnx.TypeProto`` taken from the
+    model's graph input/output; it determines whether the file stores a
+    ``TensorProto``, a ``SequenceProto`` (decoded to a list of numpy
+    arrays) or an ``OptionalProto`` (decoded to either ``None`` or a
+    numpy value). When ``type_proto`` is missing or carries no usable
+    field, the file is parsed as a ``TensorProto`` for backwards
+    compatibility.
+    """
     import onnx
     from onnx import numpy_helper
 
-    tensor = onnx.TensorProto()
     with open(path, "rb") as fh:
-        tensor.ParseFromString(fh.read())
+        content = fh.read()
+
+    if type_proto is not None:
+        if type_proto.HasField("sequence_type"):
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if type_proto.HasField("optional_type"):
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+
+    tensor = onnx.TensorProto()
+    tensor.ParseFromString(content)
     return numpy_helper.to_array(tensor)
 
 
-def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
+# Backwards-compatible alias: historically only tensors were supported.
+_load_tensor = _load_proto
+
+
+def _load_test_data_sets(
+    model_dir: str, model: Any = None
+) -> List[Tuple[List[Any], List[Any]]]:
     """Return ``[(inputs, expected_outputs), ...]`` for ``model_dir``.
 
     Each test directory contains one or more ``test_data_set_<n>``
     sub-directories with ``input_<i>.pb`` and ``output_<j>.pb`` files
-    storing serialised ``TensorProto`` messages.
+    storing serialised protos. Most files hold ``TensorProto`` messages,
+    but sequence and optional operator tests store ``SequenceProto`` and
+    ``OptionalProto`` messages instead. When ``model`` is provided its
+    graph input/output ``TypeProto`` entries are used to decode each file
+    with the right proto type; otherwise every file is parsed as a
+    ``TensorProto``.
     """
+    input_types: List[Any] = []
+    output_types: List[Any] = []
+    if model is not None:
+        input_types = [inp.type for inp in model.graph.input]
+        output_types = [out.type for out in model.graph.output]
+
     data_sets: List[Tuple[List[Any], List[Any]]] = []
     for name in sorted(os.listdir(model_dir)):
         if not name.startswith("test_data_set_"):
@@ -273,7 +312,8 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
             p = os.path.join(ds_path, f"input_{i}.pb")
             if not os.path.exists(p):
                 break
-            inputs.append(_load_tensor(p))
+            type_proto = input_types[i] if i < len(input_types) else None
+            inputs.append(_load_proto(p, type_proto))
             i += 1
         outputs: List[Any] = []
         j = 0
@@ -281,7 +321,8 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
             p = os.path.join(ds_path, f"output_{j}.pb")
             if not os.path.exists(p):
                 break
-            outputs.append(_load_tensor(p))
+            type_proto = output_types[j] if j < len(output_types) else None
+            outputs.append(_load_proto(p, type_proto))
             j += 1
         data_sets.append((inputs, outputs))
     return data_sets
@@ -293,6 +334,63 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+def _compare_value(
+    exp: Any,
+    act: Any,
+    rtol: float,
+    atol: float,
+    label: str,
+) -> Optional[str]:
+    """Compare a single expected/actual value, recursing into sequences.
+
+    ``exp``/``act`` may be numpy arrays (tensor outputs), Python lists
+    (sequence outputs) or ``None`` (an absent optional output).
+    """
+    import numpy as np
+
+    if exp is None or act is None:
+        if exp is None and act is None:
+            return None
+        return f"{label} value mismatch: one side is None"
+
+    if isinstance(exp, list) or isinstance(act, list):
+        if not (isinstance(exp, list) and isinstance(act, list)):
+            return f"{label} type mismatch: sequence vs non-sequence"
+        if len(exp) != len(act):
+            return (
+                f"{label} length mismatch: "
+                f"expected {len(exp)}, got {len(act)}"
+            )
+        for k, (sub_exp, sub_act) in enumerate(zip(exp, act)):
+            msg = _compare_value(sub_exp, sub_act, rtol, atol, f"{label}[{k}]")
+            if msg is not None:
+                return msg
+        return None
+
+    exp_arr = np.asarray(exp)
+    act_arr = np.asarray(act)
+    if exp_arr.shape != act_arr.shape:
+        return (
+            f"{label} shape mismatch: "
+            f"expected {exp_arr.shape}, got {act_arr.shape}"
+        )
+    if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
+        "U",
+        "S",
+        "O",
+    ):
+        if not np.array_equal(exp_arr, act_arr):
+            return f"{label} value mismatch"
+        return None
+    try:
+        np.testing.assert_allclose(
+            act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
+        )
+    except AssertionError as exc:
+        return f"{label} mismatch ({_stringify_error(exc)})"
+    return None
+
+
 def _compare_outputs(
     expected: List[Any],
     actual: List[Any],
@@ -300,32 +398,12 @@ def _compare_outputs(
     atol: float,
 ) -> Optional[str]:
     """Return ``None`` if the outputs match, otherwise an error string."""
-    import numpy as np
-
     if len(expected) != len(actual):
         return f"output count mismatch: " f"expected {len(expected)}, got {len(actual)}"
     for idx, (exp, act) in enumerate(zip(expected, actual)):
-        exp_arr = np.asarray(exp)
-        act_arr = np.asarray(act)
-        if exp_arr.shape != act_arr.shape:
-            return (
-                f"output {idx} shape mismatch: "
-                f"expected {exp_arr.shape}, got {act_arr.shape}"
-            )
-        if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
-            "U",
-            "S",
-            "O",
-        ):
-            if not np.array_equal(exp_arr, act_arr):
-                return f"output {idx} value mismatch"
-            continue
-        try:
-            np.testing.assert_allclose(
-                act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
-            )
-        except AssertionError as exc:
-            return f"output {idx} mismatch ({_stringify_error(exc)})"
+        msg = _compare_value(exp, act, rtol, atol, f"output {idx}")
+        if msg is not None:
+            return msg
     return None
 
 
