@@ -500,14 +500,23 @@
 operators. Models that include custom operators from a private domain
 cannot be shape-inferred out of the box: the engine encounters a node it
 does not recognise and raises <a class="reference external" href="https://docs.python.org/3/library/exceptions.html#ValueError" title="(in Python v3.14)"><code class="xref py py-class docutils literal notranslate"><span class="pre">ValueError</span></code></a>.</p>
-<p><em>onnx-light</em> lets you plug in a Python callback that handles the shape
-inference for any <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">op_type)</span></code> pair. Once registered, the
-callback is invoked transparently by
+<p><em>onnx-light</em> lets you plug in a callback that handles the shape
+inference for any <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">op_type)</span></code> pair, in Python and in C++. Once
+registered, the callback is invoked transparently by
 <code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_node()</span></code> and
-<code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code>.</p>
+<code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code> in
+Python, and by
+<code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::onnx_optim::shapes::ShapesContext::ComputeShapeNode()</span></code> and
+<code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::onnx_optim::shapes::ShapesContext::ComputeShapeModel()</span></code> in
+C++.</p>
 <section id="import-the-shape-inference-module">
 <h2>Import the shape-inference module<a class="headerlink" href="#import-the-shape-inference-module" title="Link to this heading">#</a></h2>
-<p>All public symbols are accessible via the high-level Python module:</p>
+<p>All public symbols are accessible via the high-level Python module, or the
+matching C++ headers:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-0" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-0">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_optim.shape_inference</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ShapesContext</span><span class="p">,</span>
     <span class="n">OptimTensor</span><span class="p">,</span>
@@ -516,10 +525,25 @@ callback is invoked transparently by
 <span class="p">)</span>
 </pre></div>
 </div>
+</div>
+<input id="sd-tab-item-1" name="sd-tab-set-0" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-1">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_optim/optim_tensor.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_optim/shapes/shape_inference.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_optim/shapes/shapes_context.h&quot;</span>
+
+<span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx</span><span class="o">::</span><span class="nn">onnx_optim</span><span class="p">;</span><span class="w">          </span><span class="c1">// OptimTensor, OptimShape, OptimDim</span>
+<span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx</span><span class="o">::</span><span class="nn">onnx_optim</span><span class="o">::</span><span class="nn">shapes</span><span class="p">;</span><span class="w">  </span><span class="c1">// ShapesContext</span>
+</pre></div>
+</div>
+</div>
+</div>
 </section>
 <section id="write-the-callback">
 <h2>Write the callback<a class="headerlink" href="#write-the-callback" title="Link to this heading">#</a></h2>
-<p>The callback must have the signature <code class="docutils literal notranslate"><span class="pre">fn(ctx,</span> <span class="pre">node)</span> <span class="pre">-&gt;</span> <span class="pre">None</span></code>.</p>
+<p>The callback must have the signature <code class="docutils literal notranslate"><span class="pre">fn(ctx,</span> <span class="pre">node)</span> <span class="pre">-&gt;</span> <span class="pre">None</span></code> in Python and
+<code class="docutils literal notranslate"><span class="pre">void</span> <span class="pre">fn(ShapesContext</span> <span class="pre">&amp;ctx,</span> <span class="pre">const</span> <span class="pre">NodeProto</span> <span class="pre">&amp;node)</span></code> in C++.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">ctx</span></code> is the current <a class="reference internal" href="../api/python/onnx_optim/shape_inference.html#onnx_light.onnx_optim.shape_inference.ShapesContext" title="onnx_light.onnx_optim.shape_inference.ShapesContext"><code class="xref py py-class docutils literal notranslate"><span class="pre">ShapesContext</span></code></a>.
 Call <a class="reference internal" href="../api/python/onnx_optim/shape_inference.html#onnx_light.onnx_optim.shape_inference.ShapesContext.get" title="onnx_light.onnx_optim.shape_inference.ShapesContext.get"><code class="xref py py-meth docutils literal notranslate"><span class="pre">get()</span></code></a> to read
@@ -528,9 +552,13 @@ to write output descriptors.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">node</span></code> is the <code class="xref py py-class docutils literal notranslate"><span class="pre">NodeProto</span></code> being processed.
 Use <code class="docutils literal notranslate"><span class="pre">node.input</span></code>, <code class="docutils literal notranslate"><span class="pre">node.output</span></code>, and <code class="docutils literal notranslate"><span class="pre">node.attribute</span></code> to inspect
 the operator’s operands and attributes.</p></li>
-<li><p>The callback must call <code class="docutils literal notranslate"><span class="pre">ctx.set(name,</span> <span class="pre">OptimTensor(dtype,</span> <span class="pre">shape))</span></code> for
-<strong>every</strong> output of the node before returning.</p></li>
+<li><p>The callback must register an <code class="xref py py-class docutils literal notranslate"><span class="pre">OptimTensor</span></code> for <strong>every</strong> output of
+the node before returning.</p></li>
 </ul>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-2" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-2">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">infer_my_op</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">node</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;Infers the output shape of MyDomain::MyOp.&quot;&quot;&quot;</span>
     <span class="n">x</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">node</span><span class="o">.</span><span class="n">input</span><span class="p">[</span><span class="mi">0</span><span class="p">]))</span>
@@ -539,33 +567,84 @@ the operator’s operands and attributes.</p></li>
     <span class="n">ctx</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">node</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">OptimTensor</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">out_shape</span><span class="p">))</span>
 </pre></div>
 </div>
+</div>
+<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-3">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="kt">void</span><span class="w"> </span><span class="nf">infer_my_op</span><span class="p">(</span><span class="n">ShapesContext</span><span class="w"> </span><span class="o">&amp;</span><span class="n">ctx</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">OptimTensor</span><span class="w"> </span><span class="o">&amp;</span><span class="n">x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">Get</span><span class="p">(</span><span class="n">node</span><span class="p">.</span><span class="n">input</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">as_string</span><span class="p">());</span>
+<span class="w">  </span><span class="c1">// derive the output shape from the input(s) and attributes</span>
+<span class="w">  </span><span class="n">OptimShape</span><span class="w"> </span><span class="n">out_shape</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">Shape</span><span class="p">();</span>
+<span class="w">  </span><span class="n">ctx</span><span class="p">.</span><span class="n">Set</span><span class="p">(</span><span class="n">node</span><span class="p">.</span><span class="n">output</span><span class="p">(</span><span class="mi">0</span><span class="p">).</span><span class="n">as_string</span><span class="p">(),</span>
+<span class="w">          </span><span class="n">OptimTensor</span><span class="p">(</span><span class="cm">/*data=*/</span><span class="nb">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">x</span><span class="p">.</span><span class="n">Dtype</span><span class="p">(),</span><span class="w"> </span><span class="n">out_shape</span><span class="p">));</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
 <p>Symbolic dimensions (string values such as <code class="docutils literal notranslate"><span class="pre">&quot;N&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;batch&quot;</span></code>) are
 preserved automatically; compare them with <code class="docutils literal notranslate"><span class="pre">isinstance(d,</span> <span class="pre">int)</span></code> before
-doing arithmetic on them.</p>
+doing arithmetic on them in Python (or <code class="docutils literal notranslate"><span class="pre">OptimDim::IsInt</span></code> in C++).</p>
 </section>
 <section id="register-the-callback">
 <h2>Register the callback<a class="headerlink" href="#register-the-callback" title="Link to this heading">#</a></h2>
 <p>Call <a class="reference internal" href="../api/python/onnx_optim/shape_inference.html#onnx_light.onnx_optim.shape_inference.ShapesContext.set_custom_shape_inference_function" title="onnx_light.onnx_optim.shape_inference.ShapesContext.set_custom_shape_inference_function"><code class="xref py py-meth docutils literal notranslate"><span class="pre">set_custom_shape_inference_function()</span></code></a>
+(C++ <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">SetCustomShapeInferenceFunction()</span></code>)
 on the context before running inference:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-4">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">ShapesContext</span><span class="p">()</span>
 <span class="n">ctx</span><span class="o">.</span><span class="n">set_custom_shape_inference_function</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;MyOp&quot;</span><span class="p">,</span> <span class="n">infer_my_op</span><span class="p">)</span>
 </pre></div>
+</div>
+</div>
+<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-5">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">ShapesContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">;</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">SetCustomShapeInferenceFunction</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MyOp&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">infer_my_op</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
 </div>
 <p>Passing an empty string as the domain normalises it to <code class="docutils literal notranslate"><span class="pre">&quot;ai.onnx&quot;</span></code>
 (the default ONNX domain). The registration is stored on the context
 object and applied for every subsequent call to <code class="docutils literal notranslate"><span class="pre">compute_shape_node</span></code> or
 <code class="docutils literal notranslate"><span class="pre">compute_shape_model</span></code> that uses the same context.</p>
 <p>You can check whether a callback is registered:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-6" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-6">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span><span class="o">.</span><span class="n">has_custom_shape_inference_function</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;MyOp&quot;</span><span class="p">)</span>  <span class="c1"># True</span>
 <span class="nb">list</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">custom_shape_inference_keys</span><span class="p">())</span>  <span class="c1"># [&quot;my.domain:MyOp&quot;]</span>
 </pre></div>
 </div>
+</div>
+<input id="sd-tab-item-7" name="sd-tab-set-3" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-7">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span><span class="p">.</span><span class="n">GetCustomShapeInferenceFunction</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MyOp&quot;</span><span class="p">)</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span><span class="w">  </span><span class="c1">// true</span>
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">kv</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">CustomShapeInferenceFunctions</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="c1">// kv.first == &quot;my.domain:MyOp&quot;</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
 </section>
 <section id="infer-shapes-for-a-single-node">
 <h2>Infer shapes for a single node<a class="headerlink" href="#infer-shapes-for-a-single-node" title="Link to this heading">#</a></h2>
-<p><code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_node()</span></code> processes
-one node at a time. Seed the context with the node’s input descriptors
-first:</p>
+<p><code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_node()</span></code>
+(C++ <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ComputeShapeNode()</span></code>)
+processes one node at a time. Seed the context with the node’s input
+descriptors first:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-8" name="sd-tab-set-4" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-8">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">onnxl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx.defs</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">defs</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx.helper</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">oh</span>
@@ -583,12 +662,41 @@ first:</p>
 <span class="nb">print</span><span class="p">(</span><span class="n">ctx</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;Y&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">shape</span><span class="p">)</span>   <span class="c1"># [4, 8]</span>
 </pre></div>
 </div>
+</div>
+<input id="sd-tab-item-9" name="sd-tab-set-4" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-9">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_proto/onnx_helper.h&quot;</span><span class="c1">  // make_node helpers, etc.</span>
+
+<span class="n">NodeProto</span><span class="w"> </span><span class="n">node</span><span class="p">;</span>
+<span class="n">node</span><span class="p">.</span><span class="n">set_op_type</span><span class="p">(</span><span class="s">&quot;MyOp&quot;</span><span class="p">);</span>
+<span class="n">node</span><span class="p">.</span><span class="n">set_domain</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">);</span>
+<span class="n">node</span><span class="p">.</span><span class="n">add_input</span><span class="p">(</span><span class="s">&quot;X&quot;</span><span class="p">);</span>
+<span class="n">node</span><span class="p">.</span><span class="n">add_output</span><span class="p">(</span><span class="s">&quot;Y&quot;</span><span class="p">);</span>
+
+<span class="n">ShapesContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">;</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">SetOpsetVersion</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">Set</span><span class="p">(</span><span class="s">&quot;X&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">OptimTensor</span><span class="p">(</span><span class="cm">/*data=*/</span><span class="nb">nullptr</span><span class="p">,</span><span class="w"> </span><span class="n">TensorType</span><span class="o">::</span><span class="n">kFloat</span><span class="p">,</span>
+<span class="w">                         </span><span class="p">{</span><span class="n">OptimDim</span><span class="p">(</span><span class="mi">4</span><span class="p">),</span><span class="w"> </span><span class="n">OptimDim</span><span class="p">(</span><span class="mi">8</span><span class="p">)}));</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">SetCustomShapeInferenceFunction</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MyOp&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">infer_my_op</span><span class="p">);</span>
+
+<span class="n">ctx</span><span class="p">.</span><span class="n">ComputeShapeNode</span><span class="p">(</span><span class="n">node</span><span class="p">);</span>
+<span class="c1">// ctx.Get(&quot;Y&quot;).Shape() == {4, 8}</span>
+</pre></div>
+</div>
+</div>
+</div>
 </section>
 <section id="infer-shapes-for-a-whole-model">
 <h2>Infer shapes for a whole model<a class="headerlink" href="#infer-shapes-for-a-whole-model" title="Link to this heading">#</a></h2>
-<p><code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code> walks
-every node of the main graph in topological order. Register the callback
-on the context <strong>before</strong> calling it:</p>
+<p><code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code>
+(C++ <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ComputeShapeModel()</span></code>)
+walks every node of the main graph in topological order. Register the
+callback on the context <strong>before</strong> calling it:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-10" name="sd-tab-set-5" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-10">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">ctx</span> <span class="o">=</span> <span class="n">ShapesContext</span><span class="p">()</span>
 <span class="n">ctx</span><span class="o">.</span><span class="n">set_custom_shape_inference_function</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;MyOp&quot;</span><span class="p">,</span> <span class="n">infer_my_op</span><span class="p">)</span>
 <span class="n">compute_shape_model</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
@@ -598,11 +706,33 @@ on the context <strong>before</strong> calling it:</p>
     <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="n">t</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><a class="reference internal" href="../api/python/onnx_optim/shape_inference.html#onnx_light.onnx_optim.shape_inference.infer_shapes_model" title="onnx_light.onnx_optim.shape_inference.infer_shapes_model"><code class="xref py py-func docutils literal notranslate"><span class="pre">infer_shapes_model()</span></code></a> creates
-its own internal context and does <strong>not</strong> accept a pre-configured
-context. Use <code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code>
+</div>
+<input id="sd-tab-item-11" name="sd-tab-set-5" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-11">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">ShapesContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">;</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">SetCustomShapeInferenceFunction</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MyOp&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">infer_my_op</span><span class="p">);</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">ComputeShapeModel</span><span class="p">(</span><span class="n">model</span><span class="p">);</span>
+
+<span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">name</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="p">{</span><span class="s">&quot;intermediate&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;output&quot;</span><span class="p">})</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">OptimTensor</span><span class="w"> </span><span class="o">&amp;</span><span class="n">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">Get</span><span class="p">(</span><span class="n">name</span><span class="p">);</span>
+<span class="w">  </span><span class="c1">// t.Shape(), t.Dtype()</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</div>
+</div>
+<p><a class="reference internal" href="../api/python/onnx_optim/shape_inference.html#onnx_light.onnx_optim.shape_inference.infer_shapes_model" title="onnx_light.onnx_optim.shape_inference.infer_shapes_model"><code class="xref py py-func docutils literal notranslate"><span class="pre">infer_shapes_model()</span></code></a>
+(C++ <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::onnx_optim::shapes::InferShapesModel()</span></code>) creates its own
+internal context and does <strong>not</strong> accept a pre-configured context. Use
+<code class="xref py py-func docutils literal notranslate"><span class="pre">compute_shape_model()</span></code>
+(C++ <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ComputeShapeModel()</span></code>)
 instead when your model contains custom operators, then apply the inferred
 shapes back manually if needed:</p>
+<div class="sd-tab-set docutils">
+<input checked="checked" id="sd-tab-item-12" name="sd-tab-set-6" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-12">
+Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_optim.shape_inference</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">compute_shape_model</span><span class="p">,</span>
     <span class="n">apply_inferred_shapes_to_model</span><span class="p">,</span>
@@ -613,6 +743,18 @@ shapes back manually if needed:</p>
 <span class="n">compute_shape_model</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
 <span class="n">apply_inferred_shapes_to_model</span><span class="p">(</span><span class="n">ctx</span><span class="p">,</span> <span class="n">model</span><span class="p">)</span>
 </pre></div>
+</div>
+</div>
+<input id="sd-tab-item-13" name="sd-tab-set-6" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-13">
+C++</label><div class="sd-tab-content docutils">
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">ShapesContext</span><span class="w"> </span><span class="n">ctx</span><span class="p">;</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">SetCustomShapeInferenceFunction</span><span class="p">(</span><span class="s">&quot;my.domain&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;MyOp&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">infer_my_op</span><span class="p">);</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">ComputeShapeModel</span><span class="p">(</span><span class="n">model</span><span class="p">);</span>
+<span class="n">ctx</span><span class="p">.</span><span class="n">ApplyInferredShapesToModel</span><span class="p">(</span><span class="n">model</span><span class="p">);</span>
+</pre></div>
+</div>
+</div>
 </div>
 </section>
 <section id="see-also">
