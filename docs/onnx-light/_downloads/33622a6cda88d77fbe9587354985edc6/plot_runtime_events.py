@@ -27,9 +27,13 @@ This example:
   the actual batch size at runtime,
 * drives the runtime through
   :class:`~onnx_light.reference.ReferenceEvaluator` while collecting
-  the event log,
+  the event log, with ``release_intermediates=True`` so the runtime
+  drops every intermediate tensor as soon as its last consumer has
+  run,
 * prints the events, illustrating how to peek at intermediate
   results without re-instrumenting the graph,
+* isolates the ``"remove"`` events to show exactly when each
+  intermediate tensor is released from the runtime tensor map,
 * cross-checks the runtime-observed shape of every intermediate
   tensor against the statically inferred (and expression-evaluated)
   shape,
@@ -116,7 +120,9 @@ for name, shape in inferred_shapes.items():
 # as well as plain integer literals and variable references.
 
 x = np.arange(8, dtype=np.float32).reshape(2, 4)
-context = {"N": int(x.shape[0])}
+# ``M`` is the user-declared output dim; shape inference anchors it to
+# the Reshape result ``2*N``, so it must be bound alongside ``N`` here.
+context = {"N": int(x.shape[0]), "M": 2 * int(x.shape[0])}
 print(f"Symbol context: {context}")
 
 
@@ -144,8 +150,13 @@ for name, shape in resolved_shapes.items():
 # After :meth:`~onnx_light.reference.ReferenceEvaluator.run` returns,
 # :meth:`~onnx_light.reference.ReferenceEvaluator.events` exposes the full
 # event log recorded by the internal :class:`RuntimeContext`.
+#
+# ``release_intermediates=True`` asks the runtime to drop every
+# intermediate tensor as soon as its last consumer node has run. Each
+# removal is recorded as a ``"remove"`` event, so the log captures not
+# only when a value is produced but also when it is freed.
 
-sess = ReferenceEvaluator(model, events_enabled=True)
+sess = ReferenceEvaluator(model, events_enabled=True, release_intermediates=True)
 (y,) = sess.run(None, {"x": x})
 print(f"y =\n{y}")
 
@@ -154,7 +165,7 @@ print(f"y =\n{y}")
 # +++++++++++++++++++++
 #
 # :meth:`~onnx_light.reference.ReferenceEvaluator.events` returns a list of
-# :class:`TensorEvent` entries. Each event carries the
+# :class:`RuntimeEvent` entries. Each event carries the
 # ``action`` (``"add"`` / ``"replace"`` / ``"remove"``), the
 # ``kind`` of value (``"input"``, ``"initializer"``,
 # ``"intermediate"`` or ``"output"``), the tensor ``name``,
@@ -172,10 +183,28 @@ print(f"Recorded {len(events)} event(s):")
 for ev in events:
     d = ev.as_dict()
     print(
-        f"  [{d['action']:<7s} {d['kind']:<12s}] {d['name']:<6s} "
+        f"  [{d['action']:<8s} {d['kind']:<12s}] {d['name']:<6s} "
         f"dtype={d['data_type']:<3d} shape={d['shape']} "
         f"values={d.get('values') or d.get('string_values')}"
     )
+
+#####################################
+# Watch intermediate results being removed
+# ++++++++++++++++++++++++++++++++++++++++
+#
+# Because the evaluator was created with
+# ``release_intermediates=True``, the runtime frees each intermediate
+# tensor as soon as its last consumer node has executed. Every such
+# release is logged as a ``"remove"`` event. Filtering the log by
+# ``action == "remove"`` therefore shows precisely when each
+# intermediate value leaves the runtime tensor map — here ``z`` is
+# removed right after ``Add`` consumes it and ``w`` right after
+# ``Reshape`` consumes it, while the graph output ``y`` is preserved.
+
+removed = [d for d in (ev.as_dict() for ev in events) if d["action"] == "remove"]
+print(f"Recorded {len(removed)} removal event(s):")
+for d in removed:
+    print(f"  {d['name']:<6s} ({d['kind']}) released from the runtime tensor map")
 
 #####################################
 # Cross-check intermediate shapes
@@ -196,7 +225,7 @@ for ev in events:
     resolved = resolved_shapes.get(d["name"])
     match = "OK" if resolved == runtime_shape else "MISMATCH"
     print(
-        f"  {d['name']:<6s} runtime={runtime_shape} inferred={inferred} "
+        f"  {d['name']:<8s} runtime={runtime_shape} inferred={inferred} "
         f"resolved={resolved} [{match}]  values={d.get('values')}"
     )
 

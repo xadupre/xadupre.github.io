@@ -30,20 +30,33 @@ a ``ModelProto`` plus one or more ``DataSet`` (lists of reference
 input / output ``Tensor`` instances).
 
 :func:`onnx_light.onnx.backend.collect_test_cases` returns the C++
-test cases as a ``list``. When called with an operator type it
-returns only the cases whose top-level graph contains a node with
-that ``op_type``.
+test cases as a ``list``. When called without any argument (or with
+an empty string) it returns *every* registered backend test case.
+When called with an operator type, or one of the special category
+strings ``"shape"``, ``"inference"`` or ``"nan_inf"``, it returns
+only the cases whose top-level graph contains a node with that
+``op_type`` (or that belong to the requested category).
+
+To filter cases by their *name* (rather than by op type), use
+:func:`onnx_light.onnx.backend.collect_test_cases_by_name`, which
+accepts an ECMAScript regular expression matched against
+:attr:`TestCase.name` with ``std::regex_search`` semantics
+(substring match unless anchored with ``^...$``).
 
 This example:
 
+* lists how many backend test cases are registered in total via
+  ``collect_test_cases()`` without argument,
 * retrieves the ``test_abs`` case via ``collect_test_cases("Abs")``,
+* demonstrates ``collect_test_cases_by_name`` to fetch cases by a
+  regular expression on the test case name,
 * displays its ``ModelProto``,
 * displays the reference input and output tensors,
 * demonstrates how to use :func:`make_test_class` from
   :mod:`onnx_light.onnx.backend` to systematically validate
   shape inference across many backend test cases.
 
-.. GENERATED FROM PYTHON SOURCE LINES 27-34
+.. GENERATED FROM PYTHON SOURCE LINES 40-47
 
 .. code-block:: Python
 
@@ -52,7 +65,7 @@ This example:
 
     import numpy as np
 
-    from onnx_light.onnx.backend import collect_test_cases
+    from onnx_light.onnx.backend import collect_test_cases, collect_test_cases_by_name
 
 
 
@@ -61,7 +74,40 @@ This example:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 35-41
+.. GENERATED FROM PYTHON SOURCE LINES 48-55
+
+All backend test cases
+++++++++++++++++++++++
+
+Calling ``collect_test_cases()`` without any argument (or with an
+empty string) returns every registered backend test case. This is
+useful to discover what is shipped with ``onnx-light`` and to drive
+parametrized tests over the full suite.
+
+.. GENERATED FROM PYTHON SOURCE LINES 55-60
+
+.. code-block:: Python
+
+
+    all_cases = collect_test_cases()
+    print(f"Total number of backend test cases: {len(all_cases)}")
+    print(f"First five names                  : {[tc.name for tc in all_cases[:5]]}")
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    Total number of backend test cases: 2024
+    First five names                  : ['test_cc_scan_basic_trip_count', 'test_cc_scan_zero_trip_count', 'test_scan_sum', 'test_scan9_sum', 'test_scan9_multi_state']
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 61-67
 
 Retrieve a backend test case
 ++++++++++++++++++++++++++++
@@ -70,7 +116,7 @@ Retrieve a backend test case
 exercises the ``Abs`` operator. We pick the canonical ``test_abs``
 case from the result.
 
-.. GENERATED FROM PYTHON SOURCE LINES 41-52
+.. GENERATED FROM PYTHON SOURCE LINES 67-78
 
 .. code-block:: Python
 
@@ -93,8 +139,8 @@ case from the result.
 
  .. code-block:: none
 
-    Number of Abs cases: 2
-    Names              : ['test_cc_abs', 'test_abs']
+    Number of Abs cases: 9
+    Names              : ['test_cc_abs', 'test_abs', 'test_cc_abs_float16', 'test_cc_abs_bfloat16', 'test_cc_abs_int8', 'test_cc_abs_int16', 'test_cc_abs_int32', 'test_cc_abs_int64', 'test_cc_abs_double']
     name      : test_abs
     model_name: test_abs
     kind      : node
@@ -103,7 +149,54 @@ case from the result.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 53-59
+.. GENERATED FROM PYTHON SOURCE LINES 79-96
+
+Filter by name with collect_test_cases_by_name
+++++++++++++++++++++++++++++++++++++++++++++++
+
+``collect_test_cases_by_name`` accepts an ECMAScript regular
+expression matched against the ``TestCase.name`` field. The match
+uses ``std::regex_search`` semantics, so the pattern is treated as
+a substring match unless it is anchored with ``^`` and ``$``.
+
+A few useful patterns:
+
+* ``"test_abs"`` matches any case whose name contains ``test_abs``
+  (substring match), including variants such as ``test_abs_<suffix>``.
+* ``"^test_abs$"`` requires an exact match on the name.
+* ``"^test_add"`` matches every case whose name starts with
+  ``test_add`` (e.g. ``test_add``, ``test_add_bcast``, ...).
+* An empty pattern returns every registered case, exactly like
+  ``collect_test_cases()`` without argument.
+
+.. GENERATED FROM PYTHON SOURCE LINES 96-104
+
+.. code-block:: Python
+
+
+    named_cases = collect_test_cases_by_name("^test_add")
+    print(f"Number of cases matching '^test_add': {len(named_cases)}")
+    print(f"Names                                : {[c.name for c in named_cases]}")
+
+    exact_abs = collect_test_cases_by_name("^test_abs$")
+    print(f"Names matching '^test_abs$' exactly  : {[c.name for c in exact_abs]}")
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    Number of cases matching '^test_add': 10
+    Names                                : ['test_add', 'test_add_int8', 'test_add_int16', 'test_add_int32', 'test_add_int64', 'test_add_uint8', 'test_add_uint16', 'test_add_uint32', 'test_add_uint64', 'test_add_bcast']
+    Names matching '^test_abs$' exactly  : ['test_abs']
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 105-111
 
 Display the model
 +++++++++++++++++
@@ -112,7 +205,7 @@ The ``model`` attribute is a :class:`ModelProto`. Its textual
 representation lists the opset imports and the graph (inputs,
 outputs, nodes).
 
-.. GENERATED FROM PYTHON SOURCE LINES 59-62
+.. GENERATED FROM PYTHON SOURCE LINES 111-114
 
 .. code-block:: Python
 
@@ -196,7 +289,7 @@ outputs, nodes).
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 63-70
+.. GENERATED FROM PYTHON SOURCE LINES 115-122
 
 Display the inputs and outputs
 ++++++++++++++++++++++++++++++
@@ -206,7 +299,7 @@ exposes ``inputs`` and ``outputs`` as lists of ``Tensor`` whose
 ``raw_data`` bytes are stored in row-major little-endian layout.
 We decode the float32 buffer to a numpy array for display.
 
-.. GENERATED FROM PYTHON SOURCE LINES 70-91
+.. GENERATED FROM PYTHON SOURCE LINES 122-143
 
 .. code-block:: Python
 
@@ -274,7 +367,7 @@ We decode the float32 buffer to a numpy array for display.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 92-104
+.. GENERATED FROM PYTHON SOURCE LINES 144-156
 
 Systematic testing with make_test_class
 ++++++++++++++++++++++++++++++++++++++++
@@ -289,7 +382,7 @@ that runs :func:`infer_shapes_model` and checks that the inferred shapes
 for intermediate tensors match the expected ``value_info`` stored in each
 test case.
 
-.. GENERATED FROM PYTHON SOURCE LINES 104-193
+.. GENERATED FROM PYTHON SOURCE LINES 156-245
 
 .. code-block:: Python
 
@@ -397,7 +490,7 @@ test case.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 194-199
+.. GENERATED FROM PYTHON SOURCE LINES 246-251
 
 Gallery thumbnail
 +++++++++++++++++
@@ -405,7 +498,7 @@ Gallery thumbnail
 Render a simple text figure used as the sphinx-gallery thumbnail for this
 example.
 
-.. GENERATED FROM PYTHON SOURCE LINES 199-206
+.. GENERATED FROM PYTHON SOURCE LINES 251-258
 
 .. code-block:: Python
 
@@ -431,7 +524,7 @@ example.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.028 seconds)
+   **Total running time of the script:** (0 minutes 0.296 seconds)
 
 
 .. _sphx_glr_download_auto_examples_backend_plot_backend_test_case.py:

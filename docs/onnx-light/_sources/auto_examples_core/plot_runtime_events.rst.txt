@@ -46,16 +46,20 @@ This example:
   the actual batch size at runtime,
 * drives the runtime through
   :class:`~onnx_light.reference.ReferenceEvaluator` while collecting
-  the event log,
+  the event log, with ``release_intermediates=True`` so the runtime
+  drops every intermediate tensor as soon as its last consumer has
+  run,
 * prints the events, illustrating how to peek at intermediate
   results without re-instrumenting the graph,
+* isolates the ``"remove"`` events to show exactly when each
+  intermediate tensor is released from the runtime tensor map,
 * cross-checks the runtime-observed shape of every intermediate
   tensor against the statically inferred (and expression-evaluated)
   shape,
 * renders a compact table of the recorded events for visual
   inspection.
 
-.. GENERATED FROM PYTHON SOURCE LINES 39-49
+.. GENERATED FROM PYTHON SOURCE LINES 43-53
 
 .. code-block:: Python
 
@@ -76,7 +80,7 @@ This example:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 50-62
+.. GENERATED FROM PYTHON SOURCE LINES 54-66
 
 Build a small ONNX model
 ++++++++++++++++++++++++
@@ -91,7 +95,7 @@ the ``-1`` placeholder of ``Reshape`` to the arithmetic
 expression ``2*N`` (input has ``N * 4`` elements, divided by the
 fixed inner dimension ``2``).
 
-.. GENERATED FROM PYTHON SOURCE LINES 62-75
+.. GENERATED FROM PYTHON SOURCE LINES 66-79
 
 .. code-block:: Python
 
@@ -201,7 +205,7 @@ fixed inner dimension ``2``).
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 76-86
+.. GENERATED FROM PYTHON SOURCE LINES 80-90
 
 Infer the shapes of every intermediate tensor
 +++++++++++++++++++++++++++++++++++++++++++++
@@ -214,7 +218,7 @@ inferred shape can contain arithmetic expressions over the input
 parameters (e.g. ``2*N`` for the ``Reshape`` output where the
 ``-1`` placeholder resolves to ``(N * 4) // 2``).
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-106
+.. GENERATED FROM PYTHON SOURCE LINES 90-110
 
 .. code-block:: Python
 
@@ -250,12 +254,12 @@ parameters (e.g. ``2*N`` for the ``Reshape`` output where the
       w      -> ('N', 4)
       z      -> ('N', 4)
       x      -> ('N', 4)
-      y      -> ('2*N', 2)
+      y      -> ('M', 2)
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 107-117
+.. GENERATED FROM PYTHON SOURCE LINES 111-121
 
 Resolve symbolic dimensions with ``evaluate_expression``
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -268,13 +272,15 @@ It supports the arithmetic expressions produced by shape
 inference (``+``, ``-``, ``*``, ``//``, ``%``, ``CeilToInt`` …)
 as well as plain integer literals and variable references.
 
-.. GENERATED FROM PYTHON SOURCE LINES 117-138
+.. GENERATED FROM PYTHON SOURCE LINES 121-144
 
 .. code-block:: Python
 
 
     x = np.arange(8, dtype=np.float32).reshape(2, 4)
-    context = {"N": int(x.shape[0])}
+    # ``M`` is the user-declared output dim; shape inference anchors it to
+    # the Reshape result ``2*N``, so it must be bound alongside ``N`` here.
+    context = {"N": int(x.shape[0]), "M": 2 * int(x.shape[0])}
     print(f"Symbol context: {context}")
 
 
@@ -301,7 +307,7 @@ as well as plain integer literals and variable references.
 
  .. code-block:: none
 
-    Symbol context: {'N': 2}
+    Symbol context: {'N': 2, 'M': 4}
     Shapes after evaluate_expression:
       w      -> (2, 4)
       z      -> (2, 4)
@@ -311,7 +317,7 @@ as well as plain integer literals and variable references.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 139-147
+.. GENERATED FROM PYTHON SOURCE LINES 145-158
 
 Run the model with ``ReferenceEvaluator``
 +++++++++++++++++++++++++++++++++++++++++
@@ -322,12 +328,17 @@ After :meth:`~onnx_light.reference.ReferenceEvaluator.run` returns,
 :meth:`~onnx_light.reference.ReferenceEvaluator.events` exposes the full
 event log recorded by the internal :class:`RuntimeContext`.
 
-.. GENERATED FROM PYTHON SOURCE LINES 147-152
+``release_intermediates=True`` asks the runtime to drop every
+intermediate tensor as soon as its last consumer node has run. Each
+removal is recorded as a ``"remove"`` event, so the log captures not
+only when a value is produced but also when it is freed.
+
+.. GENERATED FROM PYTHON SOURCE LINES 158-163
 
 .. code-block:: Python
 
 
-    sess = ReferenceEvaluator(model, events_enabled=True)
+    sess = ReferenceEvaluator(model, events_enabled=True, release_intermediates=True)
     (y,) = sess.run(None, {"x": x})
     print(f"y =\n{y}")
 
@@ -348,13 +359,13 @@ event log recorded by the internal :class:`RuntimeContext`.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 153-169
+.. GENERATED FROM PYTHON SOURCE LINES 164-180
 
 Inspect the event log
 +++++++++++++++++++++
 
 :meth:`~onnx_light.reference.ReferenceEvaluator.events` returns a list of
-:class:`TensorEvent` entries. Each event carries the
+:class:`RuntimeEvent` entries. Each event carries the
 ``action`` (``"add"`` / ``"replace"`` / ``"remove"``), the
 ``kind`` of value (``"input"``, ``"initializer"``,
 ``"intermediate"`` or ``"output"``), the tensor ``name``,
@@ -367,7 +378,7 @@ elements are summarised: ``data_type`` is set to ``-1`` and
 ``shape`` is left empty to signal the truncated payload. The
 total number of events in the log itself is unbounded.
 
-.. GENERATED FROM PYTHON SOURCE LINES 169-180
+.. GENERATED FROM PYTHON SOURCE LINES 180-191
 
 .. code-block:: Python
 
@@ -377,7 +388,7 @@ total number of events in the log itself is unbounded.
     for ev in events:
         d = ev.as_dict()
         print(
-            f"  [{d['action']:<7s} {d['kind']:<12s}] {d['name']:<6s} "
+            f"  [{d['action']:<8s} {d['kind']:<12s}] {d['name']:<6s} "
             f"dtype={d['data_type']:<3d} shape={d['shape']} "
             f"values={d.get('values') or d.get('string_values')}"
         )
@@ -390,21 +401,62 @@ total number of events in the log itself is unbounded.
 
  .. code-block:: none
 
-    Recorded 9 event(s):
-      [add     input       ] x      dtype=1   shape=[2, 4] values=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
-      [add     initializer ] two    dtype=1   shape=[] values=[2.0]
-      [add     initializer ] target_shape dtype=7   shape=[2] values=[-1.0, 2.0]
-      [add     intermediate] z      dtype=1   shape=[2, 4] values=[0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
+    Recorded 11 event(s):
+      [add      input       ] x      dtype=1   shape=[2, 4] values=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]
+      [add      initializer ] two    dtype=1   shape=[] values=[2.0]
+      [add      initializer ] target_shape dtype=7   shape=[2] values=[-1.0, 2.0]
+      [add      intermediate] z      dtype=1   shape=[2, 4] values=[0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
       [run_node unknown     ]        dtype=0   shape=[] values=[]
-      [add     intermediate] w      dtype=1   shape=[2, 4] values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
+      [add      intermediate] w      dtype=1   shape=[2, 4] values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
       [run_node unknown     ]        dtype=0   shape=[] values=[]
-      [add     intermediate] y      dtype=1   shape=[4, 2] values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
+      [remove   unknown     ] z      dtype=0   shape=[] values=[]
+      [add      intermediate] y      dtype=1   shape=[4, 2] values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
       [run_node unknown     ]        dtype=0   shape=[] values=[]
+      [remove   unknown     ] w      dtype=0   shape=[] values=[]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 181-188
+.. GENERATED FROM PYTHON SOURCE LINES 192-203
+
+Watch intermediate results being removed
+++++++++++++++++++++++++++++++++++++++++
+
+Because the evaluator was created with
+``release_intermediates=True``, the runtime frees each intermediate
+tensor as soon as its last consumer node has executed. Every such
+release is logged as a ``"remove"`` event. Filtering the log by
+``action == "remove"`` therefore shows precisely when each
+intermediate value leaves the runtime tensor map — here ``z`` is
+removed right after ``Add`` consumes it and ``w`` right after
+``Reshape`` consumes it, while the graph output ``y`` is preserved.
+
+.. GENERATED FROM PYTHON SOURCE LINES 203-209
+
+.. code-block:: Python
+
+
+    removed = [d for d in (ev.as_dict() for ev in events) if d["action"] == "remove"]
+    print(f"Recorded {len(removed)} removal event(s):")
+    for d in removed:
+        print(f"  {d['name']:<6s} ({d['kind']}) released from the runtime tensor map")
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    Recorded 2 removal event(s):
+      z      (unknown) released from the runtime tensor map
+      w      (unknown) released from the runtime tensor map
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 210-217
 
 Cross-check intermediate shapes
 +++++++++++++++++++++++++++++++
@@ -414,7 +466,7 @@ only the values produced by node kernels — i.e. the intermediate
 tensors of the graph. For each one we compare the runtime-observed
 shape against the shape :func:`infer_shapes_model` had pre-computed.
 
-.. GENERATED FROM PYTHON SOURCE LINES 188-203
+.. GENERATED FROM PYTHON SOURCE LINES 217-232
 
 .. code-block:: Python
 
@@ -429,7 +481,7 @@ shape against the shape :func:`infer_shapes_model` had pre-computed.
         resolved = resolved_shapes.get(d["name"])
         match = "OK" if resolved == runtime_shape else "MISMATCH"
         print(
-            f"  {d['name']:<6s} runtime={runtime_shape} inferred={inferred} "
+            f"  {d['name']:<8s} runtime={runtime_shape} inferred={inferred} "
             f"resolved={resolved} [{match}]  values={d.get('values')}"
         )
 
@@ -442,14 +494,14 @@ shape against the shape :func:`infer_shapes_model` had pre-computed.
  .. code-block:: none
 
     Intermediate tensors produced by node kernels:
-      z      runtime=(2, 4) inferred=('N', 4) resolved=(2, 4) [OK]  values=[0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
-      w      runtime=(2, 4) inferred=('N', 4) resolved=(2, 4) [OK]  values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
-      y      runtime=(4, 2) inferred=('2*N', 2) resolved=(4, 2) [OK]  values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
+      z        runtime=(2, 4) inferred=('N', 4) resolved=(2, 4) [OK]  values=[0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0]
+      w        runtime=(2, 4) inferred=('N', 4) resolved=(2, 4) [OK]  values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
+      y        runtime=(4, 2) inferred=('M', 2) resolved=(4, 2) [OK]  values=[0.0, 3.0, 6.0, 9.0, 12.0, 15.0, 18.0, 21.0]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 204-211
+.. GENERATED FROM PYTHON SOURCE LINES 233-240
 
 Render the event log as a table
 +++++++++++++++++++++++++++++++
@@ -459,7 +511,7 @@ thumbnail and as a compact visual recap of the captured events.
 The last column shows the statically inferred shape so it can be
 read alongside the runtime-observed shape.
 
-.. GENERATED FROM PYTHON SOURCE LINES 211-252
+.. GENERATED FROM PYTHON SOURCE LINES 240-281
 
 .. code-block:: Python
 
@@ -519,7 +571,7 @@ read alongside the runtime-observed shape.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.211 seconds)
+   **Total running time of the script:** (0 minutes 0.283 seconds)
 
 
 .. _sphx_glr_download_auto_examples_core_plot_runtime_events.py:
