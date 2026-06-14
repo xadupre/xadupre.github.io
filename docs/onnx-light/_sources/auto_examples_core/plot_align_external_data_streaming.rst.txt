@@ -54,11 +54,12 @@ footprint differs.
     is meant to illustrate.  RSS captures both Python and C++
     allocations.
 
-.. GENERATED FROM PYTHON SOURCE LINES 38-53
+.. GENERATED FROM PYTHON SOURCE LINES 38-54
 
 .. code-block:: Python
 
 
+    import gc
     import os
     import shutil
     import threading
@@ -80,7 +81,7 @@ footprint differs.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 54-60
+.. GENERATED FROM PYTHON SOURCE LINES 55-61
 
 Build a synthetic model
 -----------------------
@@ -89,7 +90,7 @@ A handful of large initializers is enough to make the in-memory peak
 noticeably larger than the streaming peak.  The example runs with a
 smaller model under ``UNITTEST_GOING=1`` to keep CI fast.
 
-.. GENERATED FROM PYTHON SOURCE LINES 60-95
+.. GENERATED FROM PYTHON SOURCE LINES 61-96
 
 .. code-block:: Python
 
@@ -143,7 +144,7 @@ smaller model under ``UNITTEST_GOING=1`` to keep CI fast.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 96-101
+.. GENERATED FROM PYTHON SOURCE LINES 97-102
 
 Save the source two-file model
 ------------------------------
@@ -151,7 +152,7 @@ Save the source two-file model
 Every benchmark below starts from the same on-disk source pair
 ``(src.onnx, src.data)``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 101-116
+.. GENERATED FROM PYTHON SOURCE LINES 102-123
 
 .. code-block:: Python
 
@@ -160,15 +161,21 @@ Every benchmark below starts from the same on-disk source pair
     src_data = src_onnx + ".data"
 
 
-    def _save_source() -> None:
+    def _save_source(proto: onnxl.ModelProto) -> None:
         """Writes the synthetic model to a two-file ``(.onnx, .data)`` pair."""
-        onnxl.save(model, src_onnx, location=src_data)
+        onnxl.save(proto, src_onnx, location=src_data)
 
 
-    _save_source()
+    _save_source(model)
     print(f"Source two-file model : {src_onnx} + {src_data}")
     print(f"Source weights size   : {os.path.getsize(src_data) / 2 ** 20:.2f} MB")
 
+    # Release the in-memory model now that the source files are on disk.
+    # Keeping ``model`` alive would inflate the RSS baseline for both benchmarks,
+    # making the streaming variant appear to use more memory than it actually does.
+    # After this point all benchmarks start from a clean low-memory baseline.
+    del model
+    gc.collect()
 
 
 
@@ -181,10 +188,11 @@ Every benchmark below starts from the same on-disk source pair
     Source two-file model : temp_plot_align_external_data_streaming/src.onnx + temp_plot_align_external_data_streaming/src.onnx.data
     Source weights size   : 96.00 MB
 
+    6
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 117-128
+.. GENERATED FROM PYTHON SOURCE LINES 124-135
 
 Helpers
 -------
@@ -198,7 +206,7 @@ sampler falls back to :func:`resource.getrusage` (Unix) or reports
 where onnx-light stores tensor ``raw_data`` during an in-memory load
 — which is exactly the overhead the streaming variant avoids.
 
-.. GENERATED FROM PYTHON SOURCE LINES 128-200
+.. GENERATED FROM PYTHON SOURCE LINES 135-207
 
 .. code-block:: Python
 
@@ -281,7 +289,7 @@ where onnx-light stores tensor ``raw_data`` during an in-memory load
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 201-208
+.. GENERATED FROM PYTHON SOURCE LINES 208-215
 
 Approach 1 — streaming alignment
 --------------------------------
@@ -291,7 +299,7 @@ metadata (a few KB) reaches RAM; tensor bytes are streamed
 file-to-file in chunks of ``chunk_size`` bytes, zero-padding to the
 requested alignment between tensors.
 
-.. GENERATED FROM PYTHON SOURCE LINES 208-225
+.. GENERATED FROM PYTHON SOURCE LINES 215-232
 
 .. code-block:: Python
 
@@ -319,7 +327,7 @@ requested alignment between tensors.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 226-232
+.. GENERATED FROM PYTHON SOURCE LINES 233-239
 
 Approach 2 — in-memory load + re-save with alignment
 ----------------------------------------------------
@@ -328,7 +336,7 @@ The "usual" path: load the full model (weights and all) into RAM, then
 re-serialize it with :attr:`SerializeOptions.alignment` set to the
 same boundary.
 
-.. GENERATED FROM PYTHON SOURCE LINES 232-249
+.. GENERATED FROM PYTHON SOURCE LINES 239-256
 
 .. code-block:: Python
 
@@ -356,12 +364,12 @@ same boundary.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 250-252
+.. GENERATED FROM PYTHON SOURCE LINES 257-259
 
 Run the benchmarks
 ------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 252-257
+.. GENERATED FROM PYTHON SOURCE LINES 259-264
 
 .. code-block:: Python
 
@@ -378,13 +386,13 @@ Run the benchmarks
 
  .. code-block:: none
 
-    align/streaming                          time=    57.2 ms   peak=   0.01 MB
-    align/in-memory                          time=   170.8 ms   peak=   0.00 MB
+    align/streaming                          time=    67.8 ms   peak=   3.88 MB
+    align/in-memory                          time=   135.7 ms   peak=  92.07 MB
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 258-264
+.. GENERATED FROM PYTHON SOURCE LINES 265-271
 
 Verify byte-equivalence of the aligned outputs
 ----------------------------------------------
@@ -393,7 +401,7 @@ Both approaches must produce the same tensor payloads at the same
 aligned offsets.  We compare each tensor's bytes read from both
 destination weights files.
 
-.. GENERATED FROM PYTHON SOURCE LINES 264-282
+.. GENERATED FROM PYTHON SOURCE LINES 271-289
 
 .. code-block:: Python
 
@@ -428,12 +436,12 @@ destination weights files.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 283-285
+.. GENERATED FROM PYTHON SOURCE LINES 290-292
 
 Results
 -------
 
-.. GENERATED FROM PYTHON SOURCE LINES 285-289
+.. GENERATED FROM PYTHON SOURCE LINES 292-296
 
 .. code-block:: Python
 
@@ -449,15 +457,15 @@ Results
 
  .. code-block:: none
 
-                       time_s   peak_mb
-    name                               
-    align/in-memory  0.170819  0.003906
-    align/streaming  0.057177  0.007812
+                       time_s    peak_mb
+    name                                
+    align/in-memory  0.135714  92.074219
+    align/streaming  0.067791   3.878906
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 290-297
+.. GENERATED FROM PYTHON SOURCE LINES 297-304
 
 Plot
 ----
@@ -467,7 +475,7 @@ The streaming variant trades a slightly different I/O pattern for an
 total weights size.  The in-memory variant peaks proportionally to
 the model's weight payload.
 
-.. GENERATED FROM PYTHON SOURCE LINES 297-328
+.. GENERATED FROM PYTHON SOURCE LINES 304-335
 
 .. code-block:: Python
 
@@ -489,7 +497,7 @@ the model's weight payload.
 
     fig.suptitle(
         f"Alignment={ALIGNMENT}B   weights={total_weight_bytes / 2 ** 20:.1f} MB"
-        f"   #initializers={len(model.graph.initializer)}"
+        f"   #initializers={N_INIT}"
     )
     fig.legend(
         handles=[
@@ -514,12 +522,12 @@ the model's weight payload.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 329-331
+.. GENERATED FROM PYTHON SOURCE LINES 336-338
 
 Cleanup
 -------
 
-.. GENERATED FROM PYTHON SOURCE LINES 331-333
+.. GENERATED FROM PYTHON SOURCE LINES 338-340
 
 .. code-block:: Python
 
@@ -535,7 +543,7 @@ Cleanup
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.426 seconds)
+   **Total running time of the script:** (0 minutes 1.418 seconds)
 
 
 .. _sphx_glr_download_auto_examples_core_plot_align_external_data_streaming.py:
