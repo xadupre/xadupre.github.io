@@ -585,6 +585,15 @@ messages and does not need operator-aware APIs:</p>
 parses it with <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::ParseModelProtoFromStream()</span></code>, reports parse-time
 statistics from repeated in-process iterations, and prints model metadata.
 File-not-found and parse errors are caught and reported to <code class="docutils literal notranslate"><span class="pre">stderr</span></code>.
+Before timing, the program tunes the glibc allocator
+(<code class="docutils literal notranslate"><span class="pre">mallopt(M_TRIM_THRESHOLD,</span> <span class="pre">-1)</span></code> and <code class="docutils literal notranslate"><span class="pre">mallopt(M_MMAP_MAX,</span> <span class="pre">0)</span></code>) so that the
+large per-tensor <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> buffers freed at the end of each iteration are
+kept in the allocator arena for reuse instead of being returned to the OS.
+Without this, every iteration re-<code class="docutils literal notranslate"><span class="pre">mmap</span></code>s those buffers and pays the
+kernel’s page zero-fill cost on first touch, which dominates the measurement
+and makes the short-lived executable look several times slower than the
+equivalent in-process Python loop (whose long-lived heap already retains the
+freed blocks).
 <code class="docutils literal notranslate"><span class="pre">FileStream</span></code> reads the file sequentially using a buffered read-ahead approach:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx.h&quot;</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_helper.h&quot;</span>
