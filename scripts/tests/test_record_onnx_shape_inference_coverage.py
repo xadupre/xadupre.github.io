@@ -436,6 +436,38 @@ class TestRunTestWithBackend(unittest.TestCase):
         self.assertFalse(info["success"])
         self.assertEqual(info["error_step"], "load")
 
+    def test_onnx_light_optim_keeps_output_shapes_as_prefill_hint(self):
+        # ``onnx-light-optim`` opts into ``prefill_with_value_info_output``
+        # so it must receive the graph output shapes as anchors. Capture
+        # the model handed to the runner and assert the output shapes are
+        # preserved while ``graph.value_info`` shapes are stripped.
+        model = _make_simple_model()
+        expected = rsi.snapshot_intermediates(model)
+        captured = {}
+
+        def fake_runner(stripped):
+            captured["model"] = stripped
+            return stripped
+
+        original = rsi._BACKEND_RUNNERS["onnx-light-optim"]
+        rsi._BACKEND_RUNNERS["onnx-light-optim"] = fake_runner
+        try:
+            rsi.run_test_with_backend(model, expected, "onnx-light-optim")
+        finally:
+            rsi._BACKEND_RUNNERS["onnx-light-optim"] = original
+
+        stripped = captured["model"]
+        for vi in stripped.graph.output:
+            self.assertTrue(
+                vi.type.tensor_type.HasField("shape"),
+                f"output shape should be preserved on {vi.name!r}",
+            )
+        for vi in stripped.graph.value_info:
+            self.assertFalse(
+                vi.type.tensor_type.HasField("shape"),
+                f"value_info shape should be stripped on {vi.name!r}",
+            )
+
 
 class TestRowFromResults(unittest.TestCase):
     def test_records_per_runtime_counts_and_last_pass(self):
