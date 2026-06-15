@@ -150,23 +150,39 @@ def _onnx_light_model_to_onnx(model):
 
 
 def _onnx_light_tensor_to_numpy(arr):
-    """Convert an ``onnx-light`` tensor / numpy array to a numpy array.
+    """Convert an ``onnx-light`` tensor / numpy array to a numpy value.
 
-    ``arr`` can either be an ``onnx-light`` ``TensorProto`` (converted by
-    round-tripping its serialised bytes through ``onnx.TensorProto``) or
-    a plain numpy-compatible value, in which case ``numpy.asarray`` is
-    used.
+    ``arr`` can either be an ``onnx-light`` ``TensorProto``, ``SequenceProto``
+    or ``OptionalProto`` (converted by round-tripping its serialised bytes
+    through the matching ``onnx`` proto) or a plain numpy-compatible value, in
+    which case ``numpy.asarray`` is used. Sequence protos decode to a list of
+    numpy arrays and optional protos to either ``None`` or a numpy value, which
+    mirrors how ``onnxruntime`` / ``onnx.reference`` represent the corresponding
+    computed outputs so the comparison stays apples-to-apples.
     """
     import numpy as np
 
     if isinstance(arr, np.ndarray):
         return arr
+    if isinstance(arr, (list, tuple)):
+        return [_onnx_light_tensor_to_numpy(a) for a in arr]
     if hasattr(arr, "SerializeToString"):
         import onnx
         from onnx import numpy_helper
 
+        content = arr.SerializeToString()
+        proto_name = type(arr).__name__
+        if proto_name == "SequenceProto":
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if proto_name == "OptionalProto":
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+
         tensor = onnx.TensorProto()
-        tensor.ParseFromString(arr.SerializeToString())
+        tensor.ParseFromString(content)
         return numpy_helper.to_array(tensor)
     return np.asarray(arr)
 
