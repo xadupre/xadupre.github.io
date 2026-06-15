@@ -733,7 +733,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIsNone(rbc._fixed_point_int_range(np.float32))
         try:
             import ml_dtypes
-        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+        except ImportError:  # pragma: no cover - ml_dtypes optional
             self.skipTest("ml_dtypes not installed")
         self.assertEqual(rbc._fixed_point_int_range(ml_dtypes.int2), (-2, 1))
         self.assertEqual(rbc._fixed_point_int_range(ml_dtypes.uint2), (0, 3))
@@ -745,7 +745,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
         try:
             import ml_dtypes
-        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+        except ImportError:  # pragma: no cover - ml_dtypes optional
             self.skipTest("ml_dtypes not installed")
         import onnx
 
@@ -782,7 +782,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
         try:
             import ml_dtypes
-        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+        except ImportError:  # pragma: no cover - ml_dtypes optional
             self.skipTest("ml_dtypes not installed")
         import onnx
 

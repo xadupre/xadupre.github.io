@@ -428,7 +428,7 @@ def _fixed_point_int_range(dtype) -> Optional[Tuple[int, int]]:
 
         info = ml_dtypes.iinfo(dtype.type)
         return int(info.min), int(info.max)
-    except Exception:  # noqa: BLE001 - not a sub-byte integer dtype
+    except Exception:  # noqa: BLE001 - ml_dtypes missing or not a sub-byte int
         return None
 
 
