@@ -717,6 +717,13 @@ def _run_onnx_light_optim(model):
     ``onnx_optim`` submodule mutates the model in place; we round-trip
     the result back to an ``onnx.ModelProto`` so the comparison helpers
     can score it uniformly.
+
+    ``prefill_with_value_info_output=True`` lets the inference anchor on
+    the model's declared ``graph.output`` shapes (preserved by
+    ``strip_shapes(..., keep_outputs=True)``). Without it, data-dependent
+    outputs such as ``NonZero`` get freshly generated symbolic dim names
+    that would never match the expected ones (e.g.
+    ``test_cc_shape_inference_nonzero_chain_named``).
     """
     import onnx
     import onnx_light.onnx as onnxl
@@ -724,7 +731,7 @@ def _run_onnx_light_optim(model):
 
     light = onnxl.ModelProto()
     light.ParseFromString(model.SerializeToString())
-    infer_shapes_model(light)
+    infer_shapes_model(light, prefill_with_value_info_output=True)
     out = onnx.ModelProto()
     out.ParseFromString(light.SerializeToString())
     return out
@@ -875,8 +882,11 @@ def run_test_with_backend(
         # ``onnx-light``'s shape inference can take advantage of the
         # known graph output shapes as a prefill hint: only clean
         # ``graph.value_info`` and keep ``graph.output`` shapes so they
-        # are passed through to the backend as initial constraints.
-        keep_outputs = backend == "onnx-light"
+        # are passed through to the backend as initial constraints. This
+        # applies to both the ``onnx.shape_inference`` backend and the
+        # experimental ``onnx_optim`` one (which opts into the anchors via
+        # ``prefill_with_value_info_output=True``).
+        keep_outputs = backend in ("onnx-light", "onnx-light-optim")
         stripped = strip_shapes(model, keep_outputs=keep_outputs)
     except Exception as exc:  # noqa: BLE001
         return {
