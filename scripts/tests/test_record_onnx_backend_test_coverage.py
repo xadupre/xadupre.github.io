@@ -701,6 +701,22 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIsNotNone(msg)
         self.assertIn("None", msg)
 
+    def test_compare_outputs_reports_precise_numeric_mismatch(self):
+        import numpy as np
+
+        msg = rbc._compare_outputs(
+            [np.array([-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0])],
+            [np.array([-2.0, -2.0, -1.0, 0.0, 1.0, 1.0, 1.0])],
+            rtol=1e-3,
+            atol=1e-4,
+        )
+        self.assertIsNotNone(msg)
+        # The message must surface the precise statistics, not just the
+        # generic "Not equal to tolerance" header.
+        self.assertIn("Mismatched elements", msg)
+        self.assertIn("Max absolute difference", msg)
+        self.assertNotIn("Not equal to tolerance", msg)
+
     def test_load_test_data_sets_decodes_sequence_and_optional(self):
         import numpy as np
         import onnx

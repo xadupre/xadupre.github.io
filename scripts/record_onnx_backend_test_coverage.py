@@ -387,8 +387,35 @@ def _compare_value(
             act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
         )
     except AssertionError as exc:
-        return f"{label} mismatch ({_stringify_error(exc)})"
+        return f"{label} mismatch ({_summarize_allclose_error(exc)})"
     return None
+
+
+def _summarize_allclose_error(exc: AssertionError) -> str:
+    """Summarise a ``numpy.testing.assert_allclose`` failure on one line.
+
+    ``assert_allclose`` reports a generic ``Not equal to tolerance`` header
+    and puts the informative statistics (how many elements differ and by how
+    much) on the following lines. :func:`_stringify_error` keeps only the
+    first line, which hides those details, so this helper gathers the
+    statistic lines into a single concise, precise message.
+    """
+    wanted = (
+        "Mismatched elements",
+        "Max absolute difference",
+        "Max relative difference",
+    )
+    parts = [
+        line.strip()
+        for line in str(exc).splitlines()
+        if line.strip().startswith(wanted)
+    ]
+    if not parts:
+        return _stringify_error(exc)
+    summary = "; ".join(parts)
+    if len(summary) > 300:
+        summary = summary[:297] + "..."
+    return summary
 
 
 def _compare_outputs(
