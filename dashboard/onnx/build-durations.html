@@ -74,6 +74,30 @@ h2.chart-title {
 .message.visible { display: block; }
 .message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
 .message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.summary { width: 100%; max-width: 1400px; margin: 0 auto 1em; box-sizing: border-box; }
+.summary table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.summary caption {
+  font-size: 1em;
+  margin-bottom: 0.5em;
+  color: #c9d1d9;
+  text-align: center;
+  caption-side: top;
+}
+.summary th, .summary td {
+  padding: 0.4em 0.75em;
+  text-align: left;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+}
+.summary th { color: #8b949e; font-weight: 600; }
+.summary td.job { font-family: monospace; word-break: break-all; }
+.summary td.num { text-align: right; font-family: monospace; }
 </style>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
@@ -87,6 +111,7 @@ h2.chart-title {
 </header>
 <div class="notice" style="max-width:1400px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
 <div id="message" class="message info"></div>
+<div id="summary" class="summary"></div>
 <div id="charts" class="charts"></div>
 <script>
 const REPO = "onnx";
@@ -173,6 +198,10 @@ const CONCLUSION_COLORS = {
 
 function jobLabelFromFilename(name) {
   return name.replace(/\.csv$/, "");
+}
+
+function jobAnchorId(name) {
+  return "chart-" + jobLabelFromFilename(name).replace(/[^A-Za-z0-9_-]+/g, "-");
 }
 
 function movingAverage(data, windowSize) {
@@ -297,10 +326,54 @@ function buildChart(canvas, jobName, rows, color) {
   return chart;
 }
 
-function renderJob(jobFile, color) {
+function buildSummaryTable() {
+  const summary = document.getElementById("summary");
+  summary.textContent = "";
+  const table = document.createElement("table");
+  const caption = document.createElement("caption");
+  caption.textContent = "Last recorded duration per job (click a name to jump to its graph)";
+  table.appendChild(caption);
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  ["job", "last duration (min)", "last run (UTC)"].forEach((label, idx) => {
+    const th = document.createElement("th");
+    th.textContent = label;
+    if (idx === 1) th.className = "num";
+    headRow.appendChild(th);
+  });
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  table.appendChild(tbody);
+  summary.appendChild(table);
+  return tbody;
+}
+
+function addSummaryRow(tbody, jobFile) {
+  const tr = document.createElement("tr");
+  const tdJob = document.createElement("td");
+  tdJob.className = "job";
+  const link = document.createElement("a");
+  link.href = "#" + jobAnchorId(jobFile);
+  link.textContent = jobLabelFromFilename(jobFile);
+  tdJob.appendChild(link);
+  const valueCell = document.createElement("td");
+  valueCell.className = "num";
+  valueCell.textContent = "\u2026";
+  const dateCell = document.createElement("td");
+  dateCell.textContent = "\u2026";
+  tr.appendChild(tdJob);
+  tr.appendChild(valueCell);
+  tr.appendChild(dateCell);
+  tbody.appendChild(tr);
+  return { valueCell, dateCell };
+}
+
+function renderJob(jobFile, color, summaryCells) {
   const container = document.getElementById("charts");
   const wrap = document.createElement("div");
   wrap.className = "chart-wrap";
+  wrap.id = jobAnchorId(jobFile);
   const title = document.createElement("h2");
   title.className = "chart-title";
   title.textContent = jobLabelFromFilename(jobFile);
@@ -333,6 +406,11 @@ function renderJob(jobFile, color) {
           : "no successful run yet";
         cc.style.display = "none";
         hint.style.display = "none";
+        if (summaryCells) {
+          summaryCells.valueCell.textContent = "\u2013";
+          summaryCells.dateCell.textContent =
+            allRows.length === 0 ? "no run yet" : "no success yet";
+        }
         return;
       }
       const total = rows.length;
@@ -342,12 +420,21 @@ function renderJob(jobFile, color) {
         total + " successful run(s) \u2013 avg " + avg.toFixed(2) + " min " +
         "\u2013 last " + last.duration.toFixed(2) + " min on " +
         last.date.replace("T", " ").replace("Z", "");
+      if (summaryCells) {
+        summaryCells.valueCell.textContent = last.duration.toFixed(2);
+        summaryCells.dateCell.textContent =
+          last.date.replace("T", " ").replace("Z", "");
+      }
       buildChart(canvas, jobLabelFromFilename(jobFile), rows, color);
     })
     .catch(err => {
       meta.textContent = "failed to load: " + (err && err.message ? err.message : err);
       cc.style.display = "none";
       hint.style.display = "none";
+      if (summaryCells) {
+        summaryCells.valueCell.textContent = "\u2013";
+        summaryCells.dateCell.textContent = "load error";
+      }
     });
 }
 
@@ -372,9 +459,11 @@ fetch(INDEX_URL, { cache: "no-store" })
       showMessage("No CI jobs have been recorded yet for " + REPO + ".", "info");
       return;
     }
+    const tbody = buildSummaryTable();
     let i = 0;
     for (const jobFile of jobs) {
-      renderJob(jobFile, PALETTE[i % PALETTE.length]);
+      const summaryCells = addSummaryRow(tbody, jobFile);
+      renderJob(jobFile, PALETTE[i % PALETTE.length], summaryCells);
       i++;
     }
   })
