@@ -774,6 +774,53 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         np.testing.assert_array_equal(inputs[1][0], np.array([3.0], dtype=np.float32))
         np.testing.assert_array_equal(outputs[0], np.array([5.0], dtype=np.float32))
 
+    def test_onnx_light_tensor_to_numpy_decodes_sequence_and_optional(self):
+        import numpy as np
+        import onnx
+        from onnx import numpy_helper
+
+        # A SequenceProto must decode to a list of numpy arrays so it can be
+        # compared against the sequence (list) produced by the runners, rather
+        # than being garbled into a non-sequence tensor.
+        seq = onnx.SequenceProto()
+        seq.name = "s"
+        seq.elem_type = onnx.SequenceProto.TENSOR
+        seq.tensor_values.extend(
+            [
+                numpy_helper.from_array(np.array([1.0, 2.0], dtype=np.float32)),
+                numpy_helper.from_array(np.array([3.0], dtype=np.float32)),
+            ]
+        )
+        seq_value = rbc._onnx_light_tensor_to_numpy(seq)
+        self.assertIsInstance(seq_value, list)
+        self.assertEqual(len(seq_value), 2)
+        np.testing.assert_array_equal(
+            seq_value[0], np.array([1.0, 2.0], dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            seq_value[1], np.array([3.0], dtype=np.float32)
+        )
+
+        # A populated OptionalProto decodes to its tensor value.
+        opt = onnx.OptionalProto()
+        opt.name = "o"
+        opt.elem_type = onnx.OptionalProto.TENSOR
+        opt.tensor_value.CopyFrom(
+            numpy_helper.from_array(np.array([5.0], dtype=np.float32))
+        )
+        opt_value = rbc._onnx_light_tensor_to_numpy(opt)
+        np.testing.assert_array_equal(
+            opt_value, np.array([5.0], dtype=np.float32)
+        )
+
+        # A plain TensorProto still decodes to a numpy array.
+        tensor = numpy_helper.from_array(np.array([7.0], dtype=np.float32))
+        tensor_value = rbc._onnx_light_tensor_to_numpy(tensor)
+        self.assertIsInstance(tensor_value, np.ndarray)
+        np.testing.assert_array_equal(
+            tensor_value, np.array([7.0], dtype=np.float32)
+        )
+
     def test_write_payload_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             json_path = os.path.join(tmp, "onnx-light", "backend_test_coverage.json")
