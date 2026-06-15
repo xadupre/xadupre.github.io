@@ -1,28 +1,43 @@
-"""Record wheel sizes published by the ``build_release.yml`` workflow.
+"""Record wheel and shared-library sizes from the ``build_release.yml`` workflow.
 
 This script queries the GitHub Actions REST API for every completed and
 successful run of a workflow (``build_release.yml`` of
 ``xadupre/onnx-light`` by default), downloads each artifact attached to the
-run, and records one CSV row per ``.whl`` file found inside the artifact
-zip archive. The resulting CSV is consumed by
-``dashboard/onnx-light/package-size.html`` to plot the evolution of the
-binary size of each wheel over time, side by side with the existing
-shared-library size chart.
+run **once**, and records, from that single download:
 
-The CSV columns are::
+* one row per ``.whl`` file found inside the artifact, into
+  ``wheel_sizes.csv`` (the "Wheel size over time" series), and
+* one row per shared library (``.so`` / versioned ``.so.N`` / ``.pyd`` /
+  ``.dylib``) found inside those wheels (or directly in the artifact), into
+  ``so_sizes.csv`` (the "Binary size over time" series).
+
+Both series feed ``dashboard/onnx-light/package-size.html``. Recording both
+from the same artifact download means the shared-library chart is backfilled
+over the same ``--months`` look-back window as the wheel chart, instead of
+only showing data accumulated since the inline workflow snapshot step first
+ran.
+
+``wheel_sizes.csv`` columns are::
 
     date,commit,run_id,size,name
+
+and ``so_sizes.csv`` columns (matching the inline workflow snapshot step) are::
+
+    date,commit,size,name
 
 where:
 
 * ``date`` is the ISO 8601 UTC timestamp of the workflow run creation,
 * ``commit`` is the head SHA of the run,
-* ``run_id`` is the GitHub Actions workflow run id (used to skip runs that
-  have already been processed),
-* ``size`` is the size in bytes of the ``.whl`` file as stored inside the
-  artifact zip archive,
-* ``name`` is the wheel file name (e.g.
-  ``onnx_light-0.1.0-cp312-cp312-manylinux_2_28_x86_64.whl``).
+* ``run_id`` is the GitHub Actions workflow run id (used to skip wheel rows
+  for runs that have already been processed),
+* ``size`` is the size in bytes of the ``.whl`` file (resp. shared library)
+  as stored inside the artifact zip archive,
+* ``name`` is the wheel (resp. shared library) file name.
+
+Wheel rows are de-duplicated by ``run_id`` and shared-library rows by
+``commit`` (so that commits already snapshotted by the inline workflow step
+are not recorded twice).
 
 Usage::
 
@@ -48,7 +63,17 @@ from typing import Iterable, Iterator
 DEFAULT_REPO = "xadupre/onnx-light"
 DEFAULT_WORKFLOW = "build_release.yml"
 
+# ``wheel_sizes.csv`` schema (one row per ``.whl`` file).
 CSV_FIELDS = ("date", "commit", "run_id", "size", "name")
+
+# ``so_sizes.csv`` schema (one row per shared library). This matches the
+# inline "Record onnx_py shared library sizes" workflow step so that rows from
+# either source can live in the same file.
+SO_CSV_FIELDS = ("date", "commit", "size", "name")
+
+# Extensions of the compiled shared libraries tracked by the binary-size chart.
+# ``.so.<version>`` files (e.g. ``libfoo.so.1``) are matched separately below.
+SHARED_LIBRARY_SUFFIXES = (".so", ".pyd", ".dylib")
 
 GITHUB_API = "https://api.github.com"
 
@@ -75,6 +100,23 @@ def _format_iso(value: dt.datetime) -> str:
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _is_shared_library(name: str) -> bool:
+    """Return ``True`` when ``name`` looks like a compiled shared library."""
+    lowered = name.lower()
+    if lowered.endswith(SHARED_LIBRARY_SUFFIXES):
+        return True
+    # Versioned ELF shared objects such as ``liblib_onnx_lib.so.1`` or
+    # ``libfoo.so.1.2``: there is a ``.so.`` segment followed by digits.
+    marker = ".so."
+    idx = lowered.rfind(marker)
+    if idx != -1:
+        tail = lowered[idx + len(marker):]
+        first = tail.split(".", 1)[0]
+        if first.isdigit():
+            return True
+    return False
+
+
 def read_existing(csv_path: str) -> set[str]:
     """Return the set of run ids already recorded in ``csv_path``."""
     seen: set[str] = set()
@@ -89,7 +131,23 @@ def read_existing(csv_path: str) -> set[str]:
     return seen
 
 
-def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
+def read_existing_commits(csv_path: str) -> set[str]:
+    """Return the set of commit SHAs already recorded in ``csv_path``."""
+    seen: set[str] = set()
+    if not os.path.exists(csv_path):
+        return seen
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            commit = row.get("commit")
+            if commit:
+                seen.add(commit)
+    return seen
+
+
+def append_rows(
+    csv_path: str, rows: Iterable[dict], fields: tuple[str, ...] = CSV_FIELDS
+) -> int:
     """Append ``rows`` to ``csv_path``, creating the file with a header if needed."""
     rows = list(rows)
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
@@ -97,11 +155,11 @@ def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
     if not rows:
         if not file_exists:
             with open(csv_path, "w", newline="", encoding="utf-8") as fh:
-                writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+                writer = csv.DictWriter(fh, fieldnames=fields)
                 writer.writeheader()
         return 0
     with open(csv_path, "a", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_FIELDS)
+        writer = csv.DictWriter(fh, fieldnames=fields)
         if not file_exists:
             writer.writeheader()
         for row in rows:
@@ -234,28 +292,83 @@ def extract_wheel_sizes(zip_bytes: bytes) -> list[tuple[str, int]]:
     return results
 
 
+def _extract_shared_libraries_from_wheel(wheel_bytes: bytes) -> list[tuple[str, int]]:
+    """Return ``(name, size)`` for every shared library inside a wheel."""
+    results: list[tuple[str, int]] = []
+    with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as wheel:
+        for info in wheel.infolist():
+            if info.is_dir():
+                continue
+            name = os.path.basename(info.filename)
+            if name and _is_shared_library(name):
+                results.append((name, int(info.file_size)))
+    return results
+
+
+def extract_shared_library_sizes(zip_bytes: bytes) -> list[tuple[str, int]]:
+    """Return ``(name, size)`` pairs for every shared library in an artifact.
+
+    Artifacts produced by ``build_release.yml`` store one or more ``.whl``
+    files (which are themselves zip archives) without further compression.
+    Shared libraries are looked up inside each wheel; an artifact that uploads
+    shared libraries directly (not wrapped in a wheel) is also supported.
+
+    When the same library name appears more than once (e.g. across several
+    wheels in the same artifact) the largest reported size is kept so that the
+    series is deterministic regardless of archive ordering.
+    """
+    sizes: dict[str, int] = {}
+
+    def _record(name: str, size: int) -> None:
+        previous = sizes.get(name)
+        if previous is None or size > previous:
+            sizes[name] = size
+
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            name = os.path.basename(info.filename)
+            if name.lower().endswith(".whl"):
+                try:
+                    inner = _extract_shared_libraries_from_wheel(zf.read(info))
+                except zipfile.BadZipFile:
+                    # A wheel that cannot be opened as a zip carries no
+                    # readable shared libraries; skip it without aborting the
+                    # rest of the artifact (the wheel-size series, which only
+                    # reads outer-zip metadata, is unaffected).
+                    continue
+                for so_name, so_size in inner:
+                    _record(so_name, so_size)
+            elif name and _is_shared_library(name):
+                _record(name, int(info.file_size))
+    return sorted(sizes.items())
+
+
 def process_run(
     run: dict, repo: str, token: str | None
-) -> list[dict]:
-    """Return CSV rows for every wheel artifact attached to ``run``.
+) -> tuple[list[dict], list[dict]]:
+    """Return ``(wheel_rows, so_rows)`` for every artifact attached to ``run``.
 
-    Returns an empty list when the run is not completed or has no wheel
+    Both lists are empty when the run is not completed or has no matching
     artifacts. Runs whose conclusion is not ``success`` are still inspected
-    because the upstream workflow may have uploaded wheel artifacts before
-    a later step failed; skipping them would silently hide otherwise-valid
-    wheel size measurements from the dashboard. Artifacts whose download
-    fails are skipped with a warning so that one broken artifact does not
-    abort the rest of the run.
+    because the upstream workflow may have uploaded artifacts before a later
+    step failed; skipping them would silently hide otherwise-valid size
+    measurements from the dashboard. Each artifact is downloaded once and both
+    the wheel sizes and the shared-library sizes contained in it are recorded.
+    Artifacts whose download fails are skipped with a warning so that one
+    broken artifact does not abort the rest of the run.
     """
     if run.get("status") != "completed":
-        return []
+        return [], []
     run_id = str(run.get("id", ""))
     if not run_id:
-        return []
+        return [], []
     created = run.get("created_at") or ""
     commit = run.get("head_sha") or ""
     artifacts = list_run_artifacts(repo, run_id, token)
-    rows: list[dict] = []
+    wheel_rows: list[dict] = []
+    so_sizes: dict[str, int] = {}
     for artifact in artifacts:
         if artifact.get("expired"):
             continue
@@ -273,6 +386,7 @@ def process_run(
             continue
         try:
             wheels = extract_wheel_sizes(data)
+            libraries = extract_shared_library_sizes(data)
         except zipfile.BadZipFile as exc:
             print(
                 f"[{repo}] run {run_id}: artifact {artifact.get('name')!r} "
@@ -281,7 +395,7 @@ def process_run(
             )
             continue
         for name, size in wheels:
-            rows.append(
+            wheel_rows.append(
                 {
                     "date": created,
                     "commit": commit,
@@ -290,7 +404,20 @@ def process_run(
                     "name": name,
                 }
             )
-    return rows
+        for name, size in libraries:
+            previous = so_sizes.get(name)
+            if previous is None or size > previous:
+                so_sizes[name] = size
+    so_rows = [
+        {
+            "date": created,
+            "commit": commit,
+            "size": str(size),
+            "name": name,
+        }
+        for name, size in sorted(so_sizes.items())
+    ]
+    return wheel_rows, so_rows
 
 
 def process_repo(
@@ -300,34 +427,42 @@ def process_repo(
     months: int,
     token: str | None,
     max_runs: int | None = None,
-) -> int:
-    """Fetch new wheel sizes for ``repo`` and append them to the cache file.
+) -> tuple[int, int]:
+    """Fetch new wheel and shared-library sizes for ``repo`` and append them.
 
-    Returns the number of new CSV rows appended.
+    Returns ``(wheel_rows_added, so_rows_added)``. Each artifact is downloaded
+    once and feeds both ``wheel_sizes.csv`` (deduplicated by ``run_id``) and
+    ``so_sizes.csv`` (deduplicated by ``commit``).
     """
     repo_name = repo.split("/", 1)[-1]
-    csv_path = os.path.join(cache_dir, repo_name, "wheel_sizes.csv")
-    seen = read_existing(csv_path)
+    wheel_csv = os.path.join(cache_dir, repo_name, "wheel_sizes.csv")
+    so_csv = os.path.join(cache_dir, repo_name, "so_sizes.csv")
+    seen_runs = read_existing(wheel_csv)
+    seen_commits = read_existing_commits(so_csv)
     since = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(days=months * 30)
     _log(
-        f"[{repo}] cache file: {csv_path} ({len(seen)} run(s) already recorded)"
+        f"[{repo}] wheel cache: {wheel_csv} ({len(seen_runs)} run(s) recorded); "
+        f"so cache: {so_csv} ({len(seen_commits)} commit(s) recorded)"
     )
     _log(f"[{repo}] fetching {workflow!r} runs since {_format_iso(since)}")
-    new_rows: list[dict] = []
+    new_wheel_rows: list[dict] = []
+    new_so_rows: list[dict] = []
     processed = 0
     try:
         for run in iter_workflow_runs(repo, workflow, since, token, max_runs):
             processed += 1
             run_id = str(run.get("id", ""))
-            if not run_id or run_id in seen:
+            commit = run.get("head_sha") or ""
+            need_wheel = bool(run_id) and run_id not in seen_runs
+            need_so = bool(commit) and commit not in seen_commits
+            if not need_wheel and not need_so:
                 continue
             _log(
                 f"[{repo}] processing run {run_id} "
-                f"(commit={(run.get('head_sha') or '')[:7]}, "
-                f"created={run.get('created_at')})"
+                f"(commit={commit[:7]}, created={run.get('created_at')})"
             )
             try:
-                rows = process_run(run, repo, token)
+                wheel_rows, so_rows = process_run(run, repo, token)
             except urllib.error.HTTPError as exc:
                 print(
                     f"[{repo}] HTTP error while processing run {run_id}: "
@@ -335,18 +470,26 @@ def process_repo(
                     file=sys.stderr,
                 )
                 continue
-            new_rows.extend(rows)
-            seen.add(run_id)
-            _log(
-                f"[{repo}]   recorded {len(rows)} wheel(s) for run {run_id}"
-            )
+            if need_wheel:
+                new_wheel_rows.extend(wheel_rows)
+                seen_runs.add(run_id)
+                _log(f"[{repo}]   recorded {len(wheel_rows)} wheel(s) for run {run_id}")
+            if need_so and so_rows:
+                new_so_rows.extend(so_rows)
+                seen_commits.add(commit)
+                _log(
+                    f"[{repo}]   recorded {len(so_rows)} shared librar(ies) "
+                    f"for commit {commit[:7]}"
+                )
     finally:
-        added = append_rows(csv_path, new_rows)
+        added_wheels = append_rows(wheel_csv, new_wheel_rows)
+        added_so = append_rows(so_csv, new_so_rows, SO_CSV_FIELDS)
     _log(
-        f"[{repo}] processed {processed} run(s) from GitHub; "
-        f"appended {added} new wheel row(s) to {csv_path}"
+        f"[{repo}] processed {processed} run(s) from GitHub; appended "
+        f"{added_wheels} wheel row(s) to {wheel_csv} and "
+        f"{added_so} shared-library row(s) to {so_csv}"
     )
-    return added
+    return added_wheels, added_so
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -398,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         _log("  authentication  : using GITHUB_TOKEN/GH_TOKEN")
 
     try:
-        added = process_repo(
+        added_wheels, added_so = process_repo(
             args.repo,
             args.workflow,
             args.cache_dir,
@@ -412,8 +555,14 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    _log(f"Done. {added} new wheel row(s) recorded.")
-    print(f"Done. {added} new wheel row(s) recorded.")
+    _log(
+        f"Done. {added_wheels} new wheel row(s) and "
+        f"{added_so} new shared-library row(s) recorded."
+    )
+    print(
+        f"Done. {added_wheels} new wheel row(s) and "
+        f"{added_so} new shared-library row(s) recorded."
+    )
     return 0
 
 
