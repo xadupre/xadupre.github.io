@@ -710,6 +710,31 @@ def _run_onnx_light(model):
     return out
 
 
+def _drop_shapeless_value_info(model):
+    """Remove ``graph.value_info`` entries that carry a type but no shape.
+
+    ``strip_shapes(..., keep_outputs=True)`` deliberately leaves the
+    intermediate ``value_info`` entries with their ``elem_type`` set but
+    no ``shape`` field. The experimental ``onnx_optim`` inference, when
+    asked to prefill from ``value_info``/``output`` shapes, reads those
+    entries unconditionally and a stripped ``tensor_type`` raises
+    ``Optional field 'shape' has no value.``. Dropping the shapeless
+    entries lets the inference rebuild them from scratch while still
+    anchoring on the preserved ``graph.output`` shapes.
+    """
+    keep = [
+        vi
+        for vi in model.graph.value_info
+        if not (
+            vi.type.HasField("tensor_type")
+            and not vi.type.tensor_type.HasField("shape")
+        )
+    ]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(keep)
+    return model
+
+
 def _run_onnx_light_optim(model):
     """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
 
@@ -724,13 +749,21 @@ def _run_onnx_light_optim(model):
     outputs such as ``NonZero`` get freshly generated symbolic dim names
     that would never match the expected ones (e.g.
     ``test_cc_shape_inference_nonzero_chain_named``).
+
+    Because the prefill also visits ``graph.value_info``, the shapeless
+    intermediate entries left behind by ``strip_shapes`` must be removed
+    first; otherwise the inference raises ``Optional field 'shape' has no
+    value.`` when it reads their stripped ``tensor_type``.
     """
     import onnx
     import onnx_light.onnx as onnxl
     from onnx_light.onnx_optim.shape_inference import infer_shapes_model
 
+    prepared = onnx.ModelProto()
+    prepared.CopyFrom(model)
+    _drop_shapeless_value_info(prepared)
     light = onnxl.ModelProto()
-    light.ParseFromString(model.SerializeToString())
+    light.ParseFromString(prepared.SerializeToString())
     infer_shapes_model(light, prefill_with_value_info_output=True)
     out = onnx.ModelProto()
     out.ParseFromString(light.SerializeToString())

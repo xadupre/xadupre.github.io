@@ -469,6 +469,43 @@ class TestRunTestWithBackend(unittest.TestCase):
             )
 
 
+class TestDropShapelessValueInfo(unittest.TestCase):
+    def test_drops_value_info_without_shape_keeps_shaped_ones(self):
+        # ``strip_shapes(keep_outputs=True)`` leaves intermediate
+        # ``value_info`` entries with an ``elem_type`` but no shape. The
+        # ``onnx-light-optim`` prefill reads every ``value_info`` entry, so
+        # those shapeless entries must be removed before inference to avoid
+        # ``Optional field 'shape' has no value.``.
+        from onnx import TensorProto, helper
+
+        shaped = helper.make_tensor_value_info("kept", TensorProto.FLOAT, [2, 3])
+        shapeless = helper.make_value_info(
+            "stripped",
+            helper.make_tensor_type_proto(TensorProto.FLOAT, shape=None),
+        )
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+        out = helper.make_tensor_value_info("Z", TensorProto.FLOAT, [2, 3])
+        graph = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Z"])],
+            "g",
+            [inp],
+            [out],
+            value_info=[shaped, shapeless],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+
+        rsi._drop_shapeless_value_info(model)
+
+        names = [vi.name for vi in model.graph.value_info]
+        self.assertEqual(names, ["kept"])
+        self.assertTrue(
+            model.graph.value_info[0].type.tensor_type.HasField("shape")
+        )
+
+
 class TestRowFromResults(unittest.TestCase):
     def test_records_per_runtime_counts_and_last_pass(self):
         expected = [
