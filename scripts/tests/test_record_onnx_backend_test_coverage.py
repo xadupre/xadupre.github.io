@@ -701,6 +701,133 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIsNotNone(msg)
         self.assertIn("None", msg)
 
+    def _make_cast_model(self, op_type="Cast", to=None):
+        import onnx
+        from onnx import helper
+
+        if op_type == "Cast":
+            node = helper.make_node("Cast", ["input"], ["output"], to=to)
+            inputs = [
+                helper.make_tensor_value_info("input", onnx.TensorProto.FLOAT, [7])
+            ]
+        else:
+            node = helper.make_node("CastLike", ["input", "like"], ["output"])
+            inputs = [
+                helper.make_tensor_value_info("input", onnx.TensorProto.FLOAT, [7]),
+                helper.make_tensor_value_info("like", to, [1]),
+            ]
+        graph = helper.make_graph(
+            [node],
+            "g",
+            inputs,
+            [helper.make_tensor_value_info("output", to, [7])],
+        )
+        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 21)])
+
+    def test_fixed_point_int_range_handles_sub_byte_and_numpy(self):
+        import numpy as np
+
+        self.assertEqual(rbc._fixed_point_int_range(np.int8), (-128, 127))
+        self.assertEqual(rbc._fixed_point_int_range(np.uint8), (0, 255))
+        # Floating point (and float8 / float4) targets are not fixed-point.
+        self.assertIsNone(rbc._fixed_point_int_range(np.float32))
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+            self.skipTest("ml_dtypes not installed")
+        self.assertEqual(rbc._fixed_point_int_range(ml_dtypes.int2), (-2, 1))
+        self.assertEqual(rbc._fixed_point_int_range(ml_dtypes.uint2), (0, 3))
+        self.assertEqual(rbc._fixed_point_int_range(ml_dtypes.int4), (-8, 7))
+        self.assertIsNone(rbc._fixed_point_int_range(ml_dtypes.float8_e4m3fn))
+
+    def test_normalize_undefined_cast_outputs_masks_out_of_range_elements(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+            self.skipTest("ml_dtypes not installed")
+        import onnx
+
+        model = self._make_cast_model("Cast", to=onnx.TensorProto.INT2)
+        src = np.array(
+            [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0], dtype=np.float32
+        )
+        # ``expected`` wraps around (onnx reference) while ``actual``
+        # saturates (a valid onnx-light behaviour). Both differ only on the
+        # out-of-range elements (-3, 2, 3), whose result is undefined.
+        expected = np.array([1, -2, -1, 0, 1, -2, -1], dtype=ml_dtypes.int2)
+        actual = np.array([-2, -2, -1, 0, 1, 1, 1], dtype=ml_dtypes.int2)
+
+        # Without normalization the comparison reports a (real) mismatch.
+        self.assertIsNotNone(
+            rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
+        )
+        new_expected, new_actual = rbc._normalize_undefined_cast_outputs(
+            model, [src], [expected], [actual]
+        )
+        self.assertIsNone(
+            rbc._compare_outputs(
+                new_expected, new_actual, rtol=1e-3, atol=1e-4
+            )
+        )
+        # The in-range elements are left untouched.
+        np.testing.assert_array_equal(
+            new_expected[0][1:5].astype(np.int8),
+            np.array([-2, -1, 0, 1], dtype=np.int8),
+        )
+
+    def test_normalize_undefined_cast_outputs_keeps_in_range_mismatch(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - ml_dtypes ships with onnx
+            self.skipTest("ml_dtypes not installed")
+        import onnx
+
+        model = self._make_cast_model("Cast", to=onnx.TensorProto.INT2)
+        src = np.array(
+            [-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0], dtype=np.float32
+        )
+        expected = np.array([1, -2, -1, 0, 1, -2, -1], dtype=ml_dtypes.int2)
+        # Disagree on an in-range element (index 3: 0 -> 1): a genuine bug
+        # must still be reported as a failure.
+        actual = expected.copy()
+        actual[3] = np.array(1, dtype=ml_dtypes.int2)
+        new_expected, new_actual = rbc._normalize_undefined_cast_outputs(
+            model, [src], [expected], [actual]
+        )
+        self.assertIsNotNone(
+            rbc._compare_outputs(
+                new_expected, new_actual, rtol=1e-3, atol=1e-4
+            )
+        )
+
+    def test_normalize_undefined_cast_outputs_ignores_non_cast_models(self):
+        import numpy as np
+        import onnx
+        from onnx import helper
+
+        node = helper.make_node("Identity", ["a"], ["b"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("a", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("b", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+        src = np.array([1.0, 2.0], dtype=np.float32)
+        expected = [np.array([1.0, 2.0], dtype=np.float32)]
+        actual = [np.array([9.0, 2.0], dtype=np.float32)]
+        new_expected, new_actual = rbc._normalize_undefined_cast_outputs(
+            model, [src], expected, actual
+        )
+        np.testing.assert_array_equal(new_expected[0], expected[0])
+        np.testing.assert_array_equal(new_actual[0], actual[0])
+
     def test_load_test_data_sets_decodes_sequence_and_optional(self):
         import numpy as np
         import onnx

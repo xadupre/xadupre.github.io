@@ -407,6 +407,97 @@ def _compare_outputs(
     return None
 
 
+def _fixed_point_int_range(dtype) -> Optional[Tuple[int, int]]:
+    """Return ``(min, max)`` for a fixed-point integer ``dtype``.
+
+    Handles both the standard NumPy integer types and the sub-byte integer
+    types (``int2``/``uint2``/``int4``/``uint4``) provided by ``ml_dtypes``.
+    Returns ``None`` for any non-integer dtype (floating point, ``float8``,
+    ``float4``, bool, string, ...).
+    """
+    import numpy as np
+
+    dtype = np.dtype(dtype)
+    try:
+        info = np.iinfo(dtype)
+        return int(info.min), int(info.max)
+    except (ValueError, TypeError):
+        pass
+    try:
+        import ml_dtypes
+
+        info = ml_dtypes.iinfo(dtype.type)
+        return int(info.min), int(info.max)
+    except Exception:  # noqa: BLE001 - not a sub-byte integer dtype
+        return None
+
+
+def _normalize_undefined_cast_outputs(
+    model: Any,
+    inputs: List[Any],
+    expected: List[Any],
+    actual: List[Any],
+) -> Tuple[List[Any], List[Any]]:
+    """Neutralise output elements whose value is undefined per the spec.
+
+    The ONNX ``Cast`` specification states that casting a floating point
+    value to a fixed-point (integer) type is *undefined* when the value is
+    out of the target type's range. Backends therefore legitimately produce
+    different results for those elements (for instance the ONNX reference
+    implementation wraps around while ``onnx-light`` saturates), which used
+    to flag ``onnx-light`` as failing tests such as
+    ``test_cast_FLOAT_to_INT2`` even though it works correctly.
+
+    For a single elementwise ``Cast``/``CastLike`` node casting floats to a
+    fixed-point integer type, the out-of-range (and non-finite) output
+    elements are zeroed in both the expected and actual tensors so the
+    comparison ignores them. The ``(expected, actual)`` pair is returned
+    unchanged when the model is not such a cast or has no undefined element.
+    """
+    import numpy as np
+
+    try:
+        nodes = list(model.graph.node)
+    except Exception:  # noqa: BLE001 - defensive, model may be unusual
+        return expected, actual
+    if len(nodes) != 1 or nodes[0].op_type not in ("Cast", "CastLike"):
+        return expected, actual
+    if not inputs or len(expected) != 1 or len(actual) != 1:
+        return expected, actual
+
+    exp = expected[0]
+    act = actual[0]
+    if not isinstance(exp, np.ndarray) or not isinstance(act, np.ndarray):
+        return expected, actual
+
+    rng = _fixed_point_int_range(exp.dtype)
+    if rng is None:
+        return expected, actual
+
+    src = np.asarray(inputs[0])
+    if src.dtype.kind != "f" or src.shape != exp.shape or act.shape != exp.shape:
+        return expected, actual
+
+    lo, hi = rng
+    src_f = src.astype(np.float64)
+    # Casting from float to integer truncates toward zero; an element is
+    # well-defined only when that truncated value fits the target range.
+    truncated = np.trunc(src_f)
+    defined = np.isfinite(src_f) & (truncated >= lo) & (truncated <= hi)
+    if defined.all():
+        return expected, actual
+
+    exp_fixed = exp.copy()
+    act_fixed = act.copy()
+    exp_fixed[~defined] = np.zeros((), dtype=exp.dtype)
+    act_fixed[~defined] = np.zeros((), dtype=act.dtype)
+    new_expected = list(expected)
+    new_actual = list(actual)
+    new_expected[0] = exp_fixed
+    new_actual[0] = act_fixed
+    return new_expected, new_actual
+
+
 def _run_with_onnxruntime(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
@@ -517,6 +608,9 @@ def run_test_with_backend(
                 "error": _stringify_error(exc),
                 "error_step": "run",
             }
+        expected, actual = _normalize_undefined_cast_outputs(
+            model, inputs, expected, actual
+        )
         mismatch = _compare_outputs(expected, actual, rtol=rtol, atol=atol)
         if mismatch is not None:
             return {

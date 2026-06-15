@@ -53,6 +53,7 @@ _log = _base._log
 _format_iso = _base._format_iso
 _stringify_error = _base._stringify_error
 _compare_outputs = _base._compare_outputs
+_normalize_undefined_cast_outputs = _base._normalize_undefined_cast_outputs
 _model_input_names = _base._model_input_names
 _load_test_data_sets = _base._load_test_data_sets
 _run_with_onnxruntime = _base._run_with_onnxruntime
@@ -207,6 +208,9 @@ def run_test_with_backend(
                 "error": _stringify_error(exc),
                 "error_step": "run",
             }
+        expected, actual = _normalize_undefined_cast_outputs(
+            model, inputs, expected, actual
+        )
         mismatch = _compare_outputs(expected, actual, rtol=rtol, atol=atol)
         if mismatch is not None:
             return {
