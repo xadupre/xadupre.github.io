@@ -159,9 +159,10 @@ class TestAppendRows(unittest.TestCase):
                 1,
             )
             with open(path, encoding="utf-8") as fh:
-                rows = list(csv.DictReader(fh))
+                content = fh.read()
+            rows = list(csv.DictReader(io.StringIO(content)))
             self.assertEqual([r["commit"] for r in rows], ["c", "c2"])
-            # Header must only appear once.
+            # Header must only appear once even after the second append.
             self.assertEqual(content.count("date,commit,size,name"), 1)
 
     def test_creates_header_only_file_when_empty(self):
