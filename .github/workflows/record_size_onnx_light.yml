@@ -185,36 +185,23 @@ jobs:
             exit 1
           fi
 
-      - name: Record wheel sizes from build_release.yml artifacts
+      - name: Record wheel and shared library sizes from build_release.yml artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Complement the locally-built wheel size recorded above with the
-          # per-platform/per-Python wheel sizes published by successful runs
-          # of the upstream ``build_release.yml`` workflow in
-          # xadupre/onnx-light, when any are available. Both sources append
-          # to cache_data/onnx-light/wheel_sizes.csv using the same schema;
-          # the script deduplicates by ``run_id`` so re-running is safe.
+          # Complement the locally-built wheel and shared-library snapshots
+          # recorded above with the per-platform/per-Python sizes published by
+          # successful runs of the upstream ``build_release.yml`` workflow in
+          # xadupre/onnx-light, when any are available. A single download of
+          # each artifact feeds both series: ``.whl`` sizes are appended to
+          # cache_data/onnx-light/wheel_sizes.csv (deduplicated by ``run_id``)
+          # and the shared libraries found inside those wheels are appended to
+          # cache_data/onnx-light/so_sizes.csv (deduplicated by ``commit`` so
+          # that commits already snapshotted by the inline step above are not
+          # double counted). Backfilling the binary-size chart this way means
+          # it spans the same look-back window as the wheel-size chart instead
+          # of only showing history accumulated since the inline step first ran.
           python -u "${GITHUB_WORKSPACE}/site/scripts/record_wheel_sizes.py" \
-            --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
-            --repo xadupre/onnx-light \
-            --workflow build_release.yml
-
-      - name: Backfill shared library sizes from build_release.yml artifacts
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # The inline "Record onnx_py shared library sizes" step above only
-          # records a single snapshot of the current build, so on its own the
-          # "Binary size over time" chart can never show more than the history
-          # accumulated since that step first ran. Backfill it the same way the
-          # wheel-size series is backfilled: download the artifacts published by
-          # the upstream ``build_release.yml`` workflow over the last 6 months
-          # and record one row per shared library found inside them. Rows are
-          # appended to cache_data/onnx-light/so_sizes.csv using the same schema
-          # as the inline step and deduplicated by ``commit`` so re-running is
-          # safe and already-recorded commits are not double counted.
-          python -u "${GITHUB_WORKSPACE}/site/scripts/record_so_sizes.py" \
             --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
             --repo xadupre/onnx-light \
             --workflow build_release.yml \
