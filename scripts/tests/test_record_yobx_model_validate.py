@@ -744,5 +744,241 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertTrue(seen["quiet"])
 
 
+    def test_run_validate_one_dispatches_to_olive_modelbuilder(self):
+        """``olive-modelbuilder`` exporter routes to ``run_olive_modelbuilder``."""
+        cfg = {
+            "label": "olive-modelbuilder",
+            "exporter": "olive-modelbuilder",
+            "optimization": "(modelbuilder)",
+        }
+        seen = {}
+
+        def fake_olive_modelbuilder(
+            entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
+        ):
+            seen["entry"] = entry
+            seen["exporter_cfg"] = exporter_cfg
+            seen["dump_folder"] = dump_folder
+            seen["quiet"] = quiet
+            return {"export": "OK", "discrepancies": "SKIPPED"}
+
+        original = rymv.run_olive_modelbuilder
+        rymv.run_olive_modelbuilder = fake_olive_modelbuilder
+        try:
+            result = rymv.run_validate_one(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                cfg,
+                dump_folder="/tmp/x",
+                quiet=True,
+            )
+        finally:
+            rymv.run_olive_modelbuilder = original
+        self.assertEqual(result, {"export": "OK", "discrepancies": "SKIPPED"})
+        self.assertEqual(seen["entry"]["model"], "a/b")
+        self.assertEqual(seen["exporter_cfg"]["exporter"], "olive-modelbuilder")
+        self.assertEqual(seen["dump_folder"], "/tmp/x")
+        self.assertTrue(seen["quiet"])
+
+    def test_is_cell_working_treats_skipped_discrepancies_as_ok(self):
+        """``SKIPPED`` discrepancies (e.g. ``olive-modelbuilder``) are working."""
+        self.assertTrue(
+            rymv.is_cell_working({"export": "OK", "discrepancies": "SKIPPED"})
+        )
+        self.assertFalse(
+            rymv.is_cell_working({"export": "FAILED", "discrepancies": "SKIPPED"})
+        )
+
+    def test_olive_precision_for_dtype(self):
+        self.assertEqual(rymv._olive_precision_for_dtype("float16"), "fp16")
+        self.assertEqual(rymv._olive_precision_for_dtype("fp16"), "fp16")
+        self.assertEqual(rymv._olive_precision_for_dtype("bfloat16"), "bf16")
+        self.assertEqual(rymv._olive_precision_for_dtype("int4"), "int4")
+        self.assertEqual(rymv._olive_precision_for_dtype("float32"), "fp32")
+        self.assertEqual(rymv._olive_precision_for_dtype(None), "fp32")
+
+    def test_default_exporters_include_olive_modelbuilder(self):
+        labels = {e["label"] for e in rymv.DEFAULT_EXPORTERS}
+        self.assertIn("olive-modelbuilder", labels)
+        # The exporter dispatch key must match the value handled by
+        # ``run_validate_one``.
+        cfg = next(
+            e for e in rymv.DEFAULT_EXPORTERS if e["label"] == "olive-modelbuilder"
+        )
+        self.assertEqual(cfg["exporter"], "olive-modelbuilder")
+
+    def test_parse_args_test_flag(self):
+        args = rymv.parse_args([])
+        self.assertFalse(args.test)
+        args = rymv.parse_args(["--test"])
+        self.assertTrue(args.test)
+
+    def test_run_olive_modelbuilder_when_cli_missing(self):
+        """``run_olive_modelbuilder`` returns a failed summary when the CLI is missing."""
+        import subprocess
+
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            raise FileNotFoundError("olive not installed")
+
+        subprocess.run = fake_run
+        try:
+            summary = rymv.run_olive_modelbuilder(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                {
+                    "label": "olive-modelbuilder",
+                    "exporter": "olive-modelbuilder",
+                    "optimization": "(modelbuilder)",
+                },
+            )
+        finally:
+            subprocess.run = original_run
+        self.assertEqual(summary["export"], "FAILED")
+        self.assertIn("olive", summary["error_export"].lower())
+
+    def test_run_olive_modelbuilder_non_zero_returncode(self):
+        """``run_olive_modelbuilder`` surfaces the CLI's stderr on failure."""
+        import subprocess
+
+        class _Proc:
+            returncode = 2
+            stdout = ""
+            stderr = "boom: missing model"
+
+        original_run = subprocess.run
+
+        def fake_run(*args, **kwargs):
+            return _Proc()
+
+        subprocess.run = fake_run
+        try:
+            summary = rymv.run_olive_modelbuilder(
+                {"model": "a/b", "dtype": "float16", "device": "cpu"},
+            {
+                "label": "olive-modelbuilder",
+                "exporter": "olive-modelbuilder",
+                "optimization": "(modelbuilder)",
+            },
+            )
+        finally:
+            subprocess.run = original_run
+        self.assertEqual(summary["export"], "FAILED")
+        self.assertEqual(
+            summary["error_export"], "--dry_run failed: boom: missing model"
+        )
+
+    def test_run_olive_modelbuilder_reads_discrepancy_check_results(self):
+        """A successful run reads metrics from ``discrepancy_check_results.json``."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            class _Proc:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            captured = {"calls": []}
+
+            def fake_run(cmd, *args, **kwargs):
+                # Drop a fake ONNX model and discrepancy results in the
+                # ``--output_path`` directory the recorder passes in.
+                idx = cmd.index("--output_path")
+                output_path = cmd[idx + 1]
+                captured["calls"].append(list(cmd))
+                captured["cmd"] = list(cmd)
+                onnx_path = os.path.join(output_path, "model.onnx")
+                with open(onnx_path, "wb") as f:
+                    f.write(b"\x00")
+                with open(
+                    os.path.join(output_path, "discrepancy_check_results.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump(
+                        {
+                            "max_abs_error": 0.0125,
+                            "elements_above_0_1": 0,
+                            "elements_above_0_01": 3,
+                            "total_elements": 1000,
+                            "status": "passed",
+                        },
+                        f,
+                    )
+                return _Proc()
+
+            original_run = subprocess.run
+            subprocess.run = fake_run
+            try:
+                summary = rymv.run_olive_modelbuilder(
+                    {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                    {
+                        "label": "olive-modelbuilder",
+                        "exporter": "olive-modelbuilder",
+                        "optimization": "(modelbuilder)",
+                    },
+                    dump_folder=tmp,
+                )
+            finally:
+                subprocess.run = original_run
+
+        self.assertEqual(summary["export"], "OK")
+        self.assertEqual(summary["discrepancies"], "OK")
+        self.assertEqual(summary["discrepancies_total"], 1000)
+        self.assertEqual(summary["discrepancies_ok"], 997)
+        self.assertAlmostEqual(summary["discrepancies_max_abs"], 0.0125)
+        self.assertEqual(summary["discrepancies_atol"], 0.01)
+        # ``--test`` must be passed so Olive auto-injects the
+        # ``OnnxDiscrepancyCheck`` pass and dumps the JSON metrics file.
+        self.assertIn("--test", captured["cmd"])
+        # Two commands are issued: a ``--dry_run`` one (to save the
+        # workflow ``config.json`` including the ``OnnxDiscrepancyCheck``
+        # pass) followed by the actual run. Both must include ``--test``
+        # so Olive injects the discrepancy-check pass in both.
+        self.assertEqual(len(captured["calls"]), 2)
+        self.assertIn("--dry_run", captured["calls"][0])
+        self.assertIn("--test", captured["calls"][0])
+        self.assertNotIn("--dry_run", captured["calls"][1])
+        self.assertIn("--test", captured["calls"][1])
+
+    def test_run_olive_modelbuilder_missing_discrepancy_results(self):
+        """Successful export but no JSON metrics file is reported as a discrepancy failure."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            class _Proc:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            def fake_run(cmd, *args, **kwargs):
+                idx = cmd.index("--output_path")
+                output_path = cmd[idx + 1]
+                with open(os.path.join(output_path, "model.onnx"), "wb") as f:
+                    f.write(b"\x00")
+                # Intentionally do not write discrepancy_check_results.json
+                return _Proc()
+
+            original_run = subprocess.run
+            subprocess.run = fake_run
+            try:
+                summary = rymv.run_olive_modelbuilder(
+                    {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                    {
+                        "label": "olive-modelbuilder",
+                        "exporter": "olive-modelbuilder",
+                        "optimization": "(modelbuilder)",
+                    },
+                    dump_folder=tmp,
+                )
+            finally:
+                subprocess.run = original_run
+
+        self.assertEqual(summary["export"], "OK")
+        self.assertEqual(summary["discrepancies"], "FAILED")
+        self.assertIn(
+            "discrepancy_check_results.json", summary["error_discrepancies"]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

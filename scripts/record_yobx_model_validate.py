@@ -29,11 +29,24 @@ following exporter configurations:
   resulting ONNX model for discrepancies. This column answers the
   question "does the no-frills, default :func:`to_onnx` call still
   work?".
+* ``olive-modelbuilder`` -- a runtime based on the development version
+  of `Olive <https://github.com/microsoft/Olive>`_. It invokes the
+  ``olive capture-onnx-graph --use_model_builder`` CLI (the
+  ``ModelBuilder`` pass, backed by ``onnxruntime-genai``) and reports
+  whether the export succeeded. No discrepancy check is run for this
+  column: ``ModelBuilder`` rebuilds the graph from scratch from the
+  HuggingFace config so a direct numerical comparison against the
+  PyTorch reference is not meaningful in the same way.
 
 Usage::
 
     python scripts/record_yobx_model_validate.py [--cache-dir DIR]
-        [--model ID ...] [--limit N]
+        [--model ID ...] [--limit N] [--test]
+
+The ``--test`` flag is a smoke-test shortcut that restricts the run to a
+single tiny model (``arnir0/Tiny-LLM``). It is intended to quickly
+validate that a newly-added runtime (such as the ``olive-modelbuilder``
+one) is wired correctly without hitting the full default list of models.
 """
 
 from __future__ import annotations
@@ -149,6 +162,19 @@ DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
         "exporter": "yobx-to_onnx",
         "optimization": "(defaults)",
     },
+    # Runtime based on the development version of Olive. It calls the
+    # ``olive capture-onnx-graph --use_model_builder --test`` CLI which
+    # runs the ``ModelBuilder`` pass (backed by ``onnxruntime-genai``)
+    # to convert the HuggingFace model to ONNX, then auto-injects the
+    # ``OnnxDiscrepancyCheck`` pass to compare the resulting graph
+    # against a randomly-initialised two-hidden-layer copy of the same
+    # architecture and dumps the metrics to
+    # ``discrepancy_check_results.json`` (see :func:`run_olive_modelbuilder`).
+    {
+        "label": "olive-modelbuilder",
+        "exporter": "olive-modelbuilder",
+        "optimization": "(modelbuilder)",
+    },
 )
 
 
@@ -199,6 +225,8 @@ def collect_versions() -> Dict[str, str]:
         "onnx",
         "onnxruntime",
         "onnxscript",
+        "olive",
+        "onnxruntime_genai",
     ):
         try:
             module = __import__(name)
@@ -286,6 +314,13 @@ def is_cell_working(summary: Any, model_atol: Optional[float] = None) -> bool:
     if export != "OK":
         return False
     if discrepancies == "OK":
+        return True
+    # ``SKIPPED`` means the runtime intentionally did not run the
+    # discrepancy check (for instance the ``olive-modelbuilder`` column,
+    # which rebuilds the graph from scratch and cannot be compared
+    # numerically against the live torch module). For such cells a
+    # successful export is enough to mark the cell as working.
+    if discrepancies == "SKIPPED":
         return True
     # ``discrepancies`` was set but reported as failed by ``validate_model``.
     # If the caller supplied a per-model ``atol`` that is more permissive than
@@ -502,6 +537,18 @@ def run_validate_one(
             quiet=quiet,
         )
 
+    # The ``olive-modelbuilder`` column does not use ``validate_model``
+    # either: it shells out to the Olive CLI to run the ``ModelBuilder``
+    # pass. See :func:`run_olive_modelbuilder`.
+    if exporter_cfg.get("exporter") == "olive-modelbuilder":
+        return run_olive_modelbuilder(
+            entry,
+            exporter_cfg,
+            verbose=verbose,
+            dump_folder=dump_folder,
+            quiet=quiet,
+        )
+
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
@@ -654,6 +701,247 @@ def run_to_onnx_default(
     if numeric_rows:
         summary.discrepancies_max_abs = max(row["abs"] for row in numeric_rows)
 
+    return summary
+
+
+def _olive_precision_for_dtype(dtype: Optional[str]) -> str:
+    """Return the Olive ``--precision`` value corresponding to *dtype*."""
+    text = (dtype or "").lower()
+    if text in ("float16", "fp16", "half"):
+        return "fp16"
+    if text in ("bfloat16", "bf16"):
+        return "bf16"
+    if text == "int4":
+        return "int4"
+    return "fp32"
+
+
+def run_olive_modelbuilder(
+    entry: Dict[str, Any],
+    exporter_cfg: Dict[str, str],
+    verbose: int = 0,
+    dump_folder: Optional[str] = None,
+    quiet: bool = True,
+) -> Dict[str, Any]:
+    """Export *entry* to ONNX using the development version of Olive.
+
+    This shells out to ``olive capture-onnx-graph --use_model_builder``
+    twice. Both invocations pass ``--test`` so Olive auto-injects the
+    ``OnnxDiscrepancyCheck`` pass into the workflow:
+
+    1. The first command adds ``--dry_run`` so Olive only generates and
+       saves the workflow ``config.json`` (already containing the
+       ``OnnxDiscrepancyCheck`` pass) without running it.
+    2. The second command drops ``--dry_run`` and actually executes the
+       same workflow, producing the ONNX graph and the
+       ``discrepancy_check_results.json`` metrics file.
+
+    ``--test`` also makes Olive build a randomly initialised,
+    two-hidden-layer copy of the HuggingFace architecture and use it as
+    the PyTorch reference, so the comparison is between the ONNX graph
+    produced by ``ModelBuilder`` and the matching PyTorch test model
+    rather than the (potentially gigabytes-sized) full checkpoint.
+
+    The function returns a plain dict that follows the same conventions
+    as :func:`yobx.torch.validate.validate_model`'s ``ValidateSummary``
+    so that :func:`_normalise_result` can consume it without changes.
+    """
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+    from collections import Counter
+
+    model_id = entry["model"]
+    precision = _olive_precision_for_dtype(entry.get("dtype"))
+
+    summary: Dict[str, Any] = {
+        "model_id": model_id,
+        "export": "",
+    }
+
+    own_tmp: Optional[str] = None
+    if dump_folder is not None:
+        os.makedirs(dump_folder, exist_ok=True)
+        output_path = os.path.join(
+            dump_folder, f"{model_id.replace('/', '-')}.olive-modelbuilder"
+        )
+        os.makedirs(output_path, exist_ok=True)
+    else:
+        own_tmp = tempfile.mkdtemp(prefix="olive_mb_")
+        output_path = own_tmp
+
+    base_cmd = [
+        sys.executable,
+        "-m",
+        "olive.cli.launcher",
+        "capture-onnx-graph",
+        "--model_name_or_path",
+        model_id,
+        "--output_path",
+        output_path,
+        "--use_model_builder",
+        "--precision",
+        precision,
+        # ``--test`` makes Olive build a randomly-initialised copy of the
+        # HuggingFace architecture with 2 hidden layers and use it as the
+        # PyTorch reference. It also auto-injects the
+        # ``OnnxDiscrepancyCheck`` pass and dumps the metrics to
+        # ``discrepancy_check_results.json`` in the output directory.
+        "--test",
+    ]
+    # First run with ``--dry_run`` so Olive generates ``config.json`` in
+    # the output directory (which already includes the
+    # ``OnnxDiscrepancyCheck`` pass thanks to ``--test``) without
+    # actually executing the workflow. The second run drops
+    # ``--dry_run`` and actually runs the same workflow, including the
+    # ``OnnxDiscrepancyCheck`` pass.
+    dry_run_cmd = [*base_cmd, "--dry_run"]
+    cmd = base_cmd
+
+    def _run(cmd_to_run: List[str]) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        try:
+            return (
+                subprocess.run(
+                    cmd_to_run,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30 * 60,
+                ),
+                None,
+            )
+        except FileNotFoundError as exc:
+            err = {
+                "export": "FAILED",
+                "error_export": (
+                    f"olive CLI is not available: {type(exc).__name__}: {exc}"
+                ),
+            }
+            return None, err
+        except subprocess.TimeoutExpired as exc:
+            err = {
+                "export": "FAILED",
+                "error_export": f"olive capture-onnx-graph timed out: {exc}",
+            }
+            return None, err
+
+    proc, err = _run(dry_run_cmd)
+    if err is not None:
+        summary.update(err)
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        msg = stderr or stdout or f"olive exited with code {proc.returncode}"
+        summary["export"] = "FAILED"
+        summary["error_export"] = f"--dry_run failed: {msg}"
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
+
+    proc, err = _run(cmd)
+    if err is not None:
+        summary.update(err)
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        msg = stderr or stdout or f"olive exited with code {proc.returncode}"
+        summary["export"] = "FAILED"
+        summary["error_export"] = msg
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
+
+    # Olive writes the ONNX model and the GenAI config files into
+    # ``output_path``. Locate the produced ``.onnx`` (recursively, since
+    # Olive may nest it inside a workflow subdirectory) so we can compute
+    # node statistics.
+    onnx_files: List[str] = []
+    for root, _dirs, files in os.walk(output_path):
+        for name in files:
+            if name.endswith(".onnx"):
+                onnx_files.append(os.path.join(root, name))
+    if not onnx_files:
+        summary["export"] = "FAILED"
+        summary["error_export"] = (
+            "olive capture-onnx-graph reported success but no .onnx file "
+            f"was found under {output_path}."
+        )
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
+
+    summary["export"] = "OK"
+    # ``--test`` makes Olive write ``discrepancy_check_results.json`` in
+    # the output directory once the OnnxDiscrepancyCheck pass has run.
+    # Surface those metrics on the summary so the dashboard can display
+    # the same discrepancy fields as the other columns.
+    disc_path: Optional[str] = None
+    for root, _dirs, files in os.walk(output_path):
+        if "discrepancy_check_results.json" in files:
+            disc_path = os.path.join(root, "discrepancy_check_results.json")
+            break
+    if disc_path is not None:
+        try:
+            with open(disc_path, encoding="utf-8") as f:
+                disc = json.load(f)
+        except Exception as exc:  # noqa: BLE001 - best effort, never fail
+            summary["discrepancies"] = "FAILED"
+            summary["error_discrepancies"] = (
+                f"could not read {disc_path}: {type(exc).__name__}: {exc}"
+            )
+        else:
+            status = str(disc.get("status") or "").lower()
+            summary["discrepancies"] = "OK" if status == "passed" else "FAILED"
+            total = disc.get("total_elements")
+            above_atol = disc.get("elements_above_0_01")
+            if isinstance(total, int):
+                summary["discrepancies_total"] = total
+                if isinstance(above_atol, int):
+                    summary["discrepancies_ok"] = max(total - above_atol, 0)
+            max_abs = disc.get("max_abs_error")
+            if isinstance(max_abs, (int, float)):
+                summary["discrepancies_max_abs"] = float(max_abs)
+            # ``OnnxDiscrepancyCheck`` reports counts at fixed thresholds
+            # of 0.01 and 0.1; the 0.01 bucket matches the other columns
+            # which use ``atol=0.01`` by default.
+            summary["discrepancies_atol"] = 0.01
+            failures = disc.get("failures")
+            if status != "passed" and failures:
+                summary["error_discrepancies"] = "; ".join(
+                    str(f) for f in failures
+                )
+    else:
+        summary["discrepancies"] = "FAILED"
+        summary["error_discrepancies"] = (
+            "olive capture-onnx-graph --test reported success but "
+            f"discrepancy_check_results.json was not found under {output_path}."
+        )
+    # Pick the largest ONNX file as the main model (external data files
+    # may exist alongside but the model file itself is usually the
+    # biggest one ending in ``.onnx``).
+    main_onnx = max(onnx_files, key=lambda p: os.path.getsize(p))
+    try:
+        import onnx
+
+        onx = onnx.load(main_onnx, load_external_data=False)
+        counts = Counter(n.op_type for n in onx.graph.node)
+        summary["n_nodes"] = sum(counts.values())
+        top = counts.most_common(5)
+        summary["top_op_types"] = ",".join(f"{op}:{cnt}" for op, cnt in top)
+    except Exception:  # noqa: BLE001 - statistics are best-effort
+        pass
+
+    if own_tmp is not None:
+        shutil.rmtree(own_tmp, ignore_errors=True)
     return summary
 
 
@@ -934,6 +1222,17 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Limit to the first N models (mainly for local testing).",
     )
     parser.add_argument(
+        "--test",
+        action="store_true",
+        help=(
+            "Smoke-test mode: ignore the default model list and run only "
+            "against a single tiny test model (``arnir0/Tiny-LLM``). This "
+            "is intended to quickly validate that a newly-added runtime "
+            "(such as ``olive-modelbuilder``) is wired correctly without "
+            "exercising the full set of default models."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         type=int,
         default=0,
@@ -974,7 +1273,20 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    if args.models:
+    if args.test:
+        # ``--test`` is a smoke-test shortcut: ignore both the default
+        # model list and any ``--model`` overrides, and run against a
+        # single tiny model so a newly-added runtime can be validated
+        # quickly. ``arnir0/Tiny-LLM`` is a small Llama-architecture
+        # checkpoint that is also supported by Olive's ``ModelBuilder``.
+        models = (
+            _coerce_model_entry(
+                "arnir0/Tiny-LLM",
+                default_dtype=args.dtype,
+                default_device=args.device,
+            ),
+        )
+    elif args.models:
         models = tuple(
             _coerce_model_entry(m, default_dtype=args.dtype, default_device=args.device)
             for m in args.models
