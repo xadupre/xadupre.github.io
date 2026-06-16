@@ -60,6 +60,23 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+# ``transformers`` converts a slow SentencePiece tokenizer (for example the
+# one shipped with ``mistralai/Mistral-7B-v0.3``) into the fast ``tokenizers``
+# backend by importing ``sentencepiece.sentencepiece_model_pb2``. That module
+# ships C++-descriptor generated code that is incompatible with ``protobuf``
+# 4.x/7.x (the version pulled in by ``onnx``); importing it raises
+# ``TypeError: Descriptors cannot be created directly``. ``transformers``
+# swallows that error and re-raises the misleading ``Couldn't instantiate the
+# backend tokenizer ... You need to have sentencepiece or tiktoken installed``
+# message, which made the Mistral cell of the dashboard fail at the
+# ``tokenizer`` step even though ``sentencepiece``/``protobuf`` are installed.
+# Forcing the pure-Python protobuf implementation avoids the descriptor-pool
+# conflict so the tokenizer conversion succeeds. ``setdefault`` keeps any
+# explicit value the caller may have set. This must run before ``protobuf``
+# (and therefore ``transformers``/``onnx``) is imported, hence its placement
+# at import time.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 DEFAULT_DTYPE = "float16"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_ATOL = 0.02
