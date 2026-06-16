@@ -127,6 +127,12 @@ if [[ "$SKIP_INSTALL" -eq 0 ]]; then
         "$PYTHON_BIN" -m pip install --upgrade pip
         "$PYTHON_BIN" -m pip install -e "$YOBX_DIR[torch,transformers,onnxscript]" \
             pandas openpyxl optree sentencepiece tiktoken
+        # Install the development version of Olive from main so the
+        # ``olive-modelbuilder`` column exercises the latest
+        # ``ModelBuilder`` pass. ``onnxruntime-genai`` is the runtime
+        # dependency that pass uses to build the ONNX graph.
+        "$PYTHON_BIN" -m pip install --upgrade \
+            "git+https://github.com/microsoft/Olive.git" onnxruntime-genai
     fi
 fi
 
