@@ -865,6 +865,108 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(summary["export"], "FAILED")
         self.assertEqual(summary["error_export"], "boom: missing model")
 
+    def test_run_olive_modelbuilder_reads_discrepancy_check_results(self):
+        """A successful run reads metrics from ``discrepancy_check_results.json``."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            class _Proc:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            captured = {}
+
+            def fake_run(cmd, *args, **kwargs):
+                # Drop a fake ONNX model and discrepancy results in the
+                # ``--output_path`` directory the recorder passes in.
+                idx = cmd.index("--output_path")
+                output_path = cmd[idx + 1]
+                captured["cmd"] = list(cmd)
+                onnx_path = os.path.join(output_path, "model.onnx")
+                with open(onnx_path, "wb") as f:
+                    f.write(b"\x00")
+                with open(
+                    os.path.join(output_path, "discrepancy_check_results.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as f:
+                    json.dump(
+                        {
+                            "max_abs_error": 0.0125,
+                            "elements_above_0_1": 0,
+                            "elements_above_0_01": 3,
+                            "total_elements": 1000,
+                            "status": "passed",
+                        },
+                        f,
+                    )
+                return _Proc()
+
+            original_run = subprocess.run
+            subprocess.run = fake_run
+            try:
+                summary = rymv.run_olive_modelbuilder(
+                    {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                    {
+                        "label": "olive-modelbuilder",
+                        "exporter": "olive-modelbuilder",
+                        "optimization": "(modelbuilder)",
+                    },
+                    dump_folder=tmp,
+                )
+            finally:
+                subprocess.run = original_run
+
+        self.assertEqual(summary["export"], "OK")
+        self.assertEqual(summary["discrepancies"], "OK")
+        self.assertEqual(summary["discrepancies_total"], 1000)
+        self.assertEqual(summary["discrepancies_ok"], 997)
+        self.assertAlmostEqual(summary["discrepancies_max_abs"], 0.0125)
+        self.assertEqual(summary["discrepancies_atol"], 0.01)
+        # ``--test`` must be passed so Olive auto-injects the
+        # ``OnnxDiscrepancyCheck`` pass and dumps the JSON metrics file.
+        self.assertIn("--test", captured["cmd"])
+
+    def test_run_olive_modelbuilder_missing_discrepancy_results(self):
+        """Successful export but no JSON metrics file is reported as a discrepancy failure."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            class _Proc:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            def fake_run(cmd, *args, **kwargs):
+                idx = cmd.index("--output_path")
+                output_path = cmd[idx + 1]
+                with open(os.path.join(output_path, "model.onnx"), "wb") as f:
+                    f.write(b"\x00")
+                # Intentionally do not write discrepancy_check_results.json
+                return _Proc()
+
+            original_run = subprocess.run
+            subprocess.run = fake_run
+            try:
+                summary = rymv.run_olive_modelbuilder(
+                    {"model": "a/b", "dtype": "float16", "device": "cpu"},
+                    {
+                        "label": "olive-modelbuilder",
+                        "exporter": "olive-modelbuilder",
+                        "optimization": "(modelbuilder)",
+                    },
+                    dump_folder=tmp,
+                )
+            finally:
+                subprocess.run = original_run
+
+        self.assertEqual(summary["export"], "OK")
+        self.assertEqual(summary["discrepancies"], "FAILED")
+        self.assertIn(
+            "discrepancy_check_results.json", summary["error_discrepancies"]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

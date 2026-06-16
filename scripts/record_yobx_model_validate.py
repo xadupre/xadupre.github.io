@@ -163,11 +163,13 @@ DEFAULT_EXPORTERS: Tuple[Dict[str, str], ...] = (
         "optimization": "(defaults)",
     },
     # Runtime based on the development version of Olive. It calls the
-    # ``olive capture-onnx-graph --use_model_builder`` CLI which in turn
+    # ``olive capture-onnx-graph --use_model_builder --test`` CLI which
     # runs the ``ModelBuilder`` pass (backed by ``onnxruntime-genai``)
-    # to convert the HuggingFace model to ONNX. The cell only reports
-    # whether the export succeeded; no torch-vs-ONNX discrepancy check
-    # is performed for this column (see :func:`run_olive_modelbuilder`).
+    # to convert the HuggingFace model to ONNX, then auto-injects the
+    # ``OnnxDiscrepancyCheck`` pass to compare the resulting graph
+    # against a randomly-initialised two-hidden-layer copy of the same
+    # architecture and dumps the metrics to
+    # ``discrepancy_check_results.json`` (see :func:`run_olive_modelbuilder`).
     {
         "label": "olive-modelbuilder",
         "exporter": "olive-modelbuilder",
@@ -723,20 +725,21 @@ def run_olive_modelbuilder(
 ) -> Dict[str, Any]:
     """Export *entry* to ONNX using the development version of Olive.
 
-    This shells out to ``olive capture-onnx-graph --use_model_builder`` to
-    invoke the `ModelBuilder
-    <https://microsoft.github.io/Olive/reference/pass.html#modelbuilder>`_
-    Olive pass (backed by ``onnxruntime-genai``). The resulting summary
-    only reports whether the export succeeded; no torch-vs-ONNX
-    discrepancy check is performed because ``ModelBuilder`` rebuilds the
-    graph from scratch from the HuggingFace config rather than tracing
-    the live PyTorch module, so a direct numerical comparison against
-    the PyTorch reference is not meaningful here.
+    This shells out to ``olive capture-onnx-graph --use_model_builder``
+    with ``--test`` so Olive auto-injects the ``OnnxDiscrepancyCheck``
+    pass and dumps the metrics to ``discrepancy_check_results.json`` in
+    the output directory. ``--test`` also makes Olive build a randomly
+    initialised, two-hidden-layer copy of the HuggingFace architecture
+    and use it as the PyTorch reference, so the comparison is between
+    the ONNX graph produced by ``ModelBuilder`` and the matching
+    PyTorch test model rather than the (potentially gigabytes-sized)
+    full checkpoint.
 
     The function returns a plain dict that follows the same conventions
     as :func:`yobx.torch.validate.validate_model`'s ``ValidateSummary``
     so that :func:`_normalise_result` can consume it without changes.
     """
+    import json
     import os
     import shutil
     import subprocess
@@ -775,10 +778,12 @@ def run_olive_modelbuilder(
         "--use_model_builder",
         "--precision",
         precision,
-        # Match the other columns which run with two hidden layers so the
-        # export stays cheap on CI without changing the architecture.
-        "--extra_mb_options",
-        "num_hidden_layers=2",
+        # ``--test`` makes Olive build a randomly-initialised copy of the
+        # HuggingFace architecture with 2 hidden layers and use it as the
+        # PyTorch reference. It also auto-injects the
+        # ``OnnxDiscrepancyCheck`` pass and dumps the metrics to
+        # ``discrepancy_check_results.json`` in the output directory.
+        "--test",
     ]
 
     try:
@@ -834,14 +839,51 @@ def run_olive_modelbuilder(
         return summary
 
     summary["export"] = "OK"
-    # ``ModelBuilder`` rebuilds the graph from scratch from the
-    # HuggingFace config rather than tracing the live PyTorch module, so
-    # a direct torch-vs-ONNX numerical comparison against the PyTorch
-    # reference is not meaningful in the same way as for the other
-    # columns. Mark the discrepancy step as ``SKIPPED`` so the dashboard
-    # can tell apart a column that intentionally does not run that step
-    # from a column where it failed.
-    summary["discrepancies"] = "SKIPPED"
+    # ``--test`` makes Olive write ``discrepancy_check_results.json`` in
+    # the output directory once the OnnxDiscrepancyCheck pass has run.
+    # Surface those metrics on the summary so the dashboard can display
+    # the same discrepancy fields as the other columns.
+    disc_path: Optional[str] = None
+    for root, _dirs, files in os.walk(output_path):
+        if "discrepancy_check_results.json" in files:
+            disc_path = os.path.join(root, "discrepancy_check_results.json")
+            break
+    if disc_path is not None:
+        try:
+            with open(disc_path, encoding="utf-8") as f:
+                disc = json.load(f)
+        except Exception as exc:  # noqa: BLE001 - best effort, never fail
+            summary["discrepancies"] = "FAILED"
+            summary["error_discrepancies"] = (
+                f"could not read {disc_path}: {type(exc).__name__}: {exc}"
+            )
+        else:
+            status = str(disc.get("status") or "").lower()
+            summary["discrepancies"] = "OK" if status == "passed" else "FAILED"
+            total = disc.get("total_elements")
+            above_atol = disc.get("elements_above_0_01")
+            if isinstance(total, int):
+                summary["discrepancies_total"] = total
+                if isinstance(above_atol, int):
+                    summary["discrepancies_ok"] = max(total - above_atol, 0)
+            max_abs = disc.get("max_abs_error")
+            if isinstance(max_abs, (int, float)):
+                summary["discrepancies_max_abs"] = float(max_abs)
+            # ``OnnxDiscrepancyCheck`` reports counts at fixed thresholds
+            # of 0.01 and 0.1; the 0.01 bucket matches the other columns
+            # which use ``atol=0.01`` by default.
+            summary["discrepancies_atol"] = 0.01
+            failures = disc.get("failures")
+            if status != "passed" and failures:
+                summary["error_discrepancies"] = "; ".join(
+                    str(f) for f in failures
+                )
+    else:
+        summary["discrepancies"] = "FAILED"
+        summary["error_discrepancies"] = (
+            "olive capture-onnx-graph --test reported success but "
+            f"discrepancy_check_results.json was not found under {output_path}."
+        )
     # Pick the largest ONNX file as the main model (external data files
     # may exist alongside but the model file itself is usually the
     # biggest one ending in ``.onnx``).
