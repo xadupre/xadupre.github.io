@@ -1,0 +1,129 @@
+name: DATA onnx backend node test coverage
+
+# Weekly job that runs every backend node test collected by
+# ``onnx`` (``onnx.backend.test.loader.load_model_tests``) against four
+# runtimes: ``onnxruntime`` (CPU), the Python reference implementation
+# shipped with ``onnx``, the ``onnx-light`` C++ reference evaluator
+# (``onnx_light.onnx.reference``) and the extended reference evaluator from
+# ``yobx`` (``yobx.reference.ExtendedReferenceEvaluator``), and caches
+# the pass/fail status as JSON under
+# ``cache_data/onnx/backend_node_coverage.json``. The dashboard at
+# ``dashboard/onnx/backend-test-coverage.html`` consumes that file.
+
+on:
+  schedule:
+    # Run once a week, Monday at 07:47 UTC. The odd minute avoids the
+    # load spikes that happen exactly on the hour, and the time is
+    # offset from the other weekly recording workflows so they do not
+    # compete for the same runner slot.
+    - cron: "47 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the new snapshot.
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Checkout onnx-light
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light
+          path: onnx-light
+
+      - name: Checkout yet-another-onnx-builder
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/yet-another-onnx-builder
+          path: yet-another-onnx-builder
+
+      - name: Detect CPU cores
+        run: |
+          # Expose the number of available CPU cores as
+          # ``CMAKE_BUILD_PARALLEL_LEVEL`` for every subsequent step so the
+          # onnx-light C++ build uses all cores rather than a hard-coded value.
+          cores="$(nproc)"
+          echo "Detected ${cores} CPU cores."
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
+
+      - name: Install onnx, onnxruntime, onnx-light and yobx
+        run: |
+          python -m pip install --upgrade pip
+          pip install onnx onnxruntime numpy scikit-build-core nanobind
+          pip install -e ./onnx-light -v
+          pip install -e ./yet-another-onnx-builder -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Record backend node test coverage snapshot
+        run: |
+          python -u scripts/record_onnx_backend_node_coverage.py
+
+      - name: Commit and push cache data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/onnx/backend_node_coverage.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update onnx backend node test coverage cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+              echo "Push succeeded on attempt ${i}."
+              rm -f "$push_err"
+              exit 0
+            fi
+            # A permission error (HTTP 403) is not a transient race and will not be
+            # fixed by retrying. Fail fast with a pointer to the README section that
+            # explains which GitHub setting needs to be changed.
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "" >&2
+              echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+              echo "Retrying will not help: the authenticated user shown above is" >&2
+              echo "not allowed to push to ${branch}." >&2
+              echo "" >&2
+              echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+              echo "setting to change:" >&2
+              echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+              exit 1
+            fi
+            rm -f "$push_err"
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1

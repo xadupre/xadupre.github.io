@@ -2,14 +2,16 @@
 implementations exercised by ``onnx-light`` (``onnx-light`` itself,
 ``onnx_light.onnx_optim`` — the experimental shape inference shipped
 inside ``onnx-light``'s ``onnx_optim`` submodule, the official
-``onnx.shape_inference`` and the standalone ``onnx-shape-inference``
-package).
+``onnx.shape_inference``, the standalone ``onnx-shape-inference``
+package and the symbolic shape inference shipped with
+``onnxruntime.transformers``).
 
 The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
-``onnx_light.backend.test.case.collect_test_case``) and keeps only the
-cases whose ``tag`` is ``"inference"`` (the family of tests dedicated to
-shape inference, mirroring
+``onnx_light.onnx_lib.backend.test.case.collect_test_case``) and keeps only the
+cases whose ``tag`` matches one of the requested tags (by default the
+``"shape"``, ``"local_function"`` and legacy ``"inference"`` families
+of tests dedicated to shape inference, mirroring
 ``unittests/backend/test_backend_with_shape_inference.py`` in the
 ``xadupre/onnx-light`` repository).
 
@@ -48,23 +50,51 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # Order matters: it drives the column order in the dashboard.
 BACKENDS: Tuple[str, ...] = (
     "onnx-light",
-    "onnx-light-onnx-optim",
+    "onnx-light-optim",
     "onnx",
     "onnx-shape-inference",
+    "ort-transformers",
+    "yobx",
 )
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend.
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnx-light": "onnx_light",
-    "onnx-light-onnx-optim": "onnx_light",
+    "onnx-light-optim": "onnx_light",
     "onnx": "onnx",
     "onnx-shape-inference": "onnx_shape_inference",
+    "ort-transformers": "onnxruntime",
+    "yobx": "yobx",
 }
 
-# Default tag used by ``onnx-light`` to mark backend cases that are
-# specifically designed to exercise shape inference.
-DEFAULT_TAG = "inference"
+# Default tags used by ``onnx-light`` to mark backend cases that are
+# specifically designed to exercise shape inference. A test case is
+# selected when its ``tag`` attribute matches any of these values.
+DEFAULT_TAGS: Tuple[str, ...] = ("shape", "local_function", "inference")
+# Backwards-compatible alias kept for callers that import a single tag.
+DEFAULT_TAG = ",".join(DEFAULT_TAGS)
+
+
+def _normalize_tags(tag) -> Tuple[str, ...]:
+    """Normalize a tag filter into a tuple of non-empty tag names.
+
+    Accepts ``None``, a single tag (``str``) – optionally a
+    comma-separated list such as ``"inference,local_function"`` – or an
+    iterable of strings. Empty entries and surrounding whitespace are
+    stripped. An empty result means "do not filter by tag".
+    """
+    if tag is None:
+        return ()
+    if isinstance(tag, str):
+        parts = tag.split(",")
+    else:
+        parts = []
+        for item in tag:
+            if item is None:
+                continue
+            parts.extend(str(item).split(","))
+    return tuple(p.strip() for p in parts if p and p.strip())
 
 
 def _log(message: str) -> None:
@@ -83,7 +113,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "numpy"):
+    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "onnxruntime", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -286,8 +316,14 @@ def model_to_mermaid(model: Any) -> str:
         return ""
 
 
-def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
-    """Return the list of backend tests tagged ``tag``.
+def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
+    """Return the list of backend tests whose ``tag`` matches.
+
+    ``tag`` can be a single tag name, a comma-separated list of tag
+    names (e.g. ``"inference,local_function"``) or an iterable of tag
+    names. A test case is retained when its ``tag`` attribute matches
+    any of the requested tags. Passing an empty value disables tag
+    filtering.
 
     Each entry is a dictionary ``{"name", "model", "expected", "mermaid"}``
     where ``model`` is an ``onnx.ModelProto``, ``expected`` is the list
@@ -295,15 +331,16 @@ def discover_inference_tests(tag: str = DEFAULT_TAG) -> List[Dict[str, Any]]:
     and ``mermaid`` is a Mermaid ``flowchart TD`` rendering of ``model``
     (empty string when rendering fails).
     """
-    from onnx_light.backend.test.case import collect_test_case
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
+    tags = _normalize_tags(tag)
     cases = collect_test_case()
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:
             continue
-        case_tag = getattr(tc, "tag", "") or ""
-        if tag and case_tag != tag:
+        case_tags = _normalize_tags(getattr(tc, "tag", "") or "")
+        if tags and not any(t in tags for t in case_tags):
             continue
         model = getattr(tc, "model", None)
         if model is None:
@@ -386,13 +423,21 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     """Snapshot the shape information of every output / value_info.
 
     Returns a list of dicts ``{"name", "kind", "op_type", "elem_type",
-    "has_shape", "shape"}`` where ``kind`` is either ``"output"`` or
-    ``"value_info"``. ``op_type`` is the type of the node that produces
-    the tensor (empty string if the tensor is not produced by any node,
-    e.g. a graph output directly aliasing an input or initializer).
-    Non plain-tensor entries (sequence/optional/map) are skipped since
-    they cannot be scored against a simple ``elem_type`` + ``shape``
-    contract.
+    "has_shape", "shape"}`` where ``kind`` is one of ``"output"``,
+    ``"value_info"`` or ``"intermediate"``. ``op_type`` is the type of
+    the node that produces the tensor (empty string if the tensor is
+    not produced by any node, e.g. a graph output directly aliasing an
+    input or initializer). Non plain-tensor entries
+    (sequence/optional/map) are skipped since they cannot be scored
+    against a simple ``elem_type`` + ``shape`` contract.
+
+    Node outputs that have no ``value_info`` in the original model (and
+    are not graph outputs) are still recorded with ``kind ==
+    "intermediate"``, ``elem_type == None`` and ``has_shape == False``
+    so the detailed report can show what each backend inferred for
+    them, even though there is no ground truth to compare against. Such
+    entries carry no expectation and are not counted towards the
+    correctness score (see :func:`_compare_snapshot_with_model`).
 
     Entries are returned in the order they appear in the model: the
     graph nodes are walked in declaration order and each output they
@@ -417,19 +462,22 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     ordered_names: List[str] = []
     seen: set = set()
     op_type_by_name: Dict[str, str] = {}
+    # Names of node outputs that have no ``value_info`` in the original
+    # model (i.e. unannotated intermediates). These are still surfaced
+    # in the snapshot so the detailed report can display the per-backend
+    # inferred shape for them, but they carry no expectation.
+    unannotated: set = set()
     for node in model.graph.node:
         for out_name in node.output:
             if not out_name or out_name in seen:
                 continue
+            op_type_by_name.setdefault(out_name, node.op_type)
             if out_name not in by_name:
-                # Still record producing op type so we know which node
-                # would have produced the tensor, even if its
-                # value_info is missing from the snapshot.
-                op_type_by_name.setdefault(out_name, node.op_type)
-                continue
+                if out_name in unannotated:
+                    continue
+                unannotated.add(out_name)
             ordered_names.append(out_name)
             seen.add(out_name)
-            op_type_by_name.setdefault(out_name, node.op_type)
     for vi in model.graph.output:
         if vi.name in seen or vi.name not in by_name:
             continue
@@ -438,37 +486,62 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
 
     snapshots: List[Dict[str, Any]] = []
     for name in ordered_names:
-        kind, vi = by_name[name]
-        if not vi.HasField("type"):
-            continue
-        if not vi.type.HasField("tensor_type"):
-            continue
-        has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
-        snapshots.append(
-            {
-                "name": vi.name,
-                "kind": kind,
-                "op_type": op_type_by_name.get(vi.name, ""),
-                "elem_type": int(vi.type.tensor_type.elem_type),
-                "has_shape": has_shape,
-                "shape": dims,
-            }
-        )
+        if name in by_name:
+            kind, vi = by_name[name]
+            if not vi.HasField("type"):
+                continue
+            if not vi.type.HasField("tensor_type"):
+                continue
+            has_shape, dims = _dims_of_tensor_type(vi.type.tensor_type)
+            snapshots.append(
+                {
+                    "name": vi.name,
+                    "kind": kind,
+                    "op_type": op_type_by_name.get(vi.name, ""),
+                    "elem_type": int(vi.type.tensor_type.elem_type),
+                    "has_shape": has_shape,
+                    "shape": dims,
+                }
+            )
+        else:
+            # Unannotated node output: report it for visibility but
+            # without any expectation. ``_compare_snapshot_with_model``
+            # treats entries with ``elem_type is None`` as informational
+            # only and they are excluded from the correctness score.
+            snapshots.append(
+                {
+                    "name": name,
+                    "kind": "intermediate",
+                    "op_type": op_type_by_name.get(name, ""),
+                    "elem_type": None,
+                    "has_shape": False,
+                    "shape": [],
+                }
+            )
     return snapshots
 
 
-def strip_shapes(model):
+def strip_shapes(model, keep_outputs: bool = False):
     """Return a deep copy of ``model`` with output / value_info shapes stripped.
 
     Only the ``elem_type`` is kept on plain ``tensor_type`` entries; the
     ``shape`` field is cleared so that shape inference must rebuild it.
     Non plain-tensor entries (sequence/optional/map) are left untouched.
+
+    When ``keep_outputs`` is ``True``, only ``graph.value_info`` shapes are
+    cleared and ``graph.output`` shapes are preserved. This is used to feed
+    backends (e.g. ``onnx-light``) that can take advantage of the known
+    output shape as a prefill hint when running shape inference.
     """
     import onnx
 
     stripped = onnx.ModelProto()
     stripped.CopyFrom(model)
-    for container in (stripped.graph.output, stripped.graph.value_info):
+    if keep_outputs:
+        containers = (stripped.graph.value_info,)
+    else:
+        containers = (stripped.graph.output, stripped.graph.value_info)
+    for container in containers:
         for vi in container:
             if not vi.HasField("type"):
                 continue
@@ -506,6 +579,14 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         expected_elem = entry["elem_type"]
         had_shape = entry["has_shape"]
         expected_shape = entry["shape"]
+        # ``expected_elem is None`` flags a purely informational entry:
+        # a node output that has no ``value_info`` in the original model
+        # and therefore no ground truth to compare against. We still
+        # populate the inferred fields below so the dashboard can show
+        # what each backend produced, but we never mark it as a
+        # mismatch and ``run_test_with_backend`` excludes it from the
+        # correctness score.
+        informational = expected_elem is None
         detail: Dict[str, Any] = {
             "name": name,
             "kind": entry["kind"],
@@ -520,11 +601,17 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         }
         vi = by_name.get(name)
         if vi is None:
-            detail["reason"] = "missing from graph after inference"
+            if informational:
+                detail["ok"] = True
+            else:
+                detail["reason"] = "missing from graph after inference"
             details.append(detail)
             continue
         if not vi.HasField("type") or not vi.type.HasField("tensor_type"):
-            detail["reason"] = "lost tensor_type"
+            if informational:
+                detail["ok"] = True
+            else:
+                detail["reason"] = "lost tensor_type"
             details.append(detail)
             continue
         tt = vi.type.tensor_type
@@ -532,6 +619,11 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
         detail["elem_type"] = int(tt.elem_type)
         detail["has_shape"] = inferred_has_shape
         detail["shape"] = list(inferred_dims)
+        if informational:
+            # Purely informational entry: any inferred value is fine.
+            detail["ok"] = True
+            details.append(detail)
+            continue
         if int(tt.elem_type) != expected_elem:
             detail["reason"] = (
                 f"elem_type mismatch: expected {expected_elem}, "
@@ -573,7 +665,12 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                         )
                         break
                 elif exp_symbolic and got_symbolic:
-                    if got != exp:
+                    # Symbolic dims may carry expressions such as
+                    # ``"a + b"`` whose exact spacing varies between
+                    # shape-inference implementations. Strip whitespace
+                    # from both sides before comparing so that
+                    # ``"a + b"`` and ``"a+b"`` are treated as equal.
+                    if "".join(got.split()) != "".join(exp.split()):
                         mismatch = (
                             f"dim[{i}] mismatch: expected {exp!r}, "
                             f"got {got!r}"
@@ -613,21 +710,61 @@ def _run_onnx_light(model):
     return out
 
 
-def _run_onnx_light_onnx_optim(model):
+def _drop_shapeless_value_info(model):
+    """Remove ``graph.value_info`` entries that carry a type but no shape.
+
+    ``strip_shapes(..., keep_outputs=True)`` deliberately leaves the
+    intermediate ``value_info`` entries with their ``elem_type`` set but
+    no ``shape`` field. The experimental ``onnx_optim`` inference, when
+    asked to prefill from ``value_info``/``output`` shapes, reads those
+    entries unconditionally and a stripped ``tensor_type`` raises
+    ``Optional field 'shape' has no value.``. Dropping the shapeless
+    entries lets the inference rebuild them from scratch while still
+    anchoring on the preserved ``graph.output`` shapes.
+    """
+    keep = [
+        vi
+        for vi in model.graph.value_info
+        if not (
+            vi.type.HasField("tensor_type")
+            and not vi.type.tensor_type.HasField("shape")
+        )
+    ]
+    del model.graph.value_info[:]
+    model.graph.value_info.extend(keep)
+    return model
+
+
+def _run_onnx_light_optim(model):
     """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
 
     The experimental shape inference shipped inside ``onnx-light``'s
     ``onnx_optim`` submodule mutates the model in place; we round-trip
     the result back to an ``onnx.ModelProto`` so the comparison helpers
     can score it uniformly.
+
+    ``prefill_with_value_info_output=True`` lets the inference anchor on
+    the model's declared ``graph.output`` shapes (preserved by
+    ``strip_shapes(..., keep_outputs=True)``). Without it, data-dependent
+    outputs such as ``NonZero`` get freshly generated symbolic dim names
+    that would never match the expected ones (e.g.
+    ``test_cc_shape_inference_nonzero_chain_named``).
+
+    Because the prefill also visits ``graph.value_info``, the shapeless
+    intermediate entries left behind by ``strip_shapes`` must be removed
+    first; otherwise the inference raises ``Optional field 'shape' has no
+    value.`` when it reads their stripped ``tensor_type``.
     """
     import onnx
     import onnx_light.onnx as onnxl
     from onnx_light.onnx_optim.shape_inference import infer_shapes_model
 
+    prepared = onnx.ModelProto()
+    prepared.CopyFrom(model)
+    _drop_shapeless_value_info(prepared)
     light = onnxl.ModelProto()
-    light.ParseFromString(model.SerializeToString())
-    infer_shapes_model(light)
+    light.ParseFromString(prepared.SerializeToString())
+    infer_shapes_model(light, prefill_with_value_info_output=True)
     out = onnx.ModelProto()
     out.ParseFromString(light.SerializeToString())
     return out
@@ -655,11 +792,86 @@ def _run_onnx_shape_inference(model):
     return ir.serde.serialize_model(inferred)
 
 
+def _run_ort_transformers(model):
+    """Run the symbolic shape inference shipped with ``onnxruntime.transformers``.
+
+    The implementation lives in ``onnxruntime/tools/symbolic_shape_infer.py``
+    and is re-exported via ``onnxruntime.transformers.shape_infer_helper``;
+    importing the helper takes care of inserting the ``tools`` directory
+    on ``sys.path`` so ``symbolic_shape_infer`` is importable. The
+    ``SymbolicShapeInference.infer_shapes`` static method takes an
+    ``onnx.ModelProto`` and returns one with shapes filled in.
+    """
+    # Importing this module has the side-effect of inserting
+    # ``onnxruntime/tools`` (or ``onnxruntime/transformers/..``) on
+    # ``sys.path`` so that ``symbolic_shape_infer`` becomes importable
+    # from a regular ``onnxruntime`` wheel — the helper class itself is
+    # not used here.
+    import onnxruntime.transformers.shape_infer_helper  # noqa: F401
+    from symbolic_shape_infer import SymbolicShapeInference
+
+    return SymbolicShapeInference.infer_shapes(model, auto_merge=True)
+
+
+def _run_yobx(model):
+    """Run ``yobx.xshape.BasicShapeBuilder`` on ``model``.
+
+    :class:`yobx.xshape.BasicShapeBuilder` is the shape-inference engine
+    shipped with the ``yet-another-onnx-builder`` project. It walks the
+    graph and tracks shapes (potentially symbolic) for every
+    intermediate. ``update_shapes`` mutates the input ``ModelProto`` to
+    populate ``graph.value_info`` for the intermediates it managed to
+    infer; existing ``value_info`` entries (left in place by
+    ``strip_shapes`` with only ``elem_type`` set) and ``graph.output``
+    entries whose shape was stripped are also refilled here so the
+    shared comparison helpers can score them uniformly.
+    """
+    import onnx
+    from yobx.xshape import BasicShapeBuilder
+
+    builder = BasicShapeBuilder()
+    builder.run_model(model)
+    out = onnx.ModelProto()
+    out.CopyFrom(model)
+    builder.update_shapes(out)
+    # ``update_shapes`` skips both ``graph.output`` (so the caller's
+    # declared output shapes are preserved) and any name already
+    # appearing in ``graph.value_info`` (so the caller's annotations are
+    # preserved). Here ``strip_shapes`` left those entries shape-less,
+    # so refill them from the builder when possible.
+    for container in (out.graph.value_info, out.graph.output):
+        for vi in container:
+            if not vi.HasField("type") or not vi.type.HasField("tensor_type"):
+                continue
+            tt = vi.type.tensor_type
+            if tt.HasField("shape") and len(tt.shape.dim) > 0:
+                continue
+            if not builder.has_shape(vi.name):
+                continue
+            tt.ClearField("shape")
+            for d in builder.get_shape(vi.name):
+                new_d = tt.shape.dim.add()
+                if isinstance(d, int):
+                    # ``BasicShapeBuilder`` uses negative values (typically
+                    # ``-1``) as a placeholder for "unknown rank position";
+                    # leave the dim empty so the comparison helper treats it
+                    # as unknown rather than as a concrete dimension.
+                    if d >= 0:
+                        new_d.dim_value = d
+                else:
+                    new_d.dim_param = str(d)
+            if not tt.elem_type and builder.has_type(vi.name):
+                tt.elem_type = builder.get_type(vi.name)
+    return out
+
+
 _BACKEND_RUNNERS: Dict[str, Callable[[Any], Any]] = {
     "onnx-light": _run_onnx_light,
-    "onnx-light-onnx-optim": _run_onnx_light_onnx_optim,
+    "onnx-light-optim": _run_onnx_light_optim,
     "onnx": _run_onnx,
     "onnx-shape-inference": _run_onnx_shape_inference,
+    "ort-transformers": _run_ort_transformers,
+    "yobx": _run_yobx,
 }
 
 
@@ -675,13 +887,19 @@ def run_test_with_backend(
     AND every snapshotted intermediate was recovered correctly.
     """
     runner = _BACKEND_RUNNERS.get(backend)
+    # ``len(expected)`` is used as a sensible upper bound for ``total``
+    # on early failure paths. Informational entries (no expectation) are
+    # excluded so the count reflects scoring as it would have been.
+    scored_total = sum(
+        1 for e in expected if e.get("elem_type") is not None
+    )
     if runner is None:
         return {
             "success": False,
             "error": f"unknown backend: {backend}",
             "error_step": "load",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     if not expected:
@@ -694,14 +912,22 @@ def run_test_with_backend(
             "details": [],
         }
     try:
-        stripped = strip_shapes(model)
+        # ``onnx-light``'s shape inference can take advantage of the
+        # known graph output shapes as a prefill hint: only clean
+        # ``graph.value_info`` and keep ``graph.output`` shapes so they
+        # are passed through to the backend as initial constraints. This
+        # applies to both the ``onnx.shape_inference`` backend and the
+        # experimental ``onnx_optim`` one (which opts into the anchors via
+        # ``prefill_with_value_info_output=True``).
+        keep_outputs = backend in ("onnx-light", "onnx-light-optim")
+        stripped = strip_shapes(model, keep_outputs=keep_outputs)
     except Exception as exc:  # noqa: BLE001
         return {
             "success": False,
             "error": _stringify_error(exc),
             "error_step": "strip",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     try:
@@ -712,7 +938,7 @@ def run_test_with_backend(
             "error": _stringify_error(exc),
             "error_step": "run",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
     try:
@@ -723,11 +949,18 @@ def run_test_with_backend(
             "error": _stringify_error(exc),
             "error_step": "compare",
             "correct": 0,
-            "total": len(expected),
+            "total": scored_total,
             "details": [],
         }
-    correct = sum(1 for d in details if d["ok"])
-    total = len(details)
+    # Entries without an expectation (``expected_elem_type is None``) are
+    # purely informational: they show up in ``details`` so the dashboard
+    # can display the inferred shape for unannotated intermediates, but
+    # they are not counted towards the correctness score.
+    scored = [
+        d for d in details if d.get("expected_elem_type") is not None
+    ]
+    correct = sum(1 for d in scored if d["ok"])
+    total = len(scored)
     return {
         "success": total > 0 and correct == total,
         "error": "" if correct == total else f"{total - correct}/{total} intermediates mismatched",
@@ -767,6 +1000,7 @@ def _row_from_results(
             {
                 "name": e.get("name"),
                 "kind": e.get("kind"),
+                "op_type": e.get("op_type", ""),
                 "elem_type": e.get("elem_type"),
                 "has_shape": e.get("has_shape", False),
                 "shape": list(e.get("shape", [])),
@@ -785,13 +1019,16 @@ def _row_from_results(
         prev_mermaid = previous.get("mermaid")
         if isinstance(prev_mermaid, str) and prev_mermaid:
             row["mermaid"] = prev_mermaid
+    scored_count = sum(
+        1 for e in expected if e.get("elem_type") is not None
+    )
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
         runtime_entry: Dict[str, Any] = {
             "success": success,
             "correct": int(info.get("correct", 0)),
-            "total": int(info.get("total", len(expected))),
+            "total": int(info.get("total", scored_count)),
             "details": info.get("details", []) or [],
         }
         error = _stringify_error(info.get("error"))
@@ -852,21 +1089,28 @@ def _index_previous_rows(payload: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def build_payload(
-    tag: str = DEFAULT_TAG,
+    tag=DEFAULT_TAGS,
     limit: Optional[int] = None,
-    discover: Callable[[str], List[Dict[str, Any]]] = discover_inference_tests,
+    discover: Callable[..., List[Dict[str, Any]]] = discover_inference_tests,
     run: Callable[..., Dict[str, Any]] = run_test_with_backend,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
     previous: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Discover tests, run each backend on each test and return a payload."""
+    """Discover tests, run each backend on each test and return a payload.
+
+    ``tag`` accepts a single tag name, a comma-separated list of tag
+    names or an iterable of tag names. See :func:`discover_inference_tests`
+    for details.
+    """
     if versions is None:
         versions = collect_versions
     tests = discover(tag)
     if limit is not None and limit >= 0:
         tests = tests[:limit]
-    _log(f"Discovered {len(tests)} backend tests tagged {tag!r}.")
+    tags = _normalize_tags(tag)
+    tag_display = ", ".join(tags)
+    _log(f"Discovered {len(tests)} backend tests tagged {tag_display!r}.")
 
     now_dt = now or dt.datetime.now(tz=dt.timezone.utc)
     now_iso = _format_iso(now_dt)
@@ -924,7 +1168,7 @@ def build_payload(
 
     return {
         "date": now_iso,
-        "tag": tag,
+        "tag": tag_display,
         "versions": version_map,
         "totals": totals,
         "tests": rows,
@@ -949,7 +1193,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--tag",
         default=DEFAULT_TAG,
         help=(
-            "Filter backend cases by their ``tag`` attribute "
+            "Filter backend cases by their ``tag`` attribute. Accepts a "
+            "single tag or a comma-separated list of tags; a case is "
+            "retained when its tag matches any of the provided values "
             "(default: %(default)s)."
         ),
     )

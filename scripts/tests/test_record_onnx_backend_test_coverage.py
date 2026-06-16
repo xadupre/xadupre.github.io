@@ -34,20 +34,29 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "error": "boom",
                     "error_step": "run",
                 },
+                "onnx_light": {"success": True, "error": "", "error_step": ""},
             },
-            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            versions={
+                "onnxruntime": "1.20.0",
+                "onnx": "1.17.0",
+                "onnx_light": "0.1.0",
+            },
             now_iso="2024-05-06T07:08:09Z",
         )
         self.assertEqual(row["name"], "test_relu")
         self.assertTrue(row["onnxruntime"])
         self.assertFalse(row["reference"])
+        self.assertTrue(row["onnx_light"])
         self.assertNotIn("onnxruntime_error", row)
         self.assertNotIn("onnxruntime_error_step", row)
         self.assertEqual(row["reference_error"], "boom")
         self.assertEqual(row["reference_error_step"], "run")
+        self.assertNotIn("onnx_light_error", row)
         # Passing backend records its last-pass date + matching package version.
         self.assertEqual(row["onnxruntime_last_pass_date"], "2024-05-06T07:08:09Z")
         self.assertEqual(row["onnxruntime_last_pass_version"], "1.20.0")
+        self.assertEqual(row["onnx_light_last_pass_date"], "2024-05-06T07:08:09Z")
+        self.assertEqual(row["onnx_light_last_pass_version"], "0.1.0")
         # Failing backend has no recorded last-pass when there is no history.
         self.assertNotIn("reference_last_pass_date", row)
         self.assertNotIn("reference_last_pass_version", row)
@@ -67,9 +76,18 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     "error": "boom",
                     "error_step": "run",
                 },
+                "onnx_light": {
+                    "success": False,
+                    "error": "boom",
+                    "error_step": "run",
+                },
             },
             previous=previous,
-            versions={"onnxruntime": "1.20.0", "onnx": "1.17.0"},
+            versions={
+                "onnxruntime": "1.20.0",
+                "onnx": "1.17.0",
+                "onnx_light": "0.1.0",
+            },
             now_iso="2024-05-06T07:08:09Z",
         )
         # Current pass refreshes the onnxruntime entry, prior reference pass is kept.
@@ -85,29 +103,29 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {"name": "test_c", "model": "model_c", "data_sets": [("in_c", "out_c")]},
         ]
         # Map of (model, backend) -> result dict
+        ok = {"success": True, "error": "", "error_step": ""}
         outcomes = {
-            ("model_a", "onnxruntime"): {
-                "success": True,
-                "error": "",
-                "error_step": "",
-            },
-            ("model_a", "reference"): {"success": True, "error": "", "error_step": ""},
-            ("model_b", "onnxruntime"): {
-                "success": True,
-                "error": "",
-                "error_step": "",
-            },
+            ("model_a", "onnxruntime"): ok,
+            ("model_a", "reference"): ok,
+            ("model_a", "onnx_light"): ok,
+            ("model_b", "onnxruntime"): ok,
             ("model_b", "reference"): {
                 "success": False,
                 "error": "not implemented",
                 "error_step": "run",
             },
+            ("model_b", "onnx_light"): ok,
             ("model_c", "onnxruntime"): {
                 "success": False,
                 "error": "kernel missing",
                 "error_step": "load",
             },
-            ("model_c", "reference"): {"success": True, "error": "", "error_step": ""},
+            ("model_c", "reference"): ok,
+            ("model_c", "onnx_light"): {
+                "success": False,
+                "error": "kernel missing in onnx-light",
+                "error_step": "run",
+            },
         }
 
         def fake_run(model, data_sets, backend, rtol, atol):
@@ -127,6 +145,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {
                 "onnxruntime": {"pass": 2, "fail": 1},
                 "reference": {"pass": 2, "fail": 1},
+                "onnx_light": {"pass": 2, "fail": 1},
             },
         )
         names = [row["name"] for row in payload["tests"]]
@@ -134,11 +153,17 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         by_name = {row["name"]: row for row in payload["tests"]}
         self.assertTrue(by_name["test_a"]["onnxruntime"])
         self.assertTrue(by_name["test_a"]["reference"])
+        self.assertTrue(by_name["test_a"]["onnx_light"])
         self.assertFalse(by_name["test_b"]["reference"])
         self.assertEqual(by_name["test_b"]["reference_error"], "not implemented")
         self.assertEqual(by_name["test_b"]["reference_error_step"], "run")
+        self.assertTrue(by_name["test_b"]["onnx_light"])
         self.assertFalse(by_name["test_c"]["onnxruntime"])
         self.assertEqual(by_name["test_c"]["onnxruntime_error_step"], "load")
+        self.assertFalse(by_name["test_c"]["onnx_light"])
+        self.assertEqual(
+            by_name["test_c"]["onnx_light_error"], "kernel missing in onnx-light"
+        )
 
     def test_build_payload_honours_limit(self):
         tests = [
@@ -162,6 +187,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             {
                 "onnxruntime": {"pass": 2, "fail": 0},
                 "reference": {"pass": 2, "fail": 0},
+                "onnx_light": {"pass": 2, "fail": 0},
             },
         )
 
@@ -180,13 +206,16 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         row = payload["tests"][0]
         self.assertFalse(row["onnxruntime"])
         self.assertFalse(row["reference"])
+        self.assertFalse(row["onnx_light"])
         self.assertEqual(row["onnxruntime_error"], "unexpected")
         self.assertEqual(row["reference_error_step"], "run")
+        self.assertEqual(row["onnx_light_error_step"], "run")
         self.assertEqual(
             payload["totals"],
             {
                 "onnxruntime": {"pass": 0, "fail": 1},
                 "reference": {"pass": 0, "fail": 1},
+                "onnx_light": {"pass": 0, "fail": 1},
             },
         )
 
@@ -260,6 +289,75 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_step"], "load")
         self.assertIn("unknown backend", result["error"])
+
+    def test_backends_include_onnx_light_reference_evaluator(self):
+        """``onnx_light`` must be one of the recorded backends."""
+        self.assertIn("onnx_light", rbc.BACKENDS)
+        self.assertIn("onnx_light", rbc._BACKEND_FACTORIES)
+        self.assertEqual(rbc.BACKEND_PACKAGE["onnx_light"], "onnx_light")
+
+    def test_run_with_onnx_light_uses_onnx_light_reference_evaluator(self):
+        """``_run_with_onnx_light`` builds and drives the onnx-light evaluator.
+
+        ``onnx-light`` is not installed in the unit test environment, so the
+        test injects a fake ``onnx_light.onnx.reference`` module exposing a
+        ``ReferenceEvaluator`` mock and checks that the factory feeds it the
+        serialised model bytes (since ``onnx-light`` ships its own
+        ``ModelProto`` type, distinct from ``onnx.ModelProto``).
+        """
+        import types
+
+        import numpy as np
+        import onnx
+        from onnx import helper
+
+        node = helper.make_node("Identity", ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+
+        constructed: dict = {}
+
+        class _FakeEvaluator:
+            def __init__(self, proto):
+                constructed["proto"] = proto
+
+            def run(self, output_names, feeds):
+                constructed["feeds"] = feeds
+                return [feeds["x"] * 2]
+
+        fake_reference = types.ModuleType("onnx_light.onnx.reference")
+        fake_reference.ReferenceEvaluator = _FakeEvaluator
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx", types.ModuleType("onnx_light.onnx")),
+            ("onnx_light.onnx.reference", fake_reference),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            runner = rbc._run_with_onnx_light(model)
+            inputs = [np.array([1.0, 2.0], dtype=np.float32)]
+            actual = runner(inputs)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # The evaluator must be built from serialised bytes so it sees a
+        # proto of its own (onnx-light's) ``ModelProto`` type.
+        self.assertEqual(constructed["proto"], model.SerializeToString())
+        np.testing.assert_array_equal(constructed["feeds"]["x"], inputs[0])
+        np.testing.assert_array_equal(actual[0], np.array([2.0, 4.0], dtype=np.float32))
 
     def test_row_from_results_includes_tag_when_provided(self):
         row = rbc._row_from_results(
@@ -368,19 +466,20 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             data_sets=[(inputs, outputs)],
             model_dir=None,
         )
-        fake_module = types.ModuleType("onnx_light.backend.test.case")
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
         fake_module.collect_test_case = lambda: {
             "test_relu_light": node_tc,
             "test_simple_other": simple_tc,
         }
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
-            ("onnx_light.backend", types.ModuleType("onnx_light.backend")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
             (
-                "onnx_light.backend.test",
-                types.ModuleType("onnx_light.backend.test"),
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
             ),
-            ("onnx_light.backend.test.case", fake_module),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}
         try:
@@ -409,6 +508,116 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         # The tag attached to the onnx-light test case is propagated so
         # the dashboard can group rows by tag.
         self.assertEqual(entry["tag"], "inference")
+
+    def test_normalize_kinds_accepts_various_shapes(self):
+        self.assertEqual(rbc._normalize_kinds(None), ())
+        self.assertEqual(rbc._normalize_kinds(""), ())
+        self.assertEqual(rbc._normalize_kinds("node"), ("node",))
+        self.assertEqual(
+            rbc._normalize_kinds("node, model"), ("node", "model")
+        )
+        self.assertEqual(
+            rbc._normalize_kinds(["node", "model"]), ("node", "model")
+        )
+        # Duplicates are dropped, preserving first-seen order.
+        self.assertEqual(
+            rbc._normalize_kinds(("node,model", "node")), ("node", "model")
+        )
+
+    def test_default_kind_includes_node_and_model(self):
+        self.assertEqual(rbc.DEFAULT_KINDS, ("node", "model"))
+        self.assertEqual(
+            rbc._normalize_kinds(rbc.DEFAULT_KIND), ("node", "model")
+        )
+
+    def test_discover_node_tests_filters_multiple_kinds(self):
+        """``discover_node_tests`` keeps every case whose kind matches.
+
+        In particular the ``test_cc_shape_inference_*`` family ships with
+        ``kind="model"`` (see ``onnx-light``'s
+        ``onnx_backend_test/cases_for_shapes/inference/``) and must be
+        included in the backend-test-coverage page alongside the
+        single-node ``kind="node"`` tests so the dashboard reports
+        backend-execution status for the shape-inference cases too
+        (issue #352).
+        """
+        import types
+
+        class Case:
+            def __init__(self, name, kind, tag=""):
+                self.name = name
+                self.kind = kind
+                self.tag = tag
+                self.model = "model_proto"
+                self.data_sets = [([1], [1])]
+                self.model_dir = None
+
+        cases = {
+            "test_node": Case("test_node", "node"),
+            "test_cc_shape_inference_x": Case(
+                "test_cc_shape_inference_x", "model", "inference"
+            ),
+            "test_simple": Case("test_simple", "simple"),
+        }
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda: cases
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        original_model_to_onnx = rbc._onnx_light_model_to_onnx
+        original_tensor_to_numpy = rbc._onnx_light_tensor_to_numpy
+        rbc._onnx_light_model_to_onnx = lambda m: m
+        rbc._onnx_light_tensor_to_numpy = lambda a: a
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+
+            # Default kind keeps both ``node`` and ``model`` cases.
+            discovered_default = rbc.discover_node_tests()
+            self.assertEqual(
+                [d["name"] for d in discovered_default],
+                ["test_cc_shape_inference_x", "test_node"],
+            )
+
+            # Comma-separated string filter.
+            discovered_pair = rbc.discover_node_tests(kind="node,model")
+            self.assertEqual(
+                sorted(d["name"] for d in discovered_pair),
+                ["test_cc_shape_inference_x", "test_node"],
+            )
+
+            # Single-kind filter still works (backwards-compatible).
+            discovered_single = rbc.discover_node_tests(kind="model")
+            self.assertEqual(
+                [d["name"] for d in discovered_single],
+                ["test_cc_shape_inference_x"],
+            )
+
+            # Iterable filter.
+            discovered_iter = rbc.discover_node_tests(kind=["simple"])
+            self.assertEqual(
+                [d["name"] for d in discovered_iter], ["test_simple"]
+            )
+        finally:
+            rbc._onnx_light_model_to_onnx = original_model_to_onnx
+            rbc._onnx_light_tensor_to_numpy = original_tensor_to_numpy
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
 
     def test_compare_outputs_detects_shape_mismatch(self):
         import numpy as np
@@ -462,6 +671,156 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
         self.assertIsNotNone(msg)
 
+    def test_compare_outputs_handles_sequence_outputs(self):
+        import numpy as np
+
+        expected = [[np.array([1.0, 2.0]), np.array([3.0])]]
+        actual = [[np.array([1.0, 2.0]), np.array([3.0])]]
+        self.assertIsNone(
+            rbc._compare_outputs(expected, actual, rtol=1e-3, atol=1e-4)
+        )
+
+        mismatched = [[np.array([1.0, 2.0]), np.array([9.0])]]
+        msg = rbc._compare_outputs(expected, mismatched, rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+
+        shorter = [[np.array([1.0, 2.0])]]
+        msg = rbc._compare_outputs(expected, shorter, rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+        self.assertIn("length mismatch", msg)
+
+    def test_compare_outputs_handles_optional_none_outputs(self):
+        import numpy as np
+
+        self.assertIsNone(
+            rbc._compare_outputs([None], [None], rtol=1e-3, atol=1e-4)
+        )
+        msg = rbc._compare_outputs(
+            [None], [np.array([1.0])], rtol=1e-3, atol=1e-4
+        )
+        self.assertIsNotNone(msg)
+        self.assertIn("None", msg)
+
+    def test_compare_outputs_reports_precise_numeric_mismatch(self):
+        import numpy as np
+
+        msg = rbc._compare_outputs(
+            [np.array([-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0])],
+            [np.array([-2.0, -2.0, -1.0, 0.0, 1.0, 1.0, 1.0])],
+            rtol=1e-3,
+            atol=1e-4,
+        )
+        self.assertIsNotNone(msg)
+        # The message must surface the precise statistics, not just the
+        # generic "Not equal to tolerance" header.
+        self.assertIn("Mismatched elements", msg)
+        self.assertIn("Max absolute difference", msg)
+        self.assertNotIn("Not equal to tolerance", msg)
+
+    def test_load_test_data_sets_decodes_sequence_and_optional(self):
+        import numpy as np
+        import onnx
+        from onnx import helper, numpy_helper
+
+        tensor = numpy_helper.from_array(
+            np.array([1.0, 2.0], dtype=np.float32), name="t"
+        )
+        seq = onnx.SequenceProto()
+        seq.name = "s"
+        seq.elem_type = onnx.SequenceProto.TENSOR
+        seq.tensor_values.extend(
+            [numpy_helper.from_array(np.array([3.0], dtype=np.float32))]
+        )
+
+        tensor_type = helper.make_tensor_type_proto(onnx.TensorProto.FLOAT, [2])
+        seq_type = helper.make_sequence_type_proto(tensor_type)
+        opt_type = helper.make_optional_type_proto(tensor_type)
+
+        model = helper.make_model(
+            helper.make_graph(
+                nodes=[],
+                name="g",
+                inputs=[
+                    helper.make_value_info("tensor_in", tensor_type),
+                    helper.make_value_info("seq_in", seq_type),
+                ],
+                outputs=[helper.make_value_info("opt_out", opt_type)],
+            )
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ds_dir = os.path.join(tmp, "test_data_set_0")
+            os.makedirs(ds_dir)
+            with open(os.path.join(ds_dir, "input_0.pb"), "wb") as fh:
+                fh.write(tensor.SerializeToString())
+            with open(os.path.join(ds_dir, "input_1.pb"), "wb") as fh:
+                fh.write(seq.SerializeToString())
+            # A populated optional output decodes to its tensor value.
+            opt_out = onnx.OptionalProto()
+            opt_out.name = "opt_out"
+            opt_out.elem_type = onnx.OptionalProto.TENSOR
+            opt_out.tensor_value.CopyFrom(
+                numpy_helper.from_array(np.array([5.0], dtype=np.float32))
+            )
+            with open(os.path.join(ds_dir, "output_0.pb"), "wb") as fh:
+                fh.write(opt_out.SerializeToString())
+
+            data_sets = rbc._load_test_data_sets(tmp, model)
+
+        self.assertEqual(len(data_sets), 1)
+        inputs, outputs = data_sets[0]
+        self.assertIsInstance(inputs[0], np.ndarray)
+        self.assertIsInstance(inputs[1], list)
+        np.testing.assert_array_equal(inputs[1][0], np.array([3.0], dtype=np.float32))
+        np.testing.assert_array_equal(outputs[0], np.array([5.0], dtype=np.float32))
+
+    def test_onnx_light_tensor_to_numpy_decodes_sequence_and_optional(self):
+        import numpy as np
+        import onnx
+        from onnx import numpy_helper
+
+        # A SequenceProto must decode to a list of numpy arrays so it can be
+        # compared against the sequence (list) produced by the runners, rather
+        # than being garbled into a non-sequence tensor.
+        seq = onnx.SequenceProto()
+        seq.name = "s"
+        seq.elem_type = onnx.SequenceProto.TENSOR
+        seq.tensor_values.extend(
+            [
+                numpy_helper.from_array(np.array([1.0, 2.0], dtype=np.float32)),
+                numpy_helper.from_array(np.array([3.0], dtype=np.float32)),
+            ]
+        )
+        seq_value = rbc._onnx_light_tensor_to_numpy(seq)
+        self.assertIsInstance(seq_value, list)
+        self.assertEqual(len(seq_value), 2)
+        np.testing.assert_array_equal(
+            seq_value[0], np.array([1.0, 2.0], dtype=np.float32)
+        )
+        np.testing.assert_array_equal(
+            seq_value[1], np.array([3.0], dtype=np.float32)
+        )
+
+        # A populated OptionalProto decodes to its tensor value.
+        opt = onnx.OptionalProto()
+        opt.name = "o"
+        opt.elem_type = onnx.OptionalProto.TENSOR
+        opt.tensor_value.CopyFrom(
+            numpy_helper.from_array(np.array([5.0], dtype=np.float32))
+        )
+        opt_value = rbc._onnx_light_tensor_to_numpy(opt)
+        np.testing.assert_array_equal(
+            opt_value, np.array([5.0], dtype=np.float32)
+        )
+
+        # A plain TensorProto still decodes to a numpy array.
+        tensor = numpy_helper.from_array(np.array([7.0], dtype=np.float32))
+        tensor_value = rbc._onnx_light_tensor_to_numpy(tensor)
+        self.assertIsInstance(tensor_value, np.ndarray)
+        np.testing.assert_array_equal(
+            tensor_value, np.array([7.0], dtype=np.float32)
+        )
+
     def test_write_payload_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             json_path = os.path.join(tmp, "onnx-light", "backend_test_coverage.json")
@@ -482,8 +841,16 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "totals": {
                     "onnxruntime": {"pass": 1, "fail": 0},
                     "reference": {"pass": 1, "fail": 0},
+                    "onnx_light": {"pass": 1, "fail": 0},
                 },
-                "tests": [{"name": "test_x", "onnxruntime": True, "reference": True}],
+                "tests": [
+                    {
+                        "name": "test_x",
+                        "onnxruntime": True,
+                        "reference": True,
+                        "onnx_light": True,
+                    }
+                ],
             }
 
         rbc.build_payload = fake_build
@@ -497,7 +864,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 ) as fh:
                     payload = json.load(fh)
                 self.assertEqual(payload["tests"][0]["name"], "test_x")
-                self.assertEqual(payload["kind"], "node")
+                self.assertEqual(payload["kind"], rbc.DEFAULT_KIND)
         finally:
             rbc.build_payload = original_build
 

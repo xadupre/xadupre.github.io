@@ -137,6 +137,86 @@ class TestRecordBuildDurations(unittest.TestCase):
         job = {"id": 1, "status": "in_progress", "conclusion": None}
         self.assertIsNone(rbd.job_to_row(job))
 
+    def test_job_to_row_skips_unexpanded_matrix_placeholder(self):
+        # When a matrix job never runs because its ``needs:`` dependency
+        # failed, GitHub returns a single placeholder entry whose name
+        # still contains the literal ``${{ matrix.* }}`` expression. Such
+        # entries do not represent a real matrix combination and must be
+        # ignored to avoid creating useless per-job CSV files (e.g.
+        # ``wheels_macos_matrix.arch.csv``) that hold only skipped rows
+        # and produce empty graphs on the dashboard.
+        job = {
+            "id": 3,
+            "run_id": 7,
+            "name": "wheels (macos, ${{ matrix.arch }})",
+            "status": "completed",
+            "conclusion": "skipped",
+            "started_at": "2024-01-01T00:00:00Z",
+            "completed_at": "2024-01-01T00:00:00Z",
+        }
+        self.assertIsNone(rbd.job_to_row(job))
+
+    def test_prune_placeholder_job_files(self):
+        # Per-job CSVs whose recorded ``job_name`` only contains an
+        # unexpanded ``${{ matrix.* }}`` placeholder were created by older
+        # versions of this script. They can only ever hold skipped or
+        # cancelled rows and render as empty charts on the dashboard, so
+        # the pruning helper must remove them while leaving regular
+        # per-job CSVs untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(rbd.prune_placeholder_job_files(tmp + "/missing"), 0)
+            jobs_dir = os.path.join(tmp, "jobs")
+            os.makedirs(jobs_dir)
+            placeholder = os.path.join(jobs_dir, "core_matrix.os.csv")
+            rbd._append_rows(
+                placeholder,
+                [
+                    {
+                        "job_id": "1",
+                        "run_id": "10",
+                        "workflow": "ci",
+                        "job_name": "core (${{ matrix.os }})",
+                        "status": "completed",
+                        "conclusion": "skipped",
+                        "started_at": "2024-01-01T00:00:00Z",
+                        "completed_at": "2024-01-01T00:00:00Z",
+                        "duration_seconds": "0",
+                        "head_sha": "abc",
+                    },
+                ],
+                rbd.JOB_CSV_FIELDS,
+            )
+            real = os.path.join(jobs_dir, "core_ubuntu-latest.csv")
+            rbd._append_rows(
+                real,
+                [
+                    {
+                        "job_id": "2",
+                        "run_id": "11",
+                        "workflow": "ci",
+                        "job_name": "core (ubuntu-latest)",
+                        "status": "completed",
+                        "conclusion": "success",
+                        "started_at": "2024-01-01T00:00:00Z",
+                        "completed_at": "2024-01-01T00:01:00Z",
+                        "duration_seconds": "60",
+                        "head_sha": "abc",
+                    },
+                ],
+                rbd.JOB_CSV_FIELDS,
+            )
+            # Empty (header-only) CSVs must not be deleted: they are
+            # produced by ``_append_rows`` to keep the cache directory in
+            # the repository even before any row is recorded.
+            empty = os.path.join(jobs_dir, "empty.csv")
+            rbd._append_rows(empty, [], rbd.JOB_CSV_FIELDS)
+
+            removed = rbd.prune_placeholder_job_files(jobs_dir)
+            self.assertEqual(removed, 1)
+            self.assertFalse(os.path.exists(placeholder))
+            self.assertTrue(os.path.exists(real))
+            self.assertTrue(os.path.exists(empty))
+
     def test_job_to_row_computes_duration(self):
         run = {"id": 10, "name": "Build docs", "head_sha": "abc"}
         job = {

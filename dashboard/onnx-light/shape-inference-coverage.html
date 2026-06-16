@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>onnx-light &mdash; shape inference coverage (onnx-light vs onnx-light.onnx_optim vs onnx vs onnx-shape-inference)</title>
+<title>onnx-light &mdash; shape inference coverage (onnx-light vs onnx-light.onnx_optim vs onnx vs onnx-shape-inference vs onnxruntime.transformers vs yobx)</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" type="image/svg+xml" href="../../logo.svg" />
 <style>
@@ -93,16 +93,19 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   color: #8b949e;
 }
 .controls .filter-status.error { color: #f85149; }
-.table-wrap { overflow-x: auto; }
+.table-wrap { overflow-x: hidden; }
 table.comparison {
   width: 100%;
   border-collapse: collapse;
   font-size: 0.9em;
+  table-layout: fixed;
 }
 table.comparison th, table.comparison td {
   text-align: left;
   padding: 0.4em 0.6em;
   border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 table.comparison th {
   color: #8b949e;
@@ -112,7 +115,8 @@ table.comparison th {
   position: sticky;
   top: 0;
   background: rgba(22, 27, 34, 0.95);
-  white-space: nowrap;
+  white-space: normal;
+  vertical-align: bottom;
 }
 table.comparison th.center { text-align: center; }
 table.comparison td.center { text-align: center; }
@@ -185,8 +189,8 @@ table.comparison th .arrow {
   font-size: 0.75em;
 }
 .detail-graph .mermaid svg {
-  max-width: 600px;
-  max-height: 400px;
+  max-width: 900px;
+  max-height: 600px;
   height: auto;
   width: auto;
 }
@@ -204,17 +208,22 @@ table.comparison th .arrow {
   <h1>onnx-light &mdash; shape inference coverage</h1>
   <p class="intro">
     Per-intermediate shape inference correctness on every backend test
-    tagged <code>inference</code> (collected via
-    <a href="https://github.com/xadupre/onnx-light"><code>onnx_light.backend.test.case.collect_test_case</code></a>,
+    tagged <code>shape</code>, <code>local_function</code> or legacy
+    <code>inference</code> (collected via
+    <a href="https://github.com/xadupre/onnx-light"><code>onnx_light.onnx_lib.backend.test.case.collect_test_case</code></a>,
     same set exercised by
     <code>unittests/backend/test_backend_with_shape_inference.py</code>).
     Each case has its output and intermediate <code>value_info</code> shapes
-    stripped, then re-inferred with four runtimes:
+    stripped, then re-inferred with six runtimes:
     <a href="https://github.com/xadupre/onnx-light"><code>onnx-light</code></a>,
     <a href="https://github.com/xadupre/onnx-light"><code>onnx_light.onnx_optim.shape_inference</code></a>,
-    <a href="https://github.com/onnx/onnx"><code>onnx.shape_inference</code></a>
+    <a href="https://github.com/onnx/onnx"><code>onnx.shape_inference</code></a>,
+    <a href="https://pypi.org/project/onnx-shape-inference/"><code>onnx-shape-inference</code></a>,
+    <a href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/python/tools/symbolic_shape_infer.py"><code>onnxruntime.transformers</code></a>
+    (symbolic shape inference, exposed via <code>onnxruntime.transformers.shape_infer_helper</code>)
     and
-    <a href="https://pypi.org/project/onnx-shape-inference/"><code>onnx-shape-inference</code></a>.
+    <a href="https://github.com/xadupre/yet-another-onnx-builder"><code>yobx.xshape.BasicShapeBuilder</code></a>
+    (shape inference shipped with <code>yet-another-onnx-builder</code>).
     The table reports the percentage of intermediates whose
     <code>elem_type</code> and shape were correctly recovered. Click a row
     to see the per-intermediate detail for each runtime; the graph
@@ -356,7 +365,7 @@ function compareRows(a, b) {
 
 function formatPercent(passed, total) {
   if (!total) return "—";
-  return ((passed * 100) / total).toFixed(1) + "%";
+  return Math.round((passed * 100) / total) + "%";
 }
 
 function renderRatios(filtered) {
@@ -376,7 +385,7 @@ function renderRatios(filtered) {
     card.className = "ratio-card b" + (i % 3);
     const label = document.createElement("div");
     label.className = "ratio-label";
-    label.textContent = backend + " — correct shape ratio";
+    label.textContent = backend;
     const value = document.createElement("div");
     value.className = "ratio-value";
     value.textContent = formatPercent(correct, total);
@@ -413,15 +422,31 @@ function renderHead() {
   const tr = document.createElement("tr");
   const cols = [
     { key: "name", label: "Test", center: false },
-    { key: "total", label: "#intermediates", center: true },
+    { key: "total", label: "#shapes", center: true },
   ];
   for (const b of state.backends) {
     cols.push({ key: b, label: b, center: true });
   }
-  for (const c of cols) {
+  const nameWidth = 24;
+  const totalWidth = 8;
+  const backendCount = state.backends.length;
+  const backendWidth = backendCount > 0
+    ? (100 - nameWidth - totalWidth) / backendCount
+    : 0;
+  for (let i = 0; i < cols.length; i++) {
+    const c = cols[i];
     const th = document.createElement("th");
     if (c.center) th.classList.add("center");
     th.dataset.key = c.key;
+    // Impose a fixed width on every column so the table does not scroll
+    // and the header row can wrap onto multiple lines.
+    if (i === 0) {
+      th.style.width = nameWidth + "%";
+    } else if (i === 1) {
+      th.style.width = totalWidth + "%";
+    } else {
+      th.style.width = backendWidth + "%";
+    }
     th.textContent = c.label;
     const arrow = document.createElement("span");
     arrow.className = "arrow";
@@ -544,14 +569,34 @@ function renderDetailFor(row) {
     tdKind.textContent = e.kind || "";
     tr.appendChild(tdKind);
     const tdExp = document.createElement("td");
-    tdExp.textContent = elemTypeName(e.elem_type) + " " + formatShape(e.shape, e.has_shape);
+    if (e.elem_type === null || e.elem_type === undefined) {
+      // Unannotated intermediate (e.g. an internal ``Shape`` output
+      // that the test model does not carry a ``value_info`` for):
+      // there is no expectation to display.
+      tdExp.className = "muted";
+      tdExp.textContent = "—";
+    } else {
+      tdExp.textContent = elemTypeName(e.elem_type) + " " + formatShape(e.shape, e.has_shape);
+    }
     tr.appendChild(tdExp);
     for (const b of state.backends) {
       const d = detailByBackend[b][e.name];
       const td = document.createElement("td");
+      const informational = (
+        e.elem_type === null || e.elem_type === undefined
+      );
       if (!d) {
         td.className = "muted";
         td.textContent = "—";
+      } else if (informational) {
+        // No expectation: just show the inferred value as plain info
+        // (no ✓/✗ marker, no styling).
+        if (d.elem_type === null || d.elem_type === undefined) {
+          td.className = "muted";
+          td.textContent = "—";
+        } else {
+          td.textContent = elemTypeName(d.elem_type) + " " + formatShape(d.shape, d.has_shape);
+        }
       } else if (d.ok) {
         td.className = "ok";
         td.textContent = "✓ " + elemTypeName(d.elem_type) + " " + formatShape(d.shape, d.has_shape);
@@ -791,5 +836,7 @@ fetch(JSON_URL, { cache: "no-store" })
     showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
   });
 </script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/shape_inference_coverage.json" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
 </body>
 </html>

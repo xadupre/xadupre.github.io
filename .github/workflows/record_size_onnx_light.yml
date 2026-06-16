@@ -24,6 +24,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   build-and-publish:
@@ -74,11 +75,27 @@ jobs:
         working-directory: onnx-light
         run: |
           # ``onnx`` is required so that
-          # ``onnx_light.schema_comparison.compute_schema_comparison()`` can
+          # ``onnx_light.tools.schema_comparison.compute_schema_comparison()`` can
           # populate the ``onnx``-side columns of the per-operator comparison
           # table consumed by the dashboard (otherwise it would silently
-          # report empty columns for the reference package).
-          python -m pip install setuptools nanobind numpy ml-dtypes onnx
+          # report empty columns for the reference package). We install the
+          # ``onnx-weekly`` build (nightly snapshot of upstream ``onnx``'s
+          # ``main`` branch) rather than the latest stable ``onnx`` release
+          # so that newly-added operators and their backend test scenarios
+          # (e.g. ``ai.onnx.preview.FlexAttention`` and its 11 ``export_*``
+          # snippets) are picked up by ``collect_snippets()`` below and
+          # reported in the per-operator comparison table — otherwise the
+          # dashboard would show ``0`` ``onnx`` backend tests for any
+          # operator that has not yet shipped in a stable ``onnx`` release.
+          # ``scikit-build-core`` is the PEP-517 build backend declared in
+          # onnx-light's ``pyproject.toml``. It must be installed alongside
+          # the rest of the toolchain so that the later
+          # ``pip wheel . --no-build-isolation`` step (used by the
+          # ``Build and record onnx-light wheel size`` step below) can find
+          # the backend — otherwise pip aborts with
+          # ``BackendUnavailable: Cannot import 'scikit_build_core.build'``
+          # and no wheel-size row is appended, leaving the chart empty.
+          python -m pip install scikit-build-core setuptools nanobind numpy ml-dtypes onnx-weekly
           python setup.py build_ext --inplace
 
       - name: ls
@@ -117,6 +134,90 @@ jobs:
             echo "No shared library found under onnx_light/onnx_py/; nothing to record."
           fi
 
+      - name: Build and record onnx-light wheel size
+        working-directory: onnx-light
+        run: |
+          # Build a distributable wheel from the onnx-light checkout and
+          # append one CSV row per .whl file produced to
+          # cache_data/onnx-light/wheel_sizes.csv inside the
+          # xadupre.github.io checkout. This is the primary source of data
+          # for the wheel-size series on
+          # dashboard/onnx-light/package-size.html: it does not depend on
+          # the upstream ``build_release.yml`` workflow (which has had no
+          # successful artifact-producing run, leaving the chart empty
+          # before this step was added). The CSV columns
+          # (date,commit,run_id,size,name) match the schema produced by
+          # scripts/record_wheel_sizes.py so the dashboard can consume rows
+          # from either source interchangeably.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,run_id,size,name" > "$out"
+          fi
+          wheel_dir="${GITHUB_WORKSPACE}/wheel-out"
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          # ``pip wheel`` reuses the build artifacts already produced by the
+          # earlier ``setup.py build_ext --inplace`` step and writes one
+          # ``.whl`` per project to ``$wheel_dir``. ``--no-deps`` ensures we
+          # only build onnx-light itself; ``--no-build-isolation`` reuses
+          # the already-installed setuptools/nanobind/numpy/ml-dtypes
+          # toolchain rather than re-resolving them in a fresh env.
+          python -m pip wheel . \
+            --no-deps \
+            --no-build-isolation \
+            --wheel-dir "$wheel_dir"
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          run_id="${GITHUB_RUN_ID:-local}"
+          found=0
+          for f in "$wheel_dir"/*.whl; do
+            [ -f "$f" ] || continue
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${run_id},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded wheel ${name} (${size} bytes) at ${commit_sha}."
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No wheel was produced by 'pip wheel .'; nothing to record." >&2
+            exit 1
+          fi
+
+      - name: Record wheel and shared library sizes from build_release.yml artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Complement the locally-built wheel and shared-library snapshots
+          # recorded above with the per-platform/per-Python sizes published by
+          # successful runs of the upstream ``build_release.yml`` workflow in
+          # xadupre/onnx-light, when any are available. A single download of
+          # each artifact feeds both series: ``.whl`` sizes are appended to
+          # cache_data/onnx-light/wheel_sizes.csv (deduplicated by ``run_id``)
+          # and the shared libraries found inside those wheels are appended to
+          # cache_data/onnx-light/so_sizes.csv (deduplicated by ``commit`` so
+          # that commits already snapshotted by the inline step above are not
+          # double counted). Backfilling the binary-size chart this way means
+          # it spans the same look-back window as the wheel-size chart instead
+          # of only showing history accumulated since the inline step first ran.
+          python -u "${GITHUB_WORKSPACE}/site/scripts/record_wheel_sizes.py" \
+            --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
+            --repo xadupre/onnx-light \
+            --workflow build_release.yml \
+            --months 6
+
+      - name: Record Python and C++ lines of code
+        run: |
+          # Count the lines of Python and C++ source code in the onnx-light
+          # checkout and append one row per language to
+          # cache_data/onnx-light/loc.csv inside the xadupre.github.io
+          # checkout. The "Commit and push cache data" step below will then
+          # publish the new rows alongside the shared-library sizes.
+          python "${GITHUB_WORKSPACE}/site/scripts/record_loc.py" \
+            --source-dir "${GITHUB_WORKSPACE}/onnx-light" \
+            --output "${GITHUB_WORKSPACE}/site/cache_data/onnx-light/loc.csv"
+
       - name: Record schema comparison snapshot
         working-directory: onnx-light
         env:
@@ -135,7 +236,7 @@ jobs:
           import os
           from dataclasses import asdict
 
-          from onnx_light.schema_comparison import compute_schema_comparison
+          from onnx_light.tools.schema_comparison import compute_schema_comparison
 
           comparison = compute_schema_comparison()
 
@@ -165,8 +266,12 @@ jobs:
           # Collect the IR_VERSION and the latest ai.onnx opset version from
           # both packages so that the dashboard can show, as its first table,
           # the ONNX specification version each side targets. ``onnx_light``
-          # forwards ``IR_VERSION`` and ``defs`` from its C++ ``onnx_lib``
-          # extension, mirroring the upstream ``onnx`` Python API.
+          # exposes its IR_VERSION and ``OpSchema`` registry via the
+          # ``onnx_light.onnx.defs`` submodule, which forwards the
+          # ``onnx_ir_version()`` / ``onnx_opset_version()`` / ``get_all_schemas()``
+          # symbols from its C++ ``onnx_lib`` extension (the ``onnx_light.onnx``
+          # package itself does not re-export ``IR_VERSION`` or ``defs`` at
+          # the top level, unlike upstream ``onnx``).
           def _max_ai_onnx_opset(defs_mod):
               versions = [
                   s.since_version
@@ -193,10 +298,9 @@ jobs:
           except ImportError:
               pass
           try:
-              from onnx_light.onnx import IR_VERSION as _LIGHT_IR_VERSION
               from onnx_light.onnx import defs as _light_defs
 
-              versions["onnx_light_ir_version"] = int(_LIGHT_IR_VERSION)
+              versions["onnx_light_ir_version"] = int(_light_defs.IR_VERSION)
               try:
                   versions["onnx_light_opset_ai_onnx"] = int(
                       _light_defs.onnx_opset_version()

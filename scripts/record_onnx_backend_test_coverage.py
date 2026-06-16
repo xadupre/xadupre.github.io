@@ -1,24 +1,29 @@
-"""Record the backend node test coverage of ``onnxruntime`` and the ONNX
+"""Record the backend test coverage of ``onnxruntime`` and the ONNX
 Python reference implementation.
 
-The script walks every backend node test bundled with the installed
+The script walks every backend test bundled with the installed
 ``onnx-light`` package (collected via
-``onnx_light.backend.test.case.collect_test_case``), runs each one
+``onnx_light.onnx_lib.backend.test.case.collect_test_case``), runs each one
 against:
 
-* ``onnxruntime`` (CPU execution provider) and
-* the ONNX Python reference implementation (``onnx.reference``),
+* ``onnxruntime`` (CPU execution provider),
+* the ONNX Python reference implementation (``onnx.reference``) and
+* the ``onnx-light`` reference implementation backed by the C++
+  ``KernelDispatchTable`` (``onnx_light.onnx.reference``),
 
-and records whether the produced outputs match the expected ones. The
-resulting per-test status is persisted to
-``cache_data/onnx-light/backend_test_coverage.json``. The dashboard at
-``dashboard/onnx-light/backend-test-coverage.html`` consumes that file to
-render the table and pass ratio requested in the tracking issue.
+and records whether the produced outputs match the expected ones. By
+default both the ``node`` (single-operator) and ``model`` (multi-node,
+including the ``test_cc_shape_inference_*`` family tagged ``inference``)
+backend test groups are exercised. The resulting per-test status is
+persisted to ``cache_data/onnx-light/backend_test_coverage.json``. The
+dashboard at ``dashboard/onnx-light/backend-test-coverage.html``
+consumes that file to render the table and pass ratio requested in the
+tracking issue.
 
 Usage::
 
     python scripts/record_onnx_backend_test_coverage.py [--cache-dir DIR]
-        [--kind node] [--limit N]
+        [--kind node,model] [--limit N]
 """
 
 from __future__ import annotations
@@ -31,14 +36,16 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference")
+BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference", "onnx_light")
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend. ``onnxruntime`` runs the model with the ``onnxruntime``
-# package while the reference implementation lives in ``onnx``.
+# package, the ``reference`` implementation lives in ``onnx`` and
+# ``onnx_light`` ships its own C++-backed reference evaluator.
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnxruntime": "onnxruntime",
     "reference": "onnx",
+    "onnx_light": "onnx_light",
 }
 
 # Default numerical tolerances when comparing produced outputs with the
@@ -48,6 +55,40 @@ BACKEND_PACKAGE: Dict[str, str] = {
 # regressions.
 DEFAULT_RTOL = 1e-3
 DEFAULT_ATOL = 1e-4
+
+# Default backend test groups to run. ``node`` covers the single-node
+# operator tests; ``model`` covers the multi-node models bundled with
+# ``onnx-light`` (in particular the ``test_cc_shape_inference_*`` family
+# tagged ``shape``/``inference``/``local_function``) so the dashboard
+# also reports backend-execution status for the shape-inference test
+# cases requested by issue #352.
+DEFAULT_KINDS: Tuple[str, ...] = ("node", "model")
+DEFAULT_KIND: str = ",".join(DEFAULT_KINDS)
+
+
+def _normalize_kinds(kind) -> Tuple[str, ...]:
+    """Normalize a ``kind`` filter into a tuple of non-empty kind names.
+
+    ``kind`` may be ``None``, an empty string (no filter), a single kind
+    name, a comma-separated list of kind names or an iterable of kind
+    names. Whitespace is stripped and duplicates are removed while
+    preserving the first-seen order.
+    """
+    if kind is None:
+        return ()
+    items: List[str] = []
+    if isinstance(kind, str):
+        items.extend(piece.strip() for piece in kind.split(","))
+    else:
+        for entry in kind:
+            if entry is None:
+                continue
+            items.extend(piece.strip() for piece in str(entry).split(","))
+    seen: Dict[str, None] = {}
+    for item in items:
+        if item and item not in seen:
+            seen[item] = None
+    return tuple(seen)
 
 
 def _log(message: str) -> None:
@@ -67,7 +108,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnxruntime", "numpy"):
+    for name in ("onnx", "onnxruntime", "onnx_light", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort, optional packages
@@ -109,36 +150,61 @@ def _onnx_light_model_to_onnx(model):
 
 
 def _onnx_light_tensor_to_numpy(arr):
-    """Convert an ``onnx-light`` tensor / numpy array to a numpy array.
+    """Convert an ``onnx-light`` tensor / numpy array to a numpy value.
 
-    ``arr`` can either be an ``onnx-light`` ``TensorProto`` (converted by
-    round-tripping its serialised bytes through ``onnx.TensorProto``) or
-    a plain numpy-compatible value, in which case ``numpy.asarray`` is
-    used.
+    ``arr`` can either be an ``onnx-light`` ``TensorProto``, ``SequenceProto``
+    or ``OptionalProto`` (converted by round-tripping its serialised bytes
+    through the matching ``onnx`` proto) or a plain numpy-compatible value, in
+    which case ``numpy.asarray`` is used. Sequence protos decode to a list of
+    numpy arrays and optional protos to either ``None`` or a numpy value, which
+    mirrors how ``onnxruntime`` / ``onnx.reference`` represent the corresponding
+    computed outputs so the comparison stays apples-to-apples.
     """
     import numpy as np
 
     if isinstance(arr, np.ndarray):
         return arr
+    if isinstance(arr, (list, tuple)):
+        return [_onnx_light_tensor_to_numpy(a) for a in arr]
     if hasattr(arr, "SerializeToString"):
         import onnx
         from onnx import numpy_helper
 
+        content = arr.SerializeToString()
+        proto_name = type(arr).__name__
+        if proto_name == "SequenceProto":
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if proto_name == "OptionalProto":
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+
         tensor = onnx.TensorProto()
-        tensor.ParseFromString(arr.SerializeToString())
+        tensor.ParseFromString(content)
         return numpy_helper.to_array(tensor)
     return np.asarray(arr)
 
 
-def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
+def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
     """Return ``[{"name", "model", "data_sets"}, ...]`` for every backend test.
 
-    The tests are loaded from ``onnx_light.backend.test.case`` which
+    The tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` which
     ships with the installed ``onnx-light`` package via
-    :func:`onnx_light.backend.test.case.collect_test_case`. ``kind``
-    selects the test group (``node``, ``simple``, ``pytorch-converted``,
-    ``pytorch-operator`` or ``real``); the default ``node`` matches the
-    tests exercised by ``onnx-light``'s reference implementation.
+    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`. ``kind``
+    selects the test groups; it can be a single kind name (``"node"``,
+    ``"simple"``, ``"pytorch-converted"``, ``"pytorch-operator"``,
+    ``"real"``, ``"model"``...), a comma-separated list of kind names
+    or any iterable of kind names. A test case is retained when its
+    ``kind`` attribute matches any of the requested kinds. Passing an
+    empty value disables kind filtering and keeps every collected test.
+
+    The default :data:`DEFAULT_KIND` covers both ``node`` (the single
+    operator tests exercised by ``onnx-light``'s reference
+    implementation) and ``model`` (multi-node models, in particular the
+    ``test_cc_shape_inference_*`` family tagged ``inference`` that the
+    onnx-light dashboard requested via issue #352).
 
     Test cases collected by ``onnx-light`` carry their ``ModelProto`` and
     expected input / output tensors in memory. They are converted to the
@@ -148,14 +214,16 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     test cases that only carry a ``model_dir`` are loaded from disk on
     the fly into the same in-memory shape.
     """
-    from onnx_light.backend.test.case import collect_test_case
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
+    kinds = _normalize_kinds(kind)
     cases = collect_test_case()
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:
             continue
-        if kind and getattr(tc, "kind", None) != kind:
+        case_kind = getattr(tc, "kind", None)
+        if kinds and case_kind not in kinds:
             continue
         model = getattr(tc, "model", None)
         data_sets = getattr(tc, "data_sets", None) or []
@@ -167,7 +235,7 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
             import onnx
 
             model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
-            data_sets = _load_test_data_sets(str(existing_dir))
+            data_sets = _load_test_data_sets(str(existing_dir), model)
         if model is None:
             continue
         onnx_model = _onnx_light_model_to_onnx(model)
@@ -191,23 +259,62 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     return discovered
 
 
-def _load_tensor(path: str):
+def _load_proto(path: str, type_proto: Any = None):
+    """Load a serialised proto from ``path`` as a numpy value.
+
+    ``type_proto`` is the matching ``onnx.TypeProto`` taken from the
+    model's graph input/output; it determines whether the file stores a
+    ``TensorProto``, a ``SequenceProto`` (decoded to a list of numpy
+    arrays) or an ``OptionalProto`` (decoded to either ``None`` or a
+    numpy value). When ``type_proto`` is missing or carries no usable
+    field, the file is parsed as a ``TensorProto`` for backwards
+    compatibility.
+    """
     import onnx
     from onnx import numpy_helper
 
-    tensor = onnx.TensorProto()
     with open(path, "rb") as fh:
-        tensor.ParseFromString(fh.read())
+        content = fh.read()
+
+    if type_proto is not None:
+        if type_proto.HasField("sequence_type"):
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if type_proto.HasField("optional_type"):
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+
+    tensor = onnx.TensorProto()
+    tensor.ParseFromString(content)
     return numpy_helper.to_array(tensor)
 
 
-def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
+# Backwards-compatible alias: historically only tensors were supported.
+_load_tensor = _load_proto
+
+
+def _load_test_data_sets(
+    model_dir: str, model: Any = None
+) -> List[Tuple[List[Any], List[Any]]]:
     """Return ``[(inputs, expected_outputs), ...]`` for ``model_dir``.
 
     Each test directory contains one or more ``test_data_set_<n>``
     sub-directories with ``input_<i>.pb`` and ``output_<j>.pb`` files
-    storing serialised ``TensorProto`` messages.
+    storing serialised protos. Most files hold ``TensorProto`` messages,
+    but sequence and optional operator tests store ``SequenceProto`` and
+    ``OptionalProto`` messages instead. When ``model`` is provided its
+    graph input/output ``TypeProto`` entries are used to decode each file
+    with the right proto type; otherwise every file is parsed as a
+    ``TensorProto``.
     """
+    input_types: List[Any] = []
+    output_types: List[Any] = []
+    if model is not None:
+        input_types = [inp.type for inp in model.graph.input]
+        output_types = [out.type for out in model.graph.output]
+
     data_sets: List[Tuple[List[Any], List[Any]]] = []
     for name in sorted(os.listdir(model_dir)):
         if not name.startswith("test_data_set_"):
@@ -221,7 +328,8 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
             p = os.path.join(ds_path, f"input_{i}.pb")
             if not os.path.exists(p):
                 break
-            inputs.append(_load_tensor(p))
+            type_proto = input_types[i] if i < len(input_types) else None
+            inputs.append(_load_proto(p, type_proto))
             i += 1
         outputs: List[Any] = []
         j = 0
@@ -229,7 +337,8 @@ def _load_test_data_sets(model_dir: str) -> List[Tuple[List[Any], List[Any]]]:
             p = os.path.join(ds_path, f"output_{j}.pb")
             if not os.path.exists(p):
                 break
-            outputs.append(_load_tensor(p))
+            type_proto = output_types[j] if j < len(output_types) else None
+            outputs.append(_load_proto(p, type_proto))
             j += 1
         data_sets.append((inputs, outputs))
     return data_sets
@@ -241,6 +350,90 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+def _compare_value(
+    exp: Any,
+    act: Any,
+    rtol: float,
+    atol: float,
+    label: str,
+) -> Optional[str]:
+    """Compare a single expected/actual value, recursing into sequences.
+
+    ``exp``/``act`` may be numpy arrays (tensor outputs), Python lists
+    (sequence outputs) or ``None`` (an absent optional output).
+    """
+    import numpy as np
+
+    if exp is None or act is None:
+        if exp is None and act is None:
+            return None
+        return f"{label} value mismatch: one side is None"
+
+    if isinstance(exp, list) or isinstance(act, list):
+        if not (isinstance(exp, list) and isinstance(act, list)):
+            return f"{label} type mismatch: sequence vs non-sequence"
+        if len(exp) != len(act):
+            return (
+                f"{label} length mismatch: "
+                f"expected {len(exp)}, got {len(act)}"
+            )
+        for k, (sub_exp, sub_act) in enumerate(zip(exp, act)):
+            msg = _compare_value(sub_exp, sub_act, rtol, atol, f"{label}[{k}]")
+            if msg is not None:
+                return msg
+        return None
+
+    exp_arr = np.asarray(exp)
+    act_arr = np.asarray(act)
+    if exp_arr.shape != act_arr.shape:
+        return (
+            f"{label} shape mismatch: "
+            f"expected {exp_arr.shape}, got {act_arr.shape}"
+        )
+    if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
+        "U",
+        "S",
+        "O",
+    ):
+        if not np.array_equal(exp_arr, act_arr):
+            return f"{label} value mismatch"
+        return None
+    try:
+        np.testing.assert_allclose(
+            act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
+        )
+    except AssertionError as exc:
+        return f"{label} mismatch ({_summarize_allclose_error(exc)})"
+    return None
+
+
+def _summarize_allclose_error(exc: AssertionError) -> str:
+    """Summarise a ``numpy.testing.assert_allclose`` failure on one line.
+
+    ``assert_allclose`` reports a generic ``Not equal to tolerance`` header
+    and puts the informative statistics (how many elements differ and by how
+    much) on the following lines. :func:`_stringify_error` keeps only the
+    first line, which hides those details, so this helper gathers the
+    statistic lines into a single concise, precise message.
+    """
+    wanted = (
+        "Mismatched elements",
+        "Max absolute difference",
+        "Max relative difference",
+    )
+    parts = [
+        line.strip()
+        for line in str(exc).splitlines()
+        if line.strip().startswith(wanted)
+    ]
+    if not parts:
+        return _stringify_error(exc)
+    summary = "; ".join(parts)
+    if len(summary) > 300:
+        summary = summary[:297] + "..."
+    return summary
+
+
 def _compare_outputs(
     expected: List[Any],
     actual: List[Any],
@@ -248,32 +441,12 @@ def _compare_outputs(
     atol: float,
 ) -> Optional[str]:
     """Return ``None`` if the outputs match, otherwise an error string."""
-    import numpy as np
-
     if len(expected) != len(actual):
         return f"output count mismatch: " f"expected {len(expected)}, got {len(actual)}"
     for idx, (exp, act) in enumerate(zip(expected, actual)):
-        exp_arr = np.asarray(exp)
-        act_arr = np.asarray(act)
-        if exp_arr.shape != act_arr.shape:
-            return (
-                f"output {idx} shape mismatch: "
-                f"expected {exp_arr.shape}, got {act_arr.shape}"
-            )
-        if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
-            "U",
-            "S",
-            "O",
-        ):
-            if not np.array_equal(exp_arr, act_arr):
-                return f"output {idx} value mismatch"
-            continue
-        try:
-            np.testing.assert_allclose(
-                act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
-            )
-        except AssertionError as exc:
-            return f"output {idx} mismatch ({_stringify_error(exc)})"
+        msg = _compare_value(exp, act, rtol, atol, f"output {idx}")
+        if msg is not None:
+            return msg
     return None
 
 
@@ -305,9 +478,32 @@ def _run_with_reference(model) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
+def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
+    """Run ``model`` with ``onnx_light.onnx.reference.ReferenceEvaluator``.
+
+    ``onnx_light`` ships its own ``ModelProto`` (and matching
+    ``ReferenceEvaluator``) that is wire-format compatible with the
+    official ``onnx`` package but distinct at the Python type level. The
+    in-memory ``onnx.ModelProto`` produced by :func:`discover_node_tests`
+    is therefore serialised and re-parsed by the evaluator so it sees a
+    proto of its own type.
+    """
+    from onnx_light.onnx.reference import ReferenceEvaluator
+
+    evaluator = ReferenceEvaluator(model.SerializeToString())
+    input_names = _model_input_names(model)
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        feeds = {name: value for name, value in zip(input_names, inputs)}
+        return list(evaluator.run(None, feeds))
+
+    return _run
+
+
 _BACKEND_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
     "onnxruntime": _run_with_onnxruntime,
     "reference": _run_with_reference,
+    "onnx_light": _run_with_onnx_light,
 }
 
 
@@ -549,10 +745,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--kind",
-        default="node",
+        default=DEFAULT_KIND,
         help=(
-            "Backend test group to run (default: %(default)s). "
-            "Common values: node, simple, pytorch-converted, "
+            "Backend test group(s) to run (default: %(default)s). "
+            "Accepts a single value or a comma-separated list. "
+            "Common values: node, model, simple, pytorch-converted, "
             "pytorch-operator, real."
         ),
     )
