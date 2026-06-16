@@ -992,6 +992,109 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             os.environ.get("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"), "python"
         )
 
+    def test_fix_sentencepiece_protobuf_compat_is_noop_when_import_succeeds(self):
+        # When sentencepiece.sentencepiece_model_pb2 can be imported without
+        # errors, _fix_sentencepiece_protobuf_compat must leave sys.modules
+        # untouched (no injection, no crash).
+        import types
+
+        stub = types.ModuleType("sentencepiece.sentencepiece_model_pb2")
+        _sentinel = object()
+        original = sys.modules.get(
+            "sentencepiece.sentencepiece_model_pb2", _sentinel
+        )
+        sys.modules["sentencepiece.sentencepiece_model_pb2"] = stub
+        # Reset the guard so the function runs again.
+        rymv._sentencepiece_protobuf_fixed = False
+        try:
+            rymv._fix_sentencepiece_protobuf_compat()
+            # The stub should still be in sys.modules (not replaced).
+            self.assertIs(sys.modules.get("sentencepiece.sentencepiece_model_pb2"), stub)
+        finally:
+            rymv._sentencepiece_protobuf_fixed = False
+            if original is _sentinel:
+                sys.modules.pop("sentencepiece.sentencepiece_model_pb2", None)
+            else:
+                sys.modules["sentencepiece.sentencepiece_model_pb2"] = original
+
+    def test_fix_sentencepiece_protobuf_compat_patches_on_type_error(self):
+        # When importing sentencepiece.sentencepiece_model_pb2 raises TypeError
+        # (protobuf 3.x-compiled module on protobuf 4.x+ runtime),
+        # _fix_sentencepiece_protobuf_compat must inject the compatible
+        # transformers replacement into sys.modules.
+        import types
+
+        compat_stub = types.ModuleType("_spm_pb2_compat_stub")
+        sp_stub = types.ModuleType("sentencepiece")
+        sp_stub.__path__ = []  # mark as a package so submodule imports work
+        _sentinel = object()
+
+        # Save original state for all keys we will touch.
+        _keys = (
+            "sentencepiece",
+            "sentencepiece.sentencepiece_model_pb2",
+            "google",
+            "google.protobuf",
+            "transformers",
+            "transformers.utils",
+        )
+        saved = {k: sys.modules.get(k, _sentinel) for k in _keys}
+        rymv._sentencepiece_protobuf_fixed = False
+
+        # A meta-path finder that raises TypeError for sentencepiece_model_pb2,
+        # simulating a protobuf-3.x-compiled module on a protobuf 4.x+ runtime.
+        class _TypeErrorFinder:
+            @classmethod
+            def find_spec(cls, name, path=None, target=None):
+                if name == "sentencepiece.sentencepiece_model_pb2":
+                    raise TypeError("Descriptors cannot be created directly")
+                return None
+
+        sys.meta_path.insert(0, _TypeErrorFinder)
+        try:
+            # Inject stubs so the function can proceed without these
+            # packages installed in the test environment.
+            sys.modules["sentencepiece"] = sp_stub
+            sys.modules.pop("sentencepiece.sentencepiece_model_pb2", None)
+            google_stub = types.ModuleType("google")
+            google_stub.__path__ = []  # package
+            pb_stub = types.SimpleNamespace(__version__="7.35.1")
+            google_stub.protobuf = pb_stub  # pre-set attribute for cached-import path
+            sys.modules["google"] = google_stub
+            sys.modules["google.protobuf"] = pb_stub
+            transformers_stub = types.ModuleType("transformers")
+            transformers_stub.__path__ = []  # package
+            utils_stub = types.SimpleNamespace(sentencepiece_model_pb2_new=compat_stub)
+            transformers_stub.utils = utils_stub  # pre-set attribute for cached-import path
+            sys.modules["transformers"] = transformers_stub
+            sys.modules["transformers.utils"] = utils_stub
+
+            rymv._fix_sentencepiece_protobuf_compat()
+
+            self.assertIs(
+                sys.modules.get("sentencepiece.sentencepiece_model_pb2"),
+                compat_stub,
+                "compatible stub should be injected into sys.modules on TypeError",
+            )
+        finally:
+            sys.meta_path.remove(_TypeErrorFinder)
+            rymv._sentencepiece_protobuf_fixed = False
+            for key, value in saved.items():
+                if value is _sentinel:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = value
+
+    def test_fix_sentencepiece_protobuf_compat_idempotent(self):
+        # Calling _fix_sentencepiece_protobuf_compat twice in a row must be
+        # safe (the global guard prevents double-execution).
+        rymv._sentencepiece_protobuf_fixed = False
+        try:
+            rymv._fix_sentencepiece_protobuf_compat()
+            rymv._fix_sentencepiece_protobuf_compat()  # should be a no-op
+        finally:
+            rymv._sentencepiece_protobuf_fixed = False
+
 
 if __name__ == "__main__":
     unittest.main()
