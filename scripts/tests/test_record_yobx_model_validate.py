@@ -863,7 +863,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         finally:
             subprocess.run = original_run
         self.assertEqual(summary["export"], "FAILED")
-        self.assertEqual(summary["error_export"], "boom: missing model")
+        self.assertEqual(
+            summary["error_export"], "--dry_run failed: boom: missing model"
+        )
 
     def test_run_olive_modelbuilder_reads_discrepancy_check_results(self):
         """A successful run reads metrics from ``discrepancy_check_results.json``."""
@@ -875,13 +877,14 @@ class TestRecordYobxModelValidate(unittest.TestCase):
                 stdout = ""
                 stderr = ""
 
-            captured = {}
+            captured = {"calls": []}
 
             def fake_run(cmd, *args, **kwargs):
                 # Drop a fake ONNX model and discrepancy results in the
                 # ``--output_path`` directory the recorder passes in.
                 idx = cmd.index("--output_path")
                 output_path = cmd[idx + 1]
+                captured["calls"].append(list(cmd))
                 captured["cmd"] = list(cmd)
                 onnx_path = os.path.join(output_path, "model.onnx")
                 with open(onnx_path, "wb") as f:
@@ -927,6 +930,15 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         # ``--test`` must be passed so Olive auto-injects the
         # ``OnnxDiscrepancyCheck`` pass and dumps the JSON metrics file.
         self.assertIn("--test", captured["cmd"])
+        # Two commands are issued: a ``--dry_run`` one (to save the
+        # workflow ``config.json`` including the ``OnnxDiscrepancyCheck``
+        # pass) followed by the actual run. Both must include ``--test``
+        # so Olive injects the discrepancy-check pass in both.
+        self.assertEqual(len(captured["calls"]), 2)
+        self.assertIn("--dry_run", captured["calls"][0])
+        self.assertIn("--test", captured["calls"][0])
+        self.assertNotIn("--dry_run", captured["calls"][1])
+        self.assertIn("--test", captured["calls"][1])
 
     def test_run_olive_modelbuilder_missing_discrepancy_results(self):
         """Successful export but no JSON metrics file is reported as a discrepancy failure."""

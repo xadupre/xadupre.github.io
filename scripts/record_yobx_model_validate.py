@@ -726,14 +726,21 @@ def run_olive_modelbuilder(
     """Export *entry* to ONNX using the development version of Olive.
 
     This shells out to ``olive capture-onnx-graph --use_model_builder``
-    with ``--test`` so Olive auto-injects the ``OnnxDiscrepancyCheck``
-    pass and dumps the metrics to ``discrepancy_check_results.json`` in
-    the output directory. ``--test`` also makes Olive build a randomly
-    initialised, two-hidden-layer copy of the HuggingFace architecture
-    and use it as the PyTorch reference, so the comparison is between
-    the ONNX graph produced by ``ModelBuilder`` and the matching
-    PyTorch test model rather than the (potentially gigabytes-sized)
-    full checkpoint.
+    twice. Both invocations pass ``--test`` so Olive auto-injects the
+    ``OnnxDiscrepancyCheck`` pass into the workflow:
+
+    1. The first command adds ``--dry_run`` so Olive only generates and
+       saves the workflow ``config.json`` (already containing the
+       ``OnnxDiscrepancyCheck`` pass) without running it.
+    2. The second command drops ``--dry_run`` and actually executes the
+       same workflow, producing the ONNX graph and the
+       ``discrepancy_check_results.json`` metrics file.
+
+    ``--test`` also makes Olive build a randomly initialised,
+    two-hidden-layer copy of the HuggingFace architecture and use it as
+    the PyTorch reference, so the comparison is between the ONNX graph
+    produced by ``ModelBuilder`` and the matching PyTorch test model
+    rather than the (potentially gigabytes-sized) full checkpoint.
 
     The function returns a plain dict that follows the same conventions
     as :func:`yobx.torch.validate.validate_model`'s ``ValidateSummary``
@@ -766,7 +773,7 @@ def run_olive_modelbuilder(
         own_tmp = tempfile.mkdtemp(prefix="olive_mb_")
         output_path = own_tmp
 
-    cmd = [
+    base_cmd = [
         sys.executable,
         "-m",
         "olive.cli.launcher",
@@ -785,30 +792,64 @@ def run_olive_modelbuilder(
         # ``discrepancy_check_results.json`` in the output directory.
         "--test",
     ]
+    # First run with ``--dry_run`` so Olive generates ``config.json`` in
+    # the output directory (which already includes the
+    # ``OnnxDiscrepancyCheck`` pass thanks to ``--test``) without
+    # actually executing the workflow. The second run drops
+    # ``--dry_run`` and actually runs the same workflow, including the
+    # ``OnnxDiscrepancyCheck`` pass.
+    dry_run_cmd = [*base_cmd, "--dry_run"]
+    cmd = base_cmd
 
-    try:
-        proc = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30 * 60,
-        )
-    except FileNotFoundError as exc:
-        summary["export"] = "FAILED"
-        summary["error_export"] = (
-            f"olive CLI is not available: {type(exc).__name__}: {exc}"
-        )
+    def _run(cmd_to_run: List[str]) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+        try:
+            return (
+                subprocess.run(
+                    cmd_to_run,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=30 * 60,
+                ),
+                None,
+            )
+        except FileNotFoundError as exc:
+            err = {
+                "export": "FAILED",
+                "error_export": (
+                    f"olive CLI is not available: {type(exc).__name__}: {exc}"
+                ),
+            }
+            return None, err
+        except subprocess.TimeoutExpired as exc:
+            err = {
+                "export": "FAILED",
+                "error_export": f"olive capture-onnx-graph timed out: {exc}",
+            }
+            return None, err
+
+    proc, err = _run(dry_run_cmd)
+    if err is not None:
+        summary.update(err)
         if own_tmp is not None:
             shutil.rmtree(own_tmp, ignore_errors=True)
         return summary
-    except subprocess.TimeoutExpired as exc:
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        msg = stderr or stdout or f"olive exited with code {proc.returncode}"
         summary["export"] = "FAILED"
-        summary["error_export"] = f"olive capture-onnx-graph timed out: {exc}"
+        summary["error_export"] = f"--dry_run failed: {msg}"
         if own_tmp is not None:
             shutil.rmtree(own_tmp, ignore_errors=True)
         return summary
 
+    proc, err = _run(cmd)
+    if err is not None:
+        summary.update(err)
+        if own_tmp is not None:
+            shutil.rmtree(own_tmp, ignore_errors=True)
+        return summary
     if proc.returncode != 0:
         stderr = (proc.stderr or "").strip()
         stdout = (proc.stdout or "").strip()
