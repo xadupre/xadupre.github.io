@@ -64,7 +64,7 @@ their shapes directly in ``model.graph.input`` and ``model.graph.output``.
 For systematic testing of shape inference across many test cases using
 :func:`make_test_class`, see :ref:`l-example-plot-backend-test-case`.
 
-.. GENERATED FROM PYTHON SOURCE LINES 48-70
+.. GENERATED FROM PYTHON SOURCE LINES 48-69
 
 .. code-block:: Python
 
@@ -77,13 +77,12 @@ For systematic testing of shape inference across many test cases using
     import onnx_light.onnx.numpy_helper as onh
     from onnx_light.onnx.backend import collect_test_cases
     from onnx_light.onnx_optim.shape_inference import (
-        check_inputs_available,
-        compute_shape_model,
-        compute_shape_node,
         infer_shapes_model,
         OptimTensor,
+        ShapeEventAction,
         ShapesContext,
     )
+    from onnx_light.tools import pretty_onnx
 
     # Make sure the built-in operator schemas are registered before running
     # shape inference (the C++ dispatch table looks them up).
@@ -97,17 +96,19 @@ For systematic testing of shape inference across many test cases using
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 71-78
+.. GENERATED FROM PYTHON SOURCE LINES 70-79
 
 Build the model
 +++++++++++++++
 
 The graph computes ``Z = Reshape(Concat(Add(X, Y), X, axis=2), [0, 0, -1])``.
-Both ``X`` and ``Y`` are 3-D float inputs with concrete dimensions
-``[2, 5, 8]``.  The Reshape target shape is stored as an INT64
-initializer ``reshape_shape = [0, 0, -1]``.
+Both ``X`` and ``Y`` are 3-D float inputs with symbolic dimensions
+``["batch", "seq", 8]``: the batch size and sequence length are dynamic
+(symbolic) while the model dimension ``d_model = 8`` is concrete.  The
+Reshape target shape is stored as an INT64 initializer
+``reshape_shape = [0, 0, -1]``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 78-114
+.. GENERATED FROM PYTHON SOURCE LINES 79-102
 
 .. code-block:: Python
 
@@ -121,8 +122,8 @@ initializer ``reshape_shape = [0, 0, -1]``.
             ],
             "shape_inference_demo",
             inputs=[
-                oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, [2, 5, 8]),
-                oh.make_tensor_value_info("Y", onnxl.TensorProto.FLOAT, [2, 5, 8]),
+                oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, ["batch", "seq", 8]),
+                oh.make_tensor_value_info("Y", onnxl.TensorProto.FLOAT, ["batch", "seq", 8]),
             ],
             outputs=[oh.make_tensor_value_info("Z", onnxl.TensorProto.FLOAT, None)],
             initializer=[oh.make_tensor("reshape_shape", onnxl.TensorProto.INT64, [3], [0, 0, -1])],
@@ -133,6 +134,24 @@ initializer ``reshape_shape = [0, 0, -1]``.
 
     # Ordered list of intermediate / output tensors to track.
     TRACKED = ["added", "concat_out", "Z"]
+
+
+
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 103-104
+
+The model.
+
+.. GENERATED FROM PYTHON SOURCE LINES 104-120
+
+.. code-block:: Python
+
+
+    print(pretty_onnx(model))
 
 
     # ---------------------------------------------------------------------------
@@ -151,10 +170,24 @@ initializer ``reshape_shape = [0, 0, -1]``.
 
 
 
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    opset: domain='' version=18
+    graph: name='shape_inference_demo'
+    input: float[batch,seq,8] X
+    input: float[batch,seq,8] Y
+    init: int64[3] reshape_shape
+    Add(X, Y) -> added
+    Concat(added, X) -> concat_out
+    Reshape(concat_out, reshape_shape) -> Z
+    output: float[] Z
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-123
+
+.. GENERATED FROM PYTHON SOURCE LINES 121-129
 
 Approach 1 — model-level inference
 ++++++++++++++++++++++++++++++++++++
@@ -163,9 +196,9 @@ Approach 1 — model-level inference
 types and shapes back into ``model.graph.output`` and
 ``model.graph.value_info``.  Internally it reads the *values* of every
 initializer, which lets it fully resolve the ``[0, 0, -1]`` target and
-derive ``Z = [2, 5, 16]``.
+derive ``Z = ["batch", "seq", 16]``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 123-143
+.. GENERATED FROM PYTHON SOURCE LINES 129-149
 
 .. code-block:: Python
 
@@ -198,14 +231,14 @@ derive ``Z = [2, 5, 16]``.
  .. code-block:: none
 
     Model-level shapes:
-      added: [2, 5, 8]
-      concat_out: [2, 5, 16]
-      Z: [2, 5, 16]
+      added: ['batch', 'seq', 8]
+      concat_out: ['batch', 'seq', 16]
+      Z: ['batch', 'seq', 16]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 144-151
+.. GENERATED FROM PYTHON SOURCE LINES 150-157
 
 Approach 2 — naïve node-by-node (no value propagation)
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -215,7 +248,7 @@ tensor of length 3) but not its *values*.  The Reshape shape function
 therefore cannot read ``[0, 0, -1]`` and falls back to symbolic
 placeholder dimensions (``Reshape_dim0``, ``Reshape_dim1``, ``Reshape_dim2``).
 
-.. GENERATED FROM PYTHON SOURCE LINES 151-191
+.. GENERATED FROM PYTHON SOURCE LINES 157-197
 
 .. code-block:: Python
 
@@ -243,8 +276,8 @@ placeholder dimensions (``Reshape_dim0``, ``Reshape_dim1``, ``Reshape_dim2``).
 
         results = {}
         for node in model.graph.node:
-            check_inputs_available(ctx, node)
-            compute_shape_node(ctx, node)
+            ctx.check_inputs_available(node)
+            ctx.compute_shape_node(node)
             for out_name in node.output:
                 if not out_name:
                     continue
@@ -269,14 +302,14 @@ placeholder dimensions (``Reshape_dim0``, ``Reshape_dim1``, ``Reshape_dim2``).
 
 
     Naïve node-by-node shapes:
-      added: [2, 5, 8]
-      concat_out: [2, 5, 16]
+      added: ['batch', 'seq', 8]
+      concat_out: ['batch', 'seq', 16]
       Z: ['Reshape_dim0', 'Reshape_dim1', 'Reshape_dim2']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 192-199
+.. GENERATED FROM PYTHON SOURCE LINES 198-205
 
 Approach 3 — enhanced node-by-node (with value propagation)
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -284,9 +317,9 @@ Approach 3 — enhanced node-by-node (with value propagation)
 Calling :meth:`OptimTensor.set_value_as_shape` on ``reshape_shape``
 mirrors what :func:`infer_shapes_model` does internally. The Reshape
 shape function can now read ``[0, 0, -1]`` and derive
-``Z = [2, 5, 16]``.
+``Z = ["batch", "seq", 16]``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 199-206
+.. GENERATED FROM PYTHON SOURCE LINES 205-212
 
 .. code-block:: Python
 
@@ -307,23 +340,23 @@ shape function can now read ``[0, 0, -1]`` and derive
 
 
     Enhanced node-by-node shapes:
-      added: [2, 5, 8]
-      concat_out: [2, 5, 16]
-      Z: [2, 5, 16]
+      added: ['batch', 'seq', 8]
+      concat_out: ['batch', 'seq', 16]
+      Z: ['batch', 'seq', 16]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 207-213
+.. GENERATED FROM PYTHON SOURCE LINES 213-219
 
 Comparison table
 ++++++++++++++++
 
-Model-level and enhanced node-by-node agree: ``Z = [2, 5, 16]``.
+Model-level and enhanced node-by-node agree: ``Z = ["batch", "seq", 16]``.
 The naïve approach cannot resolve the ``Reshape`` output because the
 shape values ``[0, 0, -1]`` are not available in the context.
 
-.. GENERATED FROM PYTHON SOURCE LINES 213-222
+.. GENERATED FROM PYTHON SOURCE LINES 219-228
 
 .. code-block:: Python
 
@@ -354,7 +387,7 @@ shape values ``[0, 0, -1]`` are not available in the context.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 223-236
+.. GENERATED FROM PYTHON SOURCE LINES 229-242
 
 Shape-inference events on a backend test case
 +++++++++++++++++++++++++++++++++++++++++++++
@@ -370,7 +403,7 @@ The log contains:
   is stored in the context,
 * one ``compute_node`` entry per processed node with operator metadata.
 
-.. GENERATED FROM PYTHON SOURCE LINES 236-266
+.. GENERATED FROM PYTHON SOURCE LINES 242-254
 
 .. code-block:: Python
 
@@ -386,22 +419,101 @@ The log contains:
     case_model = onnxl.ModelProto()
     case_model.CopyFrom(nonzero_case.model)
 
+
+
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 255-256
+
+Prints the model.
+
+.. GENERATED FROM PYTHON SOURCE LINES 256-258
+
+.. code-block:: Python
+
+    print(pretty_onnx(case_model))
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    opset: domain='' version=18
+    graph: name='test_cc_shape_inference_nonzero_chain_named'
+    input: float[batch,seq] X
+    Abs(X) -> abs_out
+    Relu(abs_out) -> relu_out
+    Add(relu_out, relu_out) -> double_out
+    Mul(double_out, relu_out) -> mul_out
+    NonZero(mul_out) -> nz_pre_abs
+    Abs(nz_pre_abs) -> nz
+    Transpose(nz) -> transposed_nz
+    Cast(transposed_nz) -> nz_float_pre_abs
+    Abs(nz_float_pre_abs) -> nz_float
+    output: int64[2,do1] nz
+    output: float[do1,2] nz_float
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 259-261
+
+We need to clear the existing value_info in the model since
+they define the expected values for the model.
+
+.. GENERATED FROM PYTHON SOURCE LINES 261-263
+
+.. code-block:: Python
+
+    case_model.graph.value_info.clear()
+
+
+
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 264-265
+
+Shape inference now.
+
+.. GENERATED FROM PYTHON SOURCE LINES 265-293
+
+.. code-block:: Python
+
+
     events_ctx = ShapesContext()
     events_ctx.events_enabled = True
-    compute_shape_model(events_ctx, case_model, prefill_with_value_info_output=True)
+    events_ctx.compute_shape_model(case_model, prefill_with_value_info_output=True)
+    events_ctx.apply_inferred_shapes_to_model(case_model)
 
     shape_events = events_ctx.events()
-    compute_events = [ev for ev in shape_events if ev.action == "compute_node"]
-    max_displayed_events = 8
+    compute_events = [ev for ev in shape_events if ev.action == ShapeEventAction.kComputeNode]
 
     print(f"\nShape-inference events for {NONZERO_CHAIN_TEST_CASE_NAME}:")
     print(f"  total events      : {len(shape_events)}")
     print(f"  compute_node count: {len(compute_events)}")
     print("  first events:")
-    for ev in shape_events[:max_displayed_events]:
+    for ev in shape_events:
+        if ev.action == ShapeEventAction.kComputeNode:
+            continue
         d = ev.as_dict()
-        op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
-        print(f"    {d['action']:<12s} name={d['name']:<16s} shape={d['shape']!s:<16s} op={op}")
+        if ev.action in (ShapeEventAction.kAdd, ShapeEventAction.kReplace):
+            op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
+            print(
+                f"    {d['node_index']:<2d}:{d['action']:<16s} "
+                f"name={d['name']:<16s} shape={d['shape']!s:<16s} op={op}"
+            )
+        else:
+            op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
+            print(f"    {d['node_index']:<2d}:{d['action']:<16s} inputs={d['inputs']}")
 
 
 
@@ -417,19 +529,63 @@ The log contains:
       total events      : 26
       compute_node count: 9
       first events:
-        add          name=X                shape=['batch', 'seq'] op=-
-        add          name=abs_out          shape=['batch', 'seq'] op=-
-        compute_node name=                 shape=[]               op=ai.onnx::Abs
-        add          name=relu_out         shape=['batch', 'seq'] op=-
-        compute_node name=                 shape=[]               op=ai.onnx::Relu
-        add          name=double_out       shape=['batch', 'seq'] op=-
-        compute_node name=                 shape=[]               op=ai.onnx::Add
-        add          name=mul_out          shape=['batch', 'seq'] op=-
+        -1:add              name=X                shape=['batch', 'seq'] op=-
+        0 :add              name=abs_out          shape=['batch', 'seq'] op=-
+        1 :add              name=relu_out         shape=['batch', 'seq'] op=-
+        2 :add              name=double_out       shape=['batch', 'seq'] op=-
+        3 :add              name=mul_out          shape=['batch', 'seq'] op=-
+        4 :constraint_max   inputs=['NonZero_nz_pre_abs_nnz', 'batch*seq']
+        4 :add              name=nz_pre_abs       shape=['2', 'NonZero_nz_pre_abs_nnz'] op=-
+        5 :add              name=nz               shape=['2', 'NonZero_nz_pre_abs_nnz'] op=-
+        6 :add              name=transposed_nz    shape=['NonZero_nz_pre_abs_nnz', '2'] op=-
+        7 :add              name=nz_float_pre_abs shape=['NonZero_nz_pre_abs_nnz', '2'] op=-
+        8 :add              name=nz_float         shape=['NonZero_nz_pre_abs_nnz', '2'] op=-
+        -1:constraint       inputs=['NonZero_nz_pre_abs_nnz', 'do1']
+        -1:replace          name=nz_float         shape=['do1', '2']     op=-
+        -1:replace          name=nz               shape=['2', 'do1']     op=-
+        -1:replace          name=nz_pre_abs       shape=['2', 'do1']     op=-
+        -1:replace          name=nz_float_pre_abs shape=['do1', '2']     op=-
+        -1:replace          name=transposed_nz    shape=['do1', '2']     op=-
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 267-277
+.. GENERATED FROM PYTHON SOURCE LINES 294-295
+
+The results compared to the expected values.
+
+.. GENERATED FROM PYTHON SOURCE LINES 295-303
+
+.. code-block:: Python
+
+    expected_values = {i.name: i for i in nonzero_case.model.graph.value_info}
+    case_values = {i.name: i for i in case_model.graph.value_info}
+    for expected in nonzero_case.model.graph.value_info:
+        print(
+            f"expected: {pretty_onnx(expected):<35s} "
+            f"computed: {pretty_onnx(case_values[expected.name]):<35s}"
+        )
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    expected: float[batch,seq] abs_out            computed: float[batch,seq] abs_out           
+    expected: float[batch,seq] relu_out           computed: float[batch,seq] relu_out          
+    expected: float[batch,seq] double_out         computed: float[batch,seq] double_out        
+    expected: float[batch,seq] mul_out            computed: float[batch,seq] mul_out           
+    expected: int64[2,do1] nz_pre_abs             computed: int64[2,do1] nz_pre_abs            
+    expected: int64[do1,2] transposed_nz          computed: int64[do1,2] transposed_nz         
+    expected: float[do1,2] nz_float_pre_abs       computed: float[do1,2] nz_float_pre_abs      
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 304-314
 
 Text plot
 +++++++++
@@ -442,7 +598,7 @@ The ``?`` for ``Z`` in the naïve row versus the concrete ``16``
 in the model-level and enhanced rows makes the divergence immediately
 visible.
 
-.. GENERATED FROM PYTHON SOURCE LINES 277-307
+.. GENERATED FROM PYTHON SOURCE LINES 314-344
 
 .. code-block:: Python
 
@@ -510,7 +666,7 @@ visible.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.019 seconds)
+   **Total running time of the script:** (0 minutes 0.020 seconds)
 
 
 .. _sphx_glr_download_auto_examples_optimization_plot_shape_inference.py:

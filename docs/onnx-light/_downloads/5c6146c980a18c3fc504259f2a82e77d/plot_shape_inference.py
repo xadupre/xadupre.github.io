@@ -54,13 +54,12 @@ import onnx_light.onnx.helper as oh
 import onnx_light.onnx.numpy_helper as onh
 from onnx_light.onnx.backend import collect_test_cases
 from onnx_light.onnx_optim.shape_inference import (
-    check_inputs_available,
-    compute_shape_model,
-    compute_shape_node,
     infer_shapes_model,
     OptimTensor,
+    ShapeEventAction,
     ShapesContext,
 )
+from onnx_light.tools import pretty_onnx
 
 # Make sure the built-in operator schemas are registered before running
 # shape inference (the C++ dispatch table looks them up).
@@ -72,9 +71,11 @@ defs.register_onnx_operator_set_schema()
 # +++++++++++++++
 #
 # The graph computes ``Z = Reshape(Concat(Add(X, Y), X, axis=2), [0, 0, -1])``.
-# Both ``X`` and ``Y`` are 3-D float inputs with concrete dimensions
-# ``[2, 5, 8]``.  The Reshape target shape is stored as an INT64
-# initializer ``reshape_shape = [0, 0, -1]``.
+# Both ``X`` and ``Y`` are 3-D float inputs with symbolic dimensions
+# ``["batch", "seq", 8]``: the batch size and sequence length are dynamic
+# (symbolic) while the model dimension ``d_model = 8`` is concrete.  The
+# Reshape target shape is stored as an INT64 initializer
+# ``reshape_shape = [0, 0, -1]``.
 
 model = oh.make_model(
     oh.make_graph(
@@ -85,8 +86,8 @@ model = oh.make_model(
         ],
         "shape_inference_demo",
         inputs=[
-            oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, [2, 5, 8]),
-            oh.make_tensor_value_info("Y", onnxl.TensorProto.FLOAT, [2, 5, 8]),
+            oh.make_tensor_value_info("X", onnxl.TensorProto.FLOAT, ["batch", "seq", 8]),
+            oh.make_tensor_value_info("Y", onnxl.TensorProto.FLOAT, ["batch", "seq", 8]),
         ],
         outputs=[oh.make_tensor_value_info("Z", onnxl.TensorProto.FLOAT, None)],
         initializer=[oh.make_tensor("reshape_shape", onnxl.TensorProto.INT64, [3], [0, 0, -1])],
@@ -97,6 +98,11 @@ model = oh.make_model(
 
 # Ordered list of intermediate / output tensors to track.
 TRACKED = ["added", "concat_out", "Z"]
+
+# %%
+# The model.
+
+print(pretty_onnx(model))
 
 
 # ---------------------------------------------------------------------------
@@ -119,7 +125,7 @@ def last_dim_int(shape):
 # types and shapes back into ``model.graph.output`` and
 # ``model.graph.value_info``.  Internally it reads the *values* of every
 # initializer, which lets it fully resolve the ``[0, 0, -1]`` target and
-# derive ``Z = [2, 5, 16]``.
+# derive ``Z = ["batch", "seq", 16]``.
 
 infer_shapes_model(model)
 
@@ -172,8 +178,8 @@ def run_node_by_node(model, propagate_values: bool) -> dict:
 
     results = {}
     for node in model.graph.node:
-        check_inputs_available(ctx, node)
-        compute_shape_node(ctx, node)
+        ctx.check_inputs_available(node)
+        ctx.compute_shape_node(node)
         for out_name in node.output:
             if not out_name:
                 continue
@@ -195,7 +201,7 @@ for name in TRACKED:
 # Calling :meth:`OptimTensor.set_value_as_shape` on ``reshape_shape``
 # mirrors what :func:`infer_shapes_model` does internally. The Reshape
 # shape function can now read ``[0, 0, -1]`` and derive
-# ``Z = [2, 5, 16]``.
+# ``Z = ["batch", "seq", 16]``.
 
 enhanced_shapes = run_node_by_node(model, propagate_values=True)
 print("\nEnhanced node-by-node shapes:")
@@ -207,7 +213,7 @@ for name in TRACKED:
 # Comparison table
 # ++++++++++++++++
 #
-# Model-level and enhanced node-by-node agree: ``Z = [2, 5, 16]``.
+# Model-level and enhanced node-by-node agree: ``Z = ["batch", "seq", 16]``.
 # The naïve approach cannot resolve the ``Reshape`` output because the
 # shape values ``[0, 0, -1]`` are not available in the context.
 
@@ -245,23 +251,54 @@ if nonzero_case is None:
 case_model = onnxl.ModelProto()
 case_model.CopyFrom(nonzero_case.model)
 
+# %%
+# Prints the model.
+print(pretty_onnx(case_model))
+
+# %%
+# We need to clear the existing value_info in the model since
+# they define the expected values for the model.
+case_model.graph.value_info.clear()
+
+# %%
+# Shape inference now.
+
 events_ctx = ShapesContext()
 events_ctx.events_enabled = True
-compute_shape_model(events_ctx, case_model, prefill_with_value_info_output=True)
+events_ctx.compute_shape_model(case_model, prefill_with_value_info_output=True)
+events_ctx.apply_inferred_shapes_to_model(case_model)
 
 shape_events = events_ctx.events()
-compute_events = [ev for ev in shape_events if ev.action == "compute_node"]
-max_displayed_events = 8
+compute_events = [ev for ev in shape_events if ev.action == ShapeEventAction.kComputeNode]
 
 print(f"\nShape-inference events for {NONZERO_CHAIN_TEST_CASE_NAME}:")
 print(f"  total events      : {len(shape_events)}")
 print(f"  compute_node count: {len(compute_events)}")
 print("  first events:")
-for ev in shape_events[:max_displayed_events]:
+for ev in shape_events:
+    if ev.action == ShapeEventAction.kComputeNode:
+        continue
     d = ev.as_dict()
-    op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
-    print(f"    {d['action']:<12s} name={d['name']:<16s} shape={d['shape']!s:<16s} op={op}")
+    if ev.action in (ShapeEventAction.kAdd, ShapeEventAction.kReplace):
+        op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
+        print(
+            f"    {d['node_index']:<2d}:{d['action']:<16s} "
+            f"name={d['name']:<16s} shape={d['shape']!s:<16s} op={op}"
+        )
+    else:
+        op = f"{d['op_domain']}::{d['op_type']}" if d["op_type"] else "-"
+        print(f"    {d['node_index']:<2d}:{d['action']:<16s} inputs={d['inputs']}")
 
+
+# %%
+# The results compared to the expected values.
+expected_values = {i.name: i for i in nonzero_case.model.graph.value_info}
+case_values = {i.name: i for i in case_model.graph.value_info}
+for expected in nonzero_case.model.graph.value_info:
+    print(
+        f"expected: {pretty_onnx(expected):<35s} "
+        f"computed: {pretty_onnx(case_values[expected.name]):<35s}"
+    )
 
 #####################################
 # Text plot
