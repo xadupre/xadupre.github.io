@@ -133,8 +133,11 @@ def _fix_sentencepiece_protobuf_compat() -> None:
     try:
         import google.protobuf
 
-        _pb_ver = tuple(int(x) for x in google.protobuf.__version__.split(".")[:2])
-        if _pb_ver >= (4, 0):
+        try:
+            _pb_major = int(google.protobuf.__version__.split(".")[0])
+        except (ValueError, IndexError):
+            _pb_major = 0
+        if _pb_major >= 4:
             from transformers.utils import (
                 sentencepiece_model_pb2_new as _spm_pb2_compat,
             )
