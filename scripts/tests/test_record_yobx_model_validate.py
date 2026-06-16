@@ -980,5 +980,18 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
 
 
+    def test_protobuf_python_implementation_env_default(self):
+        # Importing the recorder must force the pure-Python protobuf
+        # implementation so that ``transformers`` can convert the slow
+        # SentencePiece tokenizer of models like ``mistralai/Mistral-7B-v0.3``
+        # into the fast ``tokenizers`` backend. With the default C++ protobuf
+        # implementation, ``sentencepiece_model_pb2`` fails to import against
+        # the ``protobuf`` version pulled in by ``onnx`` and the tokenizer step
+        # fails with a misleading "need sentencepiece or tiktoken" error.
+        self.assertEqual(
+            os.environ.get("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"), "python"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
