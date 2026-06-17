@@ -685,6 +685,46 @@ def _index_value_infos(model) -> Dict[str, Any]:
     return indexed
 
 
+_SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _symbolic_dims_equal(got: str, exp: str) -> bool:
+    """Return ``True`` when two symbolic dim expressions are equivalent.
+
+    Shape-inference implementations format symbolic dimensions in
+    different ways. The cheap comparison strips whitespace so that
+    ``"a + b"`` and ``"a+b"`` are treated as equal. When that fails the
+    expressions are parsed with ``sympy`` (when available) and compared
+    symbolically, so mathematically equivalent forms such as
+    ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are recognised as equal.
+    """
+
+    if "".join(got.split()) == "".join(exp.split()):
+        return True
+
+    try:
+        import sympy
+        from sympy.parsing.sympy_parser import parse_expr
+    except Exception:
+        return False
+
+    def _parse(expr: str):
+        # Map every identifier to a plain symbol so names such as ``N``
+        # are not interpreted as ``sympy`` helpers (e.g. ``sympy.N``).
+        names = set(_SYMBOL_RE.findall(expr))
+        names.discard("floor")
+        local = {name: sympy.Symbol(name) for name in names}
+        parsed = parse_expr(expr, local_dict=local)
+        # Convert floats (``0.5``) to rationals so ``floor(0.5*H)`` and
+        # ``floor(H/2)`` collapse to the same expression.
+        return sympy.nsimplify(parsed, rational=True)
+
+    try:
+        return sympy.simplify(_parse(got) - _parse(exp)) == 0
+    except Exception:
+        return False
+
+
 def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any]]:
     """Score each snapshotted intermediate against ``inferred_model``.
 
@@ -789,9 +829,11 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                     # Symbolic dims may carry expressions such as
                     # ``"a + b"`` whose exact spacing varies between
                     # shape-inference implementations. Strip whitespace
-                    # from both sides before comparing so that
-                    # ``"a + b"`` and ``"a+b"`` are treated as equal.
-                    if "".join(got.split()) != "".join(exp.split()):
+                    # before comparing so that ``"a + b"`` and ``"a+b"``
+                    # are treated as equal, and fall back to a symbolic
+                    # comparison so mathematically equivalent forms such
+                    # as ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` match.
+                    if not _symbolic_dims_equal(got, exp):
                         mismatch = (
                             f"dim[{i}] mismatch: expected {exp!r}, "
                             f"got {got!r}"

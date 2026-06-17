@@ -454,6 +454,15 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
 
+    def test_symbolic_dim_name_accepts_equivalent_expressions(self):
+        # ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are mathematically
+        # equivalent symbolic dims (floor division), so they must not be
+        # flagged as a mismatch even though their textual forms differ.
+        snap, wrong = self._make_symbolic_model("2*floor(0.5*H)", "2*(H//2)")
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
+
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
         details = rsi._compare_snapshot_with_model(snap, wrong)
