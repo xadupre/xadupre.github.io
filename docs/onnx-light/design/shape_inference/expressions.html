@@ -64,7 +64,7 @@
     <link rel="icon" href="../../_static/logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Symbolic-dimension constraint mechanism" href="constraints.html" />
+    <link rel="next" title="Value-as-shape propagation" href="value_as_shape.html" />
     <link rel="prev" title="Shape inference" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
@@ -391,12 +391,12 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><p aria-level="2" class="caption" role="heading"><span class="caption-text">ONNX, Concepts, link to protobuf</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../goals.html">Uncompromising Objective</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../intro/index.html">Introduction to ONNX</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../intro/concepts.html">ONNX Concepts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../intro/python.html">ONNX with Python</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="../goals.html">Uncompromising Objective</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../differences.html">Detailed Differences between <code class="docutils literal notranslate"><span class="pre">onnx</span></code> and <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="../protobuf_format.html">Protobuf format applied to ONNX</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../ort_flatbuffer_format.html">ORT flatbuffer format: parallelization and alignment</a></li>
@@ -420,6 +420,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Shape inference</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="value_as_shape.html">Value-as-shape propagation</a></li>
 <li class="toctree-l2"><a class="reference internal" href="constraints.html">Symbolic-dimension constraint mechanism</a></li>
 <li class="toctree-l2"><a class="reference internal" href="sequences_and_subgraphs.html">Sequences, maps and subgraphs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="events.html">Shape-inference events (<code class="docutils literal notranslate"><span class="pre">ShapeEvent</span></code>)</a></li>
@@ -687,6 +688,28 @@ symbolic terms), the result is returned as an <code class="docutils literal notr
 normalised sum is unparsed back to a string.</p>
 </section>
 <hr class="docutils" />
+<section id="floor-division-semantics">
+<h2>Floor-division semantics<a class="headerlink" href="#floor-division-semantics" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">//</span></code> is <em>floor</em> (integer) division, not exact division, so it does <strong>not</strong>
+commute with multiplication.  A constant factor can be cancelled against the
+denominator only when the numerator is provably an exact multiple of it.  This
+explains a pair of expressions that look symmetric but simplify differently:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">(2*H)//2</span></code> <strong>simplifies to</strong> <code class="docutils literal notranslate"><span class="pre">H</span></code>.  The numerator <code class="docutils literal notranslate"><span class="pre">2*H</span></code> is always an
+even multiple of <code class="docutils literal notranslate"><span class="pre">2</span></code>, so the division is exact for every integer <code class="docutils literal notranslate"><span class="pre">H</span></code> and
+<code class="docutils literal notranslate"><span class="pre">ExactMulDivConstantFolderTransformer</span></code> cancels the common factor.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">2*(H//2)</span></code> is <strong>left unchanged</strong>.  Here the floor division <code class="docutils literal notranslate"><span class="pre">H//2</span></code> is
+evaluated first and discards the remainder, so multiplying the result by
+<code class="docutils literal notranslate"><span class="pre">2</span></code> only recovers <code class="docutils literal notranslate"><span class="pre">H</span></code> when <code class="docutils literal notranslate"><span class="pre">H</span></code> is even (for example <code class="docutils literal notranslate"><span class="pre">2*(3//2)</span> <span class="pre">==</span> <span class="pre">2</span></code>,
+not <code class="docutils literal notranslate"><span class="pre">3</span></code>).  Because the equality does not hold for all integers, the
+simplifier must preserve the expression.</p></li>
+</ul>
+<p>In general <code class="docutils literal notranslate"><span class="pre">a*(x//a)</span></code> equals <code class="docutils literal notranslate"><span class="pre">x</span></code> only when <code class="docutils literal notranslate"><span class="pre">x</span></code> is a multiple of <code class="docutils literal notranslate"><span class="pre">a</span></code>,
+whereas <code class="docutils literal notranslate"><span class="pre">(a*x)//a</span></code> always equals <code class="docutils literal notranslate"><span class="pre">x</span></code>.  The simplifier is conservative and
+never rewrites an expression unless the rewrite is valid for <em>every</em> integer
+value of the symbolic dimensions.</p>
+</section>
+<hr class="docutils" />
 <section id="unparser">
 <h2>Unparser<a class="headerlink" href="#unparser" title="Link to this heading">#</a></h2>
 <p><a class="reference internal" href="../../api/python/onnx_optim/expressions.html#onnx_light.onnx_optim.expressions.simplify_expression" title="onnx_light.onnx_optim.expressions.simplify_expression"><code class="xref py py-func docutils literal notranslate"><span class="pre">simplify_expression()</span></code></a> (and all other
@@ -695,10 +718,16 @@ an AST back to a string.  The unparser inserts parentheses exactly where
 required by the precedence rules above, so the output round-trips through
 <code class="docutils literal notranslate"><span class="pre">parse()</span></code> to an equivalent AST.</p>
 <p>For example:</p>
+<p>&lt;&lt;&lt;</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_optim.expressions</span><span class="w"> </span><span class="kn">import</span> <span class="n">simplify_expression</span>
 
-<span class="n">simplify_expression</span><span class="p">(</span><span class="s2">&quot;(a + b) * c&quot;</span><span class="p">)</span>   <span class="c1"># &quot;(a+b)*c&quot;  — parens kept (needed)</span>
-<span class="n">simplify_expression</span><span class="p">(</span><span class="s2">&quot;a * b + c&quot;</span><span class="p">)</span>     <span class="c1"># &quot;a*b+c&quot;   — no parens (not needed)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">simplify_expression</span><span class="p">(</span><span class="s2">&quot;(a + b) * c&quot;</span><span class="p">))</span>  <span class="c1"># &quot;(a+b)*c&quot;  — parens kept (needed)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">simplify_expression</span><span class="p">(</span><span class="s2">&quot;a * b + c&quot;</span><span class="p">))</span>  <span class="c1"># &quot;a*b+c&quot;   — no parens (not needed)</span>
+</pre></div>
+</div>
+<p>&gt;&gt;&gt;</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>    <span class="p">(</span><span class="n">a</span><span class="o">+</span><span class="n">b</span><span class="p">)</span><span class="o">*</span><span class="n">c</span>
+    <span class="n">a</span><span class="o">*</span><span class="n">b</span><span class="o">+</span><span class="n">c</span>
 </pre></div>
 </div>
 </section>
@@ -725,12 +754,20 @@ string).</p></li>
 </ol>
 <p>This ensures that symbolic arithmetic never accumulates unnormalised
 intermediate expressions:</p>
+<p>&lt;&lt;&lt;</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_optim.expressions</span><span class="w"> </span><span class="kn">import</span> <span class="n">dim_add</span><span class="p">,</span> <span class="n">dim_mul</span><span class="p">,</span> <span class="n">dim_div</span>
 
-<span class="n">dim_add</span><span class="p">(</span><span class="s2">&quot;batch&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>          <span class="c1"># &quot;1+batch&quot;</span>
-<span class="n">dim_mul</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;seq_length&quot;</span><span class="p">)</span>     <span class="c1"># &quot;2*seq_length&quot;</span>
-<span class="n">dim_div</span><span class="p">(</span><span class="s2">&quot;2*seq_length&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">)</span>   <span class="c1"># &quot;seq_length&quot;  (simplified)</span>
-<span class="n">dim_div</span><span class="p">(</span><span class="s2">&quot;2*n&quot;</span><span class="p">,</span> <span class="s2">&quot;n&quot;</span><span class="p">)</span>          <span class="c1"># 2  (int — fully reduced)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">dim_add</span><span class="p">(</span><span class="s2">&quot;batch&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">))</span>  <span class="c1"># &quot;1+batch&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">dim_mul</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="s2">&quot;seq_length&quot;</span><span class="p">))</span>  <span class="c1"># &quot;2*seq_length&quot;</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">dim_div</span><span class="p">(</span><span class="s2">&quot;2*seq_length&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">))</span>  <span class="c1"># &quot;seq_length&quot;  (simplified)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">dim_div</span><span class="p">(</span><span class="s2">&quot;2*n&quot;</span><span class="p">,</span> <span class="s2">&quot;n&quot;</span><span class="p">))</span>  <span class="c1"># 2  (int — fully reduced)</span>
+</pre></div>
+</div>
+<p>&gt;&gt;&gt;</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>    <span class="n">batch</span><span class="o">+</span><span class="mi">1</span>
+    <span class="mi">2</span><span class="o">*</span><span class="n">seq_length</span>
+    <span class="n">seq_length</span>
+    <span class="mi">2</span>
 </pre></div>
 </div>
 </section>
@@ -812,11 +849,11 @@ exposed via the <code class="docutils literal notranslate"><span class="pre">_on
       </div>
     </a>
     <a class="right-next"
-       href="constraints.html"
+       href="value_as_shape.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Symbolic-dimension constraint mechanism</p>
+        <p class="prev-next-title">Value-as-shape propagation</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -843,6 +880,7 @@ exposed via the <code class="docutils literal notranslate"><span class="pre">_on
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#expression-grammar">Expression grammar</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ast-node-types">AST node types</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#simplification-pipeline">Simplification pipeline</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#floor-division-semantics">Floor-division semantics</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#unparser">Unparser</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dimension-operations">Dimension operations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#renaming">Renaming</a></li>
