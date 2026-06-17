@@ -14,6 +14,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_shape_inference_coverage as rsi  # noqa: E402
 
+try:
+    import sympy  # noqa: F401
+
+    _HAS_SYMPY = True
+except ImportError:
+    _HAS_SYMPY = False
+
 
 def _make_simple_model():
     """Build a tiny ``onnx.ModelProto`` exercising shape inference.
@@ -253,8 +260,8 @@ def _make_model_with_subgraph():
 
     The ``then`` branch has an intermediate ``value_info`` (``tmid``) and
     an output (``tout``); the ``else`` branch only has an output
-    (``eout``). Used to check that subgraph shapes are snapshotted,
-    stripped and scored like the main graph's.
+    (``eout``). Used to check that subgraph shapes are stripped from the
+    working copy but are **not** snapshotted or scored.
     """
     from onnx import TensorProto, helper
 
@@ -290,19 +297,15 @@ def _make_model_with_subgraph():
 
 
 class TestSubgraphCoverage(unittest.TestCase):
-    def test_snapshot_includes_subgraph_value_info_and_outputs(self):
+    def test_snapshot_excludes_subgraph_value_info_and_outputs(self):
         model = _make_model_with_subgraph()
         snap = rsi.snapshot_intermediates(model)
         by_name = {s["name"]: s for s in snap}
-        # Subgraph intermediate ``value_info`` is snapshotted.
-        self.assertIn("tmid", by_name)
-        self.assertEqual(by_name["tmid"]["kind"], "value_info")
-        self.assertEqual(by_name["tmid"]["shape"], [2, 3])
-        # Subgraph outputs of both branches are snapshotted.
-        self.assertIn("tout", by_name)
-        self.assertEqual(by_name["tout"]["kind"], "output")
-        self.assertIn("eout", by_name)
-        self.assertEqual(by_name["eout"]["kind"], "output")
+        # Subgraph intermediates / outputs are NOT snapshotted: their
+        # shapes must not be scored against the runtimes.
+        self.assertNotIn("tmid", by_name)
+        self.assertNotIn("tout", by_name)
+        self.assertNotIn("eout", by_name)
         # The main graph output is still present.
         self.assertIn("Y", by_name)
 
@@ -321,7 +324,7 @@ class TestSubgraphCoverage(unittest.TestCase):
             for vi in list(graph.value_info) + list(graph.output):
                 self.assertTrue(vi.type.tensor_type.HasField("shape"))
 
-    def test_subgraph_shapes_are_scored_against_inferred_model(self):
+    def test_subgraph_shapes_are_not_scored_against_inferred_model(self):
         model = _make_model_with_subgraph()
         snap = rsi.snapshot_intermediates(model)
         stripped = rsi.strip_shapes(model)
@@ -329,10 +332,11 @@ class TestSubgraphCoverage(unittest.TestCase):
         details = {
             d["name"]: d for d in rsi._compare_snapshot_with_model(snap, inferred)
         }
+        # Subgraph intermediates / outputs never appear in the scored
+        # details; only the main graph is compared.
         for name in ("tmid", "tout", "eout"):
-            self.assertIn(name, details)
-            self.assertTrue(details[name]["ok"], details[name])
-            self.assertEqual(details[name]["shape"], [2, 3])
+            self.assertNotIn(name, details)
+        self.assertIn("Y", details)
 
 
 class TestCompareSnapshotWithModel(unittest.TestCase):
@@ -420,6 +424,18 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         # dims with different spacing, so whitespace must be stripped
         # from both sides before comparing.
         snap, wrong = self._make_symbolic_model("a + b", "a+b")
+        details = rsi._compare_snapshot_with_model(snap, wrong)
+        by_name = {d["name"]: d for d in details}
+        self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
+
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
+    def test_symbolic_dim_name_accepts_equivalent_expressions(self):
+        # ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are mathematically
+        # equivalent symbolic dims (floor division), so they must not be
+        # flagged as a mismatch even though their textual forms differ.
+        snap, wrong = self._make_symbolic_model("2*floor(0.5*H)", "2*(H//2)")
         details = rsi._compare_snapshot_with_model(snap, wrong)
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
@@ -521,6 +537,28 @@ class TestRunTestWithBackend(unittest.TestCase):
                 vi.type.tensor_type.HasField("shape"),
                 f"value_info shape should be stripped on {vi.name!r}",
             )
+
+    def test_runner_exception_without_message_reports_type(self):
+        # A backend whose runner raises an exception with no message (for
+        # instance a bare ``assert`` in onnxruntime's symbolic shape
+        # inference) must still surface an explicit error rather than an
+        # empty one that reads on the dashboard as "not running".
+        model = _make_simple_model()
+        expected = rsi.snapshot_intermediates(model)
+
+        def fake_runner(stripped):
+            raise AssertionError()
+
+        original = rsi._BACKEND_RUNNERS["ort-transformers"]
+        rsi._BACKEND_RUNNERS["ort-transformers"] = fake_runner
+        try:
+            info = rsi.run_test_with_backend(model, expected, "ort-transformers")
+        finally:
+            rsi._BACKEND_RUNNERS["ort-transformers"] = original
+
+        self.assertFalse(info["success"])
+        self.assertEqual(info["error_step"], "run")
+        self.assertEqual(info["error"], "AssertionError")
 
 
 class TestDropShapelessValueInfo(unittest.TestCase):

@@ -17,10 +17,12 @@ of tests dedicated to shape inference, mirroring
 
 For each retained test case the recorded ``graph.output`` (and
 intermediate ``graph.value_info``) shapes are snapshotted then stripped
-from a working copy of the model. Subgraphs nested inside control-flow
-nodes (``If``/``Loop``/``Scan``) are walked as well, so their
-intermediate and output shapes are snapshotted, stripped and scored
-alongside the main graph's. Each candidate shape-inference
+from a working copy of the model. Only the main graph's shapes are
+snapshotted and scored; shapes carried by subgraphs nested inside
+control-flow nodes (``If``/``Loop``/``Scan``) are still stripped from
+the working copy but are deliberately **not** compared, since their
+intermediates depend on outer-scope inputs the shape-inference passes
+cannot always propagate. Each candidate shape-inference
 implementation is invoked on that stripped model and the produced shapes
 are compared with the snapshot. For every intermediate, we report
 whether the runtime recovered the expected ``elem_type`` and a
@@ -157,6 +159,12 @@ def _stringify_error(value: Any) -> str:
     if value is None:
         return ""
     text = str(value)
+    if not text and isinstance(value, BaseException):
+        # Some exceptions carry no message (for instance a bare ``assert``
+        # in onnxruntime's symbolic shape inference). Fall back to the
+        # exception type so the dashboard reports an explicit reason
+        # instead of an empty ``error`` that reads as "not running".
+        text = type(value).__name__
     if "\n" in text:
         text = text.splitlines()[0]
     if len(text) > 300:
@@ -534,9 +542,12 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     entries carry no expectation and are not counted towards the
     correctness score (see :func:`_compare_snapshot_with_model`).
 
-    Subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
-    are walked as well, so the ``value_info``/``output`` shapes they carry
-    are snapshotted alongside the main graph's.
+    Only the model's main graph is snapshotted. Shapes carried by
+    subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
+    are intentionally **not** snapshotted, so they are never scored
+    against the runtimes: subgraph intermediates depend on outer-scope
+    inputs whose shapes the shape-inference passes cannot always
+    propagate, which would otherwise produce spurious mismatches.
 
     Entries are returned in the order they appear in the model: the
     graph nodes are walked in declaration order and each output they
@@ -544,18 +555,15 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     node are appended at the end, preserving their relative order in
     ``model.graph.output``.
     """
-    snapshots: List[Dict[str, Any]] = []
-    for graph in _iter_subgraphs(model.graph):
-        snapshots.extend(_snapshot_graph_intermediates(graph))
-    return snapshots
+    return _snapshot_graph_intermediates(model.graph)
 
 
 def _snapshot_graph_intermediates(graph) -> List[Dict[str, Any]]:
     """Snapshot output / value_info shapes for a single ``GraphProto``.
 
     See :func:`snapshot_intermediates` for the entry format. This helper
-    operates on one graph at a time so it can be reused for both the main
-    graph and every nested subgraph.
+    operates on a single graph; only the model's main graph is passed in
+    (subgraph shapes are deliberately not snapshotted).
     """
     output_names = {vi.name for vi in graph.output}
     by_name: Dict[str, Tuple[str, Any]] = {}
@@ -676,16 +684,61 @@ def strip_shapes(model, keep_outputs: bool = False):
 def _index_value_infos(model) -> Dict[str, Any]:
     """Return ``{name: ValueInfoProto}`` for outputs + value_info.
 
-    Subgraphs are indexed as well so subgraph outputs / value_info can be
-    located when scoring snapshotted intermediates.
+    Only the main graph is indexed. Subgraph outputs / value_info are
+    intentionally excluded so the comparison never scores a snapshotted
+    intermediate against a shape that lives in a control-flow subgraph
+    (e.g. when a subgraph reuses a main-graph tensor name).
     """
     indexed: Dict[str, Any] = {}
-    for graph in _iter_subgraphs(model.graph):
-        for vi in graph.value_info:
-            indexed[vi.name] = vi
-        for vi in graph.output:
-            indexed[vi.name] = vi
+    graph = model.graph
+    for vi in graph.value_info:
+        indexed[vi.name] = vi
+    for vi in graph.output:
+        indexed[vi.name] = vi
     return indexed
+
+
+_SYMBOL_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _symbolic_dims_equal(got: str, exp: str) -> bool:
+    """Return ``True`` when two symbolic dim expressions are equivalent.
+
+    Shape-inference implementations format symbolic dimensions in
+    different ways. The cheap comparison strips whitespace so that
+    ``"a + b"`` and ``"a+b"`` are treated as equal. When that fails the
+    expressions are parsed with ``sympy`` (when available) and compared
+    symbolically, so mathematically equivalent forms such as
+    ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are recognised as equal.
+    """
+
+    if "".join(got.split()) == "".join(exp.split()):
+        return True
+
+    try:
+        import sympy
+        from sympy.parsing.sympy_parser import parse_expr
+    except ImportError:
+        return False
+
+    def _parse(expr: str):
+        # Map every identifier to a plain symbol so names such as ``N``
+        # are not interpreted as ``sympy`` helpers (e.g. ``sympy.N``).
+        names = set(_SYMBOL_RE.findall(expr))
+        names.discard("floor")
+        local = {name: sympy.Symbol(name) for name in names}
+        parsed = parse_expr(expr, local_dict=local)
+        # Convert floats (``0.5``) to rationals so ``floor(0.5*H)`` and
+        # ``floor(H/2)`` collapse to the same expression.
+        return sympy.nsimplify(parsed, rational=True)
+
+    try:
+        return sympy.simplify(_parse(got) - _parse(exp)) == 0
+    except Exception:
+        # Parsing/simplification can raise a wide range of errors for
+        # expressions sympy cannot handle; fall back to "not equal"
+        # instead of crashing the coverage run.
+        return False
 
 
 def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any]]:
@@ -790,9 +843,11 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                     # Symbolic dims may carry expressions such as
                     # ``"a + b"`` whose exact spacing varies between
                     # shape-inference implementations. Strip whitespace
-                    # from both sides before comparing so that
-                    # ``"a + b"`` and ``"a+b"`` are treated as equal.
-                    if "".join(got.split()) != "".join(exp.split()):
+                    # before comparing so that ``"a + b"`` and ``"a+b"``
+                    # are treated as equal, and fall back to a symbolic
+                    # comparison so mathematically equivalent forms such
+                    # as ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` match.
+                    if not _symbolic_dims_equal(got, exp):
                         mismatch = (
                             f"dim[{i}] mismatch: expected {exp!r}, " f"got {got!r}"
                         )
