@@ -1078,15 +1078,40 @@ class TestPerModelPerExporterDispatch(unittest.TestCase):
         else:
             self._check_validate_model(entry, cfg)
 
-    def test_every_model_and_exporter_is_wired(self):
-        # One sub-test per (model, exporter) pair so that a failure pinpoints
-        # the exact cell of the model-id coverage page that regressed.
-        self.assertTrue(rymv.DEFAULT_MODELS)
-        self.assertTrue(rymv.DEFAULT_EXPORTERS)
-        for entry in rymv.DEFAULT_MODELS:
-            for cfg in rymv.DEFAULT_EXPORTERS:
-                with self.subTest(model=entry["model"], exporter=cfg["label"]):
-                    self._check_cell(entry, cfg)
+
+def _slugify(value: str) -> str:
+    """Return a valid Python identifier fragment for a test method name."""
+    return "".join(ch if ch.isalnum() else "_" for ch in value)
+
+
+def _make_cell_test(entry, cfg):
+    def test(self):
+        self._check_cell(entry, cfg)
+
+    test.__doc__ = (
+        f"model-id coverage cell ({entry['model']!r}, {cfg['label']!r}) "
+        "is routed to the right backend."
+    )
+    return test
+
+
+# Generate one test function per (model, exporter) cell of the model-id
+# coverage page so that a failure pinpoints the exact cell that regressed
+# (and so each model/exporter pairing is its own test rather than a single
+# parametrised loop). This covers the Olive runtime (``olive-modelbuilder``)
+# and the ``torch.onnx.export`` based columns (``dynamo``/``onnx-dynamo``)
+# alongside ``yobx`` and ``yobx-to_onnx``.
+for _entry in rymv.DEFAULT_MODELS:
+    for _cfg in rymv.DEFAULT_EXPORTERS:
+        _name = (
+            f"test_cell_{_slugify(_entry['model'])}__{_slugify(_cfg['label'])}"
+        )
+        setattr(
+            TestPerModelPerExporterDispatch,
+            _name,
+            _make_cell_test(_entry, _cfg),
+        )
+del _entry, _cfg, _name
 
 
 if __name__ == "__main__":
