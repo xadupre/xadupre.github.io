@@ -489,6 +489,21 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         right = 2 * (H // 2)
         self.assertEqual(sympy.simplify(left - right), 0)
 
+    def test_neg_floor_neg_half_equals_ceil_floordiv_with_sympy(self):
+        # Regression test for ``-floor(-b/2 - c/2)`` (i.e. ``ceil((b+c)/2)``)
+        # being recognised as equal to ``(1+b+c)//2``. ``sympy.simplify``
+        # cannot prove this floor/ceil identity, so ``_symbolic_dims_equal``
+        # falls back to a numeric integer-grid check.
+        self.assertTrue(
+            rsi._symbolic_dims_equal("-floor(-b/2 - c/2)", "(1+b+c)//2"),
+            "-floor(-b/2 - c/2) must be recognised as equal to (1+b+c)//2",
+        )
+
+    def test_distinct_symbolic_dims_are_not_equal_with_sympy(self):
+        # The numeric-grid fallback must not produce false positives for
+        # genuinely different symbolic dims.
+        self.assertFalse(rsi._symbolic_dims_equal("a+b", "a+c"))
+
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
         details = rsi._compare_snapshot_with_model(snap, wrong)
