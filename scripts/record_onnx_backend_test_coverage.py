@@ -350,6 +350,29 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+# ``ml_dtypes`` packed sub-byte integer dtypes. They expose ``kind == "V"``
+# (void) rather than ``"i"`` / ``"u"`` and arithmetic on them wraps around
+# inside the narrow range, so they need widening before numeric comparison.
+_SUB_BYTE_INT_DTYPES: Tuple[str, ...] = ("int4", "uint4", "int2", "uint2")
+
+
+def _widen_sub_byte_int(arr):
+    """Upcast packed sub-byte integer arrays to ``int64`` for comparison.
+
+    ``int4`` / ``uint4`` / ``int2`` / ``uint2`` outputs are stored with
+    ``ml_dtypes`` packed dtypes whose element-wise subtraction wraps around
+    modulo the narrow range. Promoting both operands to a wide signed integer
+    makes :func:`numpy.testing.assert_allclose` compute exact differences (and
+    therefore exact mismatch statistics). Arrays of any other dtype are
+    returned unchanged.
+    """
+    import numpy as np
+
+    if arr.dtype.name in _SUB_BYTE_INT_DTYPES:
+        return arr.astype(np.int64)
+    return arr
+
+
 def _compare_value(
     exp: Any,
     act: Any,
@@ -398,6 +421,14 @@ def _compare_value(
         if not np.array_equal(exp_arr, act_arr):
             return f"{label} value mismatch"
         return None
+    # Sub-byte integer outputs (``int4`` / ``uint4`` / ``int2`` / ``uint2``)
+    # are carried by ``ml_dtypes`` packed dtypes. ``assert_allclose`` computes
+    # the element-wise difference in the narrow dtype, which overflows modulo
+    # 16 / 4 and reports misleading statistics (e.g. an absolute difference of
+    # 15 wraps to 1). Widen both sides to a signed 64-bit integer so the
+    # comparison and the reported diff are exact.
+    exp_arr = _widen_sub_byte_int(exp_arr)
+    act_arr = _widen_sub_byte_int(act_arr)
     try:
         np.testing.assert_allclose(
             act_arr, exp_arr, rtol=rtol, atol=atol, equal_nan=True
