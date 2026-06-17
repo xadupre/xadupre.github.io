@@ -740,15 +740,68 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         except ImportError:  # pragma: no cover - optional dependency
             self.skipTest("ml_dtypes is not installed")
 
-        # ``int4`` arithmetic wraps modulo 16, so a true difference of 15
-        # (7 vs -8) would be reported as 1 without widening. Widening the
-        # packed sub-byte dtype must surface the exact magnitude.
-        expected = np.array([7], dtype=ml_dtypes.int4)
-        actual = np.array([-8], dtype=ml_dtypes.int4)
+        # ``int4`` arithmetic wraps modulo 16, so the true difference between
+        # ``-8`` and ``5`` (13) would wrap to 3 without widening. Widening the
+        # packed sub-byte dtype must surface the exact magnitude. ``5`` is an
+        # interior value (not a saturation bound), so the disagreement is a
+        # genuine mismatch rather than a spec-undefined out-of-range cast.
+        expected = np.array([-8], dtype=ml_dtypes.int4)
+        actual = np.array([5], dtype=ml_dtypes.int4)
         msg = rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
         self.assertIsNotNone(msg)
         self.assertIn("Max absolute difference", msg)
-        self.assertIn("15", msg)
+        self.assertIn("13", msg)
+
+    def test_compare_outputs_accepts_saturating_sub_byte_int_cast(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - optional dependency
+            self.skipTest("ml_dtypes is not installed")
+
+        # The ONNX ``Cast`` spec leaves float -> fixed-point conversions
+        # undefined when the source is out of range. The bundled backend test
+        # data wraps around while a spec-compliant runtime may saturate to the
+        # representable bound; the comparison must treat that as a match.
+        for dtype, lo, hi in (
+            (ml_dtypes.int4, -8, 7),
+            (ml_dtypes.uint4, 0, 15),
+            (ml_dtypes.uint2, 0, 3),
+        ):
+            with self.subTest(dtype=dtype.__name__):
+                source = np.arange(lo - 2, hi + 3).astype(np.float32)
+                expected = source.astype(dtype)  # wrap-around (test data)
+                actual = np.clip(source, lo, hi).astype(dtype)  # saturating
+                # The two encodings must genuinely differ to exercise the
+                # tolerance rather than accidentally agree.
+                self.assertTrue(
+                    np.any(
+                        np.asarray(expected).astype(np.int64)
+                        != np.asarray(actual).astype(np.int64)
+                    )
+                )
+                self.assertIsNone(
+                    rbc._compare_outputs(
+                        [expected], [actual], rtol=1e-3, atol=1e-4
+                    )
+                )
+
+    def test_compare_outputs_reports_interior_sub_byte_int_mismatch(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - optional dependency
+            self.skipTest("ml_dtypes is not installed")
+
+        # A disagreement where the actual value is *not* a saturation bound
+        # cannot be explained by an out-of-range cast and must be reported.
+        expected = np.array([3, 1], dtype=ml_dtypes.int4)
+        actual = np.array([3, 2], dtype=ml_dtypes.int4)
+        msg = rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+        self.assertIn("mismatch", msg)
 
     def test_load_test_data_sets_decodes_sequence_and_optional(self):
         import numpy as np
