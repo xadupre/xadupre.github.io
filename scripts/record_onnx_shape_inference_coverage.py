@@ -216,6 +216,10 @@ def _render_model_as_mermaid(model: Any) -> str:
     output as a stadium-shape node. Edges are labelled with the tensor
     name and, when shape inference succeeds, with their inferred
     ``DTYPE[shape]``.
+
+    Subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
+    are rendered as Mermaid ``subgraph`` blocks so their inputs,
+    operators and outputs are visible too.
     """
     import onnx
 
@@ -230,15 +234,23 @@ def _render_model_as_mermaid(model: Any) -> str:
     except Exception:  # noqa: BLE001 - shape inference is best-effort
         annotated = model
 
-    graph = annotated.graph
-
     edge_types: Dict[str, str] = {}
-    for value_info in list(graph.input) + list(graph.output) + list(graph.value_info):
-        label = _mermaid_format_type(onnx, value_info.type)
-        if label:
-            edge_types[value_info.name] = label
 
-    initializer_names = {init.name for init in graph.initializer}
+    def _collect_types(graph: Any) -> None:
+        for value_info in (
+            list(graph.input) + list(graph.output) + list(graph.value_info)
+        ):
+            label = _mermaid_format_type(onnx, value_info.type)
+            if label:
+                edge_types.setdefault(value_info.name, label)
+        for node in graph.node:
+            for attr in node.attribute:
+                if attr.HasField("g"):
+                    _collect_types(attr.g)
+                for sub in attr.graphs:
+                    _collect_types(sub)
+
+    _collect_types(annotated.graph)
 
     used_ids: set = set()
 
@@ -254,67 +266,107 @@ def _render_model_as_mermaid(model: Any) -> str:
         return candidate
 
     lines: List[str] = ["flowchart TD"]
-    tensor_source: Dict[str, str] = {}
+    edges: List[str] = []
+    # Per-graph records used in the edge pass: ``(op_nodes, output_entries,
+    # scope)`` where ``op_nodes`` is a list of ``(node_id, node)``,
+    # ``output_entries`` a list of ``(out_name, out_id)`` and ``scope`` the
+    # tensor-name to producing-node-id mapping visible inside that graph.
+    # Each subgraph inherits a copy of its parent scope so locally produced
+    # tensors shadow outer-scope names (matching ONNX subgraph semantics)
+    # without leaking to sibling subgraphs.
+    graph_records: List[
+        Tuple[List[Tuple[str, Any]], List[Tuple[str, str]], Dict[str, str]]
+    ] = []
 
-    for value_info in graph.input:
-        if value_info.name in initializer_names:
-            continue
-        node_id = _make_id("in", value_info.name)
-        type_label = edge_types.get(value_info.name, "")
-        label = value_info.name + (f"<br>{type_label}" if type_label else "")
-        lines.append(f'    {node_id}(["{_mermaid_escape(label)}"])')
-        tensor_source[value_info.name] = node_id
+    def _declare(graph: Any, indent: int, parent_scope: Dict[str, str]) -> None:
+        pad = "    " * indent
+        # ``local`` holds the producers declared in *this* graph; it is
+        # layered over ``parent_scope`` so a locally produced tensor shadows
+        # an outer-scope tensor of the same name (ONNX subgraph semantics).
+        local: Dict[str, str] = {}
+        initializer_names = {init.name for init in graph.initializer}
 
-    for initializer in graph.initializer:
-        node_id = _make_id("init", initializer.name)
-        dtype = _mermaid_dtype_name(onnx, initializer.data_type)
-        dims = ",".join(str(d) for d in initializer.dims)
-        label = initializer.name + (f"<br>{dtype}[{dims}]" if dtype else "")
-        lines.append(f'    {node_id}[("{_mermaid_escape(label)}")]')
-        tensor_source[initializer.name] = node_id
-
-    op_ids: List[str] = []
-    for index, node in enumerate(graph.node):
-        node_id = _make_id("op", node.name or f"{node.op_type}_{index}")
-        op_ids.append(node_id)
-        label = node.op_type + (f"<br>{node.name}" if node.name else "")
-        lines.append(f'    {node_id}["{_mermaid_escape(label)}"]')
-        for out_name in node.output:
-            if out_name:
-                tensor_source.setdefault(out_name, node_id)
-
-    output_entries: List[Tuple[str, str]] = []
-    for value_info in graph.output:
-        node_id = _make_id("out", value_info.name)
-        output_entries.append((value_info.name, node_id))
-        type_label = edge_types.get(value_info.name, "")
-        label = value_info.name + (f"<br>{type_label}" if type_label else "")
-        lines.append(f'    {node_id}(["{_mermaid_escape(label)}"])')
-
-    for node_id, node in zip(op_ids, graph.node):
-        for in_name in node.input:
-            if not in_name:
+        for value_info in graph.input:
+            if value_info.name in initializer_names:
                 continue
-            source_id = tensor_source.get(in_name)
-            if not source_id:
+            node_id = _make_id("in", value_info.name)
+            type_label = edge_types.get(value_info.name, "")
+            label = value_info.name + (f"<br>{type_label}" if type_label else "")
+            lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
+            local[value_info.name] = node_id
+
+        for initializer in graph.initializer:
+            node_id = _make_id("init", initializer.name)
+            dtype = _mermaid_dtype_name(onnx, initializer.data_type)
+            dims = ",".join(str(d) for d in initializer.dims)
+            label = initializer.name + (f"<br>{dtype}[{dims}]" if dtype else "")
+            lines.append(f'{pad}{node_id}[("{_mermaid_escape(label)}")]')
+            local[initializer.name] = node_id
+
+        op_nodes: List[Tuple[str, Any]] = []
+        subgraphs: List[Tuple[str, str, Any]] = []
+        for index, node in enumerate(graph.node):
+            node_id = _make_id("op", node.name or f"{node.op_type}_{index}")
+            op_nodes.append((node_id, node))
+            label = node.op_type + (f"<br>{node.name}" if node.name else "")
+            lines.append(f'{pad}{node_id}["{_mermaid_escape(label)}"]')
+            for out_name in node.output:
+                if out_name:
+                    local.setdefault(out_name, node_id)
+            for attr in node.attribute:
+                attr_graphs: List[Any] = []
+                if attr.HasField("g"):
+                    attr_graphs.append(attr.g)
+                attr_graphs.extend(attr.graphs)
+                for sub in attr_graphs:
+                    sg_id = _make_id("sg", f"{node.op_type}_{attr.name}")
+                    sg_label = f"{node.op_type}.{attr.name}"
+                    subgraphs.append((sg_id, sg_label, sub))
+
+        scope = {**parent_scope, **local}
+
+        output_entries: List[Tuple[str, str]] = []
+        for value_info in graph.output:
+            node_id = _make_id("out", value_info.name)
+            output_entries.append((value_info.name, node_id))
+            type_label = edge_types.get(value_info.name, "")
+            label = value_info.name + (f"<br>{type_label}" if type_label else "")
+            lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
+
+        graph_records.append((op_nodes, output_entries, scope))
+
+        for sg_id, sg_label, sub in subgraphs:
+            lines.append(f'{pad}subgraph {sg_id}["{_mermaid_escape(sg_label)}"]')
+            _declare(sub, indent + 1, scope)
+            lines.append(f"{pad}end")
+
+    _declare(annotated.graph, 1, {})
+
+    for op_nodes, output_entries, scope in graph_records:
+        for node_id, node in op_nodes:
+            for in_name in node.input:
+                if not in_name:
+                    continue
+                source_id = scope.get(in_name)
+                if not source_id:
+                    continue
+                type_label = edge_types.get(in_name, "")
+                edge_label = in_name + (f" : {type_label}" if type_label else "")
+                edges.append(
+                    f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {node_id}'
+                )
+
+        for out_name, out_id in output_entries:
+            source_id = scope.get(out_name)
+            if not source_id or source_id == out_id:
                 continue
-            type_label = edge_types.get(in_name, "")
-            edge_label = in_name + (f" : {type_label}" if type_label else "")
-            lines.append(
-                f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {node_id}'
+            type_label = edge_types.get(out_name, "")
+            edge_label = out_name + (f" : {type_label}" if type_label else "")
+            edges.append(
+                f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {out_id}'
             )
 
-    for out_name, out_id in output_entries:
-        source_id = tensor_source.get(out_name)
-        if not source_id or source_id == out_id:
-            continue
-        type_label = edge_types.get(out_name, "")
-        edge_label = out_name + (f" : {type_label}" if type_label else "")
-        lines.append(
-            f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {out_id}'
-        )
-
-    return "\n".join(lines)
+    return "\n".join(lines + edges)
 
 
 def model_to_mermaid(model: Any) -> str:
