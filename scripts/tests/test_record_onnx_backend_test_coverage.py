@@ -717,6 +717,39 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIn("Max absolute difference", msg)
         self.assertNotIn("Not equal to tolerance", msg)
 
+    def test_compare_outputs_accepts_matching_sub_byte_int(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - optional dependency
+            self.skipTest("ml_dtypes is not installed")
+
+        values = [7, -8, -7, -6, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 6]
+        expected = np.array(values, dtype=ml_dtypes.int4)
+        actual = np.array(values, dtype=ml_dtypes.int4)
+        self.assertIsNone(
+            rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
+        )
+
+    def test_compare_outputs_reports_exact_sub_byte_int_difference(self):
+        import numpy as np
+
+        try:
+            import ml_dtypes
+        except ImportError:  # pragma: no cover - optional dependency
+            self.skipTest("ml_dtypes is not installed")
+
+        # ``int4`` arithmetic wraps modulo 16, so a true difference of 15
+        # (7 vs -8) would be reported as 1 without widening. Widening the
+        # packed sub-byte dtype must surface the exact magnitude.
+        expected = np.array([7], dtype=ml_dtypes.int4)
+        actual = np.array([-8], dtype=ml_dtypes.int4)
+        msg = rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
+        self.assertIsNotNone(msg)
+        self.assertIn("Max absolute difference", msg)
+        self.assertIn("15", msg)
+
     def test_load_test_data_sets_decodes_sequence_and_optional(self):
         import numpy as np
         import onnx
