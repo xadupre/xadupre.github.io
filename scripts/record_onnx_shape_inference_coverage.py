@@ -267,14 +267,23 @@ def _render_model_as_mermaid(model: Any) -> str:
 
     lines: List[str] = ["flowchart TD"]
     edges: List[str] = []
-    tensor_source: Dict[str, str] = {}
-    # Per-graph records used in the edge pass: (op_nodes, output_entries),
-    # where ``op_nodes`` is a list of ``(node_id, node)`` and
-    # ``output_entries`` a list of ``(out_name, out_id)``.
-    graph_records: List[Tuple[List[Tuple[str, Any]], List[Tuple[str, str]]]] = []
+    # Per-graph records used in the edge pass: ``(op_nodes, output_entries,
+    # scope)`` where ``op_nodes`` is a list of ``(node_id, node)``,
+    # ``output_entries`` a list of ``(out_name, out_id)`` and ``scope`` the
+    # tensor-name to producing-node-id mapping visible inside that graph.
+    # Each subgraph inherits a copy of its parent scope so locally produced
+    # tensors shadow outer-scope names (matching ONNX subgraph semantics)
+    # without leaking to sibling subgraphs.
+    graph_records: List[
+        Tuple[List[Tuple[str, Any]], List[Tuple[str, str]], Dict[str, str]]
+    ] = []
 
-    def _declare(graph: Any, indent: int) -> None:
+    def _declare(graph: Any, indent: int, parent_scope: Dict[str, str]) -> None:
         pad = "    " * indent
+        # ``local`` holds the producers declared in *this* graph; it is
+        # layered over ``parent_scope`` so a locally produced tensor shadows
+        # an outer-scope tensor of the same name (ONNX subgraph semantics).
+        local: Dict[str, str] = {}
         initializer_names = {init.name for init in graph.initializer}
 
         for value_info in graph.input:
@@ -284,7 +293,7 @@ def _render_model_as_mermaid(model: Any) -> str:
             type_label = edge_types.get(value_info.name, "")
             label = value_info.name + (f"<br>{type_label}" if type_label else "")
             lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
-            tensor_source.setdefault(value_info.name, node_id)
+            local[value_info.name] = node_id
 
         for initializer in graph.initializer:
             node_id = _make_id("init", initializer.name)
@@ -292,7 +301,7 @@ def _render_model_as_mermaid(model: Any) -> str:
             dims = ",".join(str(d) for d in initializer.dims)
             label = initializer.name + (f"<br>{dtype}[{dims}]" if dtype else "")
             lines.append(f'{pad}{node_id}[("{_mermaid_escape(label)}")]')
-            tensor_source.setdefault(initializer.name, node_id)
+            local[initializer.name] = node_id
 
         op_nodes: List[Tuple[str, Any]] = []
         subgraphs: List[Tuple[str, str, Any]] = []
@@ -303,7 +312,7 @@ def _render_model_as_mermaid(model: Any) -> str:
             lines.append(f'{pad}{node_id}["{_mermaid_escape(label)}"]')
             for out_name in node.output:
                 if out_name:
-                    tensor_source.setdefault(out_name, node_id)
+                    local.setdefault(out_name, node_id)
             for attr in node.attribute:
                 attr_graphs: List[Any] = []
                 if attr.HasField("g"):
@@ -314,6 +323,8 @@ def _render_model_as_mermaid(model: Any) -> str:
                     sg_label = f"{node.op_type}.{attr.name}"
                     subgraphs.append((sg_id, sg_label, sub))
 
+        scope = {**parent_scope, **local}
+
         output_entries: List[Tuple[str, str]] = []
         for value_info in graph.output:
             node_id = _make_id("out", value_info.name)
@@ -322,21 +333,21 @@ def _render_model_as_mermaid(model: Any) -> str:
             label = value_info.name + (f"<br>{type_label}" if type_label else "")
             lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
 
-        graph_records.append((op_nodes, output_entries))
+        graph_records.append((op_nodes, output_entries, scope))
 
         for sg_id, sg_label, sub in subgraphs:
             lines.append(f'{pad}subgraph {sg_id}["{_mermaid_escape(sg_label)}"]')
-            _declare(sub, indent + 1)
+            _declare(sub, indent + 1, scope)
             lines.append(f"{pad}end")
 
-    _declare(annotated.graph, 1)
+    _declare(annotated.graph, 1, {})
 
-    for op_nodes, output_entries in graph_records:
+    for op_nodes, output_entries, scope in graph_records:
         for node_id, node in op_nodes:
             for in_name in node.input:
                 if not in_name:
                     continue
-                source_id = tensor_source.get(in_name)
+                source_id = scope.get(in_name)
                 if not source_id:
                     continue
                 type_label = edge_types.get(in_name, "")
@@ -346,7 +357,7 @@ def _render_model_as_mermaid(model: Any) -> str:
                 )
 
         for out_name, out_id in output_entries:
-            source_id = tensor_source.get(out_name)
+            source_id = scope.get(out_name)
             if not source_id or source_id == out_id:
                 continue
             type_label = edge_types.get(out_name, "")
