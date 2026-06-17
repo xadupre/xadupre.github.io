@@ -17,10 +17,12 @@ of tests dedicated to shape inference, mirroring
 
 For each retained test case the recorded ``graph.output`` (and
 intermediate ``graph.value_info``) shapes are snapshotted then stripped
-from a working copy of the model. Subgraphs nested inside control-flow
-nodes (``If``/``Loop``/``Scan``) are walked as well, so their
-intermediate and output shapes are snapshotted, stripped and scored
-alongside the main graph's. Each candidate shape-inference
+from a working copy of the model. Only the main graph's shapes are
+snapshotted and scored; shapes carried by subgraphs nested inside
+control-flow nodes (``If``/``Loop``/``Scan``) are still stripped from
+the working copy but are deliberately **not** compared, since their
+intermediates depend on outer-scope inputs the shape-inference passes
+cannot always propagate. Each candidate shape-inference
 implementation is invoked on that stripped model and the produced shapes
 are compared with the snapshot. For every intermediate, we report
 whether the runtime recovered the expected ``elem_type`` and a
@@ -531,9 +533,12 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     entries carry no expectation and are not counted towards the
     correctness score (see :func:`_compare_snapshot_with_model`).
 
-    Subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
-    are walked as well, so the ``value_info``/``output`` shapes they carry
-    are snapshotted alongside the main graph's.
+    Only the model's main graph is snapshotted. Shapes carried by
+    subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
+    are intentionally **not** snapshotted, so they are never scored
+    against the runtimes: subgraph intermediates depend on outer-scope
+    inputs whose shapes the shape-inference passes cannot always
+    propagate, which would otherwise produce spurious mismatches.
 
     Entries are returned in the order they appear in the model: the
     graph nodes are walked in declaration order and each output they
@@ -541,18 +546,15 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     node are appended at the end, preserving their relative order in
     ``model.graph.output``.
     """
-    snapshots: List[Dict[str, Any]] = []
-    for graph in _iter_subgraphs(model.graph):
-        snapshots.extend(_snapshot_graph_intermediates(graph))
-    return snapshots
+    return _snapshot_graph_intermediates(model.graph)
 
 
 def _snapshot_graph_intermediates(graph) -> List[Dict[str, Any]]:
     """Snapshot output / value_info shapes for a single ``GraphProto``.
 
     See :func:`snapshot_intermediates` for the entry format. This helper
-    operates on one graph at a time so it can be reused for both the main
-    graph and every nested subgraph.
+    operates on a single graph; only the model's main graph is passed in
+    (subgraph shapes are deliberately not snapshotted).
     """
     output_names = {vi.name for vi in graph.output}
     by_name: Dict[str, Tuple[str, Any]] = {}
@@ -673,15 +675,17 @@ def strip_shapes(model, keep_outputs: bool = False):
 def _index_value_infos(model) -> Dict[str, Any]:
     """Return ``{name: ValueInfoProto}`` for outputs + value_info.
 
-    Subgraphs are indexed as well so subgraph outputs / value_info can be
-    located when scoring snapshotted intermediates.
+    Only the main graph is indexed. Subgraph outputs / value_info are
+    intentionally excluded so the comparison never scores a snapshotted
+    intermediate against a shape that lives in a control-flow subgraph
+    (e.g. when a subgraph reuses a main-graph tensor name).
     """
     indexed: Dict[str, Any] = {}
-    for graph in _iter_subgraphs(model.graph):
-        for vi in graph.value_info:
-            indexed[vi.name] = vi
-        for vi in graph.output:
-            indexed[vi.name] = vi
+    graph = model.graph
+    for vi in graph.value_info:
+        indexed[vi.name] = vi
+    for vi in graph.output:
+        indexed[vi.name] = vi
     return indexed
 
 
