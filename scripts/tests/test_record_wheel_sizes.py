@@ -604,5 +604,100 @@ class TestSharedLibrarySizes(unittest.TestCase):
             self.assertEqual(len(so_rows), 1)
 
 
+    def test_process_repo_writes_custom_wheel_csv_name(self):
+        # The reduced wheel is recorded into a separate CSV so that it is not
+        # merged into the full-wheel series even though both wheels share the
+        # same file name.
+        run = {
+            "id": 7,
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": "2024-05-02T10:00:00Z",
+            "head_sha": "feedface",
+        }
+        wheel = _make_wheel(
+            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
+        )
+        artifact = {
+            "id": 100,
+            "name": "wheels-reduced-py3.12",
+            "expired": False,
+            "archive_download_url": "https://api/artifact/100",
+        }
+        zip_bytes = _make_artifact_zip(
+            {"onnx_light-0.1-cp312-cp312-linux_x86_64.whl": wheel}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                rws, "iter_workflow_runs", return_value=iter([run])
+            ), mock.patch.object(
+                rws, "list_run_artifacts", return_value=[artifact]
+            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+                added_wheels, added_so = rws.process_repo(
+                    "xadupre/onnx-light",
+                    "build_reduced_wheel.yml",
+                    tmp,
+                    months=6,
+                    token=None,
+                    wheel_csv_name="wheel_sizes_reduced.csv",
+                    skip_so=True,
+                )
+            # Only the wheel series is recorded; the so series is skipped.
+            self.assertEqual((added_wheels, added_so), (1, 0))
+            reduced_path = os.path.join(
+                tmp, "onnx-light", "wheel_sizes_reduced.csv"
+            )
+            full_path = os.path.join(tmp, "onnx-light", "wheel_sizes.csv")
+            so_path = os.path.join(tmp, "onnx-light", "so_sizes.csv")
+            self.assertTrue(os.path.exists(reduced_path))
+            # The default wheel CSV and the so CSV are left untouched.
+            self.assertFalse(os.path.exists(full_path))
+            self.assertFalse(os.path.exists(so_path))
+            with open(reduced_path, encoding="utf-8") as fh:
+                rows = list(csv.DictReader(fh))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(
+                rows[0]["name"], "onnx_light-0.1-cp312-cp312-linux_x86_64.whl"
+            )
+
+    def test_process_repo_skip_so_keeps_wheel_series(self):
+        run = {
+            "id": 8,
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": "2024-05-02T10:00:00Z",
+            "head_sha": "feedface",
+        }
+        wheel = _make_wheel(
+            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
+        )
+        artifact = {
+            "id": 100,
+            "name": "wheels-reduced-py3.12",
+            "expired": False,
+            "archive_download_url": "https://api/artifact/100",
+        }
+        zip_bytes = _make_artifact_zip(
+            {"onnx_light-0.1-cp312-cp312-linux_x86_64.whl": wheel}
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                rws, "iter_workflow_runs", return_value=iter([run])
+            ), mock.patch.object(
+                rws, "list_run_artifacts", return_value=[artifact]
+            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+                added_wheels, added_so = rws.process_repo(
+                    "xadupre/onnx-light",
+                    "build_reduced_wheel.yml",
+                    tmp,
+                    months=6,
+                    token=None,
+                    skip_so=True,
+                )
+            self.assertEqual((added_wheels, added_so), (1, 0))
+            so_path = os.path.join(tmp, "onnx-light", "so_sizes.csv")
+            self.assertFalse(os.path.exists(so_path))
+
+
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

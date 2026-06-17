@@ -185,6 +185,55 @@ jobs:
             exit 1
           fi
 
+      - name: Build and record reduced onnx-light wheel size
+        working-directory: onnx-light
+        env:
+          # Build the reduced variant of onnx-light: ONNX_LIGHT_BUILD_KERNELS=OFF
+          # compiles the package without the operator-kernel runtime and the
+          # backend-test registries (mirrors xadupre/onnx-light's
+          # .github/workflows/build_reduced_wheel.yml). This produces a smaller
+          # wheel whose size is tracked alongside the full wheel.
+          CMAKE_ARGS: "-DONNX_LIGHT_BUILD_KERNELS=OFF"
+        run: |
+          # Build the reduced wheel from the onnx-light checkout and append one
+          # CSV row per .whl file produced to
+          # cache_data/onnx-light/wheel_sizes_reduced.csv inside the
+          # xadupre.github.io checkout. It is kept in a separate file (rather
+          # than wheel_sizes.csv) because the reduced wheel shares the same file
+          # name as the full one; the dashboard plots it as a distinct
+          # "(reduced)" line. ``pip wheel`` builds in an isolated temporary
+          # directory, so the ``CMAKE_ARGS`` override here does not disturb the
+          # full build_ext --inplace artifacts produced earlier.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes_reduced.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,run_id,size,name" > "$out"
+          fi
+          wheel_dir="${GITHUB_WORKSPACE}/wheel-out-reduced"
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          python -m pip wheel . \
+            --no-deps \
+            --no-build-isolation \
+            --wheel-dir "$wheel_dir"
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          run_id="${GITHUB_RUN_ID:-local}"
+          found=0
+          for f in "$wheel_dir"/*.whl; do
+            [ -f "$f" ] || continue
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${run_id},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded reduced wheel ${name} (${size} bytes) at ${commit_sha}."
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No reduced wheel was produced by 'pip wheel .'; nothing to record." >&2
+            exit 1
+          fi
+
       - name: Record wheel and shared library sizes from build_release.yml artifacts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -205,6 +254,27 @@ jobs:
             --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
             --repo xadupre/onnx-light \
             --workflow build_release.yml \
+            --months 6
+
+      - name: Record reduced wheel sizes from build_reduced_wheel.yml artifacts
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Backfill the reduced-wheel series with the per-Python sizes
+          # published by completed runs of the upstream
+          # ``build_reduced_wheel.yml`` workflow in xadupre/onnx-light (it builds
+          # the ONNX_LIGHT_BUILD_KERNELS=OFF wheel on a weekly schedule). Rows
+          # are written to cache_data/onnx-light/wheel_sizes_reduced.csv
+          # (deduplicated by ``run_id``) so the reduced line spans the same
+          # look-back window as the full wheel. ``--skip-so`` keeps the reduced
+          # build's compiled extensions out of so_sizes.csv, whose binary-size
+          # chart tracks the released (kernels-enabled) build.
+          python -u "${GITHUB_WORKSPACE}/site/scripts/record_wheel_sizes.py" \
+            --cache-dir "${GITHUB_WORKSPACE}/site/cache_data" \
+            --repo xadupre/onnx-light \
+            --workflow build_reduced_wheel.yml \
+            --wheel-csv-name wheel_sizes_reduced.csv \
+            --skip-so \
             --months 6
 
       - name: Record Python and C++ lines of code
