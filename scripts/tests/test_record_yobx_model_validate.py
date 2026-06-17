@@ -29,7 +29,6 @@ def _run_real_export_test(testcase, entry, cfg, dump_folder):
         "yobx": _STANDARD_EXPORT_MODULES,
         "dynamo": _STANDARD_EXPORT_MODULES,
         "onnx-dynamo": _STANDARD_EXPORT_MODULES,
-        "yobx-to_onnx": _STANDARD_EXPORT_MODULES,
         "olive-modelbuilder": (
             *_STANDARD_EXPORT_MODULES,
             "olive",
@@ -68,7 +67,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertIn("yobx-ort", labels)
         self.assertIn("dynamo-ir", labels)
         self.assertIn("onnx-dynamo-os_ort", labels)
-        self.assertIn("yobx-to_onnx", labels)
         # Each exporter config must declare the three required fields.
         for cfg in rymv.DEFAULT_EXPORTERS:
             self.assertIn("label", cfg)
@@ -652,7 +650,6 @@ for _entry in rymv.DEFAULT_MODELS:
         if _cfg["label"] not in {
             "yobx",
             "dynamo-ir",
-            "yobx-to_onnx",
             "olive-modelbuilder",
         }:
             continue
