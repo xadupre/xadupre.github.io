@@ -119,15 +119,36 @@ def collect_versions() -> Dict[str, str]:
     return versions
 
 
+_ERROR_MAX_LEN = 300
+_ERROR_ELLIPSIS = " ... "
+# When an error line is longer than ``_ERROR_MAX_LEN`` we keep this many
+# characters from the front (enough to identify *what* failed) and fill the
+# rest with the tail, because backends such as ``onnxruntime`` append the
+# human-readable cause (e.g. "inconsistent total_sequence_length") *after* a
+# long file path and C++ type signature. Keeping only the head would hide it.
+_ERROR_HEAD_LEN = 180
+
+
 def _stringify_error(value: Any) -> str:
-    """Return a short, single-line string representation of an error."""
+    """Return a short, single-line string representation of an error.
+
+    Long single-line errors are truncated in the middle rather than at the
+    end so that both the head (which usually identifies the failing node /
+    operator) and the tail (which often carries the actual cause) survive.
+    ``onnxruntime`` in particular reports the informative status message at the
+    very end of a long line, behind a verbose C++ type signature, so a plain
+    head truncation would drop the part that explains *why* a test fails.
+    """
     if value is None:
         return ""
     text = str(value)
     if "\n" in text:
         text = text.splitlines()[0]
-    if len(text) > 300:
-        text = text[:297] + "..."
+    if len(text) > _ERROR_MAX_LEN:
+        tail_len = _ERROR_MAX_LEN - _ERROR_HEAD_LEN - len(_ERROR_ELLIPSIS)
+        head = text[:_ERROR_HEAD_LEN].rstrip()
+        tail = text[-tail_len:].lstrip()
+        text = head + _ERROR_ELLIPSIS + tail
     return text
 
 

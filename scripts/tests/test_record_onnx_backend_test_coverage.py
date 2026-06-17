@@ -21,8 +21,36 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(rbc._stringify_error("boom\nrest"), "boom")
         long = "x" * 500
         out = rbc._stringify_error(long)
-        self.assertTrue(out.endswith("..."))
+        # Over-long single lines are truncated in the middle so the head and
+        # tail both survive; the result stays bounded at the max length.
         self.assertEqual(len(out), 300)
+        self.assertIn(" ... ", out)
+        self.assertTrue(out.startswith("x"))
+        self.assertTrue(out.endswith("x"))
+
+    def test_stringify_error_keeps_onnxruntime_cause_in_tail(self):
+        # ``onnxruntime`` reports the human-readable cause at the very end of a
+        # long single line, behind a file path and a verbose C++ signature. The
+        # informative tail must survive truncation so the dashboard explains
+        # *why* a test (e.g. ``test_attention_4d_diff_heads_mask4d_padded_kv``)
+        # fails instead of only showing the function signature.
+        ort_error = (
+            "[ONNXRuntimeError] : 1 : FAIL : Non-zero status code returned "
+            "while running Attention node. Name:'' Status Message: "
+            "/onnxruntime_src/onnxruntime/core/providers/cpu/llm/"
+            "attention_helper.h:146 onnxruntime::common::Status "
+            "onnxruntime::attention_helper::ComputeOutputShapeForAttention("
+            "const onnxruntime::Tensor*, const onnxruntime::Tensor*) "
+            "attn_mask->Shape()[attn_mask->Shape().NumDimensions() - 1] == "
+            "parameters.total_sequence_length was false. inconsistent "
+            "total_sequence_length (between attn_mask and past_key and "
+            "past_value)"
+        )
+        out = rbc._stringify_error(ort_error)
+        self.assertLessEqual(len(out), 300)
+        self.assertIn("Attention node", out)
+        self.assertIn("inconsistent total_sequence_length", out)
+
 
     def test_row_from_results_includes_errors_only_when_present(self):
         row = rbc._row_from_results(
