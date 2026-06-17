@@ -470,6 +470,25 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
 
+    def test_2_floor_half_h_equals_2_h_floordiv_2_with_sympy(self):
+        # Regression test guaranteeing ``2*floor(0.5*H)`` is recognised as
+        # equal to ``2*(H//2)``. ``sympy`` is a hard dependency of the test
+        # suite (installed in CI), so this test is intentionally *not*
+        # skipped: it must always run and prove the equivalence is handled.
+        import sympy
+
+        self.assertTrue(
+            rsi._symbolic_dims_equal("2*floor(0.5*H)", "2*(H//2)"),
+            "2*floor(0.5*H) must be recognised as equal to 2*(H//2)",
+        )
+
+        # Verify the underlying equivalence directly with sympy so the test
+        # fails loudly if the parsing/normalisation logic regresses.
+        H = sympy.Symbol("H")
+        left = 2 * sympy.floor(sympy.Rational(1, 2) * H)
+        right = 2 * (H // 2)
+        self.assertEqual(sympy.simplify(left - right), 0)
+
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
         details = rsi._compare_snapshot_with_model(snap, wrong)
