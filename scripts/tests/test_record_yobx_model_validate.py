@@ -1050,6 +1050,7 @@ class TestPerModelPerExporterDispatch(unittest.TestCase):
         if exporter == "olive-modelbuilder":
             self._check_special_cased(entry, cfg, "run_olive_modelbuilder")
         elif exporter == "yobx-to_onnx":
+            # do not fake this one
             self._check_special_cased(entry, cfg, "run_to_onnx_default")
         else:
             self._check_validate_model(entry, cfg)
