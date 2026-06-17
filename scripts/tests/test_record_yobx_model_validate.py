@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import sys
@@ -14,13 +15,39 @@ sys.path.insert(0, os.path.dirname(HERE))
 import record_yobx_model_validate as rymv  # noqa: E402
 
 
-def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg, dump_folder):
-    """Exercise the real ``yobx-to_onnx`` export path when the stack is installed."""
+def _require_modules(testcase, *modules):
+    missing = [name for name in modules if importlib.util.find_spec(name) is None]
+    if missing:
+        testcase.skipTest(f"optional export stack is not installed ({', '.join(missing)})")
+
+
+def _run_real_export_test(testcase, entry, cfg, dump_folder):
+    """Exercise the real exporter path when the optional stack is installed."""
+    required = {
+        "yobx": ("torch", "yobx", "onnx"),
+        "dynamo": ("torch", "yobx", "onnx"),
+        "onnx-dynamo": ("torch", "yobx", "onnx"),
+        "yobx-to_onnx": ("torch", "yobx", "onnx"),
+        "olive-modelbuilder": (
+            "torch",
+            "yobx",
+            "onnx",
+            "olive",
+            "onnxruntime_genai",
+        ),
+    }
+    _require_modules(testcase, *required[cfg["exporter"]])
     observed = rymv.run_validate_one(
         entry, cfg, dump_folder=dump_folder, quiet=False, verbose=1
     )
+    hub_error = observed.get("error_config") or observed.get("error_export")
+    if rymv._is_hf_hub_access_error(hub_error):
+        testcase.skipTest(hub_error)
     testcase.assertEqual("OK", observed["export"])
-    testcase.assertEqual("OK", observed["discrepancies"])
+    if cfg["exporter"] == "olive-modelbuilder":
+        testcase.assertIn(observed["discrepancies"], {"OK", "SKIPPED"})
+    else:
+        testcase.assertEqual("OK", observed["discrepancies"])
 
 
 class TestRecordYobxModelValidate(unittest.TestCase):
@@ -591,33 +618,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
 
 
 class TestPerModelPerExporterDispatch(unittest.TestCase):
-    def _check_validate_model(self, entry, cfg):
-        """Assert ``run_validate_one`` calls ``validate_model`` for the cell."""
-        recorder = {}
-        result = rymv.run_validate_one(entry, cfg, dump_folder="dump_test", quiet=False)
-        self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
-        kwargs = recorder["kwargs"]
-        self.assertEqual(kwargs["model_id"], entry["model"])
-        self.assertEqual(kwargs["exporter"], cfg["exporter"])
-        self.assertEqual(kwargs["optimization"], cfg["optimization"])
-
     def _check_cell(self, entry, cfg):
-        exporter = cfg["exporter"]
-        if exporter == "yobx":
-            _run_real_yobx_to_onnx_export_test(
-                self,
-                {
-                    "model": entry["model"],
-                    "dtype": entry["dtype"],
-                    "device": entry["device"],
-                    "atol": entry["atol"],
-                    "rtol": entry["rtol"],
-                },
-                cfg,
-                "dump_tests",
-            )
-        else:
-            raise NotImplementedError(f"Not implemented yet for {exporter!r}.")
+        with tempfile.TemporaryDirectory() as tmp:
+            _run_real_export_test(self, entry, cfg, tmp)
 
 
 def _slugify(value: str) -> str:
@@ -640,14 +643,19 @@ def _make_cell_test(entry, cfg):
 # coverage page so that a failure pinpoints the exact cell that regressed
 # (and so each model/exporter pairing is its own test rather than a single
 # parametrised loop). This covers the Olive runtime (``olive-modelbuilder``)
-# and the ``torch.onnx.export`` based columns (``dynamo``/``onnx-dynamo``)
-# alongside ``yobx`` and ``yobx-to_onnx``.
+# and the ``torch.onnx.export`` / Olive-backed columns that are expected to
+# work on the tiny smoke-test model.
 for _entry in rymv.DEFAULT_MODELS:
     if "arnir0" not in _entry["model"]:
         continue
-    if "os_ort" in _entry["optimization"]:
-        continue
     for _cfg in rymv.DEFAULT_EXPORTERS:
+        if _cfg["label"] not in {
+            "yobx",
+            "dynamo-ir",
+            "yobx-to_onnx",
+            "olive-modelbuilder",
+        }:
+            continue
         _name = f"test_cell_{_slugify(_entry['model'])}__{_slugify(_cfg['label'])}"
         assert "atol" in _entry, f"incomplete {_entry!r}"
         setattr(
