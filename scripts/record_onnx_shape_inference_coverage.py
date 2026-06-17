@@ -113,7 +113,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "onnxruntime", "numpy"):
+    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "onnxruntime", "yobx", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -122,6 +122,24 @@ def collect_versions() -> Dict[str, str]:
         if version:
             versions[name] = str(version)
     return versions
+
+
+def backend_versions_from_map(version_map: Dict[str, str]) -> Dict[str, str]:
+    """Map each tested backend to the version of the package it exercises.
+
+    The dashboard lists one column per tested package; this returns the
+    version string for every backend in :data:`BACKENDS` whose underlying
+    package (see :data:`BACKEND_PACKAGE`) has a known version, so the page
+    can display the version of each tested package.
+    """
+    version_map = version_map or {}
+    backend_versions: Dict[str, str] = {}
+    for backend in BACKENDS:
+        pkg = BACKEND_PACKAGE.get(backend)
+        version = version_map.get(pkg) if pkg else None
+        if version:
+            backend_versions[backend] = version
+    return backend_versions
 
 
 def _stringify_error(value: Any) -> str:
@@ -1170,6 +1188,7 @@ def build_payload(
         "date": now_iso,
         "tag": tag_display,
         "versions": version_map,
+        "backend_versions": backend_versions_from_map(version_map),
         "totals": totals,
         "tests": rows,
     }
