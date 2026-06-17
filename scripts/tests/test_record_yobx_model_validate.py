@@ -980,5 +980,114 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
 
 
+class TestPerModelPerExporterDispatch(unittest.TestCase):
+    """One wiring check per (model, exporter) cell of the model-id coverage page.
+
+    The ``dashboard/yet-another-onnx-builder/model-validate.html`` page is fed
+    by one cell per model (``DEFAULT_MODELS``) and per exporter
+    (``DEFAULT_EXPORTERS``). This exercises every such cell to make sure
+    ``run_validate_one`` routes it to the right backend so that both the Olive
+    runtime (``olive-modelbuilder``) and the ``torch.onnx.export`` based
+    columns (the ``dynamo``/``onnx-dynamo`` exporters, which ``validate_model``
+    drives through ``torch.onnx.export``) are actually invoked. ``yobx`` and
+    ``yobx-to_onnx`` are checked too for completeness.
+    """
+
+    def _install_fake_validate_model(self, recorder):
+        """Inject a fake ``yobx.torch.validate`` so the lazy import resolves.
+
+        ``run_validate_one`` imports ``validate_model`` lazily inside the
+        function, so a fake module tree is enough to intercept the call
+        without requiring the heavy ``yobx``/``torch`` stack to be installed.
+        Returns a restore token to feed back to :meth:`_restore_modules`.
+        """
+        import types
+
+        names = ("yobx", "yobx.torch", "yobx.torch.validate")
+        saved = {name: sys.modules.get(name) for name in names}
+
+        yobx_mod = types.ModuleType("yobx")
+        torch_mod = types.ModuleType("yobx.torch")
+        validate_mod = types.ModuleType("yobx.torch.validate")
+
+        def fake_validate_model(**kwargs):
+            recorder["kwargs"] = kwargs
+            return ({"export": "OK", "discrepancies": "OK"}, {"data": 1})
+
+        validate_mod.validate_model = fake_validate_model
+        yobx_mod.torch = torch_mod
+        torch_mod.validate = validate_mod
+        sys.modules["yobx"] = yobx_mod
+        sys.modules["yobx.torch"] = torch_mod
+        sys.modules["yobx.torch.validate"] = validate_mod
+        return saved
+
+    def _restore_modules(self, saved):
+        for name, mod in saved.items():
+            if mod is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = mod
+
+    def _check_special_cased(self, entry, cfg, attr):
+        """Assert ``run_validate_one`` routes the cell to ``rymv.<attr>``."""
+        seen = {}
+
+        def fake_backend(entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True):
+            seen["entry"] = entry
+            seen["exporter_cfg"] = exporter_cfg
+            seen["dump_folder"] = dump_folder
+            seen["quiet"] = quiet
+            return {"export": "OK", "discrepancies": "OK"}
+
+        original = getattr(rymv, attr)
+        setattr(rymv, attr, fake_backend)
+        try:
+            result = rymv.run_validate_one(
+                entry, cfg, dump_folder="/tmp/x", quiet=True
+            )
+        finally:
+            setattr(rymv, attr, original)
+        self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
+        self.assertEqual(seen["entry"]["model"], entry["model"])
+        self.assertEqual(seen["exporter_cfg"]["exporter"], cfg["exporter"])
+        self.assertEqual(seen["dump_folder"], "/tmp/x")
+
+    def _check_validate_model(self, entry, cfg):
+        """Assert ``run_validate_one`` calls ``validate_model`` for the cell."""
+        recorder = {}
+        saved = self._install_fake_validate_model(recorder)
+        try:
+            result = rymv.run_validate_one(
+                entry, cfg, dump_folder="/tmp/x", quiet=True
+            )
+        finally:
+            self._restore_modules(saved)
+        self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
+        kwargs = recorder["kwargs"]
+        self.assertEqual(kwargs["model_id"], entry["model"])
+        self.assertEqual(kwargs["exporter"], cfg["exporter"])
+        self.assertEqual(kwargs["optimization"], cfg["optimization"])
+
+    def _check_cell(self, entry, cfg):
+        exporter = cfg["exporter"]
+        if exporter == "olive-modelbuilder":
+            self._check_special_cased(entry, cfg, "run_olive_modelbuilder")
+        elif exporter == "yobx-to_onnx":
+            self._check_special_cased(entry, cfg, "run_to_onnx_default")
+        else:
+            self._check_validate_model(entry, cfg)
+
+    def test_every_model_and_exporter_is_wired(self):
+        # One sub-test per (model, exporter) pair so that a failure pinpoints
+        # the exact cell of the model-id coverage page that regressed.
+        self.assertTrue(rymv.DEFAULT_MODELS)
+        self.assertTrue(rymv.DEFAULT_EXPORTERS)
+        for entry in rymv.DEFAULT_MODELS:
+            for cfg in rymv.DEFAULT_EXPORTERS:
+                with self.subTest(model=entry["model"], exporter=cfg["label"]):
+                    self._check_cell(entry, cfg)
+
+
 if __name__ == "__main__":
     unittest.main()
