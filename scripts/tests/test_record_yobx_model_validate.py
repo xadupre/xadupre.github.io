@@ -14,6 +14,62 @@ sys.path.insert(0, os.path.dirname(HERE))
 import record_yobx_model_validate as rymv  # noqa: E402
 
 
+def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg):
+    """Exercise the real ``yobx-to_onnx`` export path when the stack is installed."""
+    try:
+        import onnx
+        import torch
+        import yobx.torch.validate as yobx_validate
+        from yobx.torch.validate import ValidateData, ValidateSummary
+    except Exception as exc:
+        testcase.skipTest(f"yobx export stack is not installed ({exc})")
+
+    class TinyModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = torch.nn.Linear(4, 4, bias=False)
+
+        def forward(self, x):
+            return self.linear(x)
+
+    sample = torch.arange(8, dtype=torch.float32).reshape(2, 4)
+    observed = {}
+    original = yobx_validate.validate_model
+
+    class FakeObserver:
+        def check_discrepancies(self, filename, atol):
+            testcase.assertEqual(atol, 1e-4)
+            testcase.assertTrue(os.path.exists(filename))
+            onx = onnx.load(filename, load_external_data=False)
+            testcase.assertGreater(len(onx.graph.node), 0)
+            observed["filename"] = filename
+            return [{"SUCCESS": True, "abs": 0.0}]
+
+    def fake_validate_model(**kwargs):
+        testcase.assertEqual(kwargs["exporter"], "yobx")
+        testcase.assertIsNone(kwargs["optimization"])
+        testcase.assertFalse(kwargs["do_run"])
+        return (
+            ValidateSummary(model_id=kwargs["model_id"], prompt=""),
+            ValidateData(
+                model=TinyModule().eval(),
+                observer=FakeObserver(),
+                kwargs={"x": sample},
+                dynamic_shapes=None,
+            ),
+        )
+
+    yobx_validate.validate_model = fake_validate_model
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = rymv.run_validate_one(entry, cfg, dump_folder=tmp, quiet=True)
+            testcase.assertEqual(result["export"], "OK")
+            testcase.assertEqual(result["discrepancies"], "OK")
+            testcase.assertEqual(observed["filename"], os.path.join(tmp, "a-b.yobx-to_onnx.onnx"))
+    finally:
+        yobx_validate.validate_model = original
+
+
 class TestRecordYobxModelValidate(unittest.TestCase):
     def test_defaults(self):
         model_ids = {e["model"] for e in rymv.DEFAULT_MODELS}
@@ -707,39 +763,16 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         finally:
             rymv.run_validate_one = original
 
-    def test_run_validate_one_dispatches_to_to_onnx_default(self):
-        cfg = {
-            "label": "yobx-to_onnx",
-            "exporter": "yobx-to_onnx",
-            "optimization": "(defaults)",
-        }
-        seen = {}
-
-        def fake_to_onnx_default(
-            entry, exporter_cfg, verbose=0, dump_folder=None, quiet=True
-        ):
-            seen["entry"] = entry
-            seen["exporter_cfg"] = exporter_cfg
-            seen["dump_folder"] = dump_folder
-            seen["quiet"] = quiet
-            return {"export": "OK", "discrepancies": "OK"}
-
-        original = rymv.run_to_onnx_default
-        rymv.run_to_onnx_default = fake_to_onnx_default
-        try:
-            result = rymv.run_validate_one(
-                {"model": "a/b", "dtype": "float16", "device": "cpu"},
-                cfg,
-                dump_folder="/tmp/x",
-                quiet=True,
-            )
-        finally:
-            rymv.run_to_onnx_default = original
-        self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
-        self.assertEqual(seen["entry"]["model"], "a/b")
-        self.assertEqual(seen["exporter_cfg"]["exporter"], "yobx-to_onnx")
-        self.assertEqual(seen["dump_folder"], "/tmp/x")
-        self.assertTrue(seen["quiet"])
+    def test_run_validate_one_exports_with_to_onnx_default(self):
+        _run_real_yobx_to_onnx_export_test(
+            self,
+            {"model": "a/b", "dtype": "float16", "device": "cpu"},
+            {
+                "label": "yobx-to_onnx",
+                "exporter": "yobx-to_onnx",
+                "optimization": "(defaults)",
+            },
+        )
 
     def test_run_validate_one_dispatches_to_olive_modelbuilder(self):
         cfg = {
@@ -1050,8 +1083,11 @@ class TestPerModelPerExporterDispatch(unittest.TestCase):
         if exporter == "olive-modelbuilder":
             self._check_special_cased(entry, cfg, "run_olive_modelbuilder")
         elif exporter == "yobx-to_onnx":
-            # do not fake this one
-            self._check_special_cased(entry, cfg, "run_to_onnx_default")
+            _run_real_yobx_to_onnx_export_test(
+                self,
+                {"model": "a/b", "dtype": entry["dtype"], "device": entry["device"]},
+                cfg,
+            )
         else:
             self._check_validate_model(entry, cfg)
 
