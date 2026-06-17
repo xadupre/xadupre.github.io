@@ -1002,6 +1002,46 @@ class TestTagFiltering(unittest.TestCase):
         )
         self.assertEqual(payload["tag"], "shape, local_function")
 
+    def test_build_payload_records_backend_versions(self):
+        tests = [{"name": "t", "model": "m", "expected": [{"name": "Y"}]}]
+
+        def fake_run(model, expected, backend):
+            return {
+                "success": True,
+                "correct": 1,
+                "total": 1,
+                "details": [],
+                "error": "",
+                "error_step": "",
+            }
+
+        payload = rsi.build_payload(
+            tag="inference",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {
+                "onnx": "1.17.0",
+                "onnx_light": "0.2",
+                "onnxruntime": "1.20.0",
+            },
+        )
+        self.assertEqual(
+            payload["backend_versions"],
+            {
+                "onnx-light": "0.2",
+                "onnx-light-optim": "0.2",
+                "onnx": "1.17.0",
+                "ort-transformers": "1.20.0",
+            },
+        )
+
+    def test_backend_versions_from_map(self):
+        self.assertEqual(rsi.backend_versions_from_map({}), {})
+        self.assertEqual(
+            rsi.backend_versions_from_map({"yobx": "3.1", "onnx": "1.18.0"}),
+            {"onnx": "1.18.0", "yobx": "3.1"},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
