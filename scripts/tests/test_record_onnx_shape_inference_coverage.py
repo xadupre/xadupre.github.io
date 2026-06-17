@@ -572,6 +572,28 @@ class TestRunTestWithBackend(unittest.TestCase):
                 f"value_info shape should be stripped on {vi.name!r}",
             )
 
+    def test_runner_exception_without_message_reports_type(self):
+        # A backend whose runner raises an exception with no message (for
+        # instance a bare ``assert`` in onnxruntime's symbolic shape
+        # inference) must still surface an explicit error rather than an
+        # empty one that reads on the dashboard as "not running".
+        model = _make_simple_model()
+        expected = rsi.snapshot_intermediates(model)
+
+        def fake_runner(stripped):
+            raise AssertionError()
+
+        original = rsi._BACKEND_RUNNERS["ort-transformers"]
+        rsi._BACKEND_RUNNERS["ort-transformers"] = fake_runner
+        try:
+            info = rsi.run_test_with_backend(model, expected, "ort-transformers")
+        finally:
+            rsi._BACKEND_RUNNERS["ort-transformers"] = original
+
+        self.assertFalse(info["success"])
+        self.assertEqual(info["error_step"], "run")
+        self.assertEqual(info["error"], "AssertionError")
+
 
 class TestDropShapelessValueInfo(unittest.TestCase):
     def test_drops_value_info_without_shape_keeps_shaped_ones(self):
