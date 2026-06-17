@@ -21,7 +21,7 @@ def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg):
         import torch
         import yobx.torch.validate as yobx_validate
         from yobx.torch.validate import ValidateData, ValidateSummary
-    except Exception as exc:
+    except (ImportError, ModuleNotFoundError) as exc:
         testcase.skipTest(f"yobx export stack is not installed ({exc})")
 
     class TinyModule(torch.nn.Module):
@@ -65,7 +65,10 @@ def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg):
             result = rymv.run_validate_one(entry, cfg, dump_folder=tmp, quiet=True)
             testcase.assertEqual(result["export"], "OK")
             testcase.assertEqual(result["discrepancies"], "OK")
-            testcase.assertEqual(observed["filename"], os.path.join(tmp, "a-b.yobx-to_onnx.onnx"))
+            expected = os.path.join(
+                tmp, f"{entry['model'].replace('/', '-')}.yobx-to_onnx.onnx"
+            )
+            testcase.assertEqual(observed["filename"], expected)
     finally:
         yobx_validate.validate_model = original
 
