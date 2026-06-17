@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -842,6 +843,80 @@ class TestMermaid(unittest.TestCase):
         self.assertIn("X", out)
         self.assertIn("Identity", out)
         self.assertIn("Z", out)
+
+    def test_model_to_mermaid_renders_subgraphs(self):
+        # Control-flow subgraphs (``If`` branches) must be rendered as
+        # Mermaid ``subgraph`` blocks so their internal nodes and outputs
+        # are visible, not hidden behind the single ``If`` node.
+        model = _make_model_with_subgraph()
+        rendered = rsi.model_to_mermaid(model)
+        self.assertTrue(rendered.startswith("flowchart TD"))
+        # The ``If`` node and both branch subgraphs appear.
+        self.assertIn('["If"]', rendered)
+        self.assertIn("subgraph", rendered)
+        self.assertIn("If.then_branch", rendered)
+        self.assertIn("If.else_branch", rendered)
+        # Every ``subgraph`` block is closed with an ``end``.
+        self.assertEqual(
+            len(re.findall(r"\bsubgraph\b", rendered)),
+            len(re.findall(r"^\s*end$", rendered, flags=re.MULTILINE)),
+        )
+        # The branch outputs (internal to the subgraphs) are drawn.
+        self.assertIn("tout", rendered)
+        self.assertIn("eout", rendered)
+
+    def test_model_to_mermaid_scopes_shadowed_subgraph_names(self):
+        # A subgraph that produces a tensor whose name also exists in the
+        # outer graph must route its internal edges to the *local*
+        # producer, not the outer one (ONNX subgraph shadowing).
+        import onnx
+        from onnx import TensorProto, helper
+
+        cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+        x = helper.make_tensor_value_info("X", TensorProto.FLOAT, [1])
+        y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
+        # Both branches reuse the name "shared" internally.
+        then_out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
+        then_g = helper.make_graph(
+            [
+                helper.make_node("Neg", ["X"], ["shared"]),
+                helper.make_node("Identity", ["shared"], ["Y"]),
+            ],
+            "then",
+            [],
+            [then_out],
+        )
+        else_out = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [1])
+        else_g = helper.make_graph(
+            [helper.make_node("Identity", ["X"], ["Y"])],
+            "else",
+            [],
+            [else_out],
+        )
+        graph = helper.make_graph(
+            [
+                helper.make_node("Identity", ["X"], ["shared"]),
+                helper.make_node(
+                    "If",
+                    ["cond"],
+                    ["Y"],
+                    then_branch=then_g,
+                    else_branch=else_g,
+                ),
+            ],
+            "main",
+            [cond, x],
+            [y],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 17)]
+        )
+        model.ir_version = 7
+        rendered = rsi.model_to_mermaid(model)
+        # The then-branch ``Neg`` feeds the then-branch ``Identity`` through
+        # the locally-shadowed ``shared`` tensor, so an edge between the two
+        # subgraph operators must exist.
+        self.assertRegex(rendered, r"op_Neg_0 -- \"shared[^\n]*--> op_Identity")
 
     def test_model_to_mermaid_returns_empty_on_invalid_model(self):
         # Non-model inputs are tolerated and produce an empty string.
