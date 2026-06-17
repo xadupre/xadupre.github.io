@@ -55,6 +55,10 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   color: #8b949e;
   font-size: 0.8em;
 }
+.ratio-card .ratio-label .ratio-version {
+  color: #6e7681;
+  font-size: 0.9em;
+}
 .ratio-card .ratio-value {
   font-size: 1.4em;
   margin-top: 0.15em;
@@ -225,7 +229,9 @@ table.comparison th .arrow {
     <a href="https://github.com/xadupre/yet-another-onnx-builder"><code>yobx.xshape.BasicShapeBuilder</code></a>
     (shape inference shipped with <code>yet-another-onnx-builder</code>).
     The table reports the percentage of intermediates whose
-    <code>elem_type</code> and shape were correctly recovered. Click a row
+    <code>elem_type</code> and shape were correctly recovered, including
+    intermediates nested inside control-flow subgraphs
+    (<code>If</code>/<code>Loop</code>/<code>Scan</code>). Click a row
     to see the per-intermediate detail for each runtime; the graph
     <code>input</code> shapes fed to the runtimes are listed first for
     context.
@@ -260,9 +266,23 @@ table.comparison th .arrow {
 <script>
 const JSON_URL = "../../cache_data/onnx-light/shape_inference_coverage.json";
 
+// Package whose version is reported for each tested backend. Mirrors
+// BACKEND_PACKAGE in scripts/record_onnx_shape_inference_coverage.py and
+// is used as a fallback to derive per-backend versions from the generic
+// payload.versions map when payload.backend_versions is absent.
+const BACKEND_PACKAGE = {
+  "onnx-light": "onnx_light",
+  "onnx-light-optim": "onnx_light",
+  "onnx": "onnx",
+  "onnx-shape-inference": "onnx_shape_inference",
+  "ort-transformers": "onnxruntime",
+  "yobx": "yobx",
+};
+
 const state = {
   rows: [],
   backends: [],
+  backendVersions: {},
   search: "",
   regex: null,
   regexError: null,
@@ -278,6 +298,28 @@ function showMessage(text, kind) {
 
 function hideMessage() {
   document.getElementById("message").className = "message";
+}
+
+function resolveBackendVersions(payload, backends) {
+  // Prefer the explicit per-backend versions recorded by the recorder;
+  // fall back to deriving them from the generic versions map so the
+  // version of each tested package is shown even for older snapshots.
+  const explicit = (payload.backend_versions && typeof payload.backend_versions === "object")
+    ? payload.backend_versions : {};
+  const versions = (payload.versions && typeof payload.versions === "object")
+    ? payload.versions : {};
+  const resolved = {};
+  for (const backend of backends) {
+    if (explicit[backend]) {
+      resolved[backend] = explicit[backend];
+      continue;
+    }
+    const pkg = BACKEND_PACKAGE[backend];
+    if (pkg && versions[pkg]) {
+      resolved[backend] = versions[pkg];
+    }
+  }
+  return resolved;
 }
 
 function renderMeta(payload) {
@@ -386,6 +428,13 @@ function renderRatios(filtered) {
     const label = document.createElement("div");
     label.className = "ratio-label";
     label.textContent = backend;
+    const version = state.backendVersions[backend];
+    if (version) {
+      const verSpan = document.createElement("span");
+      verSpan.className = "ratio-version";
+      verSpan.textContent = " v" + version;
+      label.appendChild(verSpan);
+    }
     const value = document.createElement("div");
     value.className = "ratio-value";
     value.textContent = formatPercent(correct, total);
@@ -814,6 +863,7 @@ fetch(JSON_URL, { cache: "no-store" })
       }
     }
     state.backends = backends;
+    state.backendVersions = resolveBackendVersions(payload, backends);
     renderHead();
     bindHeaderSorting();
     bindSearch();

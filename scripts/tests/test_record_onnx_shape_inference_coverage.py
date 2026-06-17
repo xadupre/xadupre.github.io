@@ -275,6 +275,93 @@ class TestSnapshotAndStrip(unittest.TestCase):
             self.assertTrue(vi.type.tensor_type.HasField("shape"))
 
 
+def _make_model_with_subgraph():
+    """Build a model whose ``If`` node carries non-trivial subgraphs.
+
+    The ``then`` branch has an intermediate ``value_info`` (``tmid``) and
+    an output (``tout``); the ``else`` branch only has an output
+    (``eout``). Used to check that subgraph shapes are snapshotted,
+    stripped and scored like the main graph's.
+    """
+    from onnx import TensorProto, helper
+
+    th_mid = helper.make_tensor_value_info("tmid", TensorProto.FLOAT, [2, 3])
+    th_out = helper.make_tensor_value_info("tout", TensorProto.FLOAT, [2, 3])
+    then_g = helper.make_graph(
+        [
+            helper.make_node("Identity", ["X"], ["tmid"]),
+            helper.make_node("Identity", ["tmid"], ["tout"]),
+        ],
+        "then",
+        [],
+        [th_out],
+        value_info=[th_mid],
+    )
+    el_out = helper.make_tensor_value_info("eout", TensorProto.FLOAT, [2, 3])
+    else_g = helper.make_graph(
+        [helper.make_node("Identity", ["X"], ["eout"])],
+        "else",
+        [],
+        [el_out],
+    )
+    cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
+    X = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
+    Y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2, 3])
+    node = helper.make_node(
+        "If", ["cond"], ["Y"], then_branch=then_g, else_branch=else_g
+    )
+    graph = helper.make_graph([node], "main", [cond, X], [Y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 7
+    return model
+
+
+class TestSubgraphCoverage(unittest.TestCase):
+    def test_snapshot_includes_subgraph_value_info_and_outputs(self):
+        model = _make_model_with_subgraph()
+        snap = rsi.snapshot_intermediates(model)
+        by_name = {s["name"]: s for s in snap}
+        # Subgraph intermediate ``value_info`` is snapshotted.
+        self.assertIn("tmid", by_name)
+        self.assertEqual(by_name["tmid"]["kind"], "value_info")
+        self.assertEqual(by_name["tmid"]["shape"], [2, 3])
+        # Subgraph outputs of both branches are snapshotted.
+        self.assertIn("tout", by_name)
+        self.assertEqual(by_name["tout"]["kind"], "output")
+        self.assertIn("eout", by_name)
+        self.assertEqual(by_name["eout"]["kind"], "output")
+        # The main graph output is still present.
+        self.assertIn("Y", by_name)
+
+    def test_strip_shapes_clears_subgraph_shapes(self):
+        model = _make_model_with_subgraph()
+        stripped = rsi.strip_shapes(model)
+        for graph in rsi._iter_subgraphs(stripped.graph):
+            if graph.name in ("then", "else"):
+                for vi in list(graph.value_info) + list(graph.output):
+                    self.assertFalse(
+                        vi.type.tensor_type.HasField("shape"),
+                        f"subgraph shape should be stripped on {vi.name!r}",
+                    )
+        # The original model is untouched.
+        for graph in rsi._iter_subgraphs(model.graph):
+            for vi in list(graph.value_info) + list(graph.output):
+                self.assertTrue(vi.type.tensor_type.HasField("shape"))
+
+    def test_subgraph_shapes_are_scored_against_inferred_model(self):
+        model = _make_model_with_subgraph()
+        snap = rsi.snapshot_intermediates(model)
+        stripped = rsi.strip_shapes(model)
+        inferred = rsi._run_onnx(stripped)
+        details = {
+            d["name"]: d for d in rsi._compare_snapshot_with_model(snap, inferred)
+        }
+        for name in ("tmid", "tout", "eout"):
+            self.assertIn(name, details)
+            self.assertTrue(details[name]["ok"], details[name])
+            self.assertEqual(details[name]["shape"], [2, 3])
+
+
 class TestCompareSnapshotWithModel(unittest.TestCase):
     def test_matching_shapes_are_scored_ok(self):
         model = _make_simple_model()
@@ -1001,6 +1088,46 @@ class TestTagFiltering(unittest.TestCase):
             versions=lambda: {},
         )
         self.assertEqual(payload["tag"], "shape, local_function")
+
+    def test_build_payload_records_backend_versions(self):
+        tests = [{"name": "t", "model": "m", "expected": [{"name": "Y"}]}]
+
+        def fake_run(model, expected, backend):
+            return {
+                "success": True,
+                "correct": 1,
+                "total": 1,
+                "details": [],
+                "error": "",
+                "error_step": "",
+            }
+
+        payload = rsi.build_payload(
+            tag="inference",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {
+                "onnx": "1.17.0",
+                "onnx_light": "0.2",
+                "onnxruntime": "1.20.0",
+            },
+        )
+        self.assertEqual(
+            payload["backend_versions"],
+            {
+                "onnx-light": "0.2",
+                "onnx-light-optim": "0.2",
+                "onnx": "1.17.0",
+                "ort-transformers": "1.20.0",
+            },
+        )
+
+    def test_backend_versions_from_map(self):
+        self.assertEqual(rsi.backend_versions_from_map({}), {})
+        self.assertEqual(
+            rsi.backend_versions_from_map({"yobx": "3.1", "onnx": "1.18.0"}),
+            {"onnx": "1.18.0", "yobx": "3.1"},
+        )
 
 
 if __name__ == "__main__":
