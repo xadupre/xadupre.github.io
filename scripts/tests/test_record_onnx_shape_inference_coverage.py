@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -842,6 +843,27 @@ class TestMermaid(unittest.TestCase):
         self.assertIn("X", out)
         self.assertIn("Identity", out)
         self.assertIn("Z", out)
+
+    def test_model_to_mermaid_renders_subgraphs(self):
+        # Control-flow subgraphs (``If`` branches) must be rendered as
+        # Mermaid ``subgraph`` blocks so their internal nodes and outputs
+        # are visible, not hidden behind the single ``If`` node.
+        model = _make_model_with_subgraph()
+        rendered = rsi.model_to_mermaid(model)
+        self.assertTrue(rendered.startswith("flowchart TD"))
+        # The ``If`` node and both branch subgraphs appear.
+        self.assertIn('["If"]', rendered)
+        self.assertIn("subgraph", rendered)
+        self.assertIn("If.then_branch", rendered)
+        self.assertIn("If.else_branch", rendered)
+        # Every ``subgraph`` block is closed with an ``end``.
+        self.assertEqual(
+            len(re.findall(r"\bsubgraph\b", rendered)),
+            len(re.findall(r"^\s*end$", rendered, flags=re.MULTILINE)),
+        )
+        # The branch outputs (internal to the subgraphs) are drawn.
+        self.assertIn("tout", rendered)
+        self.assertIn("eout", rendered)
 
     def test_model_to_mermaid_returns_empty_on_invalid_model(self):
         # Non-model inputs are tolerated and produce an empty string.
