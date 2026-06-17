@@ -36,7 +36,7 @@ def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg):
     observed = {}
     original = yobx_validate.validate_model
 
-    class FakeObserver:
+    class TestObserver:
         def check_discrepancies(self, filename, atol):
             testcase.assertEqual(atol, 1e-4)
             testcase.assertTrue(os.path.exists(filename))
@@ -53,7 +53,7 @@ def _run_real_yobx_to_onnx_export_test(testcase, entry, cfg):
             ValidateSummary(model_id=kwargs["model_id"], prompt=""),
             ValidateData(
                 model=TinyModule().eval(),
-                observer=FakeObserver(),
+                observer=TestObserver(),
                 kwargs={"x": sample},
                 dynamic_shapes=None,
             ),
