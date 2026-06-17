@@ -630,9 +630,9 @@ def run_to_onnx_default(
     model = getattr(data, "model", None)
     observer = getattr(data, "observer", None)
     captured_kwargs = getattr(data, "kwargs", None)
-    dynamic_shapes = getattr(data, "dynamic_shapes", None)
     if model is None or observer is None or captured_kwargs is None:
         return summary
+    dynamic_shapes = getattr(data, "dynamic_shapes", None)
 
     # 2. Explicit, default call to ``yobx.torch.to_onnx``.
     model_name = entry["model"].replace("/", "-")
@@ -682,7 +682,7 @@ def run_to_onnx_default(
             pass
 
     # 4. Discrepancy check using the captured observer.
-    atol = 1e-4
+    atol = entry.get("atol", DEFAULT_ATOL)
     try:
         disc_data = observer.check_discrepancies(filename, atol=atol)
     except Exception as exc:  # noqa: BLE001

@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_yobx_model_validate as rymv  # noqa: E402
 
+_STANDARD_EXPORT_MODULES = ("torch", "yobx", "onnx")
+
 
 def _require_modules(testcase, *modules):
     missing = [name for name in modules if importlib.util.find_spec(name) is None]
@@ -24,14 +26,12 @@ def _require_modules(testcase, *modules):
 def _run_real_export_test(testcase, entry, cfg, dump_folder):
     """Exercise the real exporter path when the optional stack is installed."""
     required = {
-        "yobx": ("torch", "yobx", "onnx"),
-        "dynamo": ("torch", "yobx", "onnx"),
-        "onnx-dynamo": ("torch", "yobx", "onnx"),
-        "yobx-to_onnx": ("torch", "yobx", "onnx"),
+        "yobx": _STANDARD_EXPORT_MODULES,
+        "dynamo": _STANDARD_EXPORT_MODULES,
+        "onnx-dynamo": _STANDARD_EXPORT_MODULES,
+        "yobx-to_onnx": _STANDARD_EXPORT_MODULES,
         "olive-modelbuilder": (
-            "torch",
-            "yobx",
-            "onnx",
+            *_STANDARD_EXPORT_MODULES,
             "olive",
             "onnxruntime_genai",
         ),
