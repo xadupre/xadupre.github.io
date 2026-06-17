@@ -427,10 +427,7 @@ def _compare_value(
         if not (isinstance(exp, list) and isinstance(act, list)):
             return f"{label} type mismatch: sequence vs non-sequence"
         if len(exp) != len(act):
-            return (
-                f"{label} length mismatch: "
-                f"expected {len(exp)}, got {len(act)}"
-            )
+            return f"{label} length mismatch: " f"expected {len(exp)}, got {len(act)}"
         for k, (sub_exp, sub_act) in enumerate(zip(exp, act)):
             msg = _compare_value(sub_exp, sub_act, rtol, atol, f"{label}[{k}]")
             if msg is not None:
@@ -441,8 +438,7 @@ def _compare_value(
     act_arr = np.asarray(act)
     if exp_arr.shape != act_arr.shape:
         return (
-            f"{label} shape mismatch: "
-            f"expected {exp_arr.shape}, got {act_arr.shape}"
+            f"{label} shape mismatch: " f"expected {exp_arr.shape}, got {act_arr.shape}"
         )
     if exp_arr.dtype.kind in ("U", "S", "O") or act_arr.dtype.kind in (
         "U",

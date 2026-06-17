@@ -916,9 +916,7 @@ def run_olive_modelbuilder(
             summary["discrepancies_atol"] = 0.01
             failures = disc.get("failures")
             if status != "passed" and failures:
-                summary["error_discrepancies"] = "; ".join(
-                    str(f) for f in failures
-                )
+                summary["error_discrepancies"] = "; ".join(str(f) for f in failures)
     else:
         summary["discrepancies"] = "FAILED"
         summary["error_discrepancies"] = (

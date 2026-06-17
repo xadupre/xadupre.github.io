@@ -116,7 +116,15 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnx_light", "onnx_shape_inference", "onnx_ir", "onnxruntime", "yobx", "numpy"):
+    for name in (
+        "onnx",
+        "onnx_light",
+        "onnx_shape_inference",
+        "onnx_ir",
+        "onnxruntime",
+        "yobx",
+        "numpy",
+    ):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort
@@ -169,12 +177,7 @@ def _onnx_light_model_to_onnx(model):
 
 def _mermaid_escape(text: str) -> str:
     """Escape ``text`` so it can appear inside a Mermaid ``"..."`` label."""
-    return (
-        str(text)
-        .replace("\\", "\\\\")
-        .replace("\"", "&quot;")
-        .replace("\n", " ")
-    )
+    return str(text).replace("\\", "\\\\").replace('"', "&quot;").replace("\n", " ")
 
 
 def _mermaid_dtype_name(onnx_mod: Any, dtype: int) -> str:
@@ -781,9 +784,7 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                 # same symbolic dim name.
                 if exp_concrete and got_concrete:
                     if got != exp:
-                        mismatch = (
-                            f"dim[{i}] mismatch: expected {exp}, got {got}"
-                        )
+                        mismatch = f"dim[{i}] mismatch: expected {exp}, got {got}"
                         break
                 elif exp_symbolic and got_symbolic:
                     # Symbolic dims may carry expressions such as
@@ -793,19 +794,14 @@ def _compare_snapshot_with_model(snapshot, inferred_model) -> List[Dict[str, Any
                     # ``"a + b"`` and ``"a+b"`` are treated as equal.
                     if "".join(got.split()) != "".join(exp.split()):
                         mismatch = (
-                            f"dim[{i}] mismatch: expected {exp!r}, "
-                            f"got {got!r}"
+                            f"dim[{i}] mismatch: expected {exp!r}, " f"got {got!r}"
                         )
                         break
                 elif exp_concrete and not got_concrete:
-                    mismatch = (
-                        f"dim[{i}] mismatch: expected {exp}, got {got!r}"
-                    )
+                    mismatch = f"dim[{i}] mismatch: expected {exp}, got {got!r}"
                     break
                 elif exp_symbolic and not got_symbolic:
-                    mismatch = (
-                        f"dim[{i}] mismatch: expected {exp!r}, got {got}"
-                    )
+                    mismatch = f"dim[{i}] mismatch: expected {exp!r}, got {got}"
                     break
             if mismatch is not None:
                 detail["reason"] = mismatch
@@ -1014,9 +1010,7 @@ def run_test_with_backend(
     # ``len(expected)`` is used as a sensible upper bound for ``total``
     # on early failure paths. Informational entries (no expectation) are
     # excluded so the count reflects scoring as it would have been.
-    scored_total = sum(
-        1 for e in expected if e.get("elem_type") is not None
-    )
+    scored_total = sum(1 for e in expected if e.get("elem_type") is not None)
     if runner is None:
         return {
             "success": False,
@@ -1080,14 +1074,16 @@ def run_test_with_backend(
     # purely informational: they show up in ``details`` so the dashboard
     # can display the inferred shape for unannotated intermediates, but
     # they are not counted towards the correctness score.
-    scored = [
-        d for d in details if d.get("expected_elem_type") is not None
-    ]
+    scored = [d for d in details if d.get("expected_elem_type") is not None]
     correct = sum(1 for d in scored if d["ok"])
     total = len(scored)
     return {
         "success": total > 0 and correct == total,
-        "error": "" if correct == total else f"{total - correct}/{total} intermediates mismatched",
+        "error": (
+            ""
+            if correct == total
+            else f"{total - correct}/{total} intermediates mismatched"
+        ),
         "error_step": "" if correct == total else "compare",
         "correct": correct,
         "total": total,
@@ -1143,9 +1139,7 @@ def _row_from_results(
         prev_mermaid = previous.get("mermaid")
         if isinstance(prev_mermaid, str) and prev_mermaid:
             row["mermaid"] = prev_mermaid
-    scored_count = sum(
-        1 for e in expected if e.get("elem_type") is not None
-    )
+    scored_count = sum(1 for e in expected if e.get("elem_type") is not None)
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -1168,11 +1162,11 @@ def _row_from_results(
             if version:
                 runtime_entry["last_pass_version"] = version
         else:
-            prev_runtimes = previous.get("runtimes") if isinstance(previous, dict) else None
+            prev_runtimes = (
+                previous.get("runtimes") if isinstance(previous, dict) else None
+            )
             prev_entry = (
-                prev_runtimes.get(backend)
-                if isinstance(prev_runtimes, dict)
-                else None
+                prev_runtimes.get(backend) if isinstance(prev_runtimes, dict) else None
             )
             if isinstance(prev_entry, dict):
                 prev_date = prev_entry.get("last_pass_date")

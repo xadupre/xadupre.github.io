@@ -502,7 +502,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertNotAlmostEqual(durations["dynamo-ir"], 2.5)
 
     def test_run_all_uses_temp_dump_folder_when_none_provided(self):
-        """When no dump folder is supplied, yobx still gets one (a temp dir)."""
         try:
             import openpyxl  # noqa: F401
         except Exception:
@@ -709,7 +708,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             rymv.run_validate_one = original
 
     def test_run_validate_one_dispatches_to_to_onnx_default(self):
-        """``yobx-to_onnx`` exporter routes to ``run_to_onnx_default``."""
         cfg = {
             "label": "yobx-to_onnx",
             "exporter": "yobx-to_onnx",
@@ -743,9 +741,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(seen["dump_folder"], "/tmp/x")
         self.assertTrue(seen["quiet"])
 
-
     def test_run_validate_one_dispatches_to_olive_modelbuilder(self):
-        """``olive-modelbuilder`` exporter routes to ``run_olive_modelbuilder``."""
         cfg = {
             "label": "olive-modelbuilder",
             "exporter": "olive-modelbuilder",
@@ -813,7 +809,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertTrue(args.test)
 
     def test_run_olive_modelbuilder_when_cli_missing(self):
-        """``run_olive_modelbuilder`` returns a failed summary when the CLI is missing."""
         import subprocess
 
         original_run = subprocess.run
@@ -837,7 +832,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertIn("olive", summary["error_export"].lower())
 
     def test_run_olive_modelbuilder_non_zero_returncode(self):
-        """``run_olive_modelbuilder`` surfaces the CLI's stderr on failure."""
         import subprocess
 
         class _Proc:
@@ -854,11 +848,11 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         try:
             summary = rymv.run_olive_modelbuilder(
                 {"model": "a/b", "dtype": "float16", "device": "cpu"},
-            {
-                "label": "olive-modelbuilder",
-                "exporter": "olive-modelbuilder",
-                "optimization": "(modelbuilder)",
-            },
+                {
+                    "label": "olive-modelbuilder",
+                    "exporter": "olive-modelbuilder",
+                    "optimization": "(modelbuilder)",
+                },
             )
         finally:
             subprocess.run = original_run
@@ -868,10 +862,10 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         )
 
     def test_run_olive_modelbuilder_reads_discrepancy_check_results(self):
-        """A successful run reads metrics from ``discrepancy_check_results.json``."""
         import subprocess
 
         with tempfile.TemporaryDirectory() as tmp:
+
             class _Proc:
                 returncode = 0
                 stdout = ""
@@ -941,10 +935,10 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertIn("--test", captured["calls"][1])
 
     def test_run_olive_modelbuilder_missing_discrepancy_results(self):
-        """Successful export but no JSON metrics file is reported as a discrepancy failure."""
         import subprocess
 
         with tempfile.TemporaryDirectory() as tmp:
+
             class _Proc:
                 returncode = 0
                 stdout = ""
@@ -975,24 +969,10 @@ class TestRecordYobxModelValidate(unittest.TestCase):
 
         self.assertEqual(summary["export"], "OK")
         self.assertEqual(summary["discrepancies"], "FAILED")
-        self.assertIn(
-            "discrepancy_check_results.json", summary["error_discrepancies"]
-        )
+        self.assertIn("discrepancy_check_results.json", summary["error_discrepancies"])
 
 
 class TestPerModelPerExporterDispatch(unittest.TestCase):
-    """One wiring check per (model, exporter) cell of the model-id coverage page.
-
-    The ``dashboard/yet-another-onnx-builder/model-validate.html`` page is fed
-    by one cell per model (``DEFAULT_MODELS``) and per exporter
-    (``DEFAULT_EXPORTERS``). This exercises every such cell to make sure
-    ``run_validate_one`` routes it to the right backend so that both the Olive
-    runtime (``olive-modelbuilder``) and the ``torch.onnx.export`` based
-    columns (the ``dynamo``/``onnx-dynamo`` exporters, which ``validate_model``
-    drives through ``torch.onnx.export``) are actually invoked. ``yobx`` and
-    ``yobx-to_onnx`` are checked too for completeness.
-    """
-
     def _install_fake_validate_model(self, recorder):
         """Inject a fake ``yobx.torch.validate`` so the lazy import resolves.
 
@@ -1043,9 +1023,7 @@ class TestPerModelPerExporterDispatch(unittest.TestCase):
         original = getattr(rymv, attr)
         setattr(rymv, attr, fake_backend)
         try:
-            result = rymv.run_validate_one(
-                entry, cfg, dump_folder="/tmp/x", quiet=True
-            )
+            result = rymv.run_validate_one(entry, cfg, dump_folder="/tmp/x", quiet=True)
         finally:
             setattr(rymv, attr, original)
         self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
@@ -1058,9 +1036,7 @@ class TestPerModelPerExporterDispatch(unittest.TestCase):
         recorder = {}
         saved = self._install_fake_validate_model(recorder)
         try:
-            result = rymv.run_validate_one(
-                entry, cfg, dump_folder="/tmp/x", quiet=True
-            )
+            result = rymv.run_validate_one(entry, cfg, dump_folder="/tmp/x", quiet=True)
         finally:
             self._restore_modules(saved)
         self.assertEqual(result, {"export": "OK", "discrepancies": "OK"})
@@ -1088,10 +1064,10 @@ def _make_cell_test(entry, cfg):
     def test(self):
         self._check_cell(entry, cfg)
 
-    test.__doc__ = (
-        f"model-id coverage cell ({entry['model']!r}, {cfg['label']!r}) "
-        "is routed to the right backend."
-    )
+    # test.__doc__ = (
+    #     f"model-id coverage cell ({entry['model']!r}, {cfg['label']!r}) "
+    #     "is routed to the right backend."
+    # )
     return test
 
 
@@ -1103,9 +1079,7 @@ def _make_cell_test(entry, cfg):
 # alongside ``yobx`` and ``yobx-to_onnx``.
 for _entry in rymv.DEFAULT_MODELS:
     for _cfg in rymv.DEFAULT_EXPORTERS:
-        _name = (
-            f"test_cell_{_slugify(_entry['model'])}__{_slugify(_cfg['label'])}"
-        )
+        _name = f"test_cell_{_slugify(_entry['model'])}__{_slugify(_cfg['label'])}"
         setattr(
             TestPerModelPerExporterDispatch,
             _name,
@@ -1115,4 +1089,4 @@ del _entry, _cfg, _name
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)

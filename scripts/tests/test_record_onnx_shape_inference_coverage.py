@@ -22,7 +22,6 @@ def _make_simple_model():
     shape inference is enough to recover both the intermediate
     ``value_info`` and the graph output shape from the input shape.
     """
-    import onnx
     from onnx import TensorProto, helper
 
     inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2, 3])
@@ -50,9 +49,7 @@ class TestSnapshotAndStrip(unittest.TestCase):
             helper.make_node("Identity", ["Y"], ["Z"]),
         ]
         graph = helper.make_graph(nodes, "ops", [inp], [out], value_info=[mid])
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         op_types = {s["name"]: s["op_type"] for s in snap}
@@ -65,20 +62,14 @@ class TestSnapshotAndStrip(unittest.TestCase):
         them (e.g. the shape produced by a ``Shape`` operator)."""
         from onnx import TensorProto, helper
 
-        inp = helper.make_tensor_value_info(
-            "X", TensorProto.FLOAT, ["N", 3]
-        )
-        out = helper.make_tensor_value_info(
-            "Y", TensorProto.INT64, [2]
-        )
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.INT64, [2])
         nodes = [
             helper.make_node("Shape", ["X"], ["shp"]),
             helper.make_node("Identity", ["shp"], ["Y"]),
         ]
         graph = helper.make_graph(nodes, "unannotated", [inp], [out])
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         by_name = {s["name"]: s for s in snap}
@@ -101,20 +92,14 @@ class TestSnapshotAndStrip(unittest.TestCase):
         flagged as a mismatch."""
         from onnx import TensorProto, helper
 
-        inp = helper.make_tensor_value_info(
-            "X", TensorProto.FLOAT, ["N", 3]
-        )
-        out = helper.make_tensor_value_info(
-            "Y", TensorProto.INT64, [2]
-        )
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.INT64, [2])
         nodes = [
             helper.make_node("Shape", ["X"], ["shp"]),
             helper.make_node("Identity", ["shp"], ["Y"]),
         ]
         graph = helper.make_graph(nodes, "unannotated", [inp], [out])
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         import onnx.shape_inference
@@ -136,20 +121,14 @@ class TestSnapshotAndStrip(unittest.TestCase):
         only entries that carry a real expectation."""
         from onnx import TensorProto, helper
 
-        inp = helper.make_tensor_value_info(
-            "X", TensorProto.FLOAT, ["N", 3]
-        )
-        out = helper.make_tensor_value_info(
-            "Y", TensorProto.INT64, [2]
-        )
+        inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3])
+        out = helper.make_tensor_value_info("Y", TensorProto.INT64, [2])
         nodes = [
             helper.make_node("Shape", ["X"], ["shp"]),
             helper.make_node("Identity", ["shp"], ["Y"]),
         ]
         graph = helper.make_graph(nodes, "unannotated", [inp], [out])
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         info = rsi.run_test_with_backend(model, snap, "onnx")
@@ -189,12 +168,8 @@ class TestSnapshotAndStrip(unittest.TestCase):
             helper.make_node("Identity", ["B"], ["C"]),
             helper.make_node("Identity", ["C"], ["Z"]),
         ]
-        graph = helper.make_graph(
-            nodes, "ordered", [inp], [out], value_info=[c, a, b]
-        )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        graph = helper.make_graph(nodes, "ordered", [inp], [out], value_info=[c, a, b])
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         self.assertEqual(
@@ -208,7 +183,6 @@ class TestSnapshotAndStrip(unittest.TestCase):
         )
 
     def test_snapshot_preserves_symbolic_dim_names(self):
-        import onnx
         from onnx import TensorProto, helper
 
         inp = helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N", 3])
@@ -219,9 +193,7 @@ class TestSnapshotAndStrip(unittest.TestCase):
             [inp],
             [out],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         by_name = {s["name"]: s for s in snap}
@@ -419,9 +391,7 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
             [inp],
             [out],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         # Rewrite the inferred dim_param to ``got_name`` (or to a concrete
@@ -472,9 +442,7 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
             [inp],
             [out],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         snap = rsi.snapshot_intermediates(model)
         wrong = type(model)()
@@ -507,9 +475,7 @@ class TestRunTestWithBackend(unittest.TestCase):
         # is exposed as a dedicated backend in the coverage script.
         self.assertIn("ort-transformers", rsi.BACKENDS)
         self.assertIn("ort-transformers", rsi._BACKEND_RUNNERS)
-        self.assertEqual(
-            rsi.BACKEND_PACKAGE["ort-transformers"], "onnxruntime"
-        )
+        self.assertEqual(rsi.BACKEND_PACKAGE["ort-transformers"], "onnxruntime")
 
     def test_yobx_backend_registered(self):
         # The shape inference shipped in ``yet-another-onnx-builder``
@@ -580,18 +546,14 @@ class TestDropShapelessValueInfo(unittest.TestCase):
             [out],
             value_info=[shaped, shapeless],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
 
         rsi._drop_shapeless_value_info(model)
 
         names = [vi.name for vi in model.graph.value_info]
         self.assertEqual(names, ["kept"])
-        self.assertTrue(
-            model.graph.value_info[0].type.tensor_type.HasField("shape")
-        )
+        self.assertTrue(model.graph.value_info[0].type.tensor_type.HasField("shape"))
 
 
 class TestRowFromResults(unittest.TestCase):
@@ -731,9 +693,7 @@ class TestRowFromResults(unittest.TestCase):
         self.assertEqual(
             row["runtimes"]["onnx"]["last_pass_date"], "2024-01-02T03:04:05Z"
         )
-        self.assertEqual(
-            row["runtimes"]["onnx"]["last_pass_version"], "1.16.0"
-        )
+        self.assertEqual(row["runtimes"]["onnx"]["last_pass_version"], "1.16.0")
         self.assertNotIn("last_pass_date", row["runtimes"]["onnx-light"])
 
 
@@ -741,31 +701,67 @@ class TestBuildPayload(unittest.TestCase):
     def test_aggregates_totals_across_backends(self):
         tests = [
             {"name": "test_a", "model": "model_a", "expected": [{"name": "Y"}]},
-            {"name": "test_b", "model": "model_b", "expected": [{"name": "Y"}, {"name": "Z"}]},
+            {
+                "name": "test_b",
+                "model": "model_b",
+                "expected": [{"name": "Y"}, {"name": "Z"}],
+            },
         ]
         outcomes = {
             ("model_a", "onnx-light"): {"success": True, "correct": 1, "total": 1},
-            ("model_a", "onnx-light-optim"): {"success": True, "correct": 1, "total": 1},
+            ("model_a", "onnx-light-optim"): {
+                "success": True,
+                "correct": 1,
+                "total": 1,
+            },
             ("model_a", "onnx"): {"success": True, "correct": 1, "total": 1},
             ("model_a", "onnx-shape-inference"): {
-                "success": False, "correct": 0, "total": 1, "error": "x", "error_step": "run",
+                "success": False,
+                "correct": 0,
+                "total": 1,
+                "error": "x",
+                "error_step": "run",
             },
             ("model_a", "ort-transformers"): {
-                "success": True, "correct": 1, "total": 1,
+                "success": True,
+                "correct": 1,
+                "total": 1,
             },
-            ("model_b", "onnx-light"): {"success": False, "correct": 1, "total": 2, "error": "1/2"},
-            ("model_b", "onnx-light-optim"): {"success": True, "correct": 2, "total": 2},
+            ("model_b", "onnx-light"): {
+                "success": False,
+                "correct": 1,
+                "total": 2,
+                "error": "1/2",
+            },
+            ("model_b", "onnx-light-optim"): {
+                "success": True,
+                "correct": 2,
+                "total": 2,
+            },
             ("model_b", "onnx"): {"success": True, "correct": 2, "total": 2},
             ("model_b", "onnx-shape-inference"): {
-                "success": False, "correct": 0, "total": 2, "error": "x", "error_step": "run",
+                "success": False,
+                "correct": 0,
+                "total": 2,
+                "error": "x",
+                "error_step": "run",
             },
             ("model_b", "ort-transformers"): {
-                "success": False, "correct": 1, "total": 2, "error": "1/2",
+                "success": False,
+                "correct": 1,
+                "total": 2,
+                "error": "1/2",
             },
         }
 
         def fake_run(model, expected, backend):
-            base = {"correct": 0, "total": len(expected), "details": [], "error": "", "error_step": ""}
+            base = {
+                "correct": 0,
+                "total": len(expected),
+                "details": [],
+                "error": "",
+                "error_step": "",
+            }
             base.update(outcomes[(model, backend)])
             return base
 
@@ -776,21 +772,51 @@ class TestBuildPayload(unittest.TestCase):
             versions=lambda: {"onnx": "1.0"},
         )
         self.assertEqual(payload["tag"], "inference")
-        self.assertEqual(payload["totals"]["onnx"], {
-            "correct": 3, "total": 3, "tests_pass": 2, "tests_fail": 0,
-        })
-        self.assertEqual(payload["totals"]["onnx-light"], {
-            "correct": 2, "total": 3, "tests_pass": 1, "tests_fail": 1,
-        })
-        self.assertEqual(payload["totals"]["onnx-light-optim"], {
-            "correct": 3, "total": 3, "tests_pass": 2, "tests_fail": 0,
-        })
-        self.assertEqual(payload["totals"]["onnx-shape-inference"], {
-            "correct": 0, "total": 3, "tests_pass": 0, "tests_fail": 2,
-        })
-        self.assertEqual(payload["totals"]["ort-transformers"], {
-            "correct": 2, "total": 3, "tests_pass": 1, "tests_fail": 1,
-        })
+        self.assertEqual(
+            payload["totals"]["onnx"],
+            {
+                "correct": 3,
+                "total": 3,
+                "tests_pass": 2,
+                "tests_fail": 0,
+            },
+        )
+        self.assertEqual(
+            payload["totals"]["onnx-light"],
+            {
+                "correct": 2,
+                "total": 3,
+                "tests_pass": 1,
+                "tests_fail": 1,
+            },
+        )
+        self.assertEqual(
+            payload["totals"]["onnx-light-optim"],
+            {
+                "correct": 3,
+                "total": 3,
+                "tests_pass": 2,
+                "tests_fail": 0,
+            },
+        )
+        self.assertEqual(
+            payload["totals"]["onnx-shape-inference"],
+            {
+                "correct": 0,
+                "total": 3,
+                "tests_pass": 0,
+                "tests_fail": 2,
+            },
+        )
+        self.assertEqual(
+            payload["totals"]["ort-transformers"],
+            {
+                "correct": 2,
+                "total": 3,
+                "tests_pass": 1,
+                "tests_fail": 1,
+            },
+        )
         names = [r["name"] for r in payload["tests"]]
         self.assertEqual(names, ["test_a", "test_b"])
 
@@ -801,7 +827,14 @@ class TestBuildPayload(unittest.TestCase):
         ]
 
         def fake_run(model, expected, backend):
-            return {"success": True, "correct": 1, "total": 1, "details": [], "error": "", "error_step": ""}
+            return {
+                "success": True,
+                "correct": 1,
+                "total": 1,
+                "details": [],
+                "error": "",
+                "error_step": "",
+            }
 
         payload = rsi.build_payload(
             tag="inference",
@@ -869,7 +902,6 @@ class TestMermaid(unittest.TestCase):
         # A subgraph that produces a tensor whose name also exists in the
         # outer graph must route its internal edges to the *local*
         # producer, not the outer one (ONNX subgraph shadowing).
-        import onnx
         from onnx import TensorProto, helper
 
         cond = helper.make_tensor_value_info("cond", TensorProto.BOOL, [])
@@ -908,9 +940,7 @@ class TestMermaid(unittest.TestCase):
             [cond, x],
             [y],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 17)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
         model.ir_version = 7
         rendered = rsi.model_to_mermaid(model)
         # The then-branch ``Neg`` feeds the then-branch ``Identity`` through
@@ -924,7 +954,6 @@ class TestMermaid(unittest.TestCase):
         self.assertEqual(rsi.model_to_mermaid("not a model"), "")
 
     def test_model_to_mermaid_escapes_quotes_in_names(self):
-        import onnx
         from onnx import TensorProto, helper
 
         inp = helper.make_tensor_value_info('X"weird', TensorProto.FLOAT, [1])
@@ -946,7 +975,10 @@ class TestMermaid(unittest.TestCase):
         row = rsi._row_from_results(
             "t",
             [],
-            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            {
+                b: {"success": True, "correct": 0, "total": 0, "details": []}
+                for b in rsi.BACKENDS
+            },
             mermaid="flowchart TD\nA-->B",
         )
         self.assertEqual(row["mermaid"], "flowchart TD\nA-->B")
@@ -956,7 +988,10 @@ class TestMermaid(unittest.TestCase):
         row = rsi._row_from_results(
             "t",
             [],
-            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            {
+                b: {"success": True, "correct": 0, "total": 0, "details": []}
+                for b in rsi.BACKENDS
+            },
             previous=previous,
             mermaid="",
         )
@@ -966,7 +1001,10 @@ class TestMermaid(unittest.TestCase):
         row = rsi._row_from_results(
             "t",
             [],
-            {b: {"success": True, "correct": 0, "total": 0, "details": []} for b in rsi.BACKENDS},
+            {
+                b: {"success": True, "correct": 0, "total": 0, "details": []}
+                for b in rsi.BACKENDS
+            },
             mermaid="",
         )
         self.assertNotIn("mermaid", row)
@@ -983,8 +1021,12 @@ class TestMermaid(unittest.TestCase):
 
         def fake_run(model, expected, backend):
             return {
-                "success": True, "correct": 1, "total": 1,
-                "details": [], "error": "", "error_step": "",
+                "success": True,
+                "correct": 1,
+                "total": 1,
+                "details": [],
+                "error": "",
+                "error_step": "",
             }
 
         payload = rsi.build_payload(
@@ -1005,7 +1047,10 @@ class TestMain(unittest.TestCase):
                 "date": "2024-01-01T00:00:00Z",
                 "tag": kwargs.get("tag", "inference"),
                 "versions": {},
-                "totals": {b: {"correct": 0, "total": 0, "tests_pass": 0, "tests_fail": 0} for b in rsi.BACKENDS},
+                "totals": {
+                    b: {"correct": 0, "total": 0, "tests_pass": 0, "tests_fail": 0}
+                    for b in rsi.BACKENDS
+                },
                 "tests": [],
             }
 
@@ -1128,9 +1173,7 @@ class TestTagFiltering(unittest.TestCase):
             discovered_single = rsi.discover_inference_tests("shape")
             self.assertEqual([d["name"] for d in discovered_single], ["a"])
 
-            discovered_list = rsi.discover_inference_tests(
-                ["local_function", "other"]
-            )
+            discovered_list = rsi.discover_inference_tests(["local_function", "other"])
             self.assertEqual([d["name"] for d in discovered_list], ["b", "c", "d"])
         finally:
             rsi._onnx_light_model_to_onnx = original_to_onnx

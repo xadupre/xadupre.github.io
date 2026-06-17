@@ -111,7 +111,7 @@ def _is_shared_library(name: str) -> bool:
     marker = ".so."
     idx = lowered.rfind(marker)
     if idx != -1:
-        tail = lowered[idx + len(marker):]
+        tail = lowered[idx + len(marker) :]
         first = tail.split(".", 1)[0]
         if first.isdigit():
             return True
@@ -250,9 +250,7 @@ def iter_workflow_runs(
         page += 1
 
 
-def list_run_artifacts(
-    repo: str, run_id: str, token: str | None
-) -> list[dict]:
+def list_run_artifacts(repo: str, run_id: str, token: str | None) -> list[dict]:
     """Return the list of artifacts attached to ``run_id`` in ``repo``."""
     artifacts: list[dict] = []
     page = 1
@@ -467,9 +465,7 @@ def process_repo(
             run_id = str(run.get("id", ""))
             commit = run.get("head_sha") or ""
             need_wheel = bool(run_id) and run_id not in seen_runs
-            need_so = (
-                not skip_so and bool(commit) and commit not in seen_commits
-            )
+            need_so = not skip_so and bool(commit) and commit not in seen_commits
             if not need_wheel and not need_so:
                 continue
             _log(
