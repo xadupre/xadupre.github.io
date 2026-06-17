@@ -17,7 +17,10 @@ of tests dedicated to shape inference, mirroring
 
 For each retained test case the recorded ``graph.output`` (and
 intermediate ``graph.value_info``) shapes are snapshotted then stripped
-from a working copy of the model. Each candidate shape-inference
+from a working copy of the model. Subgraphs nested inside control-flow
+nodes (``If``/``Loop``/``Scan``) are walked as well, so their
+intermediate and output shapes are snapshotted, stripped and scored
+alongside the main graph's. Each candidate shape-inference
 implementation is invoked on that stripped model and the produced shapes
 are compared with the snapshot. For every intermediate, we report
 whether the runtime recovered the expected ``elem_type`` and a
@@ -366,6 +369,25 @@ def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     return discovered
 
 
+def _iter_subgraphs(graph):
+    """Yield ``graph`` followed by every nested subgraph (depth-first).
+
+    Subgraphs are reached through node attributes holding a ``GraphProto``
+    (e.g. the ``then_branch``/``else_branch`` of ``If`` or the ``body`` of
+    ``Loop``/``Scan``) or a list of ``GraphProto`` (attributes of type
+    ``GRAPHS``). The walk recurses so subgraphs nested inside subgraphs are
+    visited as well, ensuring their ``value_info``/``output`` shapes are
+    seen by the snapshot, strip and comparison helpers.
+    """
+    yield graph
+    for node in graph.node:
+        for attr in node.attribute:
+            if attr.HasField("g"):
+                yield from _iter_subgraphs(attr.g)
+            for sub in attr.graphs:
+                yield from _iter_subgraphs(sub)
+
+
 def _dims_of_tensor_type(tensor_type) -> Tuple[bool, List[Any]]:
     """Return ``(has_shape, dims)`` for an ``onnx`` ``TypeProto.Tensor``.
 
@@ -439,18 +461,35 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     entries carry no expectation and are not counted towards the
     correctness score (see :func:`_compare_snapshot_with_model`).
 
+    Subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
+    are walked as well, so the ``value_info``/``output`` shapes they carry
+    are snapshotted alongside the main graph's.
+
     Entries are returned in the order they appear in the model: the
     graph nodes are walked in declaration order and each output they
     produce yields one entry. Graph outputs that are not produced by any
     node are appended at the end, preserving their relative order in
     ``model.graph.output``.
     """
-    output_names = {vi.name for vi in model.graph.output}
+    snapshots: List[Dict[str, Any]] = []
+    for graph in _iter_subgraphs(model.graph):
+        snapshots.extend(_snapshot_graph_intermediates(graph))
+    return snapshots
+
+
+def _snapshot_graph_intermediates(graph) -> List[Dict[str, Any]]:
+    """Snapshot output / value_info shapes for a single ``GraphProto``.
+
+    See :func:`snapshot_intermediates` for the entry format. This helper
+    operates on one graph at a time so it can be reused for both the main
+    graph and every nested subgraph.
+    """
+    output_names = {vi.name for vi in graph.output}
     by_name: Dict[str, Tuple[str, Any]] = {}
-    for vi in model.graph.value_info:
+    for vi in graph.value_info:
         kind = "output" if vi.name in output_names else "value_info"
         by_name[vi.name] = (kind, vi)
-    for vi in model.graph.output:
+    for vi in graph.output:
         by_name[vi.name] = ("output", vi)
 
     # Walk the graph nodes in declaration order so that each
@@ -458,7 +497,7 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     # the order it is computed by the model. Graph outputs that are not
     # produced by any node (rare; e.g. directly aliasing an input or an
     # initializer) are appended at the end, preserving their relative
-    # order in ``model.graph.output``.
+    # order in ``graph.output``.
     ordered_names: List[str] = []
     seen: set = set()
     op_type_by_name: Dict[str, str] = {}
@@ -467,7 +506,7 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
     # in the snapshot so the detailed report can display the per-backend
     # inferred shape for them, but they carry no expectation.
     unannotated: set = set()
-    for node in model.graph.node:
+    for node in graph.node:
         for out_name in node.output:
             if not out_name or out_name in seen:
                 continue
@@ -478,7 +517,7 @@ def snapshot_intermediates(model) -> List[Dict[str, Any]]:
                 unannotated.add(out_name)
             ordered_names.append(out_name)
             seen.add(out_name)
-    for vi in model.graph.output:
+    for vi in graph.output:
         if vi.name in seen or vi.name not in by_name:
             continue
         ordered_names.append(vi.name)
@@ -532,35 +571,47 @@ def strip_shapes(model, keep_outputs: bool = False):
     cleared and ``graph.output`` shapes are preserved. This is used to feed
     backends (e.g. ``onnx-light``) that can take advantage of the known
     output shape as a prefill hint when running shape inference.
+
+    Subgraphs nested inside control-flow nodes (``If``/``Loop``/``Scan``)
+    are stripped as well so shape inference must rebuild their
+    intermediate and output shapes. ``keep_outputs`` only applies to the
+    model's top-level outputs; a subgraph's outputs are internal results
+    and are always cleared.
     """
     import onnx
 
     stripped = onnx.ModelProto()
     stripped.CopyFrom(model)
-    if keep_outputs:
-        containers = (stripped.graph.value_info,)
-    else:
-        containers = (stripped.graph.output, stripped.graph.value_info)
-    for container in containers:
-        for vi in container:
-            if not vi.HasField("type"):
-                continue
-            if not vi.type.HasField("tensor_type"):
-                continue
-            tt = vi.type.tensor_type
-            elem_type = tt.elem_type
-            vi.type.ClearField("tensor_type")
-            vi.type.tensor_type.elem_type = elem_type
+    for index, graph in enumerate(_iter_subgraphs(stripped.graph)):
+        if keep_outputs and index == 0:
+            containers = (graph.value_info,)
+        else:
+            containers = (graph.output, graph.value_info)
+        for container in containers:
+            for vi in container:
+                if not vi.HasField("type"):
+                    continue
+                if not vi.type.HasField("tensor_type"):
+                    continue
+                tt = vi.type.tensor_type
+                elem_type = tt.elem_type
+                vi.type.ClearField("tensor_type")
+                vi.type.tensor_type.elem_type = elem_type
     return stripped
 
 
 def _index_value_infos(model) -> Dict[str, Any]:
-    """Return ``{name: ValueInfoProto}`` for outputs + value_info."""
+    """Return ``{name: ValueInfoProto}`` for outputs + value_info.
+
+    Subgraphs are indexed as well so subgraph outputs / value_info can be
+    located when scoring snapshotted intermediates.
+    """
     indexed: Dict[str, Any] = {}
-    for vi in model.graph.value_info:
-        indexed[vi.name] = vi
-    for vi in model.graph.output:
-        indexed[vi.name] = vi
+    for graph in _iter_subgraphs(model.graph):
+        for vi in graph.value_info:
+            indexed[vi.name] = vi
+        for vi in graph.output:
+            indexed[vi.name] = vi
     return indexed
 
 
@@ -720,18 +771,21 @@ def _drop_shapeless_value_info(model):
     entries unconditionally and a stripped ``tensor_type`` raises
     ``Optional field 'shape' has no value.``. Dropping the shapeless
     entries lets the inference rebuild them from scratch while still
-    anchoring on the preserved ``graph.output`` shapes.
+    anchoring on the preserved ``graph.output`` shapes. Subgraphs are
+    cleaned as well so their stripped intermediate ``value_info`` entries
+    do not trip the same prefill path.
     """
-    keep = [
-        vi
-        for vi in model.graph.value_info
-        if not (
-            vi.type.HasField("tensor_type")
-            and not vi.type.tensor_type.HasField("shape")
-        )
-    ]
-    del model.graph.value_info[:]
-    model.graph.value_info.extend(keep)
+    for graph in _iter_subgraphs(model.graph):
+        keep = [
+            vi
+            for vi in graph.value_info
+            if not (
+                vi.type.HasField("tensor_type")
+                and not vi.type.tensor_type.HasField("shape")
+            )
+        ]
+        del graph.value_info[:]
+        graph.value_info.extend(keep)
     return model
 
 
