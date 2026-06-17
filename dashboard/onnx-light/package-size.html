@@ -114,7 +114,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Wheel size over time</h2>
   <div id="wheelMessage" class="message info"></div>
   <div id="wheelChartContainer" class="chart-container small"><canvas id="wheelChart"></canvas></div>
-  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+  <div class="hint">The full wheel and the reduced wheel (built with <code>ONNX_LIGHT_BUILD_KERNELS=OFF</code>, shown as a <code>(reduced)</code> line) are plotted together. Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
 </div>
 <div class="chart-wrap" style="margin-top:1em;">
@@ -150,13 +150,20 @@ const SOURCES = [
     chartId: "wheelChart",
     containerId: "wheelChartContainer",
     messageId: "wheelMessage",
-    url: "../../cache_data/onnx-light/wheel_sizes.csv",
+    files: [
+      { url: "../../cache_data/onnx-light/wheel_sizes.csv", suffix: "" },
+      {
+        url: "../../cache_data/onnx-light/wheel_sizes_reduced.csv",
+        suffix: " (reduced)",
+      },
+    ],
     dashed: false,
     emptyMessage:
       "No wheel size data is available yet. Wheel sizes are collected from " +
       "completed runs of the upstream build_release.yml workflow in " +
       "xadupre/onnx-light; if no such run has produced wheel artifacts " +
-      "recently, this series stays empty.",
+      "recently, this series stays empty. The reduced wheel " +
+      "(ONNX_LIGHT_BUILD_KERNELS=OFF) is shown as a separate '(reduced)' line.",
   },
 ];
 
@@ -209,16 +216,21 @@ const PALETTE = [
 ];
 
 function fetchSource(src) {
-  return fetch(src.url, { cache: "no-store" })
-    .then(r => {
-      if (r.status === 404) return { src, rows: [], missing: true };
-      if (!r.ok) throw new Error("HTTP " + r.status + " for " + src.url);
-      return r.text().then(text => ({
-        src,
-        rows: parseCSV(text),
-        missing: false,
-      }));
-    });
+  const files = src.files || [{ url: src.url, suffix: "" }];
+  return Promise.all(
+    files.map(f =>
+      fetch(f.url, { cache: "no-store" }).then(r => {
+        if (r.status === 404) return [];
+        if (!r.ok) throw new Error("HTTP " + r.status + " for " + f.url);
+        return r.text().then(text => {
+          const rows = parseCSV(text);
+          return f.suffix
+            ? rows.map(row => ({ ...row, name: row.name + f.suffix }))
+            : rows;
+        });
+      })
+    )
+  ).then(lists => ({ src, rows: lists.flat(), missing: false }));
 }
 
 function renderSizeChart(src, rows) {
@@ -517,7 +529,7 @@ fetch(LOC_URL, { cache: "no-store" })
     showLocMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
   });
 </script>
-<footer class="data-updated" data-source="../../cache_data/onnx-light/so_sizes.csv,../../cache_data/onnx-light/wheel_sizes.csv,../../cache_data/onnx-light/loc.csv" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/so_sizes.csv,../../cache_data/onnx-light/wheel_sizes.csv,../../cache_data/onnx-light/wheel_sizes_reduced.csv,../../cache_data/onnx-light/loc.csv" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
 <script src="../../assets/last-updated.js"></script>
 </body>
 </html>
