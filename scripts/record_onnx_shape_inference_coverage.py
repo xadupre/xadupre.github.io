@@ -705,7 +705,7 @@ def _symbolic_dims_equal(got: str, exp: str) -> bool:
     try:
         import sympy
         from sympy.parsing.sympy_parser import parse_expr
-    except Exception:
+    except ImportError:
         return False
 
     def _parse(expr: str):
@@ -722,6 +722,9 @@ def _symbolic_dims_equal(got: str, exp: str) -> bool:
     try:
         return sympy.simplify(_parse(got) - _parse(exp)) == 0
     except Exception:
+        # Parsing/simplification can raise a wide range of errors for
+        # expressions sympy cannot handle; fall back to "not equal"
+        # instead of crashing the coverage run.
         return False
 
 
