@@ -43,6 +43,7 @@ Usage::
 
     python scripts/record_wheel_sizes.py [--cache-dir DIR] [--repo owner/name]
         [--workflow build_release.yml] [--months N] [--max-runs N]
+        [--wheel-csv-name wheel_sizes.csv] [--skip-so]
 """
 
 from __future__ import annotations
@@ -427,22 +428,34 @@ def process_repo(
     months: int,
     token: str | None,
     max_runs: int | None = None,
+    wheel_csv_name: str = "wheel_sizes.csv",
+    skip_so: bool = False,
 ) -> tuple[int, int]:
     """Fetch new wheel and shared-library sizes for ``repo`` and append them.
 
     Returns ``(wheel_rows_added, so_rows_added)``. Each artifact is downloaded
-    once and feeds both ``wheel_sizes.csv`` (deduplicated by ``run_id``) and
+    once and feeds both ``wheel_csv_name`` (deduplicated by ``run_id``) and
     ``so_sizes.csv`` (deduplicated by ``commit``).
+
+    ``wheel_csv_name`` selects which file the wheel rows are written to (it
+    defaults to ``wheel_sizes.csv``); pointing a separate workflow such as
+    ``build_reduced_wheel.yml`` at ``wheel_sizes_reduced.csv`` keeps the
+    reduced-wheel series from being merged into the full-wheel one even though
+    both wheels share the same file name. When ``skip_so`` is true the
+    shared-library series is not recorded at all, so a reduced build whose
+    compiled extensions differ from the released ones does not pollute
+    ``so_sizes.csv``.
     """
     repo_name = repo.split("/", 1)[-1]
-    wheel_csv = os.path.join(cache_dir, repo_name, "wheel_sizes.csv")
+    wheel_csv = os.path.join(cache_dir, repo_name, wheel_csv_name)
     so_csv = os.path.join(cache_dir, repo_name, "so_sizes.csv")
     seen_runs = read_existing(wheel_csv)
-    seen_commits = read_existing_commits(so_csv)
+    seen_commits = set() if skip_so else read_existing_commits(so_csv)
     since = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(days=months * 30)
     _log(
         f"[{repo}] wheel cache: {wheel_csv} ({len(seen_runs)} run(s) recorded); "
-        f"so cache: {so_csv} ({len(seen_commits)} commit(s) recorded)"
+        f"so cache: {so_csv} ({len(seen_commits)} commit(s) recorded"
+        f"{', skipped' if skip_so else ''})"
     )
     _log(f"[{repo}] fetching {workflow!r} runs since {_format_iso(since)}")
     new_wheel_rows: list[dict] = []
@@ -454,7 +467,9 @@ def process_repo(
             run_id = str(run.get("id", ""))
             commit = run.get("head_sha") or ""
             need_wheel = bool(run_id) and run_id not in seen_runs
-            need_so = bool(commit) and commit not in seen_commits
+            need_so = (
+                not skip_so and bool(commit) and commit not in seen_commits
+            )
             if not need_wheel and not need_so:
                 continue
             _log(
@@ -483,7 +498,7 @@ def process_repo(
                 )
     finally:
         added_wheels = append_rows(wheel_csv, new_wheel_rows)
-        added_so = append_rows(so_csv, new_so_rows, SO_CSV_FIELDS)
+        added_so = 0 if skip_so else append_rows(so_csv, new_so_rows, SO_CSV_FIELDS)
     _log(
         f"[{repo}] processed {processed} run(s) from GitHub; appended "
         f"{added_wheels} wheel row(s) to {wheel_csv} and "
@@ -524,6 +539,24 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional cap on the number of runs inspected per invocation.",
     )
+    parser.add_argument(
+        "--wheel-csv-name",
+        default="wheel_sizes.csv",
+        help=(
+            "Name of the wheel CSV file written under "
+            "<cache-dir>/<repo>/ (default: wheel_sizes.csv). Use e.g. "
+            "wheel_sizes_reduced.csv to record the reduced wheel separately."
+        ),
+    )
+    parser.add_argument(
+        "--skip-so",
+        action="store_true",
+        help=(
+            "Do not record shared-library sizes to so_sizes.csv. Useful when "
+            "the inspected workflow builds a reduced wheel whose compiled "
+            "extensions differ from the released ones."
+        ),
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
@@ -532,6 +565,8 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"  repository      : {args.repo}")
     _log(f"  workflow        : {args.workflow}")
     _log(f"  months          : {args.months}")
+    _log(f"  wheel csv name  : {args.wheel_csv_name}")
+    _log(f"  skip so series  : {args.skip_so}")
     if args.max_runs is not None:
         _log(f"  max runs        : {args.max_runs}")
     if not token:
@@ -548,6 +583,8 @@ def main(argv: list[str] | None = None) -> int:
             args.months,
             token,
             args.max_runs,
+            wheel_csv_name=args.wheel_csv_name,
+            skip_so=args.skip_so,
         )
     except urllib.error.HTTPError as exc:
         print(
