@@ -14,6 +14,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_shape_inference_coverage as rsi  # noqa: E402
 
+try:
+    import sympy  # noqa: F401
+
+    _HAS_SYMPY = True
+except ImportError:
+    _HAS_SYMPY = False
+
 
 def _make_simple_model():
     """Build a tiny ``onnx.ModelProto`` exercising shape inference.
@@ -454,6 +461,9 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
 
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
     def test_symbolic_dim_name_accepts_equivalent_expressions(self):
         # ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are mathematically
         # equivalent symbolic dims (floor division), so they must not be
