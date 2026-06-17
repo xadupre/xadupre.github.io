@@ -149,6 +149,12 @@ def _stringify_error(value: Any) -> str:
     if value is None:
         return ""
     text = str(value)
+    if not text and isinstance(value, BaseException):
+        # Some exceptions carry no message (for instance a bare ``assert``
+        # in onnxruntime's symbolic shape inference). Fall back to the
+        # exception type so the dashboard reports an explicit reason
+        # instead of an empty ``error`` that reads as "not running".
+        text = type(value).__name__
     if "\n" in text:
         text = text.splitlines()[0]
     if len(text) > 300:
