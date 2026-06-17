@@ -65,7 +65,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="Sequences, maps and subgraphs" href="sequences_and_subgraphs.html" />
-    <link rel="prev" title="Symbolic expression library (onnx_light.onnx_optim.expressions)" href="expressions.html" />
+    <link rel="prev" title="Value-as-shape propagation" href="value_as_shape.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -391,12 +391,12 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><p aria-level="2" class="caption" role="heading"><span class="caption-text">ONNX, Concepts, link to protobuf</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../goals.html">Uncompromising Objective</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../intro/index.html">Introduction to ONNX</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="../intro/concepts.html">ONNX Concepts</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../intro/python.html">ONNX with Python</a></li>
 </ul>
 </details></li>
+<li class="toctree-l1"><a class="reference internal" href="../goals.html">Uncompromising Objective</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../differences.html">Detailed Differences between <code class="docutils literal notranslate"><span class="pre">onnx</span></code> and <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="../protobuf_format.html">Protobuf format applied to ONNX</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../ort_flatbuffer_format.html">ORT flatbuffer format: parallelization and alignment</a></li>
@@ -420,6 +420,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Shape inference</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="expressions.html">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="value_as_shape.html">Value-as-shape propagation</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">Symbolic-dimension constraint mechanism</a></li>
 <li class="toctree-l2"><a class="reference internal" href="sequences_and_subgraphs.html">Sequences, maps and subgraphs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="events.html">Shape-inference events (<code class="docutils literal notranslate"><span class="pre">ShapeEvent</span></code>)</a></li>
@@ -570,7 +571,7 @@ implied leaf equality <code class="docutils literal notranslate"><span class="pr
 <p>After node-level inference completes,
 <code class="docutils literal notranslate"><span class="pre">PropagateAnchorConstraintsIntoContext</span></code> turns the recorded equality
 constraints into a renaming of the context:</p>
-<ol class="arabic simple">
+<ol class="arabic">
 <li><p>If no constraints were recorded, it returns immediately.</p></li>
 <li><p>It collects the set of <em>preferred</em> names — the symbols (and the leaf
 tokens of compound expressions) attached to graph inputs, outputs and
@@ -584,11 +585,25 @@ and returns a <code class="docutils literal notranslate"><span class="pre">{inte
 <li><p>Replacement entries whose key is a compound expression made
 exclusively of leaf tokens that are themselves graph-declared anchor
 symbols are dropped, so already-authoritative expressions such as
-<code class="docutils literal notranslate"><span class="pre">b+c</span></code> (both graph inputs) are preserved.</p></li>
+<code class="docutils literal notranslate"><span class="pre">b+c</span></code> (both graph inputs) are preserved. The one exception is when
+the replacement <em>target</em> is itself a graph-<strong>input</strong> symbol: a compound
+expression such as <code class="docutils literal notranslate"><span class="pre">past_seq+seq</span></code> that an equality constraint proves
+equal to the input dimension <code class="docutils literal notranslate"><span class="pre">total_seq</span></code> is rewritten to that anchor
+rather than preserved, because the input symbol is the authoritative
+dimension. (Graph <em>output</em>-only symbols, by contrast, are mere labels,
+so their computed expression is kept.)</p></li>
 <li><p>Every tensor’s <code class="docutils literal notranslate"><span class="pre">shape</span></code> and <code class="docutils literal notranslate"><span class="pre">value_as_shape</span></code> is rewritten with the
 replacement mapping. The rewrite is repeated to a fixed point (up to a
 few iterations) because a dimension freshly populated during one pass
-may itself need renaming on the next.</p></li>
+may itself need renaming on the next.</p>
+<p>When rewriting a dimension,
+<a class="reference internal" href="../../api/python/onnx_optim/expressions.html#onnx_light.onnx_optim.expressions.rename_dynamic_expression" title="onnx_light.onnx_optim.expressions.rename_dynamic_expression"><code class="xref py py-func docutils literal notranslate"><span class="pre">rename_dynamic_expression()</span></code></a>
+also substitutes whole compound <em>subexpressions</em> that match a
+replacement key — so <code class="docutils literal notranslate"><span class="pre">past_seq+seq</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">total_seq</span></code> even
+when it is nested inside a synthesized <code class="docutils literal notranslate"><span class="pre">broadcast(past_seq+seq,</span>
+<span class="pre">total_seq)</span></code> term — and collapses <code class="docutils literal notranslate"><span class="pre">broadcast(x,</span> <span class="pre">x)</span></code> to <code class="docutils literal notranslate"><span class="pre">x</span></code> once both
+operands become identical.</p>
+</li>
 </ol>
 <p>Because the preferred set includes the user-declared symbols, the
 canonicalisation keeps <code class="docutils literal notranslate"><span class="pre">X:</span> <span class="pre">[N,</span> <span class="pre">4]</span></code> as-is while rewriting an internally
@@ -617,12 +632,12 @@ an internal one.</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="expressions.html"
+       href="value_as_shape.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Symbolic expression library (<code class="docutils literal notranslate"><span class="pre">onnx_light.onnx_optim.expressions</span></code>)</p>
+        <p class="prev-next-title">Value-as-shape propagation</p>
       </div>
     </a>
     <a class="right-next"
