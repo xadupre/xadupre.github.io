@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -720,8 +721,6 @@ def _symbolic_dims_equal(got: str, exp: str) -> bool:
         return True
 
     try:
-        import itertools
-
         import sympy
         from sympy.parsing.sympy_parser import parse_expr
     except ImportError:

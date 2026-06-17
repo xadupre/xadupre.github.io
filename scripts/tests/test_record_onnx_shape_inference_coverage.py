@@ -501,8 +501,11 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
 
     def test_distinct_symbolic_dims_are_not_equal_with_sympy(self):
         # The numeric-grid fallback must not produce false positives for
-        # genuinely different symbolic dims.
+        # genuinely different symbolic dims, including subtle differences
+        # over the same set of variables.
         self.assertFalse(rsi._symbolic_dims_equal("a+b", "a+c"))
+        self.assertFalse(rsi._symbolic_dims_equal("a+b", "a+b+1"))
+        self.assertFalse(rsi._symbolic_dims_equal("-floor(-b/2 - c/2)", "(b+c)//2"))
 
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
