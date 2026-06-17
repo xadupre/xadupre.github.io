@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -707,6 +708,13 @@ def _symbolic_dims_equal(got: str, exp: str) -> bool:
     expressions are parsed with ``sympy`` (when available) and compared
     symbolically, so mathematically equivalent forms such as
     ``"2*floor(0.5*H)"`` and ``"2*(H//2)"`` are recognised as equal.
+
+    Floor-division/ceil identities such as ``"-floor(-b/2 - c/2)"`` and
+    ``"(1+b+c)//2"`` are integer-valued but ``sympy.simplify`` cannot
+    always prove them.  When the symbolic difference does not collapse to
+    zero, it is evaluated over a small grid of positive integer dimension
+    values; if the difference vanishes everywhere, the expressions are
+    treated as equal.
     """
 
     if "".join(got.split()) == "".join(exp.split()):
@@ -730,7 +738,21 @@ def _symbolic_dims_equal(got: str, exp: str) -> bool:
         return sympy.nsimplify(parsed, rational=True)
 
     try:
-        return sympy.simplify(_parse(got) - _parse(exp)) == 0
+        diff = sympy.simplify(_parse(got) - _parse(exp))
+        if diff == 0:
+            return True
+
+        # ``sympy.simplify`` leaves floor/ceil identities unproven, so
+        # verify the difference numerically over a grid of positive
+        # integer dimension values. Bail out when there are too many
+        # symbols to keep the combinatorial check cheap.
+        symbols = sorted(diff.free_symbols, key=str)
+        if not symbols or len(symbols) > 4:
+            return False
+        for combo in itertools.product(range(1, 11), repeat=len(symbols)):
+            if diff.subs(dict(zip(symbols, combo))) != 0:
+                return False
+        return True
     except Exception:
         # Parsing/simplification can raise a wide range of errors for
         # expressions sympy cannot handle; fall back to "not equal"
