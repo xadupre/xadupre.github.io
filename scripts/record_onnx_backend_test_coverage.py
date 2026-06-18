@@ -371,87 +371,18 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
-def _format_value_type(type_proto) -> str:
-    """Return a short human-readable string for a ``TypeProto``.
-
-    Examples: ``"float[3,4]"``, ``"int64[N]"``, ``"sequence(float)"`` or
-    ``""`` when the type cannot be described. Used to annotate the graph
-    inputs / outputs shown in the dashboard SVG so the reader knows the
-    element type and shape without opening the model.
-    """
-    if type_proto is None:
-        return ""
-    try:
-        import onnx
-
-        if type_proto.HasField("tensor_type"):
-            tt = type_proto.tensor_type
-            elem = ""
-            if tt.elem_type:
-                elem = onnx.TensorProto.DataType.Name(tt.elem_type).lower()
-            if not tt.HasField("shape"):
-                return elem
-            dims: List[str] = []
-            for dim in tt.shape.dim:
-                if dim.HasField("dim_param") and dim.dim_param:
-                    dims.append(str(dim.dim_param))
-                elif dim.HasField("dim_value"):
-                    dims.append(str(dim.dim_value))
-                else:
-                    dims.append("?")
-            return elem + "[" + ",".join(dims) + "]"
-        if type_proto.HasField("sequence_type"):
-            return "sequence(" + _format_value_type(type_proto.sequence_type.elem_type) + ")"
-        if type_proto.HasField("optional_type"):
-            return "optional(" + _format_value_type(type_proto.optional_type.elem_type) + ")"
-        if type_proto.HasField("map_type"):
-            return "map"
-    except Exception:  # noqa: BLE001 - annotations are best effort only
-        return ""
-    return ""
-
-
 def build_graph(model) -> Dict[str, Any]:
-    """Return a compact JSON-serialisable description of ``model``'s graph.
+    """Return an SVG rendering of ``model``'s graph.
 
-    The dashboard renders this structure as an SVG that the reader can
-    unfold for each test. The representation is intentionally minimal so
-    it stays small in the JSON cache: graph inputs / outputs (name +
-    type), initializer names and the ordered list of nodes with their
-    ``op_type``, optional ``name`` / ``domain`` and input / output tensor
-    names. Empty fields are omitted to keep the payload small.
+    The conversion is delegated to :func:`onnx_light.tools.to_svg` so the
+    dashboard reuses the canonical ``onnx-light`` renderer instead of
+    re-implementing the graph layout in JavaScript. The returned mapping
+    stores the self-contained ``<svg>`` document under the ``"svg"`` key,
+    which the dashboard embeds directly when unfolding a test.
     """
-    graph = model.graph
-    initializer_names = {init.name for init in graph.initializer}
-    inputs = [
-        {"name": inp.name, "type": _format_value_type(inp.type)}
-        for inp in graph.input
-        if inp.name not in initializer_names
-    ]
-    outputs = [
-        {"name": out.name, "type": _format_value_type(out.type)}
-        for out in graph.output
-    ]
-    nodes: List[Dict[str, Any]] = []
-    for node in graph.node:
-        entry: Dict[str, Any] = {
-            "op_type": node.op_type,
-            "inputs": [str(i) for i in node.input],
-            "outputs": [str(o) for o in node.output],
-        }
-        if node.name:
-            entry["name"] = node.name
-        if node.domain:
-            entry["domain"] = node.domain
-        nodes.append(entry)
-    result: Dict[str, Any] = {
-        "inputs": inputs,
-        "outputs": outputs,
-        "nodes": nodes,
-    }
-    if initializer_names:
-        result["initializers"] = [init.name for init in graph.initializer]
-    return result
+    from onnx_light.tools import to_svg
+
+    return {"svg": to_svg(model)}
 
 
 # ``ml_dtypes`` packed sub-byte integer dtypes. They expose ``kind == "V"``
