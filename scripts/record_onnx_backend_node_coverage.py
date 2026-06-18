@@ -55,6 +55,7 @@ _stringify_error = _base._stringify_error
 _compare_outputs = _base._compare_outputs
 _model_input_names = _base._model_input_names
 _load_test_data_sets = _base._load_test_data_sets
+build_graph = _base.build_graph
 _run_with_onnxruntime = _base._run_with_onnxruntime
 _run_with_reference = _base._run_with_reference
 _run_with_onnx_light = _base._run_with_onnx_light
@@ -224,6 +225,7 @@ def _row_from_results(
     versions: Optional[Dict[str, str]] = None,
     now_iso: Optional[str] = None,
     tag: str = "",
+    graph: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a dashboard row, carrying over per-backend ``last_pass`` info."""
     versions = versions or {}
@@ -233,6 +235,10 @@ def _row_from_results(
         row["tag"] = tag
     elif previous.get("tag"):
         row["tag"] = previous["tag"]
+    if graph is not None:
+        row["graph"] = graph
+    elif previous.get("graph"):
+        row["graph"] = previous["graph"]
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -305,6 +311,10 @@ def build_payload(
         model = test["model"]
         data_sets = test["data_sets"]
         results: Dict[str, Dict[str, Any]] = {}
+        try:
+            graph = build_graph(model)
+        except Exception:  # noqa: BLE001 - graph is a best-effort annotation
+            graph = None
         for backend in BACKENDS:
             try:
                 info = run(model, data_sets, backend, rtol=rtol, atol=atol)
@@ -329,6 +339,7 @@ def build_payload(
                 versions=version_map,
                 now_iso=now_iso,
                 tag=str(test.get("tag", "") or ""),
+                graph=graph,
             )
         )
         if (idx + 1) % 50 == 0:
