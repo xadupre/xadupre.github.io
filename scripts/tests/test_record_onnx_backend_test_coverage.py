@@ -13,6 +13,13 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_backend_test_coverage as rbc  # noqa: E402
 
+try:  # ``onnx_light`` is only installed in the coverage workflows, not in CI.
+    from onnx_light.tools import to_svg as _to_svg  # noqa: F401
+
+    _HAS_ONNX_LIGHT = True
+except Exception:  # noqa: BLE001 - any import failure disables the SVG tests
+    _HAS_ONNX_LIGHT = False
+
 
 class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
     def test_stringify_error_truncates_and_takes_first_line(self):
@@ -124,7 +131,8 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(row["reference_last_pass_date"], "2024-01-02T03:04:05Z")
         self.assertEqual(row["reference_last_pass_version"], "1.16.0")
 
-    def test_build_graph_describes_inputs_outputs_and_nodes(self):
+    @unittest.skipUnless(_HAS_ONNX_LIGHT, "onnx_light is required for to_svg")
+    def test_build_graph_renders_svg_with_onnx_light(self):
         import onnx
         from onnx import helper
 
@@ -139,30 +147,19 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
 
         result = rbc.build_graph(model)
-        self.assertEqual(
-            result["inputs"],
-            [
-                {"name": "x", "type": "float[3,4]"},
-                {"name": "w", "type": "float[4,2]"},
-            ],
-        )
-        self.assertEqual(result["outputs"], [{"name": "y", "type": "float[3,2]"}])
-        self.assertEqual(
-            result["nodes"],
-            [
-                {"op_type": "MatMul", "inputs": ["x", "w"], "outputs": ["m"]},
-                {
-                    "op_type": "Relu",
-                    "inputs": ["m"],
-                    "outputs": ["y"],
-                    "name": "act",
-                },
-            ],
-        )
-        # No initializers in this model: the key is omitted to keep it small.
-        self.assertNotIn("initializers", result)
+        # ``build_graph`` now delegates to ``onnx_light.tools.to_svg`` and
+        # stores the resulting standalone SVG document under ``"svg"``.
+        self.assertIn("svg", result)
+        svg = result["svg"]
+        self.assertIsInstance(svg, str)
+        self.assertTrue(svg.lstrip().startswith("<svg"))
+        self.assertIn("</svg>", svg)
+        # The operator names appear in the rendered SVG text.
+        self.assertIn("MatMul", svg)
+        self.assertIn("Relu", svg)
 
-    def test_build_graph_lists_initializers_and_excludes_them_from_inputs(self):
+    @unittest.skipUnless(_HAS_ONNX_LIGHT, "onnx_light is required for to_svg")
+    def test_build_graph_renders_initializers_in_svg(self):
         import numpy as np
         import onnx
         from onnx import helper, numpy_helper
@@ -183,9 +180,10 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
 
         result = rbc.build_graph(model)
-        # ``b`` is an initializer, so it is not listed as a graph input.
-        self.assertEqual(result["inputs"], [{"name": "x", "type": "float[2]"}])
-        self.assertEqual(result["initializers"], ["b"])
+        svg = result["svg"]
+        self.assertTrue(svg.lstrip().startswith("<svg"))
+        self.assertIn("Add", svg)
+        self.assertIn("b", svg)
 
     def test_row_from_results_includes_and_carries_over_graph(self):
         graph = {

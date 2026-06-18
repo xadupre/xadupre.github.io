@@ -277,6 +277,14 @@ table.comparison tr.graph-row > td {
   fill: #c9d1d9;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
+.graph-container.onnx-svg {
+  background: #ffffff;
+  border-radius: 6px;
+  padding: 6px;
+}
+.graph-container.onnx-svg svg text {
+  fill: #1f2328;
+}
 .message {
   display: none;
   text-align: center;
@@ -825,8 +833,32 @@ function buildGraphSvg(graph) {
   return svg;
 }
 
+function graphHasContent(graph) {
+  if (!graph) return false;
+  if (typeof graph.svg === "string" && graph.svg) return true;
+  return Array.isArray(graph.nodes) && graph.nodes.length > 0;
+}
+
+function renderGraph(container, graph) {
+  // Prefer the SVG rendered server-side by ``onnx_light.tools.to_svg``;
+  // fall back to the in-browser layout for cached rows recorded before
+  // the dashboard switched to the onnx-light renderer.
+  if (typeof graph.svg === "string" && graph.svg) {
+    const doc = new DOMParser().parseFromString(graph.svg, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === "svg") {
+      container.classList.add("onnx-svg");
+      container.appendChild(document.importNode(svg, true));
+      return;
+    }
+  }
+  if (Array.isArray(graph.nodes) && graph.nodes.length > 0) {
+    container.appendChild(buildGraphSvg(graph));
+  }
+}
+
 function appendGraphRow(mainRow, nameTd, row, colSpan) {
-  if (!row.graph || !Array.isArray(row.graph.nodes) || row.graph.nodes.length === 0) {
+  if (!graphHasContent(row.graph)) {
     return null;
   }
   const graphRow = document.createElement("tr");
@@ -847,7 +879,7 @@ function appendGraphRow(mainRow, nameTd, row, colSpan) {
   btn.addEventListener("click", () => {
     const hidden = graphRow.style.display === "none";
     if (hidden && !built) {
-      container.appendChild(buildGraphSvg(row.graph));
+      renderGraph(container, row.graph);
       built = true;
     }
     graphRow.style.display = hidden ? "" : "none";
