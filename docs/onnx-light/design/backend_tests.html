@@ -649,6 +649,7 @@ backend test case through
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">unittest</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ort</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnxruntime.capi._pybind_state</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_all_operator_schema</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.ext_test_case</span><span class="w"> </span><span class="kn">import</span> <span class="n">import_or_skip</span>
 
 <span class="c1"># The backend test registries are only available in the full build; skip this</span>
@@ -684,312 +685,47 @@ backend test case through
     <span class="k">return</span> <span class="n">outputs</span>
 
 
-<span class="c1"># Backend test cases that ONNXRuntime cannot run as-is:</span>
-<span class="c1">#   * ``test_cc_roialign_max`` and ``test_cc_roialign_mode_max`` — ORT&#39;s</span>
-<span class="c1">#     RoiAlign max-mode implementation does not match the ONNX reference</span>
-<span class="c1">#     (ORT emits a warning on session creation).</span>
-<span class="c1">#   * ``test_cc_flexattention_*`` — ORT does not register the</span>
-<span class="c1">#     ``ai.onnx.preview`` domain, so these models fail to load with</span>
-<span class="c1">#     &quot;ai.onnx.preview:FlexAttention(-1) is not a registered function/op&quot;.</span>
-<span class="c1">#   * ``test_cc_adam_*``, ``test_adam``, ``test_adam_multiple``,</span>
-<span class="c1">#     ``test_adagrad``, ``test_adagrad_multiple``, ``test_momentum``,</span>
-<span class="c1">#     ``test_momentum_multiple`` and ``test_nesterov_momentum`` — ORT does</span>
-<span class="c1">#     not register the ``ai.onnx.preview.training`` domain, so these models</span>
-<span class="c1">#     fail to load with</span>
-<span class="c1">#     &quot;ai.onnx.preview.training:Adam(-1) is not a registered function/op&quot;.</span>
-<span class="c1">#   * ``test_cc_bernoulli``, ``test_cc_bernoulli_double`` and</span>
-<span class="c1">#     ``test_cc_bernoulli_seed`` — ORT decomposes ``Bernoulli`` into</span>
-<span class="c1">#     ``RandomUniformLike`` + ``Less``, but its CPU EP has no kernel</span>
-<span class="c1">#     registered for ``RandomUniformLike(22)`` (&quot;Could not find an</span>
-<span class="c1">#     implementation for RandomUniformLike(22) node&quot;). The reference backend</span>
-<span class="c1">#     still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_multinomial``, ``test_cc_multinomial_seeded`` and</span>
-<span class="c1">#     ``test_cc_multinomial_int64`` — ORT&#39;s CPU EP has no kernel registered</span>
-<span class="c1">#     for ``Multinomial(22)`` (&quot;Could not find an implementation for</span>
-<span class="c1">#     Multinomial(22) node&quot;). The reference backend still exercises these</span>
-<span class="c1">#     cases.</span>
-<span class="c1">#   * ``test_cc_randomnormal*``, ``test_cc_randomnormallike*``,</span>
-<span class="c1">#     ``test_cc_randomuniform*`` and ``test_cc_randomuniformlike*`` — ORT&#39;s</span>
-<span class="c1">#     CPU EP has no kernel registered for ``RandomNormal(22)``,</span>
-<span class="c1">#     ``RandomNormalLike(22)``, ``RandomUniform(22)`` or</span>
-<span class="c1">#     ``RandomUniformLike(22)`` (&quot;Could not find an implementation for</span>
-<span class="c1">#     RandomNormal(22) node&quot;). The reference backend still exercises these</span>
-<span class="c1">#     cases.</span>
-<span class="c1">#   * ``test_training_dropout``, ``test_training_dropout_mask``,</span>
-<span class="c1">#     ``test_training_dropout_default`` and</span>
-<span class="c1">#     ``test_training_dropout_default_mask`` — training-mode ``Dropout`` with</span>
-<span class="c1">#     ``ratio &gt; 0`` selects kept/dropped elements via a runtime-defined RNG,</span>
-<span class="c1">#     so the expected outputs computed by ``kernel::Dropout`` are not</span>
-<span class="c1">#     bit-comparable with ORT&#39;s CPU kernel even for the same seed. The</span>
-<span class="c1">#     zero-ratio variants remain deterministic (output equals input, mask is</span>
-<span class="c1">#     all ones) and are still exercised.</span>
-<span class="c1">#   * ``test_cc_binarizer_int64`` — ORT only registers a ``float`` kernel for</span>
-<span class="c1">#     ``ai.onnx.ml::Binarizer``, so the ``int64`` variant fails with</span>
-<span class="c1">#     &quot;Could not find an implementation for Binarizer(1) node&quot;. The</span>
-<span class="c1">#     ``float`` variant (``test_ai_onnx_ml_binarizer``) is still exercised.</span>
-<span class="c1">#   * ``test_cc_scaler_int64`` — ORT only registers a ``float`` kernel for</span>
-<span class="c1">#     ``ai.onnx.ml::Scaler``, so the ``int64`` variant fails with</span>
-<span class="c1">#     &quot;Could not find an implementation for Scaler(1) node&quot;. The</span>
-<span class="c1">#     ``float`` variant (``test_cc_scaler_float``) is still exercised.</span>
-<span class="c1">#   * ``test_cc_cast_*FLOAT8E4M3*`` and ``test_cc_cast_*FLOAT8E5M2*`` — ORT&#39;s</span>
-<span class="c1">#     CPU EP rejects the float8 dtypes as ``Cast`` operand types</span>
-<span class="c1">#     (&quot;Type &#39;tensor(float8eNmM)&#39; of input parameter ... is invalid&quot;) and its</span>
-<span class="c1">#     Python bindings have no numpy mapping for the output type</span>
-<span class="c1">#     (&quot;No corresponding Numpy type for Tensor Type. Float8E5M2&quot;). The</span>
-<span class="c1">#     reference backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cast_no_saturate_*FLOAT8*`` — same ORT limitation: the float8</span>
-<span class="c1">#     output tensors cannot be mapped to a numpy type (&quot;No corresponding</span>
-<span class="c1">#     Numpy type for Tensor Type. Float8E4M3FNUZ&quot;) and for FLOAT8E4M3FN the</span>
-<span class="c1">#     comparison fails because ORT returns raw uint8 bytes instead of a</span>
-<span class="c1">#     typed float8 array. The reference backend still exercises these</span>
-<span class="c1">#     conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_cast_*UINT4*`` and ``test_cc_cast_*UINT2*`` — ORT&#39;s CPU EP</span>
-<span class="c1">#     rejects ``uint4``/``uint2`` as ``Cast`` operand types</span>
-<span class="c1">#     (&quot;Type &#39;tensor(uint4)&#39; of input parameter ... is invalid&quot;). The</span>
-<span class="c1">#     reference backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_cast_*INT4*`` and ``test_cc_cast_*INT2*`` — ORT&#39;s CPU EP</span>
-<span class="c1">#     rejects ``int4``/``int2`` as ``Cast`` operand types</span>
-<span class="c1">#     (&quot;Type &#39;tensor(int4)&#39; of input parameter ... is invalid&quot;) and its</span>
-<span class="c1">#     Python bindings have no numpy mapping for the packed output types</span>
-<span class="c1">#     (&quot;No corresponding Numpy type for Tensor Type. Int4x2&quot;). The</span>
-<span class="c1">#     reference backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_cast_*BFLOAT16*`` — ORT&#39;s Python bindings have no numpy</span>
-<span class="c1">#     mapping for ``bfloat16`` (&quot;No corresponding Numpy type for Tensor</span>
-<span class="c1">#     Type. bfloat16&quot; on output, &quot;Numpy_type 256 can&#39;t be converted to</span>
-<span class="c1">#     MLDataType&quot; on input). The reference backend still exercises these</span>
-<span class="c1">#     conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_cast_*FLOAT4E2M1*`` and ``test_cc_cast_*FLOAT8E8M0*``</span>
-<span class="c1">#     (including the ``test_cc_cast_e8m0_*`` variants) — ORT&#39;s CPU EP</span>
-<span class="c1">#     rejects ``float4e2m1`` / ``float8e8m0`` as ``Cast`` operand types</span>
-<span class="c1">#     (&quot;Type &#39;tensor(float4e2m1)&#39; of input parameter ... is invalid&quot;,</span>
-<span class="c1">#     &quot;MLDataType for: tensor(float8e8m0) is not currently registered or</span>
-<span class="c1">#     supported&quot;). The reference backend still exercises these</span>
-<span class="c1">#     conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_castlike_*FLOAT8E4M3*``, ``test_cc_castlike_*FLOAT8E5M2*``,</span>
-<span class="c1">#     ``test_cc_castlike_*FLOAT8E8M0*`` and</span>
-<span class="c1">#     ``test_cc_castlike_*FLOAT4E2M1*`` — ORT&#39;s CPU EP rejects these</span>
-<span class="c1">#     float8 / float4 dtypes as ``CastLike`` ``input`` / ``target_type``</span>
-<span class="c1">#     operand types (&quot;Type &#39;tensor(float8e4m3fn)&#39; of input parameter</span>
-<span class="c1">#     (input) of operator (CastLike) ... is invalid&quot;). The reference</span>
-<span class="c1">#     backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_castlike_no_saturate_*FLOAT8*`` — same ORT limitation: ORT&#39;s</span>
-<span class="c1">#     Python bindings cannot map the float8 input type to an MLDataType</span>
-<span class="c1">#     (&quot;Numpy_type 260/261/262/263 can&#39;t be converted to MLDataType&quot;).</span>
-<span class="c1">#     The reference backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_castlike_*UINT4*``, ``test_cc_castlike_*UINT2*``,</span>
-<span class="c1">#     ``test_cc_castlike_*INT4*`` and ``test_cc_castlike_*INT2*`` — ORT&#39;s</span>
-<span class="c1">#     CPU EP rejects these packed sub-byte dtypes as ``CastLike``</span>
-<span class="c1">#     ``input`` / ``target_type`` operand types (&quot;Type &#39;tensor(int4)&#39; of</span>
-<span class="c1">#     input parameter ... of operator (CastLike) ... is invalid&quot;). The</span>
-<span class="c1">#     reference backend still exercises these conversions byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_castlike_*BFLOAT16*`` — ORT&#39;s Python bindings have no numpy</span>
-<span class="c1">#     mapping for ``bfloat16`` (&quot;Numpy_type 256 can&#39;t be converted to</span>
-<span class="c1">#     MLDataType&quot;). The reference backend still exercises these conversions</span>
-<span class="c1">#     byte-for-byte.</span>
-<span class="c1">#   * ``test_cc_equal_bfloat16``, ``test_cc_greater_bfloat16``,</span>
-<span class="c1">#     ``test_cc_greater_or_equal_bfloat16``, ``test_cc_less_bfloat16``,</span>
-<span class="c1">#     ``test_cc_less_or_equal_bfloat16``, ``test_mod_mixed_sign_bfloat16``,</span>
-<span class="c1">#     ``test_cc_mod_bfloat16_fmod``</span>
-<span class="c1">#     and ``test_cc_pow_types_bfloat16_float32`` — ORT&#39;s CPU EP does not</span>
-<span class="c1">#     register ``bfloat16`` kernels for these comparison, modulo, and power</span>
-<span class="c1">#     operators (&quot;Could not find an implementation for Equal(19) / Greater(13) /</span>
-<span class="c1">#     Less(13) / Mod(13) / Pow(13) node&quot;). The reference backend still</span>
-<span class="c1">#     exercises these cases.</span>
-<span class="c1">#   * ``test_cc_zipmap_*`` — ORT returns Python ``list[dict]`` for ZipMap</span>
-<span class="c1">#     outputs while the lightweight backend-test carrier materializes ZipMap</span>
-<span class="c1">#     expected outputs as float tensors containing map values.</span>
-<span class="c1">#   * ``test_dequantizelinear_int16`` and ``test_dequantizelinear_uint16`` —</span>
-<span class="c1">#     ORT&#39;s CPU EP rejects ``int16``/``uint16`` as ``DequantizeLinear`` input</span>
-<span class="c1">#     types (&quot;Type &#39;tensor(int16)&#39; of input parameter ... is invalid&quot;). The</span>
-<span class="c1">#     reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_dequantizelinear_e4m3fn``, ``test_dequantizelinear_e5m2``,</span>
-<span class="c1">#     ``test_dequantizelinear_e4m3fn_zero_point`` and</span>
-<span class="c1">#     ``test_dequantizelinear_e4m3fn_float16`` — ORT&#39;s CPU EP rejects</span>
-<span class="c1">#     ``float8e4m3fn`` / ``float8e5m2`` as ``DequantizeLinear`` input types</span>
-<span class="c1">#     (&quot;Type &#39;tensor(float8e4m3fn)&#39; of input parameter (x) of operator</span>
-<span class="c1">#     (DequantizeLinear) ... is invalid&quot;). The reference backend still</span>
-<span class="c1">#     exercises these cases.</span>
-<span class="c1">#   * ``test_dequantizelinear_uint4``, ``test_dequantizelinear_int4``,</span>
-<span class="c1">#     ``test_dequantizelinear_uint2``, ``test_dequantizelinear_int2`` and</span>
-<span class="c1">#     ``test_dequantizelinear_float4e2m1`` — ORT&#39;s CPU EP rejects sub-byte</span>
-<span class="c1">#     dtypes as ``DequantizeLinear`` input types (&quot;Type &#39;tensor(uint4)&#39; of</span>
-<span class="c1">#     input parameter (x) of operator (DequantizeLinear) ... is invalid&quot;).</span>
-<span class="c1">#     The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_dequantizelinear_blocked`` — ORT&#39;s CPU EP rejects the</span>
-<span class="c1">#     ``block_size`` attribute on ``DequantizeLinear`` (&quot;This is an invalid</span>
-<span class="c1">#     model. In Node ... DequantizeLinear ...&quot;). The reference backend still</span>
-<span class="c1">#     exercises this case.</span>
-<span class="c1">#   * ``test_quantizelinear_int16`` and ``test_quantizelinear_uint16`` — ORT&#39;s</span>
-<span class="c1">#     CPU EP rejects ``int16``/``uint16`` as ``QuantizeLinear`` ``y_zero_point``</span>
-<span class="c1">#     types (&quot;Type &#39;tensor(int16)&#39; of input parameter (y_zero_point) ... is</span>
-<span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_quantizelinear_e4m3fn``, ``test_quantizelinear_e5m2``,</span>
-<span class="c1">#     ``test_quantizelinear_uint4``, ``test_quantizelinear_int4``,</span>
-<span class="c1">#     ``test_quantizelinear_uint2``, ``test_quantizelinear_int2`` and</span>
-<span class="c1">#     ``test_quantizelinear_float4e2m1`` — ORT&#39;s CPU EP rejects these</span>
-<span class="c1">#     sub-byte / float8 / float4 types as ``QuantizeLinear`` ``y_zero_point``</span>
-<span class="c1">#     types (&quot;Type &#39;tensor(&lt;dtype&gt;)&#39; of input parameter (y_zero_point) ... is</span>
-<span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_qlinearmatmul_{2D,3D}_{uint8,int8}_float16`` — ORT&#39;s CPU EP</span>
-<span class="c1">#     rejects FLOAT16 scales for ``QLinearMatMul`` (&quot;Type &#39;tensor(float16)&#39;</span>
-<span class="c1">#     of input parameter (a_scale) of operator (QLinearMatMul) ... is</span>
-<span class="c1">#     invalid&quot;). The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_svmclassifier_int64_binary`` and</span>
-<span class="c1">#     ``test_cc_svmregressor_linear`` — ORT&#39;s ``ai.onnx.ml`` SVM kernels follow</span>
-<span class="c1">#     a different scoring/layout convention than the lightweight backend</span>
-<span class="c1">#     reference kernels for these focused C++ parity cases.</span>
-<span class="c1">#   * ``test_cc_linearclassifier_int64_binary`` and</span>
-<span class="c1">#     ``test_cc_linearregressor_single_target`` — focused C++ parity cases for</span>
-<span class="c1">#     the ``ai.onnx.ml`` Linear* operators; ORT&#39;s kernels may apply a</span>
-<span class="c1">#     different score-expansion convention for binary classifiers.</span>
-<span class="c1">#   * ``test_cc_treeensembleclassifier_int64_binary`` — focused C++ parity</span>
-<span class="c1">#     case for ``ai.onnx.ml::TreeEnsembleClassifier``; ORT&#39;s binary-classifier</span>
-<span class="c1">#     kernel applies a different score-expansion convention (threshold-at-zero</span>
-<span class="c1">#     rather than argmax) that produces a different predicted label for the</span>
-<span class="c1">#     zero-score sample.</span>
-<span class="c1">#   * ``test_cc_globallppool_*`` — ORT has no CPU kernel for</span>
-<span class="c1">#     ``GlobalLpPool(22)`` (&quot;Could not find an implementation for</span>
-<span class="c1">#     GlobalLpPool(22) node&quot;). The reference backend still exercises these</span>
-<span class="c1">#     cases.</span>
-<span class="c1">#   * ``test_cc_maxroipool_*`` — ORT has no CPU kernel for</span>
-<span class="c1">#     ``MaxRoiPool(22)`` (&quot;Could not find an implementation for</span>
-<span class="c1">#     MaxRoiPool(22) node&quot;). The reference backend still exercises these</span>
-<span class="c1">#     cases.</span>
-<span class="c1">#   * ``test_cc_scan_zero_trip_count`` — ORT&#39;s ``Scan`` implementation</span>
-<span class="c1">#     unconditionally slices the scan input at ``dim0_offset=0`` even when</span>
-<span class="c1">#     the scan-input leading dimension is 0, asserting</span>
-<span class="c1">#     ``dim0_offset &lt; dim0_size`` (&quot;Invalid dim0_offset of 0. Dimension 0</span>
-<span class="c1">#     is 0&quot;). The reference backend still exercises the zero-trip-count</span>
-<span class="c1">#     case.</span>
-<span class="c1">#   * ``test_bitshift_right_uint16`` and ``test_bitshift_left_uint16`` — ORT&#39;s</span>
-<span class="c1">#     CPU EP does not register a ``BitShift`` kernel for ``uint16`` (&quot;Could</span>
-<span class="c1">#     not find an implementation for BitShift(11) node&quot;); only ``uint8`` /</span>
-<span class="c1">#     ``uint32`` / ``uint64`` are registered. The reference backend still</span>
-<span class="c1">#     exercises the ``uint16`` cases.</span>
-<span class="c1">#   * ``test_bitcast_*`` — ORT&#39;s CPU EP does not register a ``BitCast`` kernel</span>
-<span class="c1">#     (&quot;Could not find an implementation for BitCast(26) node&quot;). The reference</span>
-<span class="c1">#     backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_dict_vectorizer_*`` and ``test_cc_cast_map_*`` — these models</span>
-<span class="c1">#     declare an ``ai.onnx.ml::DictVectorizer`` / ``ai.onnx.ml::CastMap``</span>
-<span class="c1">#     input typed as ``map(K, V)``. ORT loads the model with a map-typed</span>
-<span class="c1">#     input parameter and rejects the tensor placeholder fed by the</span>
-<span class="c1">#     lightweight backend harness (&quot;input with name: &#39;x&#39; expected to be of</span>
-<span class="c1"># type: 1 but received a tensor&quot;). The reference backend still exercises</span>
-<span class="c1">#     these cases.</span>
-<span class="c1">#   * ``test_cc_feature_vectorizer_mixed_dtypes`` — ORT&#39;s</span>
-<span class="c1">#     ``ai.onnx.ml::FeatureVectorizer`` kernel binds the variadic ``T1``</span>
-<span class="c1">#     type-constraint to a single dtype across all inputs and rejects mixed</span>
-<span class="c1">#     dtypes at load time (&quot;Type parameter (T1) of Optype (FeatureVectorizer)</span>
-<span class="c1">#     bound to different types (tensor(int64) and tensor(float))&quot;). The ONNX</span>
-<span class="c1">#     reference backend still exercises this case.</span>
-<span class="c1">#   * ``test_cc_simple_rnn_batchwise``, ``test_cc_lstm_batchwise`` and</span>
-<span class="c1">#     ``test_cc_gru_batchwise`` — ORT&#39;s CPU ``RNN``/``LSTM``/``GRU``</span>
-<span class="c1">#     kernels reject ``layout=1`` at initialization (&quot;Batchwise recurrent</span>
-<span class="c1">#     operations (layout == 1) are not supported. If you need support</span>
-<span class="c1">#     create a github issue with justification.&quot;). The reference backend</span>
-<span class="c1">#     still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_3d_mask_causal``</span>
-<span class="c1">#     and ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask_causal``</span>
-<span class="c1">#     — ORT&#39;s CPU ``Attention`` kernel writes ``-FLT_MAX`` (≈ -3.4e38) into the</span>
-<span class="c1">#     ``qk_matmul_output`` at causal-masked positions while the ONNX reference</span>
-<span class="c1">#     (and this lightweight backend) writes the mathematical ``-inf`` from the</span>
-<span class="c1">#     additive causal bias. Both produce the same softmax outputs but differ</span>
-<span class="c1">#     bit-for-bit in the intermediate ``qk_matmul_output``. The reference</span>
-<span class="c1">#     backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_attention_3d_with_past_and_present_qk_matmul_bias``,</span>
-<span class="c1">#     ``test_cc_attention_4d_with_qk_matmul_bias``,</span>
-<span class="c1">#     ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias``,</span>
-<span class="c1">#     ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_3d_mask`` and</span>
-<span class="c1">#     ``test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask`` —</span>
-<span class="c1">#     ORT&#39;s CPU ``Attention`` kernel emits ``qk_matmul_output`` with</span>
-<span class="c1">#     ``qk_matmul_output_mode=1`` as ``raw QK^T * scale + attn_bias`` (a legacy</span>
-<span class="c1">#     interpretation), whereas the ONNX schema (and the ONNX reference and the</span>
-<span class="c1">#     function body baked into ``defs.cc``) define mode 1 as the post-softcap,</span>
-<span class="c1">#     pre-mask value — i.e. plain raw ``QK^T * scale`` when no softcap is</span>
-<span class="c1">#     requested. The softmax outputs agree; only the exposed</span>
-<span class="c1">#     ``qk_matmul_output`` differs. The reference backend still exercises</span>
-<span class="c1">#     these cases.</span>
-<span class="c1">#   * ``test_cc_attention_4d_softcap_neginf_mask`` and</span>
-<span class="c1">#     ``test_cc_attention_4d_softcap_neginf_mask_poison`` — ORT&#39;s CPU</span>
-<span class="c1">#     ``Attention`` kernel applies ``softcap`` *after* the attention mask is</span>
-<span class="c1">#     added, so ``-inf`` mask entries saturate to ``-softcap`` (finite) and</span>
-<span class="c1">#     leak probability mass into masked positions (the poison variant amplifies</span>
-<span class="c1">#     this with ``V=1000`` at masked positions, blowing up the output). The</span>
-<span class="c1">#     ONNX schema and reference apply softcap *before* the mask, so ``-inf``</span>
-<span class="c1">#     survives into softmax and produces zero probability at masked positions.</span>
-<span class="c1">#     The reference backend still exercises these cases.</span>
-<span class="c1"># These cases remain covered by the reference backend tests.</span>
-<span class="c1">#   * ``test_cc_top_k_uint64`` — ORT&#39;s CPU EP has no ``TopK(11)`` kernel</span>
-<span class="c1">#     registered for ``uint64`` (&quot;Could not find an implementation for</span>
-<span class="c1">#     TopK(11) node&quot;). The reference backend still exercises this case.</span>
-<span class="c1">#   * ``test_cc_prelu_inf`` — ORT&#39;s CPU EP ``PRelu`` kernel evaluates</span>
-<span class="c1">#     ``slope * x`` on both branches of the sign mask and so returns</span>
-<span class="c1">#     ``NaN`` for ``+inf`` / ``-inf`` inputs (see</span>
-<span class="c1">#     microsoft/onnxruntime#28732). The reference backend still exercises</span>
-<span class="c1">#     this case to lock in the ``±inf``-preserving behaviour.</span>
-<span class="c1">#   * ``test_pow_types_float32_uint32`` and ``test_pow_types_float32_uint64``</span>
-<span class="c1">#     — ORT has no CPU kernel for ``Pow(13)`` with ``uint32``/``uint64``</span>
-<span class="c1">#     exponent inputs (&quot;Could not find an implementation for Pow(13) node&quot;).</span>
-<span class="c1">#     The reference backend still exercises these mixed-type coverage cases.</span>
-<span class="c1">#   * ``test_cc_shape_inference_shape_identity_unsqueeze`` — model</span>
-<span class="c1">#     intentionally exercises the in-memory INT64 initializer path in</span>
-<span class="c1">#     ``Graph::SaveShapeValuesFromDataPropagation`` (the regression scenario</span>
-<span class="c1">#     fixed by microsoft/onnxruntime#28778). ORT versions on the macOS /</span>
-<span class="c1">#     Windows CI runners predate that fix and abort on the model during</span>
-<span class="c1">#     graph re-resolution. The reference backend still exercises this case.</span>
-<span class="c1">#   * ``test_max_int16``, ``test_max_uint16``, ``test_min_int16`` and</span>
-<span class="c1">#     ``test_min_uint16`` — ORT has no CPU kernel for ``Max(13)`` /</span>
-<span class="c1">#     ``Min(13)`` with ``int16``/``uint16`` inputs (&quot;Could not find an</span>
-<span class="c1">#     implementation for Max(13) node&quot; / &quot;Could not find an implementation</span>
-<span class="c1">#     for Min(13) node&quot;). The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_relu_int16`` and ``test_cc_relu_int64`` — ORT&#39;s CPU EP has no</span>
-<span class="c1">#     kernel registered for ``Relu(14)`` with ``int16``/``int64`` inputs</span>
-<span class="c1">#     (&quot;Could not find an implementation for Relu(14) node&quot;). The reference</span>
-<span class="c1">#     backend still exercises these cases.</span>
-<span class="c1">#   * ``test_resize_downsample_scales_linear_align_corners`` and</span>
-<span class="c1">#     ``test_resize_downsample_scales_cubic_align_corners`` — when</span>
-<span class="c1">#     downsampling with ``coordinate_transformation_mode=&quot;align_corners&quot;``</span>
-<span class="c1">#     and float ``scales``, ORT&#39;s CPU EP computes the output spatial size</span>
-<span class="c1">#     by rounding ``input_size * scale`` (e.g. ``round(4 * 0.6) = 2`` and</span>
-<span class="c1">#     ``round(4 * 0.8) = 3``) and then maps coordinates with</span>
-<span class="c1">#     ``(output_size - 1) / (input_size - 1)``, which lands sampling</span>
-<span class="c1">#     positions exactly on existing grid points and reproduces the input</span>
-<span class="c1">#     values verbatim. The ONNX reference implementation in</span>
-<span class="c1">#     ``onnx/reference/ops/op_resize.py`` instead computes ``align_corners``</span>
-<span class="c1">#     downsample positions using the float scale directly</span>
-<span class="c1">#     (``i * (input_size - 1) * scale / (output_size - 1)``), which yields</span>
-<span class="c1">#     the fractional sample positions baked into the upstream</span>
-<span class="c1">#     ``test_resize_downsample_scales_*_align_corners`` reference outputs.</span>
-<span class="c1">#     The reference backend still exercises these cases.</span>
-<span class="c1">#   * ``test_cc_maxunpool_export_with_output_shape`` — when ``output_shape``</span>
-<span class="c1">#     differs from the shape inferred from ``kernel_shape``/``strides``/</span>
-<span class="c1">#     ``pads``, ORT&#39;s CPU EP scatters ``X`` into ``output_shape`` directly by</span>
-<span class="c1">#     reinterpreting ``indices`` as flat offsets into ``output_shape``. The</span>
-<span class="c1">#     ONNX reference implementation instead scatters into the inferred shape</span>
-<span class="c1">#     and copies that region into the top-left corner of ``output_shape``</span>
-<span class="c1">#     (see ``onnx/reference/ops/op_max_unpool.py``). The reference backend</span>
-<span class="c1">#     still exercises this case.</span>
-<span class="c1">#   * ``test_cc_stft_complex_batched`` — this case is the regression test</span>
-<span class="c1">#     ported from microsoft/onnxruntime#28961 and exists precisely to lock</span>
-<span class="c1">#     in the cross-batch pointer-arithmetic fix for complex-valued STFT</span>
-<span class="c1">#     inputs. ORT versions on the CI runners (≤ 1.26.0) predate that fix</span>
-<span class="c1">#     and emit ``NaN`` for every frame past the first batch. The reference</span>
-<span class="c1">#     backend still exercises this case to keep the regression coverage.</span>
-<span class="c1">#   * ``test_cc_squeeze_empty_axes_name`` — ORT&#39;s CPU ``Squeeze`` kernel</span>
-<span class="c1">#     rejects an unconnected optional ``axes`` input encoded with an empty</span>
-<span class="c1">#     input name (&quot;axes_tensor != nullptr was false. Axes input is null&quot;).</span>
-<span class="c1">#     Per the ONNX opset 13+ schema ``axes`` is optional and a missing</span>
-<span class="c1">#     optional input may be expressed by either omitting the slot or using</span>
-<span class="c1">#     an empty name; both forms must squeeze every unit dimension. The</span>
-<span class="c1">#     &quot;slot omitted entirely&quot; form (``test_cc_squeeze_no_axes_input``) is</span>
-<span class="c1">#     accepted by ORT and the reference backend continues to exercise the</span>
-<span class="c1">#     empty-name form.</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">ort_max_supported_opset</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Returns the highest default-domain opset version ONNX Runtime supports.</span>
+
+<span class="sd">    Reads the registered operator schemas from ONNX Runtime and takes the</span>
+<span class="sd">    maximum ``since_version`` over the default ONNX domain (``&quot;&quot;``). This lets</span>
+<span class="sd">    the exclusion list adapt to the installed ONNX Runtime instead of</span>
+<span class="sd">    hard-coding an opset ceiling.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        The highest default-domain opset version ONNX Runtime supports.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">max</span><span class="p">(</span>
+        <span class="n">schema</span><span class="o">.</span><span class="n">since_version</span> <span class="k">for</span> <span class="n">schema</span> <span class="ow">in</span> <span class="n">get_all_operator_schema</span><span class="p">()</span> <span class="k">if</span> <span class="n">schema</span><span class="o">.</span><span class="n">domain</span> <span class="o">==</span> <span class="s2">&quot;&quot;</span>
+    <span class="p">)</span>
+
+
+<span class="c1"># Opset version at which the cases below were introduced. They are only excluded</span>
+<span class="c1"># when the installed ONNX Runtime does not yet support that opset.</span>
+<span class="n">OPSET_27</span> <span class="o">=</span> <span class="mi">27</span>
+
+<span class="c1"># Exclusions that only apply when ONNX Runtime does not support the given opset.</span>
+<span class="n">ORT_OPSET_GATED_EXCLUDE_REGEX</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">OPSET_27</span><span class="p">:</span> <span class="p">[</span>
+        <span class="c1"># Range opset 27 cases.</span>
+        <span class="sa">r</span><span class="s2">&quot;^test_range_float16_type_positive_delta$&quot;</span><span class="p">,</span>
+        <span class="sa">r</span><span class="s2">&quot;^test_range_bfloat16_type_positive_delta$&quot;</span><span class="p">,</span>
+        <span class="c1"># LinearAttention is opset 27.</span>
+        <span class="sa">r</span><span class="s2">&quot;^test_cc_linear_attention_.*$&quot;</span><span class="p">,</span>
+        <span class="c1"># CausalConvWithState is opset 27.</span>
+        <span class="sa">r</span><span class="s2">&quot;^test_cc_causal_conv_with_state_.*$&quot;</span><span class="p">,</span>
+    <span class="p">]</span>
+<span class="p">}</span>
+
 <span class="n">ORT_EXCLUDE_REGEX</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_roialign_max$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_roialign_mode_max$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT/reference parity mismatches in focused C++ cases.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_stft_complex_batched$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_flexattention_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_image_decoder_&quot;</span><span class="p">,</span>
+    <span class="c1"># Preview ops/functions are not registered in ORT.</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_flexattention_&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT exposes different Attention intermediates than the ONNX reference.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_with_past_and_present_qk_matmul_bias_3d_mask_causal(_expanded)?$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask_causal(_expanded)?$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_3d_with_past_and_present_qk_matmul_bias(_expanded)?$&quot;</span><span class="p">,</span>
@@ -999,6 +735,7 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_with_past_and_present_qk_matmul_bias_4d_mask(_expanded)?$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_softcap_neginf_mask(_expanded)?$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_attention_4d_softcap_neginf_mask_poison(_expanded)?$&quot;</span><span class="p">,</span>
+    <span class="c1"># Preview training ops are not registered in ORT.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_adam_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_adam_multiple$&quot;</span><span class="p">,</span>
@@ -1007,6 +744,7 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_momentum$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_momentum_multiple$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_nesterov_momentum$&quot;</span><span class="p">,</span>
+    <span class="c1"># Random ops are missing or nondeterministic in ORT.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_double$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_bernoulli_seed$&quot;</span><span class="p">,</span>
@@ -1029,8 +767,14 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_training_dropout_mask$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_training_dropout_default$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_training_dropout_default_mask$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT only wires float kernels for these ai.onnx.ml cases.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_binarizer_int64$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_scaler_int64$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT&#39;s binary LinearClassifier Z output uses [1-z, z] instead of the spec&#39;s [-z, z].</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_linearclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT returns wrong labels for the binary TreeEnsembleClassifier test case.</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_treeensembleclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="c1"># Low-precision Cast/CastLike dtypes are unsupported in ORT.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E4M3.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E5M2.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E8M0.*$&quot;</span><span class="p">,</span>
@@ -1051,7 +795,9 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*INT4.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*INT2.*$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*BFLOAT16.*$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT returns ZipMap outputs in a different carrier format.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_zipmap_&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT rejects these QuantizeLinear/DequantizeLinear dtypes or attrs.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_int16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_uint16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn$&quot;</span><span class="p">,</span>
@@ -1073,36 +819,35 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint2$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int2$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_float4e2m1$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT rejects FLOAT16 scales for QLinearMatMul.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_2D_uint8_float16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_2D_int8_float16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_3D_uint8_float16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_3D_int8_float16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_svmclassifier_int64_binary$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_svmregressor_linear$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_linearclassifier_int64_binary$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_linearregressor_single_target$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_treeensembleclassifier_int64_binary$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT is missing kernels for these ops or dtypes.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_globallppool_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_maxroipool_&quot;</span><span class="p">,</span>
+    <span class="c1"># The backend harness cannot feed these map-typed inputs to ORT.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_dict_vectorizer_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_map_&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT rejects these mixed-dtype or batchwise sequence patterns.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_feature_vectorizer_mixed_dtypes$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_simple_rnn_batchwise$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_lstm_batchwise$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_gru_batchwise$&quot;</span><span class="p">,</span>
+    <span class="c1"># More single-op kernel gaps and focused parity checks.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_bitshift_right_uint16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_bitshift_left_uint16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_bitcast_&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_top_k_uint64$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_scan_zero_trip_count$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_prelu_inf$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_pow_types_float32_uint32$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_pow_types_float32_uint64$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_shape_inference_shape_identity_unsqueeze$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_max_int16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_max_uint16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_min_int16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_min_uint16$&quot;</span><span class="p">,</span>
+    <span class="c1"># dim0_offset &lt; dim0_size was false. Invalid dim0_offset of 0. Dimension 0 is 0</span>
+    <span class="sa">r</span><span class="s2">&quot;^test_cc_scan_zero_trip_count$&quot;</span><span class="p">,</span>
     <span class="c1"># ORT CPU does not register int16/int64 kernels for Relu(14).</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_relu_int16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_relu_int64$&quot;</span><span class="p">,</span>
@@ -1111,20 +856,11 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_mod_mixed_sign_bfloat16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_mod_bfloat16_fmod$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_pow_types_bfloat16_float32$&quot;</span><span class="p">,</span>
+    <span class="c1"># ORT diverges from the reference on MaxUnpool/Resize edge semantics.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_maxunpool_export_with_output_shape$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_resize_downsample_scales_linear_align_corners$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_resize_downsample_scales_cubic_align_corners$&quot;</span><span class="p">,</span>
-    <span class="c1"># Range opset 27 cases: ONNX Runtime only guarantees support up to opset 26.</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_range_float16_type_positive_delta$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_range_bfloat16_type_positive_delta$&quot;</span><span class="p">,</span>
-    <span class="c1"># LinearAttention is opset 27: ONNX Runtime only guarantees support up to opset 26.</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_linear_attention_.*$&quot;</span><span class="p">,</span>
-    <span class="c1"># CausalConvWithState is opset 27: ONNX Runtime only guarantees support up to opset 26.</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_causal_conv_with_state_.*$&quot;</span><span class="p">,</span>
-    <span class="c1"># ORT&#39;s DFT does not support the combination ``inverse=1, onesided=1`` —</span>
-    <span class="c1"># it falls back to the forward one-sided transform, producing the wrong</span>
-    <span class="c1"># shape. The forward / inverse / forward-onesided variants are exercised</span>
-    <span class="c1"># separately by the other ``test_cc_dft_*`` cases.</span>
+    <span class="c1"># ORT IRFFT mishandles the ``inverse=1, onesided=1`` combination.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_dft_irfft(_opset19|_roundtrip|_roundtrip_opset19)?$&quot;</span><span class="p">,</span>
     <span class="c1"># ORT does not support Optional loop-carried state in this graph structure.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_loop16_seq_none$&quot;</span><span class="p">,</span>
@@ -1133,9 +869,15 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_identity_opt$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_if_seq$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_if_opt$&quot;</span><span class="p">,</span>
-    <span class="c1"># See note above on the ``Squeeze`` optional ``axes`` input.</span>
+    <span class="c1"># ORT rejects the empty-name encoding of the optional ``axes`` input.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_squeeze_empty_axes_name$&quot;</span><span class="p">,</span>
 <span class="p">]</span>
+
+<span class="c1"># Add opset-gated exclusions only for opset versions ONNX Runtime cannot load yet.</span>
+<span class="n">_ORT_MAX_OPSET</span> <span class="o">=</span> <span class="n">ort_max_supported_opset</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">_opset</span><span class="p">,</span> <span class="n">_patterns</span> <span class="ow">in</span> <span class="n">ORT_OPSET_GATED_EXCLUDE_REGEX</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="k">if</span> <span class="n">_ORT_MAX_OPSET</span> <span class="o">&lt;</span> <span class="n">_opset</span><span class="p">:</span>
+        <span class="n">ORT_EXCLUDE_REGEX</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">_patterns</span><span class="p">)</span>
 
 <span class="n">TestOrtBackend</span> <span class="o">=</span> <span class="n">make_test_class</span><span class="p">(</span><span class="n">onnxruntime_backend</span><span class="p">,</span> <span class="n">exclude_regex</span><span class="o">=</span><span class="n">ORT_EXCLUDE_REGEX</span><span class="p">)</span>
 
