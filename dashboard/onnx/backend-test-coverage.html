@@ -247,6 +247,36 @@ table.comparison tbody tr.ref-only { background: rgba(210, 168, 255, 0.07); }
 table.comparison tbody tr.light-only { background: rgba(255, 166, 87, 0.07); }
 table.comparison tbody tr.yobx-only { background: rgba(86, 211, 100, 0.07); }
 table.comparison tbody tr.both-fail { background: rgba(248, 81, 73, 0.12); }
+table.comparison td .graph-toggle {
+  margin-top: 0.3em;
+  background: rgba(13, 17, 23, 0.7);
+  color: #c9d1d9;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 0.1em 0.5em;
+  font-size: 0.85em;
+  font-family: inherit;
+  cursor: pointer;
+}
+table.comparison td .graph-toggle:hover {
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+table.comparison tr.graph-row > td {
+  background: rgba(13, 17, 23, 0.85);
+  padding: 0.5em 0.6em;
+}
+.graph-container {
+  overflow-x: auto;
+  max-width: 100%;
+}
+.graph-container svg {
+  display: block;
+}
+.graph-container svg text {
+  fill: #c9d1d9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
 .message {
   display: none;
   text-align: center;
@@ -600,12 +630,15 @@ function renderRows() {
       else if (allFail) tr.classList.add("both-fail");
 
       tr.appendChild(cellText(r.name));
+      const nameTd = tr.firstChild;
       tr.appendChild(cellCheck(r.onnxruntime));
       tr.appendChild(cellCheck(r.reference));
       tr.appendChild(cellCheck(r.onnx_light));
       tr.appendChild(cellCheck(r.yobx));
       tr.appendChild(cellErrors(r));
+      const graphRow = appendGraphRow(tr, nameTd, r, 6);
       body.appendChild(tr);
+      if (graphRow) body.appendChild(graphRow);
     }
   }
   updateSortArrows();
@@ -616,6 +649,235 @@ function cellText(value) {
   td.textContent = value;
   return td;
 }
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function buildGraphSvg(graph) {
+  const inputs = graph.inputs || [];
+  const initializers = graph.initializers || [];
+  const nodes = graph.nodes || [];
+  const outputs = graph.outputs || [];
+
+  const boxes = [];
+  const producer = Object.create(null);
+  function addBox(kind, label, sub, ins) {
+    const box = {
+      id: boxes.length,
+      kind: kind,
+      label: label || "",
+      sub: sub || "",
+      ins: ins || [],
+      layer: 0,
+    };
+    boxes.push(box);
+    return box;
+  }
+
+  for (const inp of inputs) {
+    const box = addBox("input", inp.name, inp.type, []);
+    if (inp.name) producer[inp.name] = box.id;
+  }
+  for (const nm of initializers) {
+    const box = addBox("init", nm, "initializer", []);
+    if (nm) producer[nm] = box.id;
+  }
+  for (const node of nodes) {
+    const ins = (node.inputs || []).filter(Boolean);
+    const sub = node.name || node.domain || "";
+    const box = addBox("node", node.op_type || "?", sub, ins);
+    for (const out of node.outputs || []) {
+      if (out) producer[out] = box.id;
+    }
+  }
+  for (const out of outputs) {
+    addBox("output", out.name, out.type, out.name ? [out.name] : []);
+  }
+
+  const byId = {};
+  for (const box of boxes) byId[box.id] = box;
+  const edges = [];
+  for (const box of boxes) {
+    for (const tensor of box.ins) {
+      const from = producer[tensor];
+      if (from !== undefined && from !== box.id) {
+        edges.push({ from: from, to: box.id });
+      }
+    }
+  }
+  // Longest-path layering so every consumer sits below its producers.
+  for (let iter = 0; iter <= boxes.length; iter++) {
+    let changed = false;
+    for (const edge of edges) {
+      if (byId[edge.to].layer < byId[edge.from].layer + 1) {
+        byId[edge.to].layer = byId[edge.from].layer + 1;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const charW = 7;
+  const padX = 10;
+  const boxH = 38;
+  const layerGapY = 70;
+  const boxGapX = 26;
+  const marginX = 12;
+  const marginY = 12;
+
+  for (const box of boxes) {
+    const longest = Math.max(box.label.length, box.sub.length);
+    box.w = Math.max(56, longest * charW + 2 * padX);
+    box.h = boxH;
+  }
+
+  const layers = [];
+  for (const box of boxes) {
+    (layers[box.layer] = layers[box.layer] || []).push(box);
+  }
+
+  let svgWidth = 0;
+  for (const layer of layers) {
+    if (!layer) continue;
+    let w = boxGapX * (layer.length - 1);
+    for (const box of layer) w += box.w;
+    svgWidth = Math.max(svgWidth, w);
+  }
+  svgWidth += 2 * marginX;
+
+  for (let l = 0; l < layers.length; l++) {
+    const layer = layers[l];
+    if (!layer) continue;
+    let total = boxGapX * (layer.length - 1);
+    for (const box of layer) total += box.w;
+    let x = (svgWidth - total) / 2;
+    const y = marginY + l * layerGapY;
+    for (const box of layer) {
+      box.x = x;
+      box.y = y;
+      x += box.w + boxGapX;
+    }
+  }
+
+  const svgHeight = marginY * 2 + Math.max(1, layers.length) * layerGapY - (layerGapY - boxH);
+
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", String(svgWidth));
+  svg.setAttribute("height", String(svgHeight));
+  svg.setAttribute("viewBox", "0 0 " + svgWidth + " " + svgHeight);
+
+  const defs = document.createElementNS(SVG_NS, "defs");
+  const marker = document.createElementNS(SVG_NS, "marker");
+  marker.setAttribute("id", "graph-arrow");
+  marker.setAttribute("markerWidth", "8");
+  marker.setAttribute("markerHeight", "8");
+  marker.setAttribute("refX", "6");
+  marker.setAttribute("refY", "3");
+  marker.setAttribute("orient", "auto");
+  marker.setAttribute("markerUnits", "userSpaceOnUse");
+  const arrowPath = document.createElementNS(SVG_NS, "path");
+  arrowPath.setAttribute("d", "M0,0 L6,3 L0,6 Z");
+  arrowPath.setAttribute("fill", "#8b949e");
+  marker.appendChild(arrowPath);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+
+  for (const edge of edges) {
+    const from = byId[edge.from];
+    const to = byId[edge.to];
+    const line = document.createElementNS(SVG_NS, "line");
+    line.setAttribute("x1", String(from.x + from.w / 2));
+    line.setAttribute("y1", String(from.y + from.h));
+    line.setAttribute("x2", String(to.x + to.w / 2));
+    line.setAttribute("y2", String(to.y));
+    line.setAttribute("stroke", "#8b949e");
+    line.setAttribute("stroke-width", "1");
+    line.setAttribute("marker-end", "url(#graph-arrow)");
+    svg.appendChild(line);
+  }
+
+  const fills = {
+    input: "rgba(121, 192, 255, 0.18)",
+    init: "rgba(139, 148, 158, 0.18)",
+    node: "rgba(88, 166, 255, 0.10)",
+    output: "rgba(86, 211, 100, 0.18)",
+  };
+  const strokes = {
+    input: "rgba(121, 192, 255, 0.6)",
+    init: "rgba(139, 148, 158, 0.6)",
+    node: "#30363d",
+    output: "rgba(86, 211, 100, 0.6)",
+  };
+
+  for (const box of boxes) {
+    const rect = document.createElementNS(SVG_NS, "rect");
+    rect.setAttribute("x", String(box.x));
+    rect.setAttribute("y", String(box.y));
+    rect.setAttribute("width", String(box.w));
+    rect.setAttribute("height", String(box.h));
+    rect.setAttribute("rx", "5");
+    rect.setAttribute("fill", fills[box.kind] || fills.node);
+    rect.setAttribute("stroke", strokes[box.kind] || strokes.node);
+    rect.setAttribute("stroke-width", "1");
+    svg.appendChild(rect);
+
+    const cx = box.x + box.w / 2;
+    const label = document.createElementNS(SVG_NS, "text");
+    label.setAttribute("x", String(cx));
+    label.setAttribute("y", String(box.y + (box.sub ? 16 : 23)));
+    label.setAttribute("text-anchor", "middle");
+    label.setAttribute("font-size", "12");
+    label.setAttribute("font-weight", box.kind === "node" ? "bold" : "normal");
+    label.textContent = box.label;
+    svg.appendChild(label);
+
+    if (box.sub) {
+      const sub = document.createElementNS(SVG_NS, "text");
+      sub.setAttribute("x", String(cx));
+      sub.setAttribute("y", String(box.y + 29));
+      sub.setAttribute("text-anchor", "middle");
+      sub.setAttribute("font-size", "10");
+      sub.setAttribute("fill", "#8b949e");
+      sub.textContent = box.sub;
+      svg.appendChild(sub);
+    }
+  }
+
+  return svg;
+}
+
+function appendGraphRow(mainRow, nameTd, row, colSpan) {
+  if (!row.graph || !Array.isArray(row.graph.nodes) || row.graph.nodes.length === 0) {
+    return null;
+  }
+  const graphRow = document.createElement("tr");
+  graphRow.className = "graph-row";
+  graphRow.style.display = "none";
+  const td = document.createElement("td");
+  td.colSpan = colSpan;
+  const container = document.createElement("div");
+  container.className = "graph-container";
+  td.appendChild(container);
+  graphRow.appendChild(td);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "graph-toggle";
+  btn.textContent = "⊞ graph";
+  let built = false;
+  btn.addEventListener("click", () => {
+    const hidden = graphRow.style.display === "none";
+    if (hidden && !built) {
+      container.appendChild(buildGraphSvg(row.graph));
+      built = true;
+    }
+    graphRow.style.display = hidden ? "" : "none";
+    btn.textContent = hidden ? "⊟ graph" : "⊞ graph";
+  });
+  nameTd.appendChild(document.createElement("br"));
+  nameTd.appendChild(btn);
+  return graphRow;
+}
+
 
 function cellCheck(value) {
   const td = document.createElement("td");

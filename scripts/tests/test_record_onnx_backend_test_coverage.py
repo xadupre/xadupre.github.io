@@ -124,7 +124,90 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(row["reference_last_pass_date"], "2024-01-02T03:04:05Z")
         self.assertEqual(row["reference_last_pass_version"], "1.16.0")
 
-    def test_build_payload_runs_every_backend_and_aggregates_totals(self):
+    def test_build_graph_describes_inputs_outputs_and_nodes(self):
+        import onnx
+        from onnx import helper
+
+        x = helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [3, 4])
+        w = helper.make_tensor_value_info("w", onnx.TensorProto.FLOAT, [4, 2])
+        y = helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [3, 2])
+        matmul = helper.make_node("MatMul", ["x", "w"], ["m"])
+        relu = helper.make_node("Relu", ["m"], ["y"], name="act")
+        graph = helper.make_graph([matmul, relu], "g", [x, w], [y])
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+
+        result = rbc.build_graph(model)
+        self.assertEqual(
+            result["inputs"],
+            [
+                {"name": "x", "type": "float[3,4]"},
+                {"name": "w", "type": "float[4,2]"},
+            ],
+        )
+        self.assertEqual(result["outputs"], [{"name": "y", "type": "float[3,2]"}])
+        self.assertEqual(
+            result["nodes"],
+            [
+                {"op_type": "MatMul", "inputs": ["x", "w"], "outputs": ["m"]},
+                {
+                    "op_type": "Relu",
+                    "inputs": ["m"],
+                    "outputs": ["y"],
+                    "name": "act",
+                },
+            ],
+        )
+        # No initializers in this model: the key is omitted to keep it small.
+        self.assertNotIn("initializers", result)
+
+    def test_build_graph_lists_initializers_and_excludes_them_from_inputs(self):
+        import numpy as np
+        import onnx
+        from onnx import helper, numpy_helper
+
+        x = helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])
+        y = helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])
+        const = numpy_helper.from_array(np.ones((2,), dtype=np.float32), name="b")
+        add = helper.make_node("Add", ["x", "b"], ["y"])
+        graph = helper.make_graph(
+            [add],
+            "g",
+            [x, helper.make_tensor_value_info("b", onnx.TensorProto.FLOAT, [2])],
+            [y],
+            initializer=[const],
+        )
+        model = helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", 18)]
+        )
+
+        result = rbc.build_graph(model)
+        # ``b`` is an initializer, so it is not listed as a graph input.
+        self.assertEqual(result["inputs"], [{"name": "x", "type": "float[2]"}])
+        self.assertEqual(result["initializers"], ["b"])
+
+    def test_row_from_results_includes_and_carries_over_graph(self):
+        graph = {
+            "inputs": [{"name": "x", "type": "float[2]"}],
+            "outputs": [{"name": "y", "type": "float[2]"}],
+            "nodes": [{"op_type": "Relu", "inputs": ["x"], "outputs": ["y"]}],
+        }
+        results = {
+            "onnxruntime": {"success": True, "error": "", "error_step": ""},
+            "reference": {"success": True, "error": "", "error_step": ""},
+            "onnx_light": {"success": True, "error": "", "error_step": ""},
+        }
+        row = rbc._row_from_results("test_relu", results, graph=graph)
+        self.assertEqual(row["graph"], graph)
+
+        # When the current run cannot build a graph, the previous one is kept.
+        carried = rbc._row_from_results(
+            "test_relu", results, previous={"graph": graph}, graph=None
+        )
+        self.assertEqual(carried["graph"], graph)
+
+
         tests = [
             {"name": "test_a", "model": "model_a", "data_sets": [("in_a", "out_a")]},
             {"name": "test_b", "model": "model_b", "data_sets": [("in_b", "out_b")]},
