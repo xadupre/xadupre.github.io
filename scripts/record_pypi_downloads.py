@@ -39,6 +39,14 @@ DEFAULT_PACKAGES: tuple[str, ...] = (
     "onnxscript",
     "onnx-ir",
     "tf2onnx",
+    "llama-cpp-python",
+    "gguf",
+    "protobuf",
+    "scikit-learn",
+    "tensorflow",
+    "pytorch",
+    "xgboost",
+    "lightgbm",
 )
 
 CSV_FIELDS: tuple[str, ...] = (
