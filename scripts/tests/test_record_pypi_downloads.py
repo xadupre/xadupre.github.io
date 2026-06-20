@@ -25,6 +25,14 @@ class TestRecordPypiDownloads(unittest.TestCase):
             "onnxscript",
             "onnx-ir",
             "tf2onnx",
+            "llama-cpp-python",
+            "gguf",
+            "protobuf",
+            "scikit-learn",
+            "tensorflow",
+            "pytorch",
+            "xgboost",
+            "lightgbm",
         }
         self.assertEqual(set(rpd.DEFAULT_PACKAGES), expected)
 
