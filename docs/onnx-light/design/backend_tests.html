@@ -648,9 +648,7 @@ backend test case through
 <a class="reference external" href="https://onnxruntime.ai/">ONNXRuntime</a>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">unittest</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">ort</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnxruntime.capi._pybind_state</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_all_operator_schema</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.ext_test_case</span><span class="w"> </span><span class="kn">import</span> <span class="n">import_or_skip</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.ext_test_case</span><span class="w"> </span><span class="kn">import</span> <span class="n">import_or_skip</span><span class="p">,</span> <span class="n">InferenceSessionAllTypes</span>
 
 <span class="c1"># The backend test registries are only available in the full build; skip this</span>
 <span class="c1"># module on a reduced build (ONNX_LIGHT_BUILD_KERNELS=OFF).</span>
@@ -659,7 +657,7 @@ backend test case through
 
 <span class="k">def</span><span class="w"> </span><span class="nf">onnxruntime_backend</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="o">*</span><span class="n">inputs</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Runs an ONNX model using ONNXRuntime.</span>
+<span class="sd">    Runs an ONNX model using ONNXRuntime with support for all dtypes.</span>
 
 <span class="sd">    Args:</span>
 <span class="sd">        model: The ONNX model (onnx_light.ModelProto) to run</span>
@@ -668,16 +666,10 @@ backend test case through
 <span class="sd">    Returns:</span>
 <span class="sd">        List of output arrays from the model</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="c1"># Serialize the model to bytes</span>
-    <span class="n">model_bytes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">()</span>
+    <span class="n">sess</span> <span class="o">=</span> <span class="n">InferenceSessionAllTypes</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 
-    <span class="c1"># Create an ONNXRuntime inference session</span>
-    <span class="n">sess</span> <span class="o">=</span> <span class="n">ort</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span><span class="n">model_bytes</span><span class="p">,</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;CPUExecutionProvider&quot;</span><span class="p">])</span>
-
-    <span class="c1"># Get input names from the session</span>
-    <span class="n">input_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">inp</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">inp</span> <span class="ow">in</span> <span class="n">sess</span><span class="o">.</span><span class="n">get_inputs</span><span class="p">()]</span>
-
-    <span class="c1"># Create input dictionary</span>
+    <span class="c1"># Get input names and create feed dict</span>
+    <span class="n">input_names</span> <span class="o">=</span> <span class="p">[</span><span class="n">inp</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">inp</span> <span class="ow">in</span> <span class="n">sess</span><span class="o">.</span><span class="n">_sess</span><span class="o">.</span><span class="n">get_inputs</span><span class="p">()]</span>
     <span class="n">input_dict</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="nb">zip</span><span class="p">(</span><span class="n">input_names</span><span class="p">,</span> <span class="n">inputs</span><span class="p">))</span>
 
     <span class="c1"># Run inference</span>
@@ -697,6 +689,8 @@ backend test case through
 <span class="sd">    Returns:</span>
 <span class="sd">        The highest default-domain opset version ONNX Runtime supports.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">onnxruntime.capi._pybind_state</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_all_operator_schema</span>
+
     <span class="k">return</span> <span class="nb">max</span><span class="p">(</span>
         <span class="n">schema</span><span class="o">.</span><span class="n">since_version</span> <span class="k">for</span> <span class="n">schema</span> <span class="ow">in</span> <span class="n">get_all_operator_schema</span><span class="p">()</span> <span class="k">if</span> <span class="n">schema</span><span class="o">.</span><span class="n">domain</span> <span class="o">==</span> <span class="s2">&quot;&quot;</span>
     <span class="p">)</span>
@@ -774,51 +768,8 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_linearclassifier_int64_binary$&quot;</span><span class="p">,</span>
     <span class="c1"># ORT returns wrong labels for the binary TreeEnsembleClassifier test case.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_treeensembleclassifier_int64_binary$&quot;</span><span class="p">,</span>
-    <span class="c1"># Low-precision Cast/CastLike dtypes are unsupported in ORT.</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E4M3.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E5M2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT8E8M0.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*FLOAT4E2M1.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cast_no_saturate_.*FLOAT8.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*FLOAT8E4M3.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*FLOAT8E5M2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*FLOAT8E8M0.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*FLOAT4E2M1.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_castlike_no_saturate_.*FLOAT8.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*UINT4.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*UINT2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*INT4.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*INT2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_cast_.*BFLOAT16.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*UINT4.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*UINT2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*INT4.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*INT2.*$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_cc_castlike_.*BFLOAT16.*$&quot;</span><span class="p">,</span>
     <span class="c1"># ORT returns ZipMap outputs in a different carrier format.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_zipmap_&quot;</span><span class="p">,</span>
-    <span class="c1"># ORT rejects these QuantizeLinear/DequantizeLinear dtypes or attrs.</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_int16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_uint16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn_zero_point$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e4m3fn_float16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_e5m2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_uint4$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_int4$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_uint2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_int2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_float4e2m1$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_dequantizelinear_blocked$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint16$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_e4m3fn$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_e5m2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint4$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int4$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_uint2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_int2$&quot;</span><span class="p">,</span>
-    <span class="sa">r</span><span class="s2">&quot;^test_quantizelinear_float4e2m1$&quot;</span><span class="p">,</span>
     <span class="c1"># ORT rejects FLOAT16 scales for QLinearMatMul.</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_2D_uint8_float16$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_qlinearmatmul_2D_int8_float16$&quot;</span><span class="p">,</span>
@@ -875,6 +826,25 @@ backend test case through
     <span class="sa">r</span><span class="s2">&quot;^test_cc_gru_batchwise$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_lstm_batchwise$&quot;</span><span class="p">,</span>
     <span class="sa">r</span><span class="s2">&quot;^test_cc_simple_rnn_batchwise$&quot;</span><span class="p">,</span>
+    <span class="c1"># ...</span>
+    <span class="sa">r</span><span class="s2">&quot;e2m1.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;e4m3.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;e5m2.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;float8.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;quantizelinear_u?int2.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;quantizelinear_u?int4.*&quot;</span><span class="p">,</span>
+    <span class="c1"># ...</span>
+    <span class="sa">r</span><span class="s2">&quot;E2M1.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;E4M3.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;E5M2.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;FLOAT8.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;to_BFLOAT16.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;to_U?INT[24].*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;castlike_U?INT[24].*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;cast_U?INT[24].*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;to_STRING&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;prelu_inf.*&quot;</span><span class="p">,</span>
+    <span class="sa">r</span><span class="s2">&quot;sequence.*&quot;</span><span class="p">,</span>
 <span class="p">]</span>
 
 <span class="c1"># Add opset-gated exclusions only for opset versions ONNX Runtime cannot load yet.</span>
