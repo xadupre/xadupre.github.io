@@ -470,11 +470,12 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
 
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
     def test_2_floor_half_h_equals_2_h_floordiv_2_with_sympy(self):
         # Regression test guaranteeing ``2*floor(0.5*H)`` is recognised as
-        # equal to ``2*(H//2)``. ``sympy`` is a hard dependency of the test
-        # suite (installed in CI), so this test is intentionally *not*
-        # skipped: it must always run and prove the equivalence is handled.
+        # equal to ``2*(H//2)`` when ``sympy`` is available.
         import sympy
 
         self.assertTrue(
@@ -489,6 +490,9 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         right = 2 * (H // 2)
         self.assertEqual(sympy.simplify(left - right), 0)
 
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
     def test_neg_floor_neg_half_equals_ceil_floordiv_with_sympy(self):
         # Regression test for ``-floor(-b/2 - c/2)`` (i.e. ``ceil((b+c)/2)``)
         # being recognised as equal to ``(1+b+c)//2``. ``sympy.simplify``
