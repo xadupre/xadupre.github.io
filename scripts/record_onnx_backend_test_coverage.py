@@ -371,6 +371,20 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+def build_graph(model) -> Dict[str, Any]:
+    """Return an SVG rendering of ``model``'s graph.
+
+    The conversion is delegated to :func:`onnx_light.tools.to_svg` so the
+    dashboard reuses the canonical ``onnx-light`` renderer instead of
+    re-implementing the graph layout in JavaScript. The returned mapping
+    stores the self-contained ``<svg>`` document under the ``"svg"`` key,
+    which the dashboard embeds directly when unfolding a test.
+    """
+    from onnx_light.tools import to_svg
+
+    return {"svg": to_svg(model)}
+
+
 # ``ml_dtypes`` packed sub-byte integer dtypes. They expose ``kind == "V"``
 # (void) rather than ``"i"`` / ``"u"`` and arithmetic on them wraps around
 # inside the narrow range, so they need widening before numeric comparison.
@@ -651,6 +665,7 @@ def _row_from_results(
     versions: Optional[Dict[str, str]] = None,
     now_iso: Optional[str] = None,
     tag: str = "",
+    graph: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Build a dashboard row, carrying over per-backend ``last_pass`` info.
 
@@ -668,6 +683,10 @@ def _row_from_results(
         row["tag"] = tag
     elif previous.get("tag"):
         row["tag"] = previous["tag"]
+    if graph is not None:
+        row["graph"] = graph
+    elif previous.get("graph"):
+        row["graph"] = previous["graph"]
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -760,6 +779,10 @@ def build_payload(
         model = test["model"]
         data_sets = test["data_sets"]
         results: Dict[str, Dict[str, Any]] = {}
+        try:
+            graph = build_graph(model)
+        except Exception:  # noqa: BLE001 - graph is a best-effort annotation
+            graph = None
         for backend in BACKENDS:
             try:
                 info = run(model, data_sets, backend, rtol=rtol, atol=atol)
@@ -787,6 +810,7 @@ def build_payload(
                 versions=version_map,
                 now_iso=now_iso,
                 tag=str(test.get("tag", "") or ""),
+                graph=graph,
             )
         )
         if (idx + 1) % 50 == 0:

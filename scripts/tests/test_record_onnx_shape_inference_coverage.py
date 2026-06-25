@@ -440,6 +440,47 @@ class TestCompareSnapshotWithModel(unittest.TestCase):
         by_name = {d["name"]: d for d in details}
         self.assertTrue(by_name["Y"]["ok"], by_name["Y"].get("reason"))
 
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
+    def test_2_floor_half_h_equals_2_h_floordiv_2_with_sympy(self):
+        # Regression test guaranteeing ``2*floor(0.5*H)`` is recognised as
+        # equal to ``2*(H//2)`` when ``sympy`` is available.
+        import sympy
+
+        self.assertTrue(
+            rsi._symbolic_dims_equal("2*floor(0.5*H)", "2*(H//2)"),
+            "2*floor(0.5*H) must be recognised as equal to 2*(H//2)",
+        )
+
+        # Verify the underlying equivalence directly with sympy so the test
+        # fails loudly if the parsing/normalisation logic regresses.
+        H = sympy.Symbol("H")
+        left = 2 * sympy.floor(sympy.Rational(1, 2) * H)
+        right = 2 * (H // 2)
+        self.assertEqual(sympy.simplify(left - right), 0)
+
+    @unittest.skipUnless(
+        _HAS_SYMPY, "sympy is required to compare equivalent symbolic dims"
+    )
+    def test_neg_floor_neg_half_equals_ceil_floordiv_with_sympy(self):
+        # Regression test for ``-floor(-b/2 - c/2)`` (i.e. ``ceil((b+c)/2)``)
+        # being recognised as equal to ``(1+b+c)//2``. ``sympy.simplify``
+        # cannot prove this floor/ceil identity, so ``_symbolic_dims_equal``
+        # falls back to a numeric integer-grid check.
+        self.assertTrue(
+            rsi._symbolic_dims_equal("-floor(-b/2 - c/2)", "(1+b+c)//2"),
+            "-floor(-b/2 - c/2) must be recognised as equal to (1+b+c)//2",
+        )
+
+    def test_distinct_symbolic_dims_are_not_equal_with_sympy(self):
+        # The numeric-grid fallback must not produce false positives for
+        # genuinely different symbolic dims, including subtle differences
+        # over the same set of variables.
+        self.assertFalse(rsi._symbolic_dims_equal("a+b", "a+c"))
+        self.assertFalse(rsi._symbolic_dims_equal("a+b", "a+b+1"))
+        self.assertFalse(rsi._symbolic_dims_equal("-floor(-b/2 - c/2)", "(b+c)//2"))
+
     def test_symbolic_vs_concrete_dim_is_flagged(self):
         snap, wrong = self._make_symbolic_model("N", 4)
         details = rsi._compare_snapshot_with_model(snap, wrong)
