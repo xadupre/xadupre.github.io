@@ -23,6 +23,7 @@ PAGES = [
     ("dashboard/onnx-light/pr-stats.html", 2),
     ("dashboard/onnx-light/schema-comparison.html", 2),
     ("dashboard/onnx-light/shape-inference-coverage.html", 2),
+    ("dashboard/onnx-light/inplace-reuse-coverage.html", 2),
     ("dashboard/yet-another-onnx-builder/build-durations.html", 2),
     ("dashboard/yet-another-onnx-builder/model-validate.html", 2),
     ("dashboard/yet-another-onnx-builder/package-size.html", 2),
