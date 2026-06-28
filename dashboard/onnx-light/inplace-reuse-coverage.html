@@ -138,6 +138,63 @@ table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
 .message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
 .message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
 .empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+table.comparison tbody tr.test-row { cursor: pointer; }
+table.comparison tbody tr.detail-row td {
+  background: rgba(13, 17, 23, 0.75);
+  padding: 0;
+}
+table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
+.toggle-arrow { color: #8b949e; margin-right: 0.4em; display: inline-block; width: 0.8em; }
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin-top: 0.4em;
+}
+.detail-table th, .detail-table td {
+  text-align: left;
+  padding: 0.3em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.18);
+  vertical-align: top;
+}
+.detail-table th { color: #8b949e; font-weight: normal; }
+.detail-table td.ok { color: #3fb950; }
+.detail-table td.ko { color: #f85149; }
+.detail-table td.muted { color: #8b949e; font-size: 0.85em; }
+.detail-error {
+  color: #f85149;
+  font-size: 0.85em;
+  margin-bottom: 0.4em;
+}
+.detail-graph {
+  margin-top: 0.8em;
+  padding: 0.6em 0.8em;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  overflow-x: auto;
+}
+.detail-graph-title {
+  color: #8b949e;
+  font-size: 0.8em;
+  margin-bottom: 0.4em;
+}
+.detail-graph .mermaid {
+  text-align: center;
+  font-size: 0.75em;
+}
+.detail-graph .mermaid svg {
+  max-width: 900px;
+  max-height: 600px;
+  height: auto;
+  width: auto;
+}
+.detail-graph-error {
+  color: #f85149;
+  font-size: 0.8em;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
 </style>
 </head>
 <body>
@@ -147,6 +204,7 @@ table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
   <p class="intro">
     Exact-match score of the <code>onnx_light</code> inplace-reuse metadata
     algorithm on backend test cases tagged <code>inplace</code>.
+    Click a row to see the per-node metadata detail and the model graph.
   </p>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -187,6 +245,7 @@ const state = {
   rows: [],
   search: "",
   sort: { key: "name", dir: "asc" },
+  expanded: new Set(),
 };
 
 function showMessage(text, kind) {
@@ -285,6 +344,137 @@ function compareRows(a, b) {
   return dir * String(va).localeCompare(String(vb));
 }
 
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  if (row.error) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "Error: " + row.error;
+    wrap.appendChild(div);
+  }
+
+  const table = document.createElement("table");
+  table.className = "detail-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["node", "op type", "key", "expected", "actual", "match"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const node of row.nodes || []) {
+    const expected = node.expected || {};
+    const actual = node.actual || {};
+    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+    if (!keys.length) {
+      // Node with no metadata: show a single placeholder row
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = String(node.index);
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      tdOp.className = "muted";
+      tdOp.textContent = node.op_type || "—";
+      tr.appendChild(tdOp);
+      for (let i = 0; i < 4; i++) {
+        const td = document.createElement("td");
+        td.className = "muted";
+        td.textContent = "—";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+      continue;
+    }
+    keys.forEach((key, keyIndex) => {
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = keyIndex === 0 ? String(node.index) : "";
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      if (keyIndex === 0) {
+        tdOp.className = node.op_type ? "" : "muted";
+        tdOp.textContent = node.op_type || "—";
+      } else {
+        tdOp.textContent = "";
+      }
+      tr.appendChild(tdOp);
+      const tdKey = document.createElement("td");
+      tdKey.textContent = key.replace("onnx_light.", "");
+      tdKey.title = key;
+      tr.appendChild(tdKey);
+      const expVal = expected[key] !== undefined ? String(expected[key]) : "—";
+      const actVal = actual[key] !== undefined ? String(actual[key]) : "—";
+      const match = expected[key] === actual[key];
+      const tdExp = document.createElement("td");
+      tdExp.textContent = expVal;
+      tr.appendChild(tdExp);
+      const tdAct = document.createElement("td");
+      tdAct.textContent = actVal;
+      tr.appendChild(tdAct);
+      const tdMatch = document.createElement("td");
+      tdMatch.className = match ? "ok" : "ko";
+      tdMatch.textContent = match ? "✓" : "✗";
+      tr.appendChild(tdMatch);
+      tbody.appendChild(tr);
+    });
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  if (row.mermaid) {
+    const graphWrap = document.createElement("div");
+    graphWrap.className = "detail-graph";
+    const title = document.createElement("div");
+    title.className = "detail-graph-title";
+    title.textContent = "Model graph";
+    graphWrap.appendChild(title);
+    const mermaidDiv = document.createElement("div");
+    mermaidDiv.className = "mermaid";
+    mermaidDiv.textContent = row.mermaid;
+    graphWrap.appendChild(mermaidDiv);
+    wrap.appendChild(graphWrap);
+    renderMermaid(mermaidDiv);
+  }
+
+  return wrap;
+}
+
+let _mermaidLoader = null;
+function loadMermaid() {
+  if (_mermaidLoader) return _mermaidLoader;
+  _mermaidLoader = import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")
+    .then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+      return mermaid;
+    });
+  return _mermaidLoader;
+}
+
+let _mermaidUid = 0;
+function renderMermaid(targetDiv) {
+  const source = targetDiv.textContent;
+  loadMermaid()
+    .then((mermaid) => mermaid.render("inplaceMermaid_" + (++_mermaidUid), source))
+    .then(({ svg, bindFunctions }) => {
+      targetDiv.innerHTML = svg;
+      if (bindFunctions) bindFunctions(targetDiv);
+    })
+    .catch((err) => {
+      const errDiv = document.createElement("div");
+      errDiv.className = "detail-graph-error";
+      errDiv.textContent = "Failed to render Mermaid graph: " + (err && err.message ? err.message : err);
+      targetDiv.innerHTML = "";
+      targetDiv.appendChild(errDiv);
+    });
+}
+
 function renderRows() {
   const tbody = document.getElementById("rowsBody");
   tbody.innerHTML = "";
@@ -315,8 +505,13 @@ function renderRows() {
   }
   for (const row of rows) {
     const tr = document.createElement("tr");
+    tr.className = "test-row";
 
     const tdName = document.createElement("td");
+    const arrow = document.createElement("span");
+    arrow.className = "toggle-arrow";
+    arrow.textContent = state.expanded.has(row.name) ? "▼" : "▶";
+    tdName.appendChild(arrow);
     tdName.appendChild(document.createTextNode(formatTestName(row.name)));
     tr.appendChild(tdName);
 
@@ -340,7 +535,23 @@ function renderRows() {
     tdDetails.textContent = summarizeRow(row);
     tr.appendChild(tdDetails);
 
+    tr.addEventListener("click", () => {
+      if (state.expanded.has(row.name)) state.expanded.delete(row.name);
+      else state.expanded.add(row.name);
+      renderRows();
+    });
+
     tbody.appendChild(tr);
+
+    if (state.expanded.has(row.name)) {
+      const detailTr = document.createElement("tr");
+      detailTr.className = "detail-row";
+      const detailTd = document.createElement("td");
+      detailTd.colSpan = 5;
+      detailTd.appendChild(renderDetailFor(row));
+      detailTr.appendChild(detailTd);
+      tbody.appendChild(detailTr);
+    }
   }
 }
 

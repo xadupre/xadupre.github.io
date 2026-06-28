@@ -70,6 +70,53 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         self.assertEqual(row["matched_metadata"], 1)
         self.assertEqual(row["total_metadata"], 2)
         self.assertEqual(row["nodes"][2]["op_type"], "Abs")
+        self.assertNotIn("mermaid", row)
+
+    def test_score_test_includes_mermaid_when_provided(self):
+        row = ric._score_test(
+            "test_with_mermaid",
+            expected_nodes=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            actual_nodes=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            node_ops=["Abs"],
+            mermaid="flowchart TD\n    A --> B",
+        )
+        self.assertTrue(row["success"])
+        self.assertIn("mermaid", row)
+        self.assertEqual(row["mermaid"], "flowchart TD\n    A --> B")
+
+    def test_score_test_omits_mermaid_when_empty(self):
+        row = ric._score_test(
+            "test_no_mermaid",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            mermaid="",
+        )
+        self.assertNotIn("mermaid", row)
+
+    def test_build_payload_passes_mermaid(self):
+        tests = [
+            {
+                "name": "test_mermaid",
+                "model": "model_m",
+                "expected_nodes": [{"onnx_light.inplace_reuse": "0:0:equal"}],
+                "node_ops": ["Add"],
+                "mermaid": "flowchart TD\n    in_X --> op_Add --> out_Y",
+            }
+        ]
+
+        def fake_run(model):
+            return {"actual_nodes": [{"onnx_light.inplace_reuse": "0:0:equal"}]}
+
+        payload = ric.build_payload(
+            tag="inplace",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        row = payload["tests"][0]
+        self.assertIn("mermaid", row)
+        self.assertEqual(row["mermaid"], "flowchart TD\n    in_X --> op_Add --> out_Y")
 
     def test_build_payload_aggregates_totals(self):
         tests = [
