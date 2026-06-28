@@ -24,6 +24,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -105,6 +106,206 @@ def _clear_node_metadata(node) -> None:
     del node.metadata_props[:]
 
 
+# ---------------------------------------------------------------------------
+# Mermaid graph rendering (best-effort; failures are silently ignored)
+# ---------------------------------------------------------------------------
+
+def _mermaid_escape(text: str) -> str:
+    """Escape ``text`` so it can appear inside a Mermaid ``"..."`` label."""
+    return (
+        str(text)
+        .replace("\\", "\\\\")
+        .replace('"', "&quot;")
+        .replace("\n", " ")
+    )
+
+
+def _mermaid_dtype_name(onnx_mod: Any, dtype: int) -> str:
+    if not dtype:
+        return ""
+    try:
+        return onnx_mod.TensorProto.DataType.Name(dtype)
+    except Exception:  # noqa: BLE001
+        return str(dtype)
+
+
+def _mermaid_format_type(onnx_mod: Any, type_proto: Any) -> str:
+    """Render an ``onnx.TypeProto`` as ``DTYPE[d0,d1,...]``."""
+    if type_proto is None:
+        return ""
+    tensor_type = getattr(type_proto, "tensor_type", None)
+    if tensor_type is None or not getattr(tensor_type, "elem_type", 0):
+        return ""
+    dtype = _mermaid_dtype_name(onnx_mod, tensor_type.elem_type)
+    dims: List[str] = []
+    if tensor_type.HasField("shape"):
+        for dim in tensor_type.shape.dim:
+            if dim.HasField("dim_value"):
+                dims.append(str(dim.dim_value))
+            elif dim.HasField("dim_param") and dim.dim_param:
+                dims.append(dim.dim_param)
+            else:
+                dims.append("?")
+    return f"{dtype}[{','.join(dims)}]" if dims else dtype
+
+
+def _render_model_as_mermaid(model: Any) -> str:
+    """Render ``model`` as a Mermaid ``flowchart TD`` string."""
+    import onnx
+
+    if not hasattr(model, "graph"):
+        return ""
+
+    annotated = model
+    try:
+        annotated = onnx.shape_inference.infer_shapes(
+            model, strict_mode=False, check_type=False
+        )
+    except Exception:  # noqa: BLE001
+        annotated = model
+
+    edge_types: Dict[str, str] = {}
+
+    def _collect_types(graph: Any) -> None:
+        for value_info in (
+            list(graph.input) + list(graph.output) + list(graph.value_info)
+        ):
+            label = _mermaid_format_type(onnx, value_info.type)
+            if label:
+                edge_types.setdefault(value_info.name, label)
+        for node in graph.node:
+            for attr in node.attribute:
+                if attr.HasField("g"):
+                    _collect_types(attr.g)
+                for sub in attr.graphs:
+                    _collect_types(sub)
+
+    _collect_types(annotated.graph)
+
+    used_ids: set = set()
+
+    def _make_id(prefix: str, name: str) -> str:
+        sanitized = re.sub(r"[^0-9A-Za-z_]", "_", name) or "x"
+        base = f"{prefix}_{sanitized}"
+        candidate = base
+        index = 1
+        while candidate in used_ids:
+            index += 1
+            candidate = f"{base}_{index}"
+        used_ids.add(candidate)
+        return candidate
+
+    lines: List[str] = ["flowchart TD"]
+    edges: List[str] = []
+    graph_records: List[
+        Tuple[List[Tuple[str, Any]], List[Tuple[str, str]], Dict[str, str]]
+    ] = []
+
+    def _declare(graph: Any, indent: int, parent_scope: Dict[str, str]) -> None:
+        pad = "    " * indent
+        local: Dict[str, str] = {}
+        initializer_names = {init.name for init in graph.initializer}
+
+        for value_info in graph.input:
+            if value_info.name in initializer_names:
+                continue
+            node_id = _make_id("in", value_info.name)
+            type_label = edge_types.get(value_info.name, "")
+            label = value_info.name + (f"<br>{type_label}" if type_label else "")
+            lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
+            local[value_info.name] = node_id
+
+        for initializer in graph.initializer:
+            node_id = _make_id("init", initializer.name)
+            dtype = _mermaid_dtype_name(onnx, initializer.data_type)
+            dims = ",".join(str(d) for d in initializer.dims)
+            label = initializer.name + (f"<br>{dtype}[{dims}]" if dtype else "")
+            lines.append(f'{pad}{node_id}[("{_mermaid_escape(label)}")]')
+            local[initializer.name] = node_id
+
+        op_nodes: List[Tuple[str, Any]] = []
+        subgraphs: List[Tuple[str, str, Any]] = []
+        for index, node in enumerate(graph.node):
+            node_id = _make_id("op", node.name or f"{node.op_type}_{index}")
+            op_nodes.append((node_id, node))
+            label = node.op_type + (f"<br>{node.name}" if node.name else "")
+            lines.append(f'{pad}{node_id}["{_mermaid_escape(label)}"]')
+            for out_name in node.output:
+                if out_name:
+                    local.setdefault(out_name, node_id)
+            for attr in node.attribute:
+                attr_graphs: List[Any] = []
+                if attr.HasField("g"):
+                    attr_graphs.append(attr.g)
+                attr_graphs.extend(attr.graphs)
+                for sub in attr_graphs:
+                    sg_id = _make_id("sg", f"{node.op_type}_{attr.name}")
+                    sg_label = f"{node.op_type}.{attr.name}"
+                    subgraphs.append((sg_id, sg_label, sub))
+
+        scope = {**parent_scope, **local}
+
+        output_entries: List[Tuple[str, str]] = []
+        for value_info in graph.output:
+            node_id = _make_id("out", value_info.name)
+            output_entries.append((value_info.name, node_id))
+            type_label = edge_types.get(value_info.name, "")
+            label = value_info.name + (f"<br>{type_label}" if type_label else "")
+            lines.append(f'{pad}{node_id}(["{_mermaid_escape(label)}"])')
+
+        graph_records.append((op_nodes, output_entries, scope))
+
+        for sg_id, sg_label, sub in subgraphs:
+            lines.append(f'{pad}subgraph {sg_id}["{_mermaid_escape(sg_label)}"]')
+            _declare(sub, indent + 1, scope)
+            lines.append(f"{pad}end")
+
+    _declare(annotated.graph, 1, {})
+
+    for op_nodes, output_entries, scope in graph_records:
+        for node_id, node in op_nodes:
+            for in_name in node.input:
+                if not in_name:
+                    continue
+                source_id = scope.get(in_name)
+                if not source_id:
+                    continue
+                type_label = edge_types.get(in_name, "")
+                edge_label = in_name + (f" : {type_label}" if type_label else "")
+                edges.append(
+                    f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {node_id}'
+                )
+
+        for out_name, out_id in output_entries:
+            source_id = scope.get(out_name)
+            if not source_id or source_id == out_id:
+                continue
+            type_label = edge_types.get(out_name, "")
+            edge_label = out_name + (f" : {type_label}" if type_label else "")
+            edges.append(
+                f'    {source_id} -- "{_mermaid_escape(edge_label)}" --> {out_id}'
+            )
+
+    return "\n".join(lines + edges)
+
+
+def model_to_mermaid(model: Any) -> str:
+    """Return a Mermaid ``flowchart TD`` string for ``model``.
+
+    Returns an empty string when ``onnx`` cannot be imported, when
+    ``model`` is not a usable ``onnx.ModelProto`` or when rendering
+    fails (best-effort, never a hard requirement).
+    """
+    try:
+        import onnx  # noqa: F401
+    except ImportError:
+        return ""
+    try:
+        return _render_model_as_mermaid(model)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     """Return backend tests whose ``tag`` matches ``tag``.
 
@@ -134,6 +335,7 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "model": model,
                 "expected_nodes": expected_nodes,
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
+                "mermaid": model_to_mermaid(model),
             }
         )
     discovered.sort(key=lambda item: item["name"])
@@ -176,7 +378,14 @@ def _score_test(
     node_ops: Optional[List[str]] = None,
     error: str = "",
     memory: Optional[List[Any]] = None,
+    mermaid: str = "",
 ) -> Dict[str, Any]:
+    """Score a single test and return a row dict for the JSON payload.
+
+    The ``"mermaid"`` key is only present in the returned dict when a
+    non-empty ``mermaid`` string is provided, so consumers should use
+    ``row.get("mermaid", "")`` to retrieve it safely.
+    """
     node_ops = list(node_ops or [])
     total_nodes = max(len(expected_nodes), len(actual_nodes), len(node_ops))
     nodes: List[Dict[str, Any]] = []
@@ -208,7 +417,7 @@ def _score_test(
             }
         )
 
-    return {
+    row: Dict[str, Any] = {
         "name": name,
         "success": success,
         "error": error,
@@ -218,6 +427,9 @@ def _score_test(
         "total_metadata": total_metadata,
         "nodes": nodes,
     }
+    if mermaid:
+        row["mermaid"] = mermaid
+    return row
 
 
 def build_payload(
@@ -247,6 +459,7 @@ def build_payload(
                 list(info.get("actual_nodes", [])),
                 node_ops=list(test.get("node_ops", [])),
                 memory=list(info.get("memory", [])) if info.get("memory") is not None else None,
+                mermaid=test.get("mermaid", ""),
             )
         except Exception as exc:  # noqa: BLE001 - keep recording other tests
             _log(f"Unhandled error for {test['name']}: {exc}")
@@ -257,6 +470,7 @@ def build_payload(
                 [],
                 node_ops=list(test.get("node_ops", [])),
                 error=str(exc) or type(exc).__name__,
+                mermaid=test.get("mermaid", ""),
             )
 
         totals["tests"]["pass" if row["success"] else "fail"] += 1
