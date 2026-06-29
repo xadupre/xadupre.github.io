@@ -49,8 +49,11 @@ by a fast C++ AST engine.  This example walks through the main entry points:
 * ``dim_add``, ``dim_sub``, ``dim_mul``, ``dim_div``, ``dim_mod``,
   ``dim_max``, ``dim_min`` — arithmetic on dimensions that may be either
   concrete integers or symbolic strings.
+* :func:`~onnx_light.onnx_optim.expressions.dim_ranges_from_expressions` —
+  infer tight ``[lower, upper]`` ranges for each dimension variable from a
+  set of equality constraints.
 
-.. GENERATED FROM PYTHON SOURCE LINES 34-55
+.. GENERATED FROM PYTHON SOURCE LINES 37-61
 
 .. code-block:: Python
 
@@ -58,6 +61,8 @@ by a fast C++ AST engine.  This example walks through the main entry points:
     from __future__ import annotations
 
     from onnx_light.onnx_optim.expressions import (
+        INFINITY,
+        DimRange,
         compare_expressions,
         dim_add,
         dim_div,
@@ -66,6 +71,7 @@ by a fast C++ AST engine.  This example walks through the main entry points:
         dim_mod,
         dim_mul,
         dim_multi_mul,
+        dim_ranges_from_expressions,
         dim_sub,
         evaluate_expression,
         parse_expression_tokens,
@@ -82,7 +88,7 @@ by a fast C++ AST engine.  This example walks through the main entry points:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 56-64
+.. GENERATED FROM PYTHON SOURCE LINES 62-70
 
 Simplifying expressions
 +++++++++++++++++++++++
@@ -93,7 +99,7 @@ including identity folding, common-factor cancellation, constant folding,
 and commutative reordering.  When the result is a pure integer it is
 returned as ``int``; otherwise a simplified string is returned.
 
-.. GENERATED FROM PYTHON SOURCE LINES 64-87
+.. GENERATED FROM PYTHON SOURCE LINES 70-93
 
 .. code-block:: Python
 
@@ -139,7 +145,7 @@ returned as ``int``; otherwise a simplified string is returned.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 88-95
+.. GENERATED FROM PYTHON SOURCE LINES 94-101
 
 Comparing two expressions
 +++++++++++++++++++++++++
@@ -149,7 +155,7 @@ Comparing two expressions
 non-zero variable coefficients.  An empty dict means the two
 expressions are equal under linear arithmetic.
 
-.. GENERATED FROM PYTHON SOURCE LINES 95-102
+.. GENERATED FROM PYTHON SOURCE LINES 101-108
 
 .. code-block:: Python
 
@@ -174,7 +180,7 @@ expressions are equal under linear arithmetic.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 103-112
+.. GENERATED FROM PYTHON SOURCE LINES 109-118
 
 :func:`compare_expressions` goes one step further: assuming every token is
 positive or null, it reports whether the first expression is
@@ -186,7 +192,7 @@ the second. The returned
 :class:`~onnx_light.onnx_optim.expressions.ExpressionComparison` exposes the
 ``result`` and the simplified ``difference`` ``expr2 - expr1``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-118
+.. GENERATED FROM PYTHON SOURCE LINES 118-124
 
 .. code-block:: Python
 
@@ -210,7 +216,7 @@ the second. The returned
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 119-124
+.. GENERATED FROM PYTHON SOURCE LINES 125-130
 
 Evaluating with concrete values
 +++++++++++++++++++++++++++++++
@@ -218,7 +224,7 @@ Evaluating with concrete values
 :func:`evaluate_expression` takes an expression string and a mapping
 from variable names to ``int`` values, and returns the integer result.
 
-.. GENERATED FROM PYTHON SOURCE LINES 124-133
+.. GENERATED FROM PYTHON SOURCE LINES 130-139
 
 .. code-block:: Python
 
@@ -246,7 +252,7 @@ from variable names to ``int`` values, and returns the integer result.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 134-141
+.. GENERATED FROM PYTHON SOURCE LINES 140-147
 
 Extracting variable names
 +++++++++++++++++++++++++
@@ -256,7 +262,7 @@ names (``Name`` AST nodes) referenced in an expression.  It returns
 the original string inside a set when parsing fails, rather than
 raising an exception.
 
-.. GENERATED FROM PYTHON SOURCE LINES 141-145
+.. GENERATED FROM PYTHON SOURCE LINES 147-151
 
 .. code-block:: Python
 
@@ -278,7 +284,7 @@ raising an exception.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 146-152
+.. GENERATED FROM PYTHON SOURCE LINES 152-158
 
 Renaming variables
 ++++++++++++++++++
@@ -287,7 +293,7 @@ Renaming variables
 mapping.  It also normalises ``Max(a, b)`` calls to the ``a^b`` form
 before renaming.
 
-.. GENERATED FROM PYTHON SOURCE LINES 152-164
+.. GENERATED FROM PYTHON SOURCE LINES 158-170
 
 .. code-block:: Python
 
@@ -318,7 +324,7 @@ before renaming.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 165-172
+.. GENERATED FROM PYTHON SOURCE LINES 171-178
 
 Arithmetic on dimensions
 ++++++++++++++++++++++++
@@ -328,7 +334,7 @@ may be either concrete integers or symbolic strings.  When both
 operands are integers the result is an integer; when at least one is
 symbolic the result is a simplified expression string.
 
-.. GENERATED FROM PYTHON SOURCE LINES 172-193
+.. GENERATED FROM PYTHON SOURCE LINES 178-199
 
 .. code-block:: Python
 
@@ -379,7 +385,75 @@ symbolic the result is a simplified expression string.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 194-201
+.. GENERATED FROM PYTHON SOURCE LINES 200-214
+
+Inferring dimension ranges from equality constraints
++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+:func:`dim_ranges_from_expressions` derives tight ``[lower, upper]`` ranges
+for each dimension variable given a list of equality constraints between
+symbolic dimension expressions, as arises when matching the shapes of two
+ONNX inputs.
+
+Supported pattern: ``var // d1 // d2 // ... // dn == value``, which yields
+``var ∈ [value * P, value * P + P - 1]`` where ``P = d1 * d2 * ... * dn``.
+Both sides of each equality are tried; the result is a dict mapping each
+variable name to a :class:`DimRange` with inclusive ``lower`` and ``upper``
+bounds.  When ``upper`` equals ``lower`` the variable is exactly constrained.
+When no finite upper bound exists, ``upper`` is set to ``INFINITY``.
+
+.. GENERATED FROM PYTHON SOURCE LINES 214-241
+
+.. code-block:: Python
+
+
+    # add(x[a,b], y[d//5,1])  →  a == d//5
+    # a is exactly d//5; d ∈ [5*a, 4+5*a]
+    r = dim_ranges_from_expressions([("a", "d//5")])
+    print("a:", r["a"].lower, r["a"].upper)  # exact: a == d//5
+    print("d:", r["d"].lower, r["d"].upper)  # range: 5*a <= d <= 4+5*a
+    print("isinstance DimRange:", isinstance(r["a"], DimRange))
+
+    # Numeric equality: a == 3  →  a is exactly 3
+    r2 = dim_ranges_from_expressions([("a", "3")])
+    print("a (numeric):", r2["a"].lower, r2["a"].upper)
+
+    # Double floor-division chain: a == d//10  →  d ∈ [10*a, 9+10*a]
+    r3 = dim_ranges_from_expressions([("a", "d//10")])
+    print("d (d//10):", r3["d"].lower, r3["d"].upper)
+
+    # Variables without a recognised pattern are absent from the result.
+    r4 = dim_ranges_from_expressions([("x+y", "5")])
+    print("'x' in result:", "x" in r4)
+
+    # Filter to a subset of tokens.
+    r5 = dim_ranges_from_expressions([("a", "d//5")], tokens=["d"])
+    print("filtered to d:", r5["d"].lower, r5["d"].upper)
+
+    # The INFINITY sentinel marks an unbounded upper bound.
+    print("INFINITY:", INFINITY)
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    a: d//5 d//5
+    d: 5*a 5*a+4
+    isinstance DimRange: True
+    a (numeric): 3 3
+    d (d//10): 10*a 10*a+9
+    'x' in result: False
+    filtered to d: 5*a 5*a+4
+    INFINITY: +inf
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 242-249
 
 End-to-end: deriving the output shape of a Reshape node
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -389,7 +463,7 @@ last two dimensions of a ``[batch, seq_length, heads, head_dim]``
 tensor.  The output shape is ``[batch, seq_length, heads * head_dim]``.
 The ``dim_*`` helpers let us compute this symbolically.
 
-.. GENERATED FROM PYTHON SOURCE LINES 201-218
+.. GENERATED FROM PYTHON SOURCE LINES 249-266
 
 .. code-block:: Python
 
@@ -425,7 +499,7 @@ The ``dim_*`` helpers let us compute this symbolically.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 219-226
+.. GENERATED FROM PYTHON SOURCE LINES 267-274
 
 Plot — Expression simplification effectiveness
 ++++++++++++++++++++++++++++++++++++++++++++++
@@ -435,7 +509,7 @@ expression complexity, measured by string length (a simple proxy for
 AST size). Bars show the character count before and after simplification
 for a set of representative expressions.
 
-.. GENERATED FROM PYTHON SOURCE LINES 226-281
+.. GENERATED FROM PYTHON SOURCE LINES 274-329
 
 .. code-block:: Python
 
@@ -509,7 +583,7 @@ for a set of representative expressions.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.290 seconds)
+   **Total running time of the script:** (0 minutes 0.285 seconds)
 
 
 .. _sphx_glr_download_auto_examples_optimization_plot_expressions.py:
