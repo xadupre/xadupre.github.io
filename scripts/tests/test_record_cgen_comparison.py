@@ -71,6 +71,20 @@ class TestMergeRows(unittest.TestCase):
         self.assertEqual(rows[0]["onnx_light_source_url"], "https://raw.example.com/abs.cc")
         self.assertEqual(rows[0]["cgen_source_url"], "https://raw.example.com/abs_op.c.j2")
 
+    def test_merge_with_source_code_map(self):
+        light = [self._make_light("Abs")]
+        cgen = [self._make_cgen("Abs")]
+        cgen_code_map = {("ai.onnx", "Abs"): "/* generated C source */"}
+        rows = rcc.merge_rows(cgen, light, cgen_source_code_map=cgen_code_map)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["cgen_source_code"], "/* generated C source */")
+
+    def test_merge_no_source_code_when_not_in_map(self):
+        light = [self._make_light("Abs")]
+        cgen = [self._make_cgen("Abs")]
+        rows = rcc.merge_rows(cgen, light, cgen_source_code_map={})
+        self.assertNotIn("cgen_source_code", rows[0])
+
     def test_merge_no_source_url_when_not_found(self):
         light = [self._make_light("Abs")]
         cgen = []
@@ -198,6 +212,89 @@ class TestComputeTotals(unittest.TestCase):
         self.assertEqual(totals["only_onnx_light"], 1)
         self.assertEqual(totals["only_cgen"], 1)
         self.assertEqual(totals["neither"], 1)
+
+
+class TestBuildOpToTestModelMap(unittest.TestCase):
+    def _make_model(self, op_type: str, domain: str = "") -> "onnx.ModelProto":  # type: ignore[name-defined]
+        import onnx  # noqa: PLC0415
+        from onnx import helper, TensorProto  # noqa: PLC0415
+
+        node = helper.make_node(op_type, ["x"], ["y"])
+        node.domain = domain
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
+            [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
+        )
+        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 20)])
+
+    def test_single_node_models_indexed(self):
+        import onnx  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create test_abs directory
+            abs_dir = os.path.join(tmpdir, "test_abs")
+            os.makedirs(abs_dir)
+            onnx.save(self._make_model("Abs"), os.path.join(abs_dir, "model.onnx"))
+
+            result = rcc.build_op_to_test_model_map(tmpdir)
+            self.assertIn(("ai.onnx", "Abs"), result)
+            self.assertTrue(result[("ai.onnx", "Abs")].endswith("model.onnx"))
+
+    def test_multi_node_models_skipped(self):
+        import onnx  # noqa: PLC0415
+        from onnx import helper, TensorProto  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a two-node model → should be skipped
+            multi_dir = os.path.join(tmpdir, "test_multi")
+            os.makedirs(multi_dir)
+            node1 = helper.make_node("Abs", ["x"], ["y"])
+            node2 = helper.make_node("Relu", ["y"], ["z"])
+            graph = helper.make_graph(
+                [node1, node2],
+                "g",
+                [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
+                [helper.make_tensor_value_info("z", TensorProto.FLOAT, [1])],
+            )
+            model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 20)])
+            onnx.save(model, os.path.join(multi_dir, "model.onnx"))
+
+            result = rcc.build_op_to_test_model_map(tmpdir)
+            # Neither Abs nor Relu should be indexed from this multi-node model
+            self.assertNotIn(("ai.onnx", "Abs"), result)
+            self.assertNotIn(("ai.onnx", "Relu"), result)
+
+    def test_missing_model_file_skipped(self):
+        import tempfile  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Directory without model.onnx
+            empty_dir = os.path.join(tmpdir, "test_noop")
+            os.makedirs(empty_dir)
+            result = rcc.build_op_to_test_model_map(tmpdir)
+            self.assertEqual(result, {})
+
+
+class TestGenerateCgenSourceForOp(unittest.TestCase):
+    def test_returns_none_when_tool_missing(self):
+        import unittest.mock as mock  # noqa: PLC0415
+
+        with mock.patch("shutil.which", return_value=None):
+            result = rcc.generate_cgen_source_for_op("/nonexistent/model.onnx")
+        self.assertIsNone(result)
+
+    def test_returns_none_on_compile_failure(self):
+        import unittest.mock as mock  # noqa: PLC0415
+
+        with mock.patch("shutil.which", return_value="/usr/bin/emx-onnx-cgen"):
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.return_value = mock.Mock(returncode=1)
+                result = rcc.generate_cgen_source_for_op("/nonexistent/model.onnx")
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":
