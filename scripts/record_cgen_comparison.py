@@ -273,6 +273,9 @@ def generate_cgen_source_for_op(model_path: str) -> Optional[str]:
     """
     if not shutil.which("emx-onnx-cgen"):
         return None
+    # Sanity-check: only compile files that exist and have an .onnx extension.
+    if not (os.path.isabs(model_path) and model_path.endswith(".onnx") and os.path.isfile(model_path)):
+        return None
     with tempfile.TemporaryDirectory() as tmpdir:
         out_path = os.path.join(tmpdir, "model.c")
         result = subprocess.run(  # noqa: S603

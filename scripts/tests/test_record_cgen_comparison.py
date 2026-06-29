@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
+import unittest.mock as mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_cgen_comparison as rcc  # noqa: E402
+
+try:
+    import onnx
+    from onnx import helper, TensorProto
+
+    _HAS_ONNX = True
+except ImportError:
+    _HAS_ONNX = False
 
 
 class TestParseSupportOps(unittest.TestCase):
@@ -214,11 +224,9 @@ class TestComputeTotals(unittest.TestCase):
         self.assertEqual(totals["neither"], 1)
 
 
+@unittest.skipUnless(_HAS_ONNX, "onnx is required for these tests")
 class TestBuildOpToTestModelMap(unittest.TestCase):
     def _make_model(self, op_type: str, domain: str = ""):
-        import onnx  # noqa: PLC0415
-        from onnx import helper, TensorProto  # noqa: PLC0415
-
         node = helper.make_node(op_type, ["x"], ["y"])
         node.domain = domain
         graph = helper.make_graph(
@@ -230,9 +238,6 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
         return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 20)])
 
     def test_single_node_models_indexed(self):
-        import onnx  # noqa: PLC0415
-        import tempfile  # noqa: PLC0415
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create test_abs directory
             abs_dir = os.path.join(tmpdir, "test_abs")
@@ -244,10 +249,6 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
             self.assertTrue(result[("ai.onnx", "Abs")].endswith("model.onnx"))
 
     def test_multi_node_models_skipped(self):
-        import onnx  # noqa: PLC0415
-        from onnx import helper, TensorProto  # noqa: PLC0415
-        import tempfile  # noqa: PLC0415
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a two-node model → should be skipped
             multi_dir = os.path.join(tmpdir, "test_multi")
@@ -269,8 +270,6 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
             self.assertNotIn(("ai.onnx", "Relu"), result)
 
     def test_missing_model_file_skipped(self):
-        import tempfile  # noqa: PLC0415
-
         with tempfile.TemporaryDirectory() as tmpdir:
             # Directory without model.onnx
             empty_dir = os.path.join(tmpdir, "test_noop")
@@ -281,15 +280,11 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
 
 class TestGenerateCgenSourceForOp(unittest.TestCase):
     def test_returns_none_when_tool_missing(self):
-        import unittest.mock as mock  # noqa: PLC0415
-
         with mock.patch("shutil.which", return_value=None):
             result = rcc.generate_cgen_source_for_op("/nonexistent/model.onnx")
         self.assertIsNone(result)
 
     def test_returns_none_on_compile_failure(self):
-        import unittest.mock as mock  # noqa: PLC0415
-
         with mock.patch("shutil.which", return_value="/usr/bin/emx-onnx-cgen"):
             with mock.patch("subprocess.run") as mock_run:
                 mock_run.return_value = mock.Mock(returncode=1)
