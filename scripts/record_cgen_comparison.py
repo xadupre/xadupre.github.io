@@ -14,6 +14,11 @@ The script:
 4. Fetches the GitHub repository trees for both projects and adds
    ``onnx_light_source_url`` / ``cgen_source_url`` fields so the dashboard
    can offer an inline C++ code view per operator.
+5. When ``emx-onnx-cgen`` is installed, compiles a representative ONNX
+   backend test model for each supported operator (using
+   ``emx-onnx-cgen compile``) and stores the generated C source inline in
+   the ``cgen_source_code`` field so the dashboard can display it without
+   a network request.
 
 The resulting JSON is consumed by
 ``dashboard/onnx-light/cgen-comparison.html``.
@@ -21,6 +26,7 @@ The resulting JSON is consumed by
 Usage::
 
     python scripts/record_cgen_comparison.py [--cache-dir DIR]
+                                             [--skip-cgen-compile]
 """
 
 from __future__ import annotations
@@ -30,7 +36,10 @@ import datetime as dt
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -194,6 +203,135 @@ def find_cgen_source_url(
     return None
 
 
+def _onnx_backend_test_node_dir() -> Optional[str]:
+    """Return the path to the ONNX backend node test-data directory, or None."""
+    try:
+        import onnx.backend.test.data as _d  # noqa: PLC0415
+
+        # Use __path__ because the package may be a namespace package (__file__
+        # is None for namespace packages).
+        paths = list(getattr(_d, "__path__", []))
+        if not paths:
+            # Fallback: try __file__ (works for regular packages)
+            f = getattr(_d, "__file__", None)
+            if f:
+                paths = [os.path.dirname(f)]
+        for base in paths:
+            candidate = os.path.join(base, "node")
+            if os.path.isdir(candidate):
+                return candidate
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def build_op_to_test_model_map(
+    test_data_dir: str,
+) -> Dict[Tuple[str, str], str]:
+    """Scan *test_data_dir* and return a ``(domain, op_name) → model_path`` map.
+
+    Only directories that contain a single-node model are considered so that
+    the compiled output is representative of that one operator.  The first
+    matching directory (alphabetical order) is used for each ``(domain,
+    op_name)`` pair.
+    """
+    try:
+        import onnx  # noqa: PLC0415
+    except ImportError:
+        return {}
+
+    result: Dict[Tuple[str, str], str] = {}
+    for dirname in sorted(os.listdir(test_data_dir)):
+        model_path = os.path.join(test_data_dir, dirname, "model.onnx")
+        if not os.path.exists(model_path):
+            continue
+        try:
+            model = onnx.load(model_path)
+            nodes = list(model.graph.node)
+            if len(nodes) != 1:
+                continue
+            node = nodes[0]
+            op = node.op_type
+            domain = node.domain or "ai.onnx"
+            key: Tuple[str, str] = (domain, op)
+            if key not in result:
+                result[key] = model_path
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
+def generate_cgen_source_for_op(model_path: str) -> Optional[str]:
+    """Compile *model_path* with ``emx-onnx-cgen compile`` and return the C source.
+
+    *model_path* is expected to be an absolute path to an ONNX model file
+    from the ONNX backend test-data directory (built by
+    :func:`build_op_to_test_model_map`).  It is never derived from external
+    or user-controlled input.
+
+    Returns ``None`` when the tool is not available or compilation fails.
+    """
+    if not shutil.which("emx-onnx-cgen"):
+        return None
+    # Sanity-check: only compile files that exist and have an .onnx extension.
+    # model_path always comes from build_op_to_test_model_map (ONNX test-data
+    # directory), never from user input, so subprocess injection is not possible.
+    is_absolute = os.path.isabs(model_path)
+    has_onnx_extension = model_path.endswith(".onnx")
+    file_exists = os.path.isfile(model_path)
+    if not (is_absolute and has_onnx_extension and file_exists):
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "model.c")
+        result = subprocess.run(  # noqa: S603  # path is validated above; not user-controlled
+            ["emx-onnx-cgen", "compile", model_path, out_path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0 or not os.path.exists(out_path):
+            return None
+        with open(out_path, encoding="utf-8") as fh:
+            return fh.read()
+
+
+def build_cgen_source_code_map(
+    cgen_rows: List[Dict[str, Any]],
+    test_data_dir: str,
+) -> Dict[Tuple[str, str], str]:
+    """Generate C source for every supported operator and return a lookup map.
+
+    The key is ``(domain, op_name)``; the value is the generated C source
+    string.  Operators for which no test model is found or compilation fails
+    are silently skipped.
+    """
+    op_to_model = build_op_to_test_model_map(test_data_dir)
+    _log(
+        f"Built op→model map with {len(op_to_model)} entries "
+        f"from {test_data_dir}."
+    )
+
+    result: Dict[Tuple[str, str], str] = {}
+    for row in cgen_rows:
+        if not row.get("in_cgen"):
+            continue
+        domain: str = row.get("domain", "ai.onnx")
+        name: str = row.get("name", "")
+        key: Tuple[str, str] = (domain, name)
+        model_path = op_to_model.get(key)
+        if model_path is None:
+            continue
+        code = generate_cgen_source_for_op(model_path)
+        if code is not None:
+            result[key] = code
+    _log(
+        f"Generated emx-onnx-cgen C source for {len(result)} "
+        f"of {sum(1 for r in cgen_rows if r.get('in_cgen'))} supported operators."
+    )
+    return result
+
+
 def fetch_support_ops_md(url: str = SUPPORT_OPS_URL) -> str:
     """Fetch and return the raw content of SUPPORT_OPS.md."""
     _log(f"Fetching {url}")
@@ -247,6 +385,7 @@ def merge_rows(
     light_rows: List[Dict[str, Any]],
     onnx_light_source_map: Optional[Dict[str, str]] = None,
     cgen_source_map: Optional[Dict[str, str]] = None,
+    cgen_source_code_map: Optional[Dict[Tuple[str, str], str]] = None,
 ) -> List[Dict[str, Any]]:
     """Merge cgen and onnx-light rows by (domain, name).
 
@@ -256,6 +395,9 @@ def merge_rows(
     When *onnx_light_source_map* and/or *cgen_source_map* are provided the
     matching raw-content URL is stored in ``onnx_light_source_url`` /
     ``cgen_source_url`` respectively (``None`` when no match is found).
+
+    When *cgen_source_code_map* is provided the generated C source string is
+    stored in ``cgen_source_code`` (keyed by ``(domain, name)``).
     """
     # Build lookup for onnx-light data
     light_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -291,6 +433,10 @@ def merge_rows(
             url = find_cgen_source_url(name, cgen_source_map)
             if url is not None:
                 row["cgen_source_url"] = url
+        if cgen_source_code_map is not None:
+            code = cgen_source_code_map.get((domain, name))
+            if code is not None:
+                row["cgen_source_code"] = code
         merged.append(row)
     return merged
 
@@ -326,6 +472,7 @@ def compute_totals(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 def build_payload(
     schema_json_path: str,
     github_token: Optional[str] = None,
+    skip_cgen_compile: bool = False,
 ) -> Dict[str, Any]:
     """Fetch and merge all data; return the full payload dict."""
     content = fetch_support_ops_md()
@@ -347,11 +494,25 @@ def build_payload(
     cgen_source_map = build_cgen_source_map(cgen_tree)
     _log(f"Built emx-onnx-cgen source map with {len(cgen_source_map)} entries.")
 
+    # Generate C source via emx-onnx-cgen compile (best-effort, optional).
+    cgen_source_code_map: Optional[Dict[Tuple[str, str], str]] = None
+    if not skip_cgen_compile and shutil.which("emx-onnx-cgen"):
+        test_node_dir = _onnx_backend_test_node_dir()
+        if test_node_dir:
+            cgen_source_code_map = build_cgen_source_code_map(cgen_rows, test_node_dir)
+        else:
+            _log("ONNX backend test data directory not found; skipping emx-onnx-cgen compile step.")
+    elif skip_cgen_compile:
+        _log("Skipping emx-onnx-cgen compile step (--skip-cgen-compile).")
+    else:
+        _log("emx-onnx-cgen not found on PATH; skipping C source generation.")
+
     rows = merge_rows(
         cgen_rows,
         light_rows,
         onnx_light_source_map=onnx_light_source_map,
         cgen_source_map=cgen_source_map,
+        cgen_source_code_map=cgen_source_code_map,
     )
     totals = compute_totals(rows)
 
@@ -387,6 +548,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "rate limit from 60 to 5,000 requests/hour."
         ),
     )
+    parser.add_argument(
+        "--skip-cgen-compile",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the ``emx-onnx-cgen compile`` step that generates inline C "
+            "source for each supported operator (useful when emx-onnx-cgen is "
+            "not installed or to speed up a dry-run)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -400,6 +571,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     payload = build_payload(
         schema_json_path=schema_json_path,
         github_token=args.github_token,
+        skip_cgen_compile=args.skip_cgen_compile,
     )
     write_payload(json_path, payload)
     _log(
