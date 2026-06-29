@@ -306,6 +306,28 @@ def model_to_mermaid(model: Any) -> str:
         return ""
 
 
+def _normalize_graph(graph: Any) -> Dict[str, str]:
+    """Return ``{"svg": ...}`` when ``graph`` carries a non-empty SVG string."""
+    if graph is None:
+        return {}
+    if isinstance(graph, dict) and isinstance(graph.get("svg"), str) and graph.get("svg"):
+        return {"svg": graph["svg"]}
+    return {}
+
+
+def model_to_svg_graph(model: Any) -> Dict[str, str]:
+    """Return ``{"svg": ...}`` for ``model`` or ``{}`` when unavailable."""
+    try:
+        from onnx_light.tools import to_svg
+    except Exception:  # noqa: BLE001
+        return {}
+    try:
+        svg = to_svg(model)
+    except Exception:  # noqa: BLE001
+        return {}
+    return _normalize_graph({"svg": svg})
+
+
 def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     """Return backend tests whose ``tag`` matches ``tag``.
 
@@ -336,6 +358,7 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "expected_nodes": expected_nodes,
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
                 "mermaid": model_to_mermaid(model),
+                "graph": model_to_svg_graph(model),
             }
         )
     discovered.sort(key=lambda item: item["name"])
@@ -379,6 +402,7 @@ def _score_test(
     error: str = "",
     memory: Optional[List[Any]] = None,
     mermaid: str = "",
+    graph: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Score a single test and return a row dict for the JSON payload.
 
@@ -429,6 +453,9 @@ def _score_test(
     }
     if mermaid:
         row["mermaid"] = mermaid
+    normalized_graph = _normalize_graph(graph)
+    if normalized_graph:
+        row["graph"] = normalized_graph
     return row
 
 
@@ -460,6 +487,7 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 memory=list(info.get("memory", [])) if info.get("memory") is not None else None,
                 mermaid=test.get("mermaid", ""),
+                graph=test.get("graph"),
             )
         except Exception as exc:  # noqa: BLE001 - keep recording other tests
             _log(f"Unhandled error for {test['name']}: {exc}")
@@ -471,6 +499,7 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 error=str(exc) or type(exc).__name__,
                 mermaid=test.get("mermaid", ""),
+                graph=test.get("graph"),
             )
 
         totals["tests"]["pass" if row["success"] else "fail"] += 1
