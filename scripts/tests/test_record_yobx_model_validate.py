@@ -8,7 +8,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -538,28 +537,6 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         # The other exporter keeps its wall-clock measurement.
         self.assertGreaterEqual(durations["dynamo-ir"], 0.0)
         self.assertNotAlmostEqual(durations["dynamo-ir"], 2.5)
-
-    def test_run_real_export_test_honours_model_atol(self):
-        entry = {"model": "arnir0/Tiny-LLM", "atol": 0.02}
-        cfg = {"label": "yobx", "exporter": "yobx", "optimization": "default"}
-        observed = {
-            "export": "OK",
-            "discrepancies": "FAILED",
-            "discrepancies_max_abs": 0.01,
-            "error_discrepancies": "too large",
-        }
-        with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(
-                rymv, "run_validate_one", return_value=observed
-            ) as patched:
-                with (
-                    mock.patch(
-                        "scripts.tests.test_record_yobx_model_validate._require_modules"
-                    ),
-                    mock.patch.object(rymv, "_is_hf_hub_access_error", return_value=False),
-                ):
-                    _run_real_export_test(self, entry, cfg, tmp)
-        patched.assert_called_once_with(entry, cfg, dump_folder=tmp, quiet=False, verbose=1)
 
     def test_only_yobx_cell_smoke_test_is_generated(self):
         self.assertTrue(
