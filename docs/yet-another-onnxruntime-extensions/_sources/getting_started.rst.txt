@@ -114,6 +114,22 @@ directly into the source tree so that it is importable without adding
 This is equivalent to running the two ``cmake`` commands above but places the
 shared library alongside the Python sources automatically.
 
+To additionally compile the C++ unit tests, pass the ``--cpp-tests`` flag,
+which forwards ``-DBUILD_CPP_TESTS=ON`` to CMake:
+
+.. code-block:: bash
+
+    python setup.py build_ext --inplace --cpp-tests
+
+The C++ unit tests are disabled by default; the equivalent direct CMake
+invocation is:
+
+.. code-block:: bash
+
+    cmake -S cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_CPP_TESTS=ON
+    cmake --build build --config Release
+    ctest --test-dir build
+
 Using a Local Build of ONNX Runtime
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
