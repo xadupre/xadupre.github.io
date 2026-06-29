@@ -264,6 +264,11 @@ def build_op_to_test_model_map(
 def generate_cgen_source_for_op(model_path: str) -> Optional[str]:
     """Compile *model_path* with ``emx-onnx-cgen compile`` and return the C source.
 
+    *model_path* is expected to be an absolute path to an ONNX model file
+    from the ONNX backend test-data directory (built by
+    :func:`build_op_to_test_model_map`).  It is never derived from external
+    or user-controlled input.
+
     Returns ``None`` when the tool is not available or compilation fails.
     """
     if not shutil.which("emx-onnx-cgen"):
@@ -274,6 +279,8 @@ def generate_cgen_source_for_op(model_path: str) -> Optional[str]:
             ["emx-onnx-cgen", "compile", model_path, out_path],
             capture_output=True,
             text=True,
+            timeout=60,
+            check=False,
         )
         if result.returncode != 0 or not os.path.exists(out_path):
             return None

@@ -215,7 +215,7 @@ class TestComputeTotals(unittest.TestCase):
 
 
 class TestBuildOpToTestModelMap(unittest.TestCase):
-    def _make_model(self, op_type: str, domain: str = "") -> "onnx.ModelProto":  # type: ignore[name-defined]
+    def _make_model(self, op_type: str, domain: str = ""):
         import onnx  # noqa: PLC0415
         from onnx import helper, TensorProto  # noqa: PLC0415
 
