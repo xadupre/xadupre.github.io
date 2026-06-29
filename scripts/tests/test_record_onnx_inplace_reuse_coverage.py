@@ -84,6 +84,17 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         self.assertIn("mermaid", row)
         self.assertEqual(row["mermaid"], "flowchart TD\n    A --> B")
 
+    def test_score_test_includes_graph_svg_when_provided(self):
+        row = ric._score_test(
+            "test_with_svg",
+            expected_nodes=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            actual_nodes=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            node_ops=["Abs"],
+            graph={"svg": "<svg><rect/></svg>"},
+        )
+        self.assertIn("graph", row)
+        self.assertEqual(row["graph"], {"svg": "<svg><rect/></svg>"})
+
     def test_score_test_omits_mermaid_when_empty(self):
         row = ric._score_test(
             "test_no_mermaid",
@@ -94,6 +105,16 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         )
         self.assertNotIn("mermaid", row)
 
+    def test_score_test_omits_graph_without_svg(self):
+        row = ric._score_test(
+            "test_no_graph",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            graph={"nodes": []},
+        )
+        self.assertNotIn("graph", row)
+
     def test_build_payload_passes_mermaid(self):
         tests = [
             {
@@ -102,6 +123,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
                 "expected_nodes": [{"onnx_light.inplace_reuse": "0:0:equal"}],
                 "node_ops": ["Add"],
                 "mermaid": "flowchart TD\n    in_X --> op_Add --> out_Y",
+                "graph": {"svg": "<svg><g/></svg>"},
             }
         ]
 
@@ -117,6 +139,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         row = payload["tests"][0]
         self.assertIn("mermaid", row)
         self.assertEqual(row["mermaid"], "flowchart TD\n    in_X --> op_Add --> out_Y")
+        self.assertEqual(row["graph"], {"svg": "<svg><g/></svg>"})
 
     def test_build_payload_aggregates_totals(self):
         tests = [
