@@ -274,11 +274,16 @@ def generate_cgen_source_for_op(model_path: str) -> Optional[str]:
     if not shutil.which("emx-onnx-cgen"):
         return None
     # Sanity-check: only compile files that exist and have an .onnx extension.
-    if not (os.path.isabs(model_path) and model_path.endswith(".onnx") and os.path.isfile(model_path)):
+    # model_path always comes from build_op_to_test_model_map (ONNX test-data
+    # directory), never from user input, so subprocess injection is not possible.
+    is_absolute = os.path.isabs(model_path)
+    has_onnx_extension = model_path.endswith(".onnx")
+    file_exists = os.path.isfile(model_path)
+    if not (is_absolute and has_onnx_extension and file_exists):
         return None
     with tempfile.TemporaryDirectory() as tmpdir:
         out_path = os.path.join(tmpdir, "model.c")
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(  # noqa: S603  # path is validated above; not user-controlled
             ["emx-onnx-cgen", "compile", model_path, out_path],
             capture_output=True,
             text=True,

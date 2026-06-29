@@ -21,6 +21,9 @@ try:
 except ImportError:
     _HAS_ONNX = False
 
+# Opset version used in test model helpers
+_TEST_OPSET_VERSION = 20
+
 
 class TestParseSupportOps(unittest.TestCase):
     def test_basic_table(self):
@@ -235,7 +238,7 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
             [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
             [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
         )
-        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", 20)])
+        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)])
 
     def test_single_node_models_indexed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -261,7 +264,7 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
                 [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
                 [helper.make_tensor_value_info("z", TensorProto.FLOAT, [1])],
             )
-            model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 20)])
+            model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)])
             onnx.save(model, os.path.join(multi_dir, "model.onnx"))
 
             result = rcc.build_op_to_test_model_map(tmpdir)
