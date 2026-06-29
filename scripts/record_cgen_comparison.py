@@ -11,6 +11,9 @@ The script:
    implemented in onnx-light.
 3. Merges the two datasets by ``(domain, operator name)`` and writes the
    result to ``cache_data/onnx-light/cgen_comparison.json``.
+4. Fetches the GitHub repository trees for both projects and adds
+   ``onnx_light_source_url`` / ``cgen_source_url`` fields so the dashboard
+   can offer an inline C++ code view per operator.
 
 The resulting JSON is consumed by
 ``dashboard/onnx-light/cgen-comparison.html``.
@@ -36,6 +39,18 @@ SUPPORT_OPS_URL = (
 )
 CGEN_REPO_URL = "https://github.com/emmtrix/emx-onnx-cgen"
 
+# GitHub repository coordinates
+ONNX_LIGHT_OWNER = "xadupre"
+ONNX_LIGHT_REPO = "onnx-light"
+# Kernel sources live under this prefix in the onnx-light repo.
+# Files are named  kernel_<opname_lower>.cc
+ONNX_LIGHT_KERNELS_PREFIX = "onnx_light/onnx_kernels/kernels/"
+
+CGEN_OWNER = "emmtrix"
+CGEN_REPO = "emx-onnx-cgen"
+# Jinja2 C templates live here, named  <snake_op>_op.c.j2
+CGEN_TEMPLATES_PREFIX = "src/emx_onnx_cgen/templates/"
+
 # Row pattern: | <operator> | ✅ | or | <operator> | ❌ |
 _ROW_RE = re.compile(r"^\|\s*(.+?)\s*\|\s*([✅❌])\s*\|", re.MULTILINE)
 
@@ -51,6 +66,132 @@ def _format_iso(value: dt.datetime) -> str:
     else:
         value = value.astimezone(dt.timezone.utc)
     return value.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fetch_github_tree(
+    owner: str,
+    repo: str,
+    token: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Fetch the recursive git tree for a GitHub repository.
+
+    Returns a list of tree entries (dicts with at least ``path`` and ``type``
+    keys), or an empty list when the request fails (e.g. rate-limited or
+    network unavailable).
+    """
+    url = (
+        f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
+    )
+    headers: Dict[str, str] = {
+        "User-Agent": "xadupre.github.io-record-cgen-comparison",
+        "Accept": "application/vnd.github+json",
+    }
+    if token:
+        headers["Authorization"] = f"token {token}"
+    _log(f"Fetching GitHub tree for {owner}/{repo}")
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+            data = json.loads(resp.read().decode("utf-8"))
+        entries = data.get("tree", [])
+        _log(f"  Got {len(entries)} tree entries for {owner}/{repo}.")
+        return entries
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as exc:
+        _log(f"  Warning: failed to fetch tree for {owner}/{repo}: {exc}")
+        return []
+
+
+def build_onnx_light_source_map(
+    tree: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Build a map from operator name key (lowercase) to raw GitHub content URL.
+
+    Only files matching ``ONNX_LIGHT_KERNELS_PREFIX*/kernel_<name>.cc`` are
+    considered.
+    """
+    result: Dict[str, str] = {}
+    for entry in tree:
+        if entry.get("type") != "blob":
+            continue
+        path: str = entry.get("path", "")
+        if not path.startswith(ONNX_LIGHT_KERNELS_PREFIX):
+            continue
+        filename = path.rsplit("/", 1)[-1]
+        if not (filename.startswith("kernel_") and filename.endswith(".cc")):
+            continue
+        op_key = filename[len("kernel_") : -len(".cc")]  # e.g. "abs"
+        raw_url = (
+            f"https://raw.githubusercontent.com/"
+            f"{ONNX_LIGHT_OWNER}/{ONNX_LIGHT_REPO}/main/{path}"
+        )
+        result[op_key] = raw_url
+    return result
+
+
+def build_cgen_source_map(
+    tree: List[Dict[str, Any]],
+) -> Dict[str, str]:
+    """Build a map from template stem (lowercase, no ``_op.c.j2``) to raw URL.
+
+    Only files under ``CGEN_TEMPLATES_PREFIX`` with the ``_op.c.j2`` suffix
+    are considered (e.g. ``conv_op.c.j2`` → key ``conv``).
+    """
+    result: Dict[str, str] = {}
+    for entry in tree:
+        if entry.get("type") != "blob":
+            continue
+        path: str = entry.get("path", "")
+        if not path.startswith(CGEN_TEMPLATES_PREFIX):
+            continue
+        filename = path.rsplit("/", 1)[-1]
+        if not filename.endswith("_op.c.j2"):
+            continue
+        stem = filename[: -len("_op.c.j2")]  # e.g. "conv"
+        raw_url = (
+            f"https://raw.githubusercontent.com/"
+            f"{CGEN_OWNER}/{CGEN_REPO}/main/{path}"
+        )
+        result[stem] = raw_url
+    return result
+
+
+def _camel_to_snake(name: str) -> str:
+    """Convert CamelCase to snake_case (e.g. ``BatchNormalization`` → ``batch_normalization``)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+
+def find_onnx_light_source_url(
+    name: str,
+    source_map: Dict[str, str],
+) -> Optional[str]:
+    """Return the raw content URL for the onnx-light kernel implementing *name*.
+
+    Tries an exact lowercase match first, then a snake_case conversion.
+    """
+    key = name.lower()
+    if key in source_map:
+        return source_map[key]
+    key_snake = _camel_to_snake(name)
+    if key_snake in source_map:
+        return source_map[key_snake]
+    return None
+
+
+def find_cgen_source_url(
+    name: str,
+    source_map: Dict[str, str],
+) -> Optional[str]:
+    """Return the raw content URL for the emx-onnx-cgen template for *name*.
+
+    Tries an exact lowercase match first, then a snake_case conversion.
+    """
+    key = name.lower()
+    if key in source_map:
+        return source_map[key]
+    key_snake = _camel_to_snake(name)
+    if key_snake in source_map:
+        return source_map[key_snake]
+    return None
 
 
 def fetch_support_ops_md(url: str = SUPPORT_OPS_URL) -> str:
@@ -104,11 +245,17 @@ def load_schema_comparison(json_path: str) -> List[Dict[str, Any]]:
 def merge_rows(
     cgen_rows: List[Dict[str, Any]],
     light_rows: List[Dict[str, Any]],
+    onnx_light_source_map: Optional[Dict[str, str]] = None,
+    cgen_source_map: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Merge cgen and onnx-light rows by (domain, name).
 
     Operators present in only one dataset are still included with the
     missing side set to ``False`` / ``0``.
+
+    When *onnx_light_source_map* and/or *cgen_source_map* are provided the
+    matching raw-content URL is stored in ``onnx_light_source_url`` /
+    ``cgen_source_url`` respectively (``None`` when no match is found).
     """
     # Build lookup for onnx-light data
     light_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -127,17 +274,24 @@ def merge_rows(
     for domain, name in all_keys:
         light = light_by_key.get((domain, name), {})
         cgen = cgen_by_key.get((domain, name), {})
-        merged.append(
-            {
-                "domain": domain,
-                "name": name,
-                "in_onnx_light": bool(light.get("in_onnx_light", False)),
-                "in_cgen": bool(cgen.get("in_cgen", False)),
-                "onnx_light_backend_tests": int(
-                    light.get("onnx_light_backend_tests", 0) or 0
-                ),
-            }
-        )
+        row: Dict[str, Any] = {
+            "domain": domain,
+            "name": name,
+            "in_onnx_light": bool(light.get("in_onnx_light", False)),
+            "in_cgen": bool(cgen.get("in_cgen", False)),
+            "onnx_light_backend_tests": int(
+                light.get("onnx_light_backend_tests", 0) or 0
+            ),
+        }
+        if onnx_light_source_map is not None:
+            url = find_onnx_light_source_url(name, onnx_light_source_map)
+            if url is not None:
+                row["onnx_light_source_url"] = url
+        if cgen_source_map is not None:
+            url = find_cgen_source_url(name, cgen_source_map)
+            if url is not None:
+                row["cgen_source_url"] = url
+        merged.append(row)
     return merged
 
 
@@ -171,6 +325,7 @@ def compute_totals(rows: List[Dict[str, Any]]) -> Dict[str, int]:
 
 def build_payload(
     schema_json_path: str,
+    github_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch and merge all data; return the full payload dict."""
     content = fetch_support_ops_md()
@@ -183,7 +338,21 @@ def build_payload(
     light_rows = load_schema_comparison(schema_json_path)
     _log(f"Loaded {len(light_rows)} operators from schema_comparison.json.")
 
-    rows = merge_rows(cgen_rows, light_rows)
+    # Attempt to fetch GitHub trees for source-URL lookup (best-effort).
+    onnx_light_tree = fetch_github_tree(ONNX_LIGHT_OWNER, ONNX_LIGHT_REPO, token=github_token)
+    onnx_light_source_map = build_onnx_light_source_map(onnx_light_tree)
+    _log(f"Built onnx-light source map with {len(onnx_light_source_map)} entries.")
+
+    cgen_tree = fetch_github_tree(CGEN_OWNER, CGEN_REPO, token=github_token)
+    cgen_source_map = build_cgen_source_map(cgen_tree)
+    _log(f"Built emx-onnx-cgen source map with {len(cgen_source_map)} entries.")
+
+    rows = merge_rows(
+        cgen_rows,
+        light_rows,
+        onnx_light_source_map=onnx_light_source_map,
+        cgen_source_map=cgen_source_map,
+    )
     totals = compute_totals(rows)
 
     return {
@@ -209,6 +378,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=os.path.join("cache_data"),
         help="Root directory of the JSON cache (default: %(default)s).",
     )
+    parser.add_argument(
+        "--github-token",
+        default=os.environ.get("GITHUB_TOKEN"),
+        help=(
+            "GitHub personal-access token used for API requests "
+            "(default: $GITHUB_TOKEN env var). Increases the unauthenticated "
+            "rate limit from 60 to 5,000 requests/hour."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -219,7 +397,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     json_path = os.path.join(args.cache_dir, "onnx-light", "cgen_comparison.json")
 
-    payload = build_payload(schema_json_path=schema_json_path)
+    payload = build_payload(
+        schema_json_path=schema_json_path,
+        github_token=args.github_token,
+    )
     write_payload(json_path, payload)
     _log(
         f"Wrote {len(payload['rows'])} operator rows to {json_path} "

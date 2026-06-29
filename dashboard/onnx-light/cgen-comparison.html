@@ -34,7 +34,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   box-sizing: border-box;
   margin-bottom: 1em;
 }
-#mainPanel { max-width: 820px; }
+#mainPanel { max-width: 1100px; }
 .meta { font-size: 0.85em; color: #8b949e; }
 .meta strong { color: #c9d1d9; }
 .ratios {
@@ -126,9 +126,10 @@ table.comparison th, table.comparison td {
   white-space: nowrap;
 }
 table.comparison th[data-key="name"], table.comparison td:first-child {
-  max-width: 18em;
+  max-width: 22em;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 table.comparison th {
   color: #8b949e;
@@ -161,6 +162,73 @@ table.comparison td.center { text-align: center; }
 table.comparison td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.comparison td.check { color: #3fb950; font-weight: bold; }
 table.comparison td.cross { color: #8b949e; }
+table.comparison tbody tr.data-row { cursor: pointer; }
+table.comparison tbody tr.detail-row td {
+  background: rgba(13, 17, 23, 0.75);
+  padding: 0;
+}
+.toggle-arrow {
+  color: #8b949e;
+  margin-right: 0.4em;
+  display: inline-block;
+  width: 0.8em;
+  font-style: normal;
+}
+.detail-wrap {
+  padding: 0.6em 0.8em;
+}
+.detail-code-panels {
+  display: flex;
+  gap: 0.75em;
+  flex-wrap: wrap;
+}
+.detail-code-panel {
+  flex: 1 1 300px;
+  min-width: 0;
+}
+.detail-code-panel-title {
+  font-size: 0.8em;
+  color: #8b949e;
+  margin-bottom: 0.3em;
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+}
+.detail-code-panel-title a {
+  font-size: 0.95em;
+}
+.detail-code-panel pre {
+  background: #0d1117;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 6px;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.8em;
+  line-height: 1.45;
+  color: #c9d1d9;
+  white-space: pre;
+  max-height: 28em;
+  overflow-y: auto;
+  margin: 0;
+}
+.detail-code-panel .code-loading {
+  color: #8b949e;
+  font-size: 0.85em;
+  font-style: italic;
+  padding: 0.5em 0;
+}
+.detail-code-panel .code-error {
+  color: #f85149;
+  font-size: 0.85em;
+  padding: 0.5em 0;
+}
+.detail-code-panel .code-unavailable {
+  color: #8b949e;
+  font-size: 0.85em;
+  font-style: italic;
+  padding: 0.5em 0;
+}
 .message {
   display: none;
   text-align: center;
@@ -184,8 +252,8 @@ table.comparison td.cross { color: #8b949e; }
     <a href="https://github.com/xadupre/onnx-light" target="_blank" rel="noopener"><code>onnx-light</code></a>
     and the C code generator
     <a href="https://github.com/emmtrix/emx-onnx-cgen" target="_blank" rel="noopener"><code>emx-onnx-cgen</code></a>.
-    One tab per operator domain. Use the search box to filter operators and
-    click on a column header to sort.
+    One tab per operator domain. Use the search box to filter operators,
+    click a column header to sort, and click a row to unfold the C++ source.
   </p>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -237,7 +305,11 @@ const state = {
   search: "",
   filter: "all",
   sort: { key: "name", dir: "asc" },
+  expanded: new Set(),
 };
+
+// Cache for fetched source code: url → { status: "loading"|"ok"|"error", code }
+const _codeCache = new Map();
 
 function showMessage(text, kind) {
   const msg = document.getElementById("message");
@@ -381,20 +453,176 @@ function renderRows() {
     body.appendChild(tr);
   } else {
     for (const r of filtered) {
+      const rowKey = r.domain + ":" + r.name;
+      const isExpanded = state.expanded.has(rowKey);
+
+      // Main data row
       const tr = document.createElement("tr");
-      tr.appendChild(cellText(r.name));
+      tr.className = "data-row";
+      tr.title = "Click to " + (isExpanded ? "collapse" : "expand") + " C++ source";
+      tr.appendChild(cellName(r.name, isExpanded));
       tr.appendChild(cellCheck(r.in_onnx_light));
       tr.appendChild(cellCheck(r.in_cgen));
       tr.appendChild(cellNum(r.onnx_light_backend_tests));
+      tr.addEventListener("click", () => {
+        if (state.expanded.has(rowKey)) {
+          state.expanded.delete(rowKey);
+        } else {
+          state.expanded.add(rowKey);
+        }
+        renderRows();
+      });
       body.appendChild(tr);
+
+      // Detail row shown when expanded
+      if (isExpanded) {
+        const detailTr = document.createElement("tr");
+        detailTr.className = "detail-row";
+        const detailTd = document.createElement("td");
+        detailTd.colSpan = 4;
+        detailTd.appendChild(renderDetailFor(r));
+        detailTr.appendChild(detailTd);
+        body.appendChild(detailTr);
+      }
     }
   }
   updateSortArrows();
 }
 
-function cellText(value) {
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  const panels = document.createElement("div");
+  panels.className = "detail-code-panels";
+
+  panels.appendChild(buildCodePanel(
+    "onnx-light",
+    "#ffa657",
+    "https://github.com/" + "xadupre/onnx-light",
+    row.onnx_light_source_url || null,
+    row
+  ));
+  panels.appendChild(buildCodePanel(
+    "emx-onnx-cgen",
+    "#79c0ff",
+    "https://github.com/" + "emmtrix/emx-onnx-cgen",
+    row.cgen_source_url || null,
+    row
+  ));
+
+  wrap.appendChild(panels);
+  return wrap;
+}
+
+function buildCodePanel(label, color, repoUrl, rawUrl, row) {
+  const panel = document.createElement("div");
+  panel.className = "detail-code-panel";
+
+  const title = document.createElement("div");
+  title.className = "detail-code-panel-title";
+
+  const labelSpan = document.createElement("span");
+  labelSpan.style.color = color;
+  labelSpan.textContent = label;
+  title.appendChild(labelSpan);
+
+  if (rawUrl) {
+    // Convert raw.githubusercontent.com URL to a GitHub browse URL
+    const browseUrl = rawUrl
+      .replace("https://raw.githubusercontent.com/", "https://github.com/")
+      .replace(/\/main\//g, "/blob/main/");
+    const link = document.createElement("a");
+    link.href = browseUrl;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "view source ↗";
+    title.appendChild(link);
+  } else {
+    const searchUrl = repoUrl + "/search?q=" + encodeURIComponent(row.name) + "&type=code";
+    const link = document.createElement("a");
+    link.href = searchUrl;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.textContent = "search on GitHub ↗";
+    title.appendChild(link);
+  }
+
+  panel.appendChild(title);
+
+  const contentDiv = document.createElement("div");
+  panel.appendChild(contentDiv);
+
+  if (!rawUrl) {
+    const msg = document.createElement("div");
+    msg.className = "code-unavailable";
+    msg.textContent = "No direct source file mapping found for this operator.";
+    contentDiv.appendChild(msg);
+    return panel;
+  }
+
+  // Fetch code lazily, using _codeCache to avoid repeated requests
+  if (_codeCache.has(rawUrl)) {
+    const cached = _codeCache.get(rawUrl);
+    if (cached.status === "ok") {
+      contentDiv.appendChild(buildCodeBlock(cached.code));
+    } else if (cached.status === "error") {
+      const msg = document.createElement("div");
+      msg.className = "code-error";
+      msg.textContent = "Failed to load source: " + cached.error;
+      contentDiv.appendChild(msg);
+    } else {
+      const msg = document.createElement("div");
+      msg.className = "code-loading";
+      msg.textContent = "Loading…";
+      contentDiv.appendChild(msg);
+    }
+  } else {
+    _codeCache.set(rawUrl, { status: "loading" });
+    const loadingMsg = document.createElement("div");
+    loadingMsg.className = "code-loading";
+    loadingMsg.textContent = "Loading…";
+    contentDiv.appendChild(loadingMsg);
+
+    fetch(rawUrl)
+      .then(r => {
+        if (!r.ok) throw new Error("HTTP " + r.status + ": " + r.statusText);
+        return r.text();
+      })
+      .then(code => {
+        _codeCache.set(rawUrl, { status: "ok", code });
+        contentDiv.innerHTML = "";
+        contentDiv.appendChild(buildCodeBlock(code));
+      })
+      .catch(err => {
+        const msg = (err && err.message) ? err.message : String(err);
+        _codeCache.set(rawUrl, { status: "error", error: msg });
+        contentDiv.innerHTML = "";
+        const errDiv = document.createElement("div");
+        errDiv.className = "code-error";
+        errDiv.textContent = "Failed to load source: " + msg;
+        contentDiv.appendChild(errDiv);
+      });
+  }
+
+  return panel;
+}
+
+function buildCodeBlock(code) {
+  const pre = document.createElement("pre");
+  const codeEl = document.createElement("code");
+  codeEl.textContent = code;
+  pre.appendChild(codeEl);
+  return pre;
+}
+
+function cellName(value, expanded) {
   const td = document.createElement("td");
-  td.textContent = value;
+  const arrow = document.createElement("span");
+  arrow.className = "toggle-arrow";
+  arrow.textContent = expanded ? "▼" : "▶";
+  td.appendChild(arrow);
+  td.appendChild(document.createTextNode(value));
   return td;
 }
 
