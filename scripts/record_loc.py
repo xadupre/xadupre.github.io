@@ -142,7 +142,7 @@ def _classify_python_line(stripped: bytes) -> tuple[bool, bool]:
     i = 0
     n = len(stripped)
     while i < n:
-        c = stripped[i:i + 1]
+        c = stripped[i : i + 1]
         if in_single:
             if c == b"\\" and i + 1 < n:
                 i += 2
@@ -203,10 +203,10 @@ def _classify_cpp_lines(data: bytes) -> tuple[int, int, int]:
         m = len(line)
         in_string = 0  # 0 = none, 1 = ", 2 = '
         while k < m:
-            c = line[k:k + 1]
+            c = line[k : k + 1]
             if in_block:
                 has_comment = True
-                if c == b"*" and k + 1 < m and line[k + 1:k + 2] == b"/":
+                if c == b"*" and k + 1 < m and line[k + 1 : k + 2] == b"/":
                     in_block = False
                     k += 2
                     continue
@@ -216,16 +216,14 @@ def _classify_cpp_lines(data: bytes) -> tuple[int, int, int]:
                 if c == b"\\" and k + 1 < m:
                     k += 2
                     continue
-                if (in_string == 1 and c == b'"') or (
-                    in_string == 2 and c == b"'"
-                ):
+                if (in_string == 1 and c == b'"') or (in_string == 2 and c == b"'"):
                     in_string = 0
                 k += 1
                 continue
-            if c == b"/" and k + 1 < m and line[k + 1:k + 2] == b"/":
+            if c == b"/" and k + 1 < m and line[k + 1 : k + 2] == b"/":
                 has_comment = True
                 break
-            if c == b"/" and k + 1 < m and line[k + 1:k + 2] == b"*":
+            if c == b"/" and k + 1 < m and line[k + 1 : k + 2] == b"*":
                 has_comment = True
                 in_block = True
                 k += 2
@@ -398,14 +396,22 @@ def _migrate_csv_header(path: str) -> None:
         if tuple(header) == CSV_FIELDS:
             return
         existing_rows = list(reader)
-    indices = {name: header.index(name) if name in header else -1 for name in CSV_FIELDS}
+    indices = {
+        name: header.index(name) if name in header else -1 for name in CSV_FIELDS
+    }
     with open(path, "w", encoding="utf-8", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_FIELDS)
         for row in existing_rows:
             writer.writerow(
-                [row[indices[name]] if indices[name] != -1 and indices[name] < len(row) else ""
-                 for name in CSV_FIELDS]
+                [
+                    (
+                        row[indices[name]]
+                        if indices[name] != -1 and indices[name] < len(row)
+                        else ""
+                    )
+                    for name in CSV_FIELDS
+                ]
             )
 
 
@@ -432,9 +438,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument(
         "--date",
         default=None,
-        help=(
-            "ISO-8601 timestamp to record (defaults to the current UTC time)."
-        ),
+        help=("ISO-8601 timestamp to record (defaults to the current UTC time)."),
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -451,9 +455,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     for row in rows:
         print(
             "Recorded {language}: {files} files, {lines} lines "
-            "({code_lines} code, {comment_lines} comment) at {commit}.".format(
-                **row
-            )
+            "({code_lines} code, {comment_lines} comment) at {commit}.".format(**row)
         )
     return 0
 
