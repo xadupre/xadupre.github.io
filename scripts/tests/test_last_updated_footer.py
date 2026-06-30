@@ -54,9 +54,7 @@ class TestLastUpdatedFooter(unittest.TestCase):
                     text = fh.read()
 
                 m = FOOTER_RE.search(text)
-                self.assertIsNotNone(
-                    m, f"{rel}: missing data-updated footer"
-                )
+                self.assertIsNotNone(m, f"{rel}: missing data-updated footer")
                 sources = [s.strip() for s in m.group(1).split(",") if s.strip()]
                 self.assertTrue(sources, f"{rel}: empty data-source")
 
@@ -73,9 +71,7 @@ class TestLastUpdatedFooter(unittest.TestCase):
                     )
 
                 s = SCRIPT_RE.search(text)
-                self.assertIsNotNone(
-                    s, f"{rel}: missing last-updated.js include"
-                )
+                self.assertIsNotNone(s, f"{rel}: missing last-updated.js include")
                 expected_prefix = "../" * depth
                 self.assertEqual(
                     s.group(1),

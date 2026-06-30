@@ -29,9 +29,7 @@ class TestRecordLoc(unittest.TestCase):
             os.path.join(root, "pkg", "cpp", "m.cpp"), "w", encoding="utf-8"
         ) as f:
             f.write("int main() {\n  return 0;\n}\n")
-        with open(
-            os.path.join(root, "pkg", "cpp", "m.h"), "w", encoding="utf-8"
-        ) as f:
+        with open(os.path.join(root, "pkg", "cpp", "m.h"), "w", encoding="utf-8") as f:
             f.write("#pragma once\n")
         # Files that must be ignored: build artefacts and unrelated
         # extensions.
@@ -88,7 +86,7 @@ class TestRecordLoc(unittest.TestCase):
                     "// pure comment\n"
                     "int y = 2; // trailing\n"
                     "\n"
-                    "const char* s = \"http://example\";\n"
+                    'const char* s = "http://example";\n'
                 )
             totals = rl.count_source_tree(tmp)
             self.assertEqual(
