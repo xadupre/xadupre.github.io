@@ -40,7 +40,6 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
             ric._node_metadata(node),
             {
                 "onnx_light.inplace_reuse": "0:0:equal",
-                "onnx_light.release_after": "A",
             },
         )
 
@@ -55,12 +54,12 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
             expected_nodes=[
                 {},
                 {"onnx_light.inplace_reuse": "0:0:equal"},
-                {"onnx_light.release_after": "B"},
+                {"onnx_light.inplace_reuse": "0:0:equal"},
             ],
             actual_nodes=[
                 {},
                 {"onnx_light.inplace_reuse": "0:0:equal"},
-                {"onnx_light.release_after": "A"},
+                {"onnx_light.inplace_reuse": "0:0:move"},
             ],
             node_ops=["Abs", "Abs", "Abs"],
         )
@@ -156,7 +155,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
                 "name": "test_b",
                 "model": "model_b",
                 "expected_nodes": [
-                    {"onnx_light.release_after": "X"},
+                    {"onnx_light.inplace_reuse": "0:0:equal"},
                 ],
                 "node_ops": ["Reshape"],
             },
@@ -170,7 +169,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
                         {"onnx_light.inplace_reuse": "0:0:equal"},
                     ]
                 }
-            return {"actual_nodes": [{"onnx_light.release_after": "Y"}]}
+            return {"actual_nodes": [{"onnx_light.inplace_reuse": "0:0:copy"}]}
 
         payload = ric.build_payload(
             tag="inplace",
@@ -196,7 +195,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
             {
                 "name": "boom",
                 "model": "model_boom",
-                "expected_nodes": [{"onnx_light.release_after": "A"}],
+                "expected_nodes": [{"onnx_light.inplace_reuse": "0:0:equal"}],
                 "node_ops": ["Abs"],
             }
         ]
