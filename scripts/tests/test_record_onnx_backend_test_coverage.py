@@ -58,7 +58,6 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIn("Attention node", out)
         self.assertIn("inconsistent total_sequence_length", out)
 
-
     def test_row_from_results_includes_errors_only_when_present(self):
         row = rbc._row_from_results(
             "test_relu",
@@ -427,9 +426,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
             [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 18)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
 
         constructed: dict = {}
 
@@ -583,7 +580,10 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
             ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
-            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
             (
                 "onnx_light.onnx_lib.backend.test",
                 types.ModuleType("onnx_light.onnx_lib.backend.test"),
@@ -622,12 +622,8 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(rbc._normalize_kinds(None), ())
         self.assertEqual(rbc._normalize_kinds(""), ())
         self.assertEqual(rbc._normalize_kinds("node"), ("node",))
-        self.assertEqual(
-            rbc._normalize_kinds("node, model"), ("node", "model")
-        )
-        self.assertEqual(
-            rbc._normalize_kinds(["node", "model"]), ("node", "model")
-        )
+        self.assertEqual(rbc._normalize_kinds("node, model"), ("node", "model"))
+        self.assertEqual(rbc._normalize_kinds(["node", "model"]), ("node", "model"))
         # Duplicates are dropped, preserving first-seen order.
         self.assertEqual(
             rbc._normalize_kinds(("node,model", "node")), ("node", "model")
@@ -635,9 +631,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
     def test_default_kind_includes_node_and_model(self):
         self.assertEqual(rbc.DEFAULT_KINDS, ("node", "model"))
-        self.assertEqual(
-            rbc._normalize_kinds(rbc.DEFAULT_KIND), ("node", "model")
-        )
+        self.assertEqual(rbc._normalize_kinds(rbc.DEFAULT_KIND), ("node", "model"))
 
     def test_discover_node_tests_filters_multiple_kinds(self):
         """``discover_node_tests`` keeps every case whose kind matches.
@@ -716,9 +710,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
             # Iterable filter.
             discovered_iter = rbc.discover_node_tests(kind=["simple"])
-            self.assertEqual(
-                [d["name"] for d in discovered_iter], ["test_simple"]
-            )
+            self.assertEqual([d["name"] for d in discovered_iter], ["test_simple"])
         finally:
             rbc._onnx_light_model_to_onnx = original_model_to_onnx
             rbc._onnx_light_tensor_to_numpy = original_tensor_to_numpy
@@ -785,9 +777,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
         expected = [[np.array([1.0, 2.0]), np.array([3.0])]]
         actual = [[np.array([1.0, 2.0]), np.array([3.0])]]
-        self.assertIsNone(
-            rbc._compare_outputs(expected, actual, rtol=1e-3, atol=1e-4)
-        )
+        self.assertIsNone(rbc._compare_outputs(expected, actual, rtol=1e-3, atol=1e-4))
 
         mismatched = [[np.array([1.0, 2.0]), np.array([9.0])]]
         msg = rbc._compare_outputs(expected, mismatched, rtol=1e-3, atol=1e-4)
@@ -801,12 +791,8 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
     def test_compare_outputs_handles_optional_none_outputs(self):
         import numpy as np
 
-        self.assertIsNone(
-            rbc._compare_outputs([None], [None], rtol=1e-3, atol=1e-4)
-        )
-        msg = rbc._compare_outputs(
-            [None], [np.array([1.0])], rtol=1e-3, atol=1e-4
-        )
+        self.assertIsNone(rbc._compare_outputs([None], [None], rtol=1e-3, atol=1e-4))
+        msg = rbc._compare_outputs([None], [np.array([1.0])], rtol=1e-3, atol=1e-4)
         self.assertIsNotNone(msg)
         self.assertIn("None", msg)
 
@@ -891,9 +877,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                     )
                 )
                 self.assertIsNone(
-                    rbc._compare_outputs(
-                        [expected], [actual], rtol=1e-3, atol=1e-4
-                    )
+                    rbc._compare_outputs([expected], [actual], rtol=1e-3, atol=1e-4)
                 )
 
     def test_compare_outputs_reports_interior_sub_byte_int_mismatch(self):
@@ -992,9 +976,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         np.testing.assert_array_equal(
             seq_value[0], np.array([1.0, 2.0], dtype=np.float32)
         )
-        np.testing.assert_array_equal(
-            seq_value[1], np.array([3.0], dtype=np.float32)
-        )
+        np.testing.assert_array_equal(seq_value[1], np.array([3.0], dtype=np.float32))
 
         # A populated OptionalProto decodes to its tensor value.
         opt = onnx.OptionalProto()
@@ -1004,17 +986,13 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             numpy_helper.from_array(np.array([5.0], dtype=np.float32))
         )
         opt_value = rbc._onnx_light_tensor_to_numpy(opt)
-        np.testing.assert_array_equal(
-            opt_value, np.array([5.0], dtype=np.float32)
-        )
+        np.testing.assert_array_equal(opt_value, np.array([5.0], dtype=np.float32))
 
         # A plain TensorProto still decodes to a numpy array.
         tensor = numpy_helper.from_array(np.array([7.0], dtype=np.float32))
         tensor_value = rbc._onnx_light_tensor_to_numpy(tensor)
         self.assertIsInstance(tensor_value, np.ndarray)
-        np.testing.assert_array_equal(
-            tensor_value, np.array([7.0], dtype=np.float32)
-        )
+        np.testing.assert_array_equal(tensor_value, np.array([7.0], dtype=np.float32))
 
     def test_write_payload_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -141,9 +141,7 @@ class TestRecordWheelSizes(unittest.TestCase):
 
     def test_read_existing_returns_empty_when_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(
-                rws.read_existing(os.path.join(tmp, "missing.csv")), set()
-            )
+            self.assertEqual(rws.read_existing(os.path.join(tmp, "missing.csv")), set())
 
     def test_process_run_skips_unfinished(self):
         for run in (
@@ -176,9 +174,7 @@ class TestRecordWheelSizes(unittest.TestCase):
         )
         with mock.patch.object(
             rws, "list_run_artifacts", return_value=[artifact]
-        ), mock.patch.object(
-            rws, "_download", return_value=zip_bytes
-        ):
+        ), mock.patch.object(rws, "_download", return_value=zip_bytes):
             wheel_rows, so_rows = rws.process_run(run, "o/r", None)
         self.assertEqual(
             wheel_rows,
@@ -416,7 +412,8 @@ class TestSharedLibrarySizes(unittest.TestCase):
     def test_extract_shared_library_sizes_from_wheel(self):
         wheel = _make_wheel(
             {
-                "onnx_light/onnx_py/_onnxpykernels.cpython-312-x86_64-linux-gnu.so": b"k" * 256,
+                "onnx_light/onnx_py/_onnxpykernels.cpython-312-x86_64-linux-gnu.so": b"k"
+                * 256,
                 "onnx_light/onnx_py/liblib_onnx_lib.so": b"l" * 512,
                 "onnx_light/__init__.py": b"# python",
                 "onnx_light-0.1.dist-info/RECORD": b"",
@@ -456,9 +453,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 "onnx_light-0.1-cp313-cp313-linux_x86_64.whl": wheel_large,
             }
         )
-        self.assertEqual(
-            rws.extract_shared_library_sizes(artifact), [("_mod.so", 99)]
-        )
+        self.assertEqual(rws.extract_shared_library_sizes(artifact), [("_mod.so", 99)])
 
     def test_extract_shared_library_sizes_ignores_artifacts_without_libraries(self):
         artifact = _make_artifact_zip({"README.txt": b"nothing here"})
@@ -508,9 +503,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
             "created_at": "2024-05-02T10:00:00Z",
             "head_sha": "feedface",
         }
-        wheel = _make_wheel(
-            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
-        )
+        wheel = _make_wheel({"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100})
         artifact = {
             "id": 100,
             "name": "wheels",
@@ -525,7 +518,9 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 rws, "iter_workflow_runs", return_value=iter([run])
             ), mock.patch.object(
                 rws, "list_run_artifacts", return_value=[artifact]
-            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+            ), mock.patch.object(
+                rws, "_download", return_value=zip_bytes
+            ):
                 added_wheels, added_so = rws.process_repo(
                     "xadupre/onnx-light",
                     "build_release.yml",
@@ -559,9 +554,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
             "created_at": "2024-05-02T10:00:00Z",
             "head_sha": "feedface",
         }
-        wheel = _make_wheel(
-            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
-        )
+        wheel = _make_wheel({"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100})
         artifact = {
             "id": 100,
             "name": "wheels",
@@ -589,7 +582,9 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 rws, "iter_workflow_runs", return_value=iter([run])
             ), mock.patch.object(
                 rws, "list_run_artifacts", return_value=[artifact]
-            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+            ), mock.patch.object(
+                rws, "_download", return_value=zip_bytes
+            ):
                 added_wheels, added_so = rws.process_repo(
                     "xadupre/onnx-light",
                     "build_release.yml",
@@ -603,7 +598,6 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 so_rows = list(csv.DictReader(fh))
             self.assertEqual(len(so_rows), 1)
 
-
     def test_process_repo_writes_custom_wheel_csv_name(self):
         # The reduced wheel is recorded into a separate CSV so that it is not
         # merged into the full-wheel series even though both wheels share the
@@ -615,9 +609,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
             "created_at": "2024-05-02T10:00:00Z",
             "head_sha": "feedface",
         }
-        wheel = _make_wheel(
-            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
-        )
+        wheel = _make_wheel({"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100})
         artifact = {
             "id": 100,
             "name": "wheels-reduced-py3.12",
@@ -632,7 +624,9 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 rws, "iter_workflow_runs", return_value=iter([run])
             ), mock.patch.object(
                 rws, "list_run_artifacts", return_value=[artifact]
-            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+            ), mock.patch.object(
+                rws, "_download", return_value=zip_bytes
+            ):
                 added_wheels, added_so = rws.process_repo(
                     "xadupre/onnx-light",
                     "build_reduced_wheel.yml",
@@ -644,9 +638,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 )
             # Only the wheel series is recorded; the so series is skipped.
             self.assertEqual((added_wheels, added_so), (1, 0))
-            reduced_path = os.path.join(
-                tmp, "onnx-light", "wheel_sizes_reduced.csv"
-            )
+            reduced_path = os.path.join(tmp, "onnx-light", "wheel_sizes_reduced.csv")
             full_path = os.path.join(tmp, "onnx-light", "wheel_sizes.csv")
             so_path = os.path.join(tmp, "onnx-light", "so_sizes.csv")
             self.assertTrue(os.path.exists(reduced_path))
@@ -668,9 +660,7 @@ class TestSharedLibrarySizes(unittest.TestCase):
             "created_at": "2024-05-02T10:00:00Z",
             "head_sha": "feedface",
         }
-        wheel = _make_wheel(
-            {"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100}
-        )
+        wheel = _make_wheel({"onnx_light/onnx_py/_mod.cpython-312.so": b"x" * 100})
         artifact = {
             "id": 100,
             "name": "wheels-reduced-py3.12",
@@ -685,7 +675,9 @@ class TestSharedLibrarySizes(unittest.TestCase):
                 rws, "iter_workflow_runs", return_value=iter([run])
             ), mock.patch.object(
                 rws, "list_run_artifacts", return_value=[artifact]
-            ), mock.patch.object(rws, "_download", return_value=zip_bytes):
+            ), mock.patch.object(
+                rws, "_download", return_value=zip_bytes
+            ):
                 added_wheels, added_so = rws.process_repo(
                     "xadupre/onnx-light",
                     "build_reduced_wheel.yml",
