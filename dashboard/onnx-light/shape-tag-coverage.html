@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light &mdash; shape-tag metadata coverage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; max-width: 1100px; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
+.intro code { background: rgba(110, 118, 129, 0.4); padding: 0 0.3em; border-radius: 4px; }
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.meta { font-size: 0.85em; color: #8b949e; }
+.meta strong { color: #c9d1d9; }
+.ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1em;
+  margin: 0.5em 0 0.75em;
+  font-size: 0.9em;
+}
+.ratio-card {
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+.ratio-card .ratio-label {
+  color: #8b949e;
+  font-size: 0.8em;
+}
+.ratio-card .ratio-value {
+  font-size: 1.4em;
+  margin-top: 0.15em;
+  font-weight: bold;
+}
+.ratio-card .ratio-detail {
+  font-size: 0.8em;
+  color: #8b949e;
+  margin-top: 0.1em;
+}
+.ratio-card.tests .ratio-value { color: #79c0ff; }
+.ratio-card.nodes .ratio-value { color: #d2a8ff; }
+.ratio-card.metadata .ratio-value { color: #ffa657; }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.75em;
+}
+.controls input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 200px;
+  padding: 0.4em 0.6em;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid rgba(139, 148, 158, 0.4);
+  border-radius: 6px;
+  font: inherit;
+}
+.controls input[type="search"].invalid {
+  border-color: #f85149;
+}
+.controls .filter-status {
+  font-size: 0.8em;
+  color: #8b949e;
+}
+.controls .filter-status.error { color: #f85149; }
+.table-wrap { overflow-x: auto; }
+table.comparison {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+table.comparison th, table.comparison td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  vertical-align: top;
+}
+table.comparison th {
+  color: #8b949e;
+  font-weight: normal;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: rgba(22, 27, 34, 0.95);
+  white-space: nowrap;
+}
+table.comparison td.center, table.comparison th.center { text-align: center; }
+table.comparison td.status.pass { color: #3fb950; font-weight: bold; }
+table.comparison td.status.fail { color: #f85149; font-weight: bold; }
+table.comparison td.score { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.comparison td.details { font-size: 0.82em; color: #8b949e; max-width: 420px; }
+table.comparison th .arrow {
+  display: inline-block;
+  width: 0.8em;
+  color: #58a6ff;
+}
+table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+table.comparison tbody tr.test-row { cursor: pointer; }
+table.comparison tbody tr.detail-row td {
+  background: rgba(13, 17, 23, 0.75);
+  padding: 0;
+}
+table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
+.toggle-arrow { color: #8b949e; margin-right: 0.4em; display: inline-block; width: 0.8em; }
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin-top: 0.4em;
+}
+.detail-table th, .detail-table td {
+  text-align: left;
+  padding: 0.3em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.18);
+  vertical-align: top;
+}
+.detail-table th { color: #8b949e; font-weight: normal; }
+.detail-table td.ok { color: #3fb950; }
+.detail-table td.ko { color: #f85149; }
+.detail-table td.muted { color: #8b949e; font-size: 0.85em; }
+.detail-error {
+  color: #f85149;
+  font-size: 0.85em;
+  margin-bottom: 0.4em;
+}
+.detail-graph {
+  margin-top: 0.8em;
+  padding: 0.6em 0.8em;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  overflow-x: auto;
+}
+.detail-graph-title {
+  color: #8b949e;
+  font-size: 0.8em;
+  margin-bottom: 0.4em;
+}
+.detail-graph .mermaid {
+  text-align: center;
+  font-size: 0.75em;
+}
+.detail-graph .mermaid svg {
+  max-width: 900px;
+  max-height: 600px;
+  height: auto;
+  width: auto;
+}
+.detail-graph .onnx-svg {
+  text-align: center;
+}
+.detail-graph .onnx-svg svg {
+  max-width: 900px;
+  max-height: 600px;
+  height: auto;
+  width: auto;
+}
+.detail-graph-error {
+  color: #f85149;
+  font-size: 0.8em;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+.notice-banner {
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto 1em;
+  padding: 0.5em 1em;
+  border-radius: 8px;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.5);
+  color: #d29922;
+  font-size: 0.85em;
+  text-align: center;
+  box-sizing: border-box;
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; shape-tag metadata coverage</h1>
+  <p class="intro">
+    Exact-match score of the <code>onnx_light</code> shape-tag metadata
+    algorithm on backend test cases tagged <code>shape_tag</code>.
+    The algorithm labels every node and tensor with a semantic role
+    (<code>shape</code>, <code>axes</code> or <code>weight</code>) via
+    <code>onnx_light.node_tag</code> and <code>onnx_light.value_tags</code>
+    metadata keys.
+    Click a row to see the per-node metadata detail and the model graph.
+  </p>
+</header>
+<div class="notice-banner">⚠ The results displayed on this page are indicative and experimental.</div>
+<div id="message" class="message info"></div>
+<div id="metaPanel" class="panel" style="display:none;">
+  <div class="meta">
+    Snapshot recorded on <strong id="metaDate"></strong>.
+    <span id="metaTag"></span>
+    <span id="metaVersions"></span>
+  </div>
+</div>
+<div id="mainPanel" class="panel" style="display:none;">
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_cc_shape_tag_)…" autocomplete="off" />
+    <div id="filterStatus" class="filter-status"></div>
+  </div>
+  <div class="ratios" id="ratiosContainer"></div>
+  <div class="table-wrap">
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th data-key="name">Test <span class="arrow"></span></th>
+          <th data-key="success" class="center">status <span class="arrow"></span></th>
+          <th data-key="nodes" class="center">nodes <span class="arrow"></span></th>
+          <th data-key="metadata" class="center">metadata <span class="arrow"></span></th>
+          <th data-key="details">details <span class="arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="rowsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const JSON_URL = "../../cache_data/onnx-light/shape_tag_coverage.json";
+
+const state = {
+  rows: [],
+  search: "",
+  sort: { key: "name", dir: "asc" },
+  expanded: new Set(),
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function clearMessage() {
+  const msg = document.getElementById("message");
+  msg.textContent = "";
+  msg.className = "message info";
+}
+
+function pct(pass, fail) {
+  const total = pass + fail;
+  if (!total) return "0.0%";
+  return ((100 * pass) / total).toFixed(1) + "%";
+}
+
+function formatTestName(name) {
+  const prefix = "test_cc_shape_tag_";
+  if (typeof name === "string" && name.startsWith(prefix)) {
+    return "test_cc_shape_tag " + name.slice(prefix.length);
+  }
+  return String(name || "");
+}
+
+function summarizeRow(row) {
+  if (row.error) return row.error;
+  const mismatches = [];
+  for (const node of row.nodes || []) {
+    if (node.success) continue;
+    const parts = [];
+    const expected = node.expected || {};
+    const actual = node.actual || {};
+    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+    for (const key of keys) {
+      const a = expected[key];
+      const b = actual[key];
+      if (a === b) continue;
+      parts.push(key + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
+    }
+    mismatches.push("node " + node.index + (node.op_type ? " (" + node.op_type + ")" : "") + ": " + parts.join("; "));
+  }
+  return mismatches.length ? mismatches.join(" | ") : "all metadata matched";
+}
+
+function renderRatios(totals) {
+  const container = document.getElementById("ratiosContainer");
+  container.innerHTML = "";
+  const cards = [
+    {
+      cls: "tests",
+      label: "tests matched exactly",
+      value: pct(totals.tests.pass, totals.tests.fail),
+      detail: totals.tests.pass + " / " + (totals.tests.pass + totals.tests.fail) + " tests",
+    },
+    {
+      cls: "nodes",
+      label: "nodes matched exactly",
+      value: pct(totals.nodes.pass, totals.nodes.fail),
+      detail: totals.nodes.pass + " / " + (totals.nodes.pass + totals.nodes.fail) + " nodes",
+    },
+    {
+      cls: "metadata",
+      label: "metadata entries matched",
+      value: pct(totals.metadata.pass, totals.metadata.fail),
+      detail: totals.metadata.pass + " / " + (totals.metadata.pass + totals.metadata.fail) + " entries",
+    },
+  ];
+  for (const card of cards) {
+    const div = document.createElement("div");
+    div.className = "ratio-card " + card.cls;
+    div.innerHTML =
+      '<div class="ratio-label">' + card.label + '</div>' +
+      '<div class="ratio-value">' + card.value + '</div>' +
+      '<div class="ratio-detail">' + card.detail + '</div>';
+    container.appendChild(div);
+  }
+}
+
+function compareRows(a, b) {
+  const key = state.sort.key;
+  const dir = state.sort.dir === "desc" ? -1 : 1;
+  const valueOf = (row) => {
+    if (key === "success") return row.success ? 1 : 0;
+    if (key === "nodes") return row.total_nodes ? row.matched_nodes / row.total_nodes : 0;
+    if (key === "metadata") return row.total_metadata ? row.matched_metadata / row.total_metadata : 0;
+    if (key === "details") return summarizeRow(row);
+    return row.name || "";
+  };
+  const va = valueOf(a);
+  const vb = valueOf(b);
+  if (typeof va === "number" && typeof vb === "number") return dir * (va - vb);
+  return dir * String(va).localeCompare(String(vb));
+}
+
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  if (row.error) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "Error: " + row.error;
+    wrap.appendChild(div);
+  }
+
+  const table = document.createElement("table");
+  table.className = "detail-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["node", "op type", "key", "expected", "actual", "match"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const node of row.nodes || []) {
+    const expected = node.expected || {};
+    const actual = node.actual || {};
+    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+    if (!keys.length) {
+      // Node with no metadata: show a single placeholder row
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = String(node.index);
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      tdOp.className = "muted";
+      tdOp.textContent = node.op_type || "—";
+      tr.appendChild(tdOp);
+      for (let i = 0; i < 4; i++) {
+        const td = document.createElement("td");
+        td.className = "muted";
+        td.textContent = "—";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+      continue;
+    }
+    keys.forEach((key, keyIndex) => {
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = keyIndex === 0 ? String(node.index) : "";
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      if (keyIndex === 0) {
+        tdOp.className = node.op_type ? "" : "muted";
+        tdOp.textContent = node.op_type || "—";
+      } else {
+        tdOp.textContent = "";
+      }
+      tr.appendChild(tdOp);
+      const tdKey = document.createElement("td");
+      tdKey.textContent = key.replace("onnx_light.", "");
+      tdKey.title = key;
+      tr.appendChild(tdKey);
+      const expVal = expected[key] !== undefined ? String(expected[key]) : "—";
+      const actVal = actual[key] !== undefined ? String(actual[key]) : "—";
+      const match = expected[key] === actual[key];
+      const tdExp = document.createElement("td");
+      tdExp.textContent = expVal;
+      tr.appendChild(tdExp);
+      const tdAct = document.createElement("td");
+      tdAct.textContent = actVal;
+      tr.appendChild(tdAct);
+      const tdMatch = document.createElement("td");
+      tdMatch.className = match ? "ok" : "ko";
+      tdMatch.textContent = match ? "✓" : "✗";
+      tr.appendChild(tdMatch);
+      tbody.appendChild(tr);
+    });
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  if (hasValidSvgGraph(row) || row.mermaid) {
+    const graphWrap = document.createElement("div");
+    graphWrap.className = "detail-graph";
+    const title = document.createElement("div");
+    title.className = "detail-graph-title";
+    title.textContent = "Model graph";
+    graphWrap.appendChild(title);
+    const graphDiv = document.createElement("div");
+    graphWrap.appendChild(graphDiv);
+    wrap.appendChild(graphWrap);
+    renderGraph(graphDiv, row);
+  }
+
+  return wrap;
+}
+
+let _mermaidLoader = null;
+function loadMermaid() {
+  if (_mermaidLoader) return _mermaidLoader;
+  _mermaidLoader = import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")
+    .then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+      return mermaid;
+    });
+  return _mermaidLoader;
+}
+
+let _mermaidUid = 0;
+function renderMermaid(targetDiv) {
+  const source = targetDiv.textContent;
+  loadMermaid()
+    .then((mermaid) => mermaid.render("shapeTagMermaid_" + (++_mermaidUid), source))
+    .then(({ svg, bindFunctions }) => {
+      targetDiv.innerHTML = svg;
+      if (bindFunctions) bindFunctions(targetDiv);
+    })
+    .catch((err) => {
+      const errDiv = document.createElement("div");
+      errDiv.className = "detail-graph-error";
+      errDiv.textContent = "Failed to render Mermaid graph: " + (err && err.message ? err.message : err);
+      targetDiv.innerHTML = "";
+      targetDiv.appendChild(errDiv);
+    });
+}
+
+function renderGraph(targetDiv, row) {
+  if (hasValidSvgGraph(row)) {
+    const doc = new DOMParser().parseFromString(row.graph.svg, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === "svg") {
+      targetDiv.className = "onnx-svg";
+      targetDiv.appendChild(document.importNode(svg, true));
+      return;
+    }
+  }
+  if (row.mermaid) {
+    targetDiv.className = "mermaid";
+    targetDiv.textContent = row.mermaid;
+    renderMermaid(targetDiv);
+  }
+}
+
+function hasValidSvgGraph(row) {
+  return !!(row && row.graph && typeof row.graph.svg === "string" && row.graph.svg);
+}
+
+function renderRows() {
+  const tbody = document.getElementById("rowsBody");
+  tbody.innerHTML = "";
+  let rows = state.rows.slice();
+  const filterStatus = document.getElementById("filterStatus");
+  filterStatus.textContent = "";
+  filterStatus.className = "filter-status";
+  if (state.search) {
+    try {
+      const rx = new RegExp(state.search, "i");
+      rows = rows.filter(row => rx.test(row.name || "") || rx.test(summarizeRow(row)));
+      filterStatus.textContent = rows.length + " test(s)";
+    } catch (err) {
+      filterStatus.textContent = String(err);
+      filterStatus.className = "filter-status error";
+    }
+  }
+  rows.sort(compareRows);
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    tr.className = "empty-row";
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.textContent = state.search ? "No test matches the current filter." : "No shape_tag backend test result is available.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "test-row";
+
+    const tdName = document.createElement("td");
+    const arrow = document.createElement("span");
+    arrow.className = "toggle-arrow";
+    arrow.textContent = state.expanded.has(row.name) ? "▼" : "▶";
+    tdName.appendChild(arrow);
+    tdName.appendChild(document.createTextNode(formatTestName(row.name)));
+    tr.appendChild(tdName);
+
+    const tdStatus = document.createElement("td");
+    tdStatus.className = "center status " + (row.success ? "pass" : "fail");
+    tdStatus.textContent = row.success ? "pass" : "fail";
+    tr.appendChild(tdStatus);
+
+    const tdNodes = document.createElement("td");
+    tdNodes.className = "center score";
+    tdNodes.textContent = row.matched_nodes + " / " + row.total_nodes;
+    tr.appendChild(tdNodes);
+
+    const tdMeta = document.createElement("td");
+    tdMeta.className = "center score";
+    tdMeta.textContent = row.matched_metadata + " / " + row.total_metadata;
+    tr.appendChild(tdMeta);
+
+    const tdDetails = document.createElement("td");
+    tdDetails.className = "details";
+    tdDetails.textContent = summarizeRow(row);
+    tr.appendChild(tdDetails);
+
+    tr.addEventListener("click", () => {
+      if (state.expanded.has(row.name)) state.expanded.delete(row.name);
+      else state.expanded.add(row.name);
+      renderRows();
+    });
+
+    tbody.appendChild(tr);
+
+    if (state.expanded.has(row.name)) {
+      const detailTr = document.createElement("tr");
+      detailTr.className = "detail-row";
+      const detailTd = document.createElement("td");
+      detailTd.colSpan = 5;
+      detailTd.appendChild(renderDetailFor(row));
+      detailTr.appendChild(detailTd);
+      tbody.appendChild(detailTr);
+    }
+  }
+}
+
+function renderMeta(payload) {
+  document.getElementById("metaDate").textContent = payload.date || "";
+  document.getElementById("metaTag").textContent = payload.tag ? " tag: " + payload.tag + "." : "";
+  const versions = payload.versions || {};
+  const parts = Object.keys(versions).sort().map(name => name + " " + versions[name]);
+  document.getElementById("metaVersions").textContent = parts.length ? " versions: " + parts.join(", ") + "." : "";
+  document.getElementById("metaPanel").style.display = "block";
+}
+
+async function loadData() {
+  try {
+    const response = await fetch(JSON_URL, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status + " while loading " + JSON_URL);
+    }
+    const payload = await response.json();
+    const tests = Array.isArray(payload.tests) ? payload.tests : [];
+    const totals = payload.totals || {
+      tests: { pass: 0, fail: 0 },
+      nodes: { pass: 0, fail: 0 },
+      metadata: { pass: 0, fail: 0 },
+    };
+    state.rows = tests;
+    renderMeta(payload);
+    renderRatios(totals);
+    document.getElementById("mainPanel").style.display = "block";
+    clearMessage();
+    if (!tests.length) {
+      showMessage("No shape_tag backend test result is available yet. The JSON cache will appear after the first successful data-recording workflow run.", "info");
+    }
+    renderRows();
+  } catch (err) {
+    showMessage(String(err), "error");
+  }
+}
+
+document.getElementById("search").addEventListener("input", ev => {
+  state.search = ev.target.value.trim();
+  ev.target.classList.remove("invalid");
+  try {
+    if (state.search) new RegExp(state.search, "i");
+  } catch (err) {
+    ev.target.classList.add("invalid");
+  }
+  renderRows();
+});
+
+for (const th of document.querySelectorAll("thead th[data-key]")) {
+  th.addEventListener("click", () => {
+    const key = th.getAttribute("data-key");
+    if (state.sort.key === key) {
+      state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+    } else {
+      state.sort.key = key;
+      state.sort.dir = key === "name" ? "asc" : "desc";
+    }
+    for (const cell of document.querySelectorAll("thead th[data-key] .arrow")) {
+      cell.textContent = "";
+    }
+    th.querySelector(".arrow").textContent = state.sort.dir === "asc" ? "▲" : "▼";
+    renderRows();
+  });
+}
+document.querySelector('thead th[data-key="name"] .arrow').textContent = "▲";
+loadData();
+</script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/shape_tag_coverage.json" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+</body>
+</html>
