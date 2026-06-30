@@ -33,8 +33,6 @@ DEFAULT_TAGS: Tuple[str, ...] = ("inplace",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
 METADATA_KEYS: Tuple[str, ...] = (
     "onnx_light.inplace_reuse",
-    "onnx_light.release_after",
-    "onnx_light.release_after_shape_tag",
 )
 
 
