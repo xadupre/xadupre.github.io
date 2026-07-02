@@ -44,10 +44,6 @@ _BACKEND_PACKAGE_ORDER: Tuple[Tuple[str, str], ...] = (
 def _csv_columns(backends: List[str]) -> List[str]:
     """Return the ordered CSV column names for ``backends``."""
     cols = ["date"]
-    for backend, pkg in _BACKEND_PACKAGE_ORDER:
-        if pkg in ("onnx_light", "yobx", "onnxruntime", "onnx"):
-            # Version columns: one per unique package across all backends.
-            pass
     # Version columns – emit one per *package* (not per backend) in a stable
     # order so that the header is predictable.
     version_pkgs_seen: List[str] = []
