@@ -39,6 +39,11 @@ FOOTER_RE = re.compile(
     r'<footer\b[^>]*\bclass="data-updated"[^>]*\bdata-source="([^"]+)"'
 )
 SCRIPT_RE = re.compile(r'<script\s+src="((?:\.\./)*)assets/last-updated\.js"')
+DOC_LINK_RE = re.compile(
+    r'<a class="doc-link"[^>]*\bdata-word="([^"]+)"[^>]*>'
+    r'.*?<span class="doc-label">([^<]+)</span>\s*</a>',
+    re.S,
+)
 
 
 class TestLastUpdatedFooter(unittest.TestCase):
@@ -79,6 +84,17 @@ class TestLastUpdatedFooter(unittest.TestCase):
                     expected_prefix,
                     f"{rel}: wrong script path prefix",
                 )
+
+    def test_homepage_doc_links_have_icon_words(self):
+        full = os.path.join(REPO_ROOT, "index.html")
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+
+        matches = DOC_LINK_RE.findall(text)
+        self.assertEqual(len(matches), 25)
+        self.assertIn(("INPLACE", "inplace"), matches)
+        for data_word, label in matches:
+            self.assertEqual(data_word, label.upper())
 
 
 if __name__ == "__main__":
