@@ -1,21 +1,15 @@
-name: DATA onnx-light backend test coverage
+name: DATA onnx-light release-after metadata coverage
 
-# Weekly job that runs every backend node test collected by
-# ``onnx-light`` (``onnx_light.onnx_lib.backend.test.case.collect_test_case``)
-# against ``onnxruntime``, the Python reference implementation shipped
-# with ``onnx`` and the ``onnx-light`` C++ reference evaluator
-# (``onnx_light.onnx.reference``), and caches the pass/fail status as JSON
-# under ``cache_data/onnx-light/backend_test_coverage.json``. The
-# dashboard at ``dashboard/onnx-light/backend-test-coverage.html``
-# consumes that file.
+# Weekly job that runs the backend tests tagged ``release_after`` bundled with
+# ``onnx-light`` and compares the metadata produced by the current
+# release-after algorithm against the metadata embedded in those tests.
+# The resulting JSON cache is written to
+# ``cache_data/onnx-light/release_after_coverage.json`` and consumed by
+# ``dashboard/onnx-light/release-after-coverage.html``.
 
 on:
   schedule:
-    # Run once a week, Monday at 07:29 UTC. The odd minute avoids the load
-    # spikes that happen exactly on the hour, and the time is offset from
-    # the other weekly recording workflows so they do not compete for the
-    # same runner slot.
-    - cron: "29 7 * * 1"
+    - cron: "57 7 * * 1"
   workflow_dispatch:
 
 concurrency:
@@ -34,13 +28,7 @@ jobs:
       - name: Checkout xadupre.github.io
         uses: actions/checkout@v6
         with:
-          # Full history so that we can rebase on top of any concurrent
-          # commits to the default branch before pushing the new snapshot.
           fetch-depth: 0
-          # Use a dedicated bot token (when available) so that the push
-          # below is allowed to bypass branch protection rules. Falls
-          # back to the default ``GITHUB_TOKEN`` when ``BOT_TOKEN`` is
-          # not configured.
           token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
@@ -56,36 +44,33 @@ jobs:
 
       - name: Detect CPU cores
         run: |
-          # Expose the number of available CPU cores as
-          # ``CMAKE_BUILD_PARALLEL_LEVEL`` for every subsequent step so the
-          # onnx-light C++ build uses all cores rather than a hard-coded value.
           cores="$(nproc)"
           echo "Detected ${cores} CPU cores."
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
 
-      - name: Install onnx, onnxruntime and onnx-light
+      - name: Install onnx and onnx-light
         run: |
           python -m pip install --upgrade pip
-          pip install onnx onnxruntime numpy scikit-build-core nanobind
+          pip install onnx numpy scikit-build-core nanobind
           pip install -e ./onnx-light -v
 
       - name: pip freeze
         run: pip freeze
 
-      - name: Record backend test coverage snapshot
+      - name: Record release-after metadata coverage snapshot
         run: |
-          python -u scripts/record_onnx_backend_test_coverage.py
+          python -u scripts/record_onnx_release_after_coverage.py
 
       - name: Commit and push cache data
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cache_data/onnx-light/backend_test_coverage.json
+          git add cache_data/onnx-light/release_after_coverage.json
           if git diff --cached --quiet; then
             echo "No changes to commit."
             exit 0
           fi
-          git commit -m "Update onnx-light backend test coverage cache"
+          git commit -m "Update onnx-light release-after metadata coverage cache"
           branch="${GITHUB_REF_NAME:-main}"
           attempts=5
           for i in $(seq 1 "$attempts"); do
@@ -95,9 +80,6 @@ jobs:
               rm -f "$push_err"
               exit 0
             fi
-            # A permission error (HTTP 403) is not a transient race and will not be
-            # fixed by retrying. Fail fast with a pointer to the README section that
-            # explains which GitHub setting needs to be changed.
             if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
               rm -f "$push_err"
               echo "" >&2
