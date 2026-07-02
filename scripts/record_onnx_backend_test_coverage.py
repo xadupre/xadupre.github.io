@@ -580,9 +580,25 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
     input_names = _model_input_names(model)
+    evaluator_input_names = getattr(evaluator, "input_names", None)
 
     def _run(inputs: List[Any]) -> List[Any]:
-        feeds = {name: value for name, value in zip(input_names, inputs)}
+        import numpy as np
+
+        feeds: Dict[str, Any] = {}
+        for name, value in zip(input_names, inputs):
+            map_keys_name = f"{name}_keys"
+            map_values_name = f"{name}_values"
+            if (
+                isinstance(value, dict)
+                and evaluator_input_names
+                and map_keys_name in evaluator_input_names
+                and map_values_name in evaluator_input_names
+            ):
+                feeds[map_keys_name] = np.asarray(list(value.keys()))
+                feeds[map_values_name] = np.asarray(list(value.values()))
+                continue
+            feeds[name] = value
         return list(evaluator.run(None, feeds))
 
     return _run
