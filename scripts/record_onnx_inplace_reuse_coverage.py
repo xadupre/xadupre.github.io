@@ -342,13 +342,14 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
         if not name:
             continue
         case_tags = _normalize_tags(getattr(tc, "tag", "") or "")
-        if tags and not any(t in tags for t in case_tags):
-            continue
         model = getattr(tc, "model", None)
         if model is None:
             continue
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
+        has_metadata = any(expected_nodes)
+        if tags and not any(t in tags for t in case_tags) and not has_metadata:
+            continue
         discovered.append(
             {
                 "name": str(name),
