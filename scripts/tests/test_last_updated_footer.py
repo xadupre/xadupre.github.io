@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import unittest
+from html.parser import HTMLParser
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -39,6 +40,36 @@ FOOTER_RE = re.compile(
     r'<footer\b[^>]*\bclass="data-updated"[^>]*\bdata-source="([^"]+)"'
 )
 SCRIPT_RE = re.compile(r'<script\s+src="((?:\.\./)*)assets/last-updated\.js"')
+
+class _DocLinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.doc_links = []
+        self._current_link = None
+        self._in_doc_label = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == "a" and attrs.get("class") == "doc-link":
+            self._current_link = {"data_word": attrs.get("data-word"), "label": ""}
+        elif (
+            tag == "span"
+            and self._current_link is not None
+            and attrs.get("class") == "doc-label"
+        ):
+            self._in_doc_label = True
+
+    def handle_data(self, data):
+        if self._in_doc_label and self._current_link is not None:
+            self._current_link["label"] += data
+
+    def handle_endtag(self, tag):
+        if tag == "span" and self._in_doc_label:
+            self._in_doc_label = False
+        elif tag == "a" and self._current_link is not None:
+            self._current_link["label"] = self._current_link["label"].strip()
+            self.doc_links.append(self._current_link)
+            self._current_link = None
 
 
 class TestLastUpdatedFooter(unittest.TestCase):
@@ -79,6 +110,20 @@ class TestLastUpdatedFooter(unittest.TestCase):
                     expected_prefix,
                     f"{rel}: wrong script path prefix",
                 )
+
+    def test_homepage_doc_links_have_icon_words(self):
+        full = os.path.join(REPO_ROOT, "index.html")
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+
+        parser = _DocLinkParser()
+        parser.feed(text)
+
+        self.assertTrue(parser.doc_links)
+        for link in parser.doc_links:
+            self.assertTrue(link["data_word"])
+            self.assertTrue(link["label"])
+            self.assertEqual(link["data_word"], link["label"].upper())
 
 
 if __name__ == "__main__":
