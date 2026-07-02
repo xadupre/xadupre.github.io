@@ -44,6 +44,7 @@ DOC_LINK_RE = re.compile(
     r'.*?<span class="doc-label">([^<]+)</span>\s*</a>',
     re.S,
 )
+DOC_LINK_COUNT_RE = re.compile(r'<a class="doc-link"')
 
 
 class TestLastUpdatedFooter(unittest.TestCase):
@@ -91,7 +92,7 @@ class TestLastUpdatedFooter(unittest.TestCase):
             text = fh.read()
 
         matches = DOC_LINK_RE.findall(text)
-        self.assertEqual(len(matches), 25)
+        self.assertEqual(len(matches), len(DOC_LINK_COUNT_RE.findall(text)))
         self.assertIn(("INPLACE", "inplace"), matches)
         for data_word, label in matches:
             self.assertEqual(data_word, label.upper())
