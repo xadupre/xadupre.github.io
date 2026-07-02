@@ -595,8 +595,9 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
                 and map_keys_name in evaluator_input_names
                 and map_values_name in evaluator_input_names
             ):
-                feeds[map_keys_name] = np.asarray(list(value.keys()))
-                feeds[map_values_name] = np.asarray(list(value.values()))
+                items = list(value.items())
+                feeds[map_keys_name] = np.asarray([k for k, _ in items])
+                feeds[map_values_name] = np.asarray([v for _, v in items])
                 continue
             feeds[name] = value
         return list(evaluator.run(None, feeds))
