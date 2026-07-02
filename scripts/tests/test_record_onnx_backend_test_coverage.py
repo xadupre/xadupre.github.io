@@ -618,6 +618,95 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         # the dashboard can group rows by tag.
         self.assertEqual(entry["tag"], "inference")
 
+    def test_discover_node_tests_loads_data_sets_from_disk_when_model_set(self):
+        """When a test case carries a model but no data sets, load data from disk.
+
+        The tiny-LLM shape-inference tests shipped with onnx-light populate
+        the ``model`` attribute in-memory but leave ``data_sets`` empty;
+        the matching test_data_set_* directories live on disk under
+        ``model_dir``.  ``discover_node_tests`` must fill in the missing
+        data sets from disk so ``run_test_with_backend`` does not report
+        "no test_data_set_* directory found".
+        """
+        import types
+
+        import numpy as np
+        import onnx
+        from onnx import helper, numpy_helper
+
+        node = helper.make_node("Relu", ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+
+        inp_arr = np.array([-1.0, 2.0], dtype=np.float32)
+        out_arr = np.array([0.0, 2.0], dtype=np.float32)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # Write model.onnx (not used by this code path, but present for
+            # completeness – only the data sets are missing in-memory).
+            onnx.save(model, os.path.join(tmp, "model.onnx"))
+            ds_dir = os.path.join(tmp, "test_data_set_0")
+            os.makedirs(ds_dir)
+            with open(os.path.join(ds_dir, "input_0.pb"), "wb") as fh:
+                fh.write(numpy_helper.from_array(inp_arr, name="x").SerializeToString())
+            with open(os.path.join(ds_dir, "output_0.pb"), "wb") as fh:
+                fh.write(numpy_helper.from_array(out_arr, name="y").SerializeToString())
+
+            # The test case has a model in memory but NO data sets; the data
+            # sets must be loaded from model_dir.
+            tc = types.SimpleNamespace(
+                name="test_tiny_llm",
+                kind="model",
+                tag="inference",
+                model=model,
+                data_sets=[],
+                model_dir=tmp,
+            )
+
+            fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+            fake_module.collect_test_case = lambda: {"test_tiny_llm": tc}
+            parents = [
+                ("onnx_light", types.ModuleType("onnx_light")),
+                ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+                (
+                    "onnx_light.onnx_lib.backend",
+                    types.ModuleType("onnx_light.onnx_lib.backend"),
+                ),
+                (
+                    "onnx_light.onnx_lib.backend.test",
+                    types.ModuleType("onnx_light.onnx_lib.backend.test"),
+                ),
+                ("onnx_light.onnx_lib.backend.test.case", fake_module),
+            ]
+            saved = {name: sys.modules.get(name) for name, _ in parents}
+            original_model_to_onnx = rbc._onnx_light_model_to_onnx
+            rbc._onnx_light_model_to_onnx = lambda m: m
+            try:
+                for name, mod in parents:
+                    sys.modules[name] = mod
+                discovered = rbc.discover_node_tests(kind="model")
+            finally:
+                rbc._onnx_light_model_to_onnx = original_model_to_onnx
+                for name, mod in saved.items():
+                    if mod is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = mod
+
+        self.assertEqual(len(discovered), 1)
+        entry = discovered[0]
+        self.assertEqual(entry["name"], "test_tiny_llm")
+        # Data sets must have been loaded from disk.
+        self.assertEqual(len(entry["data_sets"]), 1)
+        loaded_inputs, loaded_outputs = entry["data_sets"][0]
+        np.testing.assert_array_equal(loaded_inputs[0], inp_arr)
+        np.testing.assert_array_equal(loaded_outputs[0], out_arr)
+
     def test_normalize_kinds_accepts_various_shapes(self):
         self.assertEqual(rbc._normalize_kinds(None), ())
         self.assertEqual(rbc._normalize_kinds(""), ())

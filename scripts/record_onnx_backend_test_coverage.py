@@ -249,14 +249,18 @@ def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
         model = getattr(tc, "model", None)
         data_sets = getattr(tc, "data_sets", None) or []
         existing_dir = getattr(tc, "model_dir", None)
-        if model is None and existing_dir:
-            # ``real`` cases (large models fetched on demand) only carry
-            # a ``model_dir``; load the model + data sets into memory so
-            # the runner side keeps a single in-memory contract.
+        if existing_dir and (model is None or not data_sets):
+            # ``real`` cases (large models fetched on demand) may carry only a
+            # ``model_dir``, or may carry an in-memory model but no data sets
+            # (e.g. the tiny-LLM shape-inference tests). Load whichever pieces
+            # are missing from disk so the runner keeps a single in-memory
+            # contract.
             import onnx
 
-            model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
-            data_sets = _load_test_data_sets(str(existing_dir), model)
+            if model is None:
+                model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
+            if not data_sets:
+                data_sets = _load_test_data_sets(str(existing_dir), model)
         if model is None:
             continue
         onnx_model = _onnx_light_model_to_onnx(model)
