@@ -15,6 +15,8 @@ class TestSchemaComparisonDashboard(unittest.TestCase):
         self.assertIn("collectBackendKeys(rows, payload.totals || {});", content)
         self.assertIn('["expanded", "expanded tests"]', content)
         self.assertIn('"backend tests (expanded)"', content)
+        self.assertIn("const prefix = `${side}_`;", content)
+        self.assertIn("key.startsWith(prefix)", content)
 
 
 if __name__ == "__main__":
