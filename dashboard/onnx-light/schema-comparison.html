@@ -206,6 +206,7 @@ table.comparison td.less, .totals td.less { color: #f85149; font-weight: bold; }
 </div>
 
 <div id="mainPanel" class="panel" style="display:none;">
+  <div id="reportTabs" class="tabs" style="margin-bottom:0.5em;"></div>
   <div class="controls">
     <input id="search" type="search" placeholder="Filter operators (name, domain, columns)…" autocomplete="off" />
   </div>
@@ -219,8 +220,8 @@ table.comparison td.less, .totals td.less { color: #f85149; font-weight: bold; }
           <th data-key="in_onnx_light" class="center"><code>onnx_light</code> <span class="arrow"></span></th>
           <th data-key="onnx_shape_inference" class="center"><code>onnx</code><span class="metric">shape infer.</span> <span class="arrow"></span></th>
           <th data-key="onnx_light_shape_inference" class="center"><code>onnx_light</code><span class="metric">shape infer.</span> <span class="arrow"></span></th>
-          <th data-key="onnx_backend_tests" class="num"><code>onnx</code><span class="metric">backend tests</span> <span class="arrow"></span></th>
-          <th data-key="onnx_light_backend_tests" class="num"><code>onnx_light</code><span class="metric">backend tests</span> <span class="arrow"></span></th>
+          <th data-key="onnx_backend_tests" class="num"><code>onnx</code><span id="onnxBackendMetric" class="metric">backend tests</span> <span class="arrow"></span></th>
+          <th data-key="onnx_light_backend_tests" class="num"><code>onnx_light</code><span id="onnxLightBackendMetric" class="metric">backend tests</span> <span class="arrow"></span></th>
         </tr>
       </thead>
       <tbody id="rowsBody"></tbody>
@@ -232,9 +233,17 @@ table.comparison td.less, .totals td.less { color: #f85149; font-weight: bold; }
 const JSON_URL = "../../cache_data/onnx-light/schema_comparison.json";
 
 const state = {
+  allRows: [],
   rowsByDomain: new Map(),
   activeDomain: null,
   search: "",
+  reportMode: "main",
+  totals: {},
+  backendKeys: {
+    onnx: { main: "onnx_backend_tests", expanded: null },
+    onnx_light: { main: "onnx_light_backend_tests", expanded: null },
+  },
+  hasExpandedBackend: false,
   sort: { key: "name", dir: "asc" },
 };
 
@@ -267,12 +276,49 @@ function renderMeta(payload) {
     : " The reference onnx package was not installed when the snapshot was recorded, so the onnx-side columns are reported as empty.";
 
   renderVersions(payload.versions || {});
+  state.totals = payload.totals || {};
+  renderTotals();
+}
 
-  const totals = payload.totals || {};
+function toNumber(value) {
+  if (typeof value === "number") return value;
+  if (value === undefined || value === null || value === "") return null;
+  const cast = Number(value);
+  return Number.isFinite(cast) ? cast : null;
+}
+
+function pickBackendKey(side, mode) {
+  return mode === "expanded" ? state.backendKeys[side].expanded : state.backendKeys[side].main;
+}
+
+function getBackendValue(row, side, mode) {
+  const key = pickBackendKey(side, mode || state.reportMode);
+  if (!key) return null;
+  return toNumber(row[key]);
+}
+
+function getTotalBackendValue(side, mode) {
+  const selectedMode = mode || state.reportMode;
+  const key = pickBackendKey(side, selectedMode);
+  if (key) {
+    const total = toNumber(state.totals[key]);
+    if (total !== null) return total;
+  }
+  let total = 0;
+  for (const row of state.allRows) {
+    const value = getBackendValue(row, side, selectedMode);
+    if (value !== null) total += value;
+  }
+  return total;
+}
+
+function renderTotals() {
+  const totals = state.totals || {};
+  const backendLabel = state.reportMode === "expanded" ? "backend tests (expanded)" : "backend tests";
   const rows = [
     ["number of schemas", totals.onnx, totals.onnx_light],
     ["shape inference", totals.onnx_shape_inference, totals.onnx_light_shape_inference],
-    ["backend tests", totals.onnx_backend_tests, totals.onnx_light_backend_tests, true],
+    [backendLabel, getTotalBackendValue("onnx"), getTotalBackendValue("onnx_light"), true],
   ];
   const body = document.getElementById("totalsBody");
   body.innerHTML = "";
@@ -299,6 +345,43 @@ function renderMeta(payload) {
     tr.appendChild(tdLight);
     body.appendChild(tr);
   }
+}
+
+function collectBackendKeys(rows, totals) {
+  const keys = new Set(Object.keys(totals || {}));
+  for (const row of rows) {
+    for (const key of Object.keys(row)) keys.add(key);
+  }
+  const allKeys = Array.from(keys);
+  function pickMain(side) {
+    const preferred = `${side}_backend_tests`;
+    if (keys.has(preferred)) return preferred;
+    const fallback = allKeys.filter(
+      key => key.includes(side) && key.includes("backend") && !key.includes("expanded")
+    );
+    return fallback.sort()[0] || null;
+  }
+  function pickExpanded(side) {
+    const preferred = `${side}_backend_tests_expanded`;
+    if (keys.has(preferred)) return preferred;
+    const fallback = allKeys.filter(
+      key => key.includes(side) && key.includes("backend") && key.includes("expanded")
+    );
+    return fallback.sort((a, b) => (a.length - b.length) || a.localeCompare(b))[0] || null;
+  }
+  state.backendKeys.onnx.main = pickMain("onnx");
+  state.backendKeys.onnx.expanded = pickExpanded("onnx");
+  state.backendKeys.onnx_light.main = pickMain("onnx_light");
+  state.backendKeys.onnx_light.expanded = pickExpanded("onnx_light");
+  state.hasExpandedBackend = Boolean(
+    state.backendKeys.onnx.expanded || state.backendKeys.onnx_light.expanded
+  );
+}
+
+function updateBackendMetricLabels() {
+  const label = state.reportMode === "expanded" ? "expanded tests" : "backend tests";
+  document.getElementById("onnxBackendMetric").textContent = label;
+  document.getElementById("onnxLightBackendMetric").textContent = label;
 }
 
 function renderVersions(versions) {
@@ -372,10 +455,47 @@ function renderTabs() {
   }
 }
 
+function renderReportTabs() {
+  const container = document.getElementById("reportTabs");
+  if (!state.hasExpandedBackend) {
+    container.style.display = "none";
+    return;
+  }
+  container.style.display = "flex";
+  container.innerHTML = "";
+  const entries = [
+    ["main", "main report"],
+    ["expanded", "expanded tests"],
+  ];
+  for (const [mode, text] of entries) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tab" + (state.reportMode === mode ? " active" : "");
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      if (state.reportMode === mode) return;
+      state.reportMode = mode;
+      renderReportTabs();
+      updateBackendMetricLabels();
+      renderTotals();
+      renderRows();
+    });
+    container.appendChild(btn);
+  }
+}
+
 function compareRows(a, b) {
   const { key, dir } = state.sort;
-  const va = a[key];
-  const vb = b[key];
+  const va = key === "onnx_backend_tests"
+    ? getBackendValue(a, "onnx")
+    : key === "onnx_light_backend_tests"
+    ? getBackendValue(a, "onnx_light")
+    : a[key];
+  const vb = key === "onnx_backend_tests"
+    ? getBackendValue(b, "onnx")
+    : key === "onnx_light_backend_tests"
+    ? getBackendValue(b, "onnx_light")
+    : b[key];
   let cmp;
   if (typeof va === "number" && typeof vb === "number") {
     cmp = va - vb;
@@ -392,6 +512,8 @@ function compareRows(a, b) {
 
 function rowMatches(row, needle) {
   if (!needle) return true;
+  const onnxBackendTests = getBackendValue(row, "onnx");
+  const onnxLightBackendTests = getBackendValue(row, "onnx_light");
   const haystack = [
     row.name,
     row.domain,
@@ -399,8 +521,8 @@ function rowMatches(row, needle) {
     row.in_onnx_light ? "yes onnx_light" : "no onnx_light",
     row.onnx_shape_inference ? "yes onnx shape" : "no onnx shape",
     row.onnx_light_shape_inference ? "yes onnx_light shape" : "no onnx_light shape",
-    String(row.onnx_backend_tests),
-    String(row.onnx_light_backend_tests),
+    String(onnxBackendTests ?? 0),
+    String(onnxLightBackendTests ?? 0),
   ].join(" ").toLowerCase();
   return haystack.includes(needle);
 }
@@ -428,14 +550,16 @@ function renderRows() {
     body.appendChild(tr);
   } else {
     for (const r of filtered) {
+      const onnxBackendTests = getBackendValue(r, "onnx");
+      const onnxLightBackendTests = getBackendValue(r, "onnx_light");
       const tr = document.createElement("tr");
       tr.appendChild(cellText(r.name));
       tr.appendChild(cellCheck(r.in_onnx));
       tr.appendChild(cellCheck(r.in_onnx_light));
       tr.appendChild(cellCheck(r.onnx_shape_inference));
       tr.appendChild(cellCheck(r.onnx_light_shape_inference));
-      tr.appendChild(cellNum(r.onnx_backend_tests));
-      tr.appendChild(cellNum(r.onnx_light_backend_tests, r.onnx_backend_tests));
+      tr.appendChild(cellNum(onnxBackendTests));
+      tr.appendChild(cellNum(onnxLightBackendTests, onnxBackendTests));
       body.appendChild(tr);
     }
   }
@@ -533,11 +657,16 @@ fetch(JSON_URL, { cache: "no-store" })
       return;
     }
     hideMessage();
+    state.allRows = rows;
+    collectBackendKeys(rows, payload.totals || {});
+    state.reportMode = "main";
+    updateBackendMetricLabels();
     renderMeta(payload);
     state.rowsByDomain = groupRows(rows);
     const domains = Array.from(state.rowsByDomain.keys()).sort();
     state.activeDomain = domains.includes("ai.onnx") ? "ai.onnx" : domains[0];
     document.getElementById("mainPanel").style.display = "block";
+    renderReportTabs();
     renderTabs();
     bindHeaderSorting();
     bindSearch();
