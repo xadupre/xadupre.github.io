@@ -22,6 +22,15 @@ class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
         )
         self.assertNotIn("_row.onnx_backend_tests = len(_snippets[_row.name])", content)
 
+    def test_schema_comparison_optionally_exports_expanded_backend_totals(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, ".github", "workflows", "record_size_onnx_light.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn("onnx_backend_tests_expanded", content)
+        self.assertIn("onnx_light_backend_tests_expanded", content)
+        self.assertIn("_optional_total(", content)
+
 
 if __name__ == "__main__":
     unittest.main()
