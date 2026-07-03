@@ -1,12 +1,12 @@
 """
 .. _l-example-plot-pretty-onnx:
 
-pretty_onnx: shape info, shape tags and inplace annotations
+pretty_onnx: shape info, shape tags, inplace and release annotations
 ======================================================================
 
 :func:`~onnx_light.tools.pretty_onnx` renders any ONNX proto as a
 compact, human-readable text listing.  Beyond the basic node-by-node
-view it supports three optional annotation layers:
+view it supports four optional annotation layers:
 
 * **shape info** — run shape inference before rendering so every input,
   intermediate and output tensor shows its inferred dtype and shape.
@@ -15,8 +15,11 @@ view it supports three optional annotation layers:
   inference.
 * **inplace info** — annotate nodes whose output can safely reuse an
   input's buffer (``onnx_light.inplace_reuse`` metadata).
+* **release info** — annotate nodes after which a tensor is no longer
+  needed and its memory can be freed (``onnx_light.release_after``
+  metadata).
 
-The example below builds a small graph, enriches it with all three kinds
+The example below builds a small graph, enriches it with all four kinds
 of metadata and then shows the output of :func:`~onnx_light.tools.pretty_onnx`
 at each level of verbosity.
 
@@ -54,7 +57,7 @@ defs.register_onnx_operator_set_schema()
 # Build the model
 # +++++++++++++++
 #
-# The graph is intentionally simple so that all three annotation layers are
+# The graph is intentionally simple so that all four annotation layers are
 # visible on just a handful of nodes.
 
 model = oh.make_model(
@@ -148,12 +151,27 @@ print(pretty_onnx(model, include_inplace=True))
 
 
 #####################################
+# Release info
+# ++++++++++++
+#
+# The same ``write_inplace_reuse_to_metadata`` call also records, for each
+# node, the set of tensors whose last use ends at that node.  A runtime can
+# free those buffers immediately after the node executes.  The names are
+# stored under the ``onnx_light.release_after`` metadata key as a
+# ``;``-separated list.  With ``include_release=True`` they are rendered
+# as ``release: A`` (or ``release: A, B`` when multiple tensors are freed).
+
+print("\n=== include_release=True ===")
+print(pretty_onnx(model, include_release=True))
+
+
+#####################################
 # All annotations combined
 # +++++++++++++++++++++++++
 #
-# The three flags are independent and compose freely.  The listing below
+# The four flags are independent and compose freely.  The listing below
 # enables all of them at once so you can see the full picture in a single
 # pass.
 
 print("\n=== all annotations combined ===")
-print(pretty_onnx(model, include_node_tags=True, include_inplace=True))
+print(pretty_onnx(model, include_node_tags=True, include_inplace=True, include_release=True))
