@@ -125,6 +125,19 @@ class TestLastUpdatedFooter(unittest.TestCase):
             self.assertTrue(link["label"])
             self.assertEqual(link["data_word"], link["label"].upper())
 
+    def test_homepage_icon_word_style(self):
+        full = os.path.join(REPO_ROOT, "index.html")
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+
+        match = re.search(r"\.doc-link::after\s*\{([^}]*)\}", text, re.DOTALL)
+        self.assertIsNotNone(match)
+        rule = match.group(1)
+
+        self.assertIn("background: transparent;", rule)
+        self.assertIn("color: #000000;", rule)
+        self.assertIn("font-weight: 300;", rule)
+
 
 if __name__ == "__main__":
     unittest.main()
