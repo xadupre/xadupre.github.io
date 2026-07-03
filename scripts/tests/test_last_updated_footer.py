@@ -130,13 +130,13 @@ class TestLastUpdatedFooter(unittest.TestCase):
         with open(full, encoding="utf-8") as fh:
             text = fh.read()
 
-        match = re.search(r"\.doc-link::after\s*\{([^}]*)\}", text, re.DOTALL)
+        match = re.search(r"\.doc-label\s*\{([^}]*)\}", text, re.DOTALL)
         self.assertIsNotNone(match)
         rule = match.group(1)
 
-        self.assertIn("background: transparent;", rule)
-        self.assertIn("color: #000000;", rule)
-        self.assertIn("font-weight: 300;", rule)
+        self.assertIn("text-transform: uppercase;", rule)
+        self.assertIn("color: #8b949e;", rule)
+        self.assertIn("font-weight: 200;", rule)
 
 
 if __name__ == "__main__":
