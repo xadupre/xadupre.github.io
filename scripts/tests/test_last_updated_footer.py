@@ -125,6 +125,15 @@ class TestLastUpdatedFooter(unittest.TestCase):
             self.assertTrue(link["label"])
             self.assertEqual(link["data_word"], link["label"].upper())
 
+    def test_homepage_doc_link_word_style(self):
+        full = os.path.join(REPO_ROOT, "index.html")
+        with open(full, encoding="utf-8") as fh:
+            text = fh.read()
+
+        self.assertIn("background: transparent;", text)
+        self.assertIn("color: #000000;", text)
+        self.assertIn("font-weight: 300;", text)
+
 
 if __name__ == "__main__":
     unittest.main()
