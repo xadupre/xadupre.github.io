@@ -111,6 +111,18 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         self.assertIn("graph", row)
         self.assertEqual(row["graph"], {"svg": "<svg><rect/></svg>"})
 
+    def test_score_test_keeps_node_input_output_info(self):
+        row = rac._score_test(
+            "test_with_io",
+            expected_nodes=[{"onnx_light.release_after": "A"}],
+            actual_nodes=[{"onnx_light.release_after": "A"}],
+            node_ops=["Abs"],
+            node_inputs=[["X"]],
+            node_outputs=[["Y"]],
+        )
+        self.assertEqual(row["nodes"][0]["inputs"], ["X"])
+        self.assertEqual(row["nodes"][0]["outputs"], ["Y"])
+
     def test_score_test_omits_mermaid_when_empty(self):
         row = rac._score_test(
             "test_no_mermaid",

@@ -113,6 +113,18 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertIn("graph", row)
         self.assertEqual(row["graph"], {"svg": "<svg><rect/></svg>"})
 
+    def test_score_test_keeps_node_input_output_info(self):
+        row = stc._score_test(
+            "test_with_io",
+            expected_nodes=[{"onnx_light.node_tag": "shape"}],
+            actual_nodes=[{"onnx_light.node_tag": "shape"}],
+            node_ops=["Shape"],
+            node_inputs=[["X"]],
+            node_outputs=[["S"]],
+        )
+        self.assertEqual(row["nodes"][0]["inputs"], ["X"])
+        self.assertEqual(row["nodes"][0]["outputs"], ["S"])
+
     def test_score_test_omits_mermaid_when_empty(self):
         row = stc._score_test(
             "test_no_mermaid",

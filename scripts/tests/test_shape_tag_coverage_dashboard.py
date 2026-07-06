@@ -1,4 +1,4 @@
-"""Tests for the onnx-light release-after coverage dashboard page."""
+"""Tests for the onnx-light shape-tag coverage dashboard page."""
 
 from __future__ import annotations
 
@@ -7,12 +7,10 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(
-    REPO_ROOT, "dashboard", "onnx-light", "release-after-coverage.html"
-)
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light", "shape-tag-coverage.html")
 
 
-class TestReleaseAfterCoverageDashboard(unittest.TestCase):
+class TestShapeTagCoverageDashboard(unittest.TestCase):
     def test_unfolded_rows_prefer_svg_graph_rendering(self):
         with open(PAGE, encoding="utf-8") as f:
             text = f.read()
@@ -23,7 +21,7 @@ class TestReleaseAfterCoverageDashboard(unittest.TestCase):
             'const doc = new DOMParser().parseFromString(row.graph.svg, "image/svg+xml");',
             text,
         )
-        self.assertIn("targetDiv.className = \"onnx-svg\";", text)
+        self.assertIn('targetDiv.className = "onnx-svg";', text)
         self.assertIn("if (row.mermaid) {", text)
 
     def test_detail_rows_render_input_output_info(self):
