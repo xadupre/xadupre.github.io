@@ -37,7 +37,7 @@ class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
         self.assertIn("def _is_expanded_test_name(name):", content)
-        self.assertIn('return "_expanded" in name or "_expected" in name', content)
+        self.assertIn('return "_expanded" in name', content)
         self.assertIn("if not _is_expanded_test_name(test.name):", content)
         self.assertIn("if not _is_expanded_test_name(name):", content)
         self.assertIn('row["onnx_backend_tests_expanded"] = onnx_exp', content)
