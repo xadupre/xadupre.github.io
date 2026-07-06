@@ -315,6 +315,9 @@ jobs:
 
           comparison = compute_schema_comparison()
 
+          def _is_expanded_test_name(name):
+              return "_expanded" in name or "_expected" in name
+
           def _count_expanded_onnx_backend_tests(op_keys):
               try:
                   import onnx
@@ -330,7 +333,7 @@ jobs:
               sorted_forms = _build_op_form_index(op_keys)
               counts = Counter()
               for test in tests:
-                  if "_expanded" not in test.name:
+                  if not _is_expanded_test_name(test.name):
                       continue
                   key = _attribute_test_name(test.name, sorted_forms)
                   if key is None:
@@ -359,7 +362,7 @@ jobs:
               sorted_forms = _build_op_form_index(op_keys)
               counts = Counter()
               for name, test_case in collect_test_case().items():
-                  if "_expanded" not in name:
+                  if not _is_expanded_test_name(name):
                       continue
                   key = _attribute_test_name(name, sorted_forms)
                   if key is None:
@@ -438,6 +441,12 @@ jobs:
                       total += int(row.get(name) or 0)
               return total if found else None
 
+          def _coalesce_optional(*values):
+              for value in values:
+                  if value is not None:
+                      return value
+              return None
+
           rows = [asdict(r) for r in comparison.rows]
           if not any(
               "onnx_backend_tests_expanded" in row
@@ -474,20 +483,24 @@ jobs:
           }
           optional_totals = {
               "onnx_backend_tests_expanded": (
-                  _optional_total(
-                      comparison,
-                      "total_onnx_backend_tests_expanded",
-                      "total_onnx_expanded_backend_tests",
+                  _coalesce_optional(
+                      _optional_total(
+                          comparison,
+                          "total_onnx_backend_tests_expanded",
+                          "total_onnx_expanded_backend_tests",
+                      ),
+                      _optional_row_total(rows, "onnx_backend_tests_expanded"),
                   )
-                  or _optional_row_total(rows, "onnx_backend_tests_expanded")
               ),
               "onnx_light_backend_tests_expanded": (
-                  _optional_total(
-                      comparison,
-                      "total_onnx_light_backend_tests_expanded",
-                      "total_onnx_light_expanded_backend_tests",
+                  _coalesce_optional(
+                      _optional_total(
+                          comparison,
+                          "total_onnx_light_backend_tests_expanded",
+                          "total_onnx_light_expanded_backend_tests",
+                      ),
+                      _optional_row_total(rows, "onnx_light_backend_tests_expanded"),
                   )
-                  or _optional_row_total(rows, "onnx_light_backend_tests_expanded")
               ),
           }
           for _key, _value in optional_totals.items():

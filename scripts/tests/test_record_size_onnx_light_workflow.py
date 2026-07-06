@@ -36,12 +36,22 @@ class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
         path = os.path.join(root, ".github", "workflows", "record_size_onnx_light.yml")
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
-        self.assertIn('if "_expanded" not in test.name:', content)
-        self.assertIn('if "_expanded" not in name:', content)
+        self.assertIn("def _is_expanded_test_name(name):", content)
+        self.assertIn('return "_expanded" in name or "_expected" in name', content)
+        self.assertIn("if not _is_expanded_test_name(test.name):", content)
+        self.assertIn("if not _is_expanded_test_name(name):", content)
         self.assertIn('row["onnx_backend_tests_expanded"] = onnx_exp', content)
         self.assertIn('row["onnx_light_backend_tests_expanded"] = light_exp', content)
         self.assertIn('int(row.get("onnx_backend_tests", 0)) - onnx_exp', content)
         self.assertIn('int(row.get("onnx_light_backend_tests", 0)) - light_exp', content)
+
+    def test_schema_comparison_preserves_zero_expanded_totals(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, ".github", "workflows", "record_size_onnx_light.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn("def _coalesce_optional(*values):", content)
+        self.assertIn("_coalesce_optional(", content)
 
 
 if __name__ == "__main__":
