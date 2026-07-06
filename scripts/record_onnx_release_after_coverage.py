@@ -431,16 +431,8 @@ def _score_test(
         expected = dict(expected_nodes[index]) if index < len(expected_nodes) else {}
         actual = dict(actual_nodes[index]) if index < len(actual_nodes) else {}
         op_type = node_ops[index] if index < len(node_ops) else ""
-        inputs = (
-            [str(name) for name in node_inputs[index] if str(name)]
-            if node_inputs is not None and index < len(node_inputs)
-            else []
-        )
-        outputs = (
-            [str(name) for name in node_outputs[index] if str(name)]
-            if node_outputs is not None and index < len(node_outputs)
-            else []
-        )
+        inputs = list(node_inputs[index]) if node_inputs is not None and index < len(node_inputs) else []
+        outputs = list(node_outputs[index]) if node_outputs is not None and index < len(node_outputs) else []
         keys = sorted(set(expected) | set(actual))
         metadata_matches = sum(1 for key in keys if expected.get(key) == actual.get(key))
         total_metadata += len(keys)
