@@ -31,6 +31,18 @@ class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
         self.assertIn("onnx_light_backend_tests_expanded", content)
         self.assertIn("_optional_total(", content)
 
+    def test_schema_comparison_reclassifies_expected_backend_tests_as_expanded(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, ".github", "workflows", "record_size_onnx_light.yml")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        self.assertIn('if "_expected" not in test.name:', content)
+        self.assertIn('if "_expected" not in name:', content)
+        self.assertIn('row["onnx_backend_tests_expanded"] = onnx_exp', content)
+        self.assertIn('row["onnx_light_backend_tests_expanded"] = light_exp', content)
+        self.assertIn('int(row.get("onnx_backend_tests", 0)) - onnx_exp', content)
+        self.assertIn('int(row.get("onnx_light_backend_tests", 0)) - light_exp', content)
+
 
 if __name__ == "__main__":
     unittest.main()
