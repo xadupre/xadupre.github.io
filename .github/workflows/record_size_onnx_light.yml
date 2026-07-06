@@ -304,11 +304,75 @@ jobs:
           python - <<'PY'
           import json
           import os
+          from collections import Counter
           from dataclasses import asdict
 
-          from onnx_light.tools.schema_comparison import compute_schema_comparison
+          from onnx_light.tools.schema_comparison import (
+              _attribute_test_name,
+              _build_op_form_index,
+              compute_schema_comparison,
+          )
 
           comparison = compute_schema_comparison()
+
+          def _count_expanded_onnx_backend_tests(op_keys):
+              try:
+                  import onnx
+                  from onnx.backend.test.loader import load_model_tests
+              except ImportError:
+                  return Counter()
+
+              try:
+                  tests = load_model_tests(kind="node")
+              except Exception:
+                  return Counter()
+
+              sorted_forms = _build_op_form_index(op_keys)
+              counts = Counter()
+              for test in tests:
+                  if "_expected" not in test.name:
+                      continue
+                  key = _attribute_test_name(test.name, sorted_forms)
+                  if key is None:
+                      model_path = (
+                          os.path.join(test.model_dir, "model.onnx") if test.model_dir else None
+                      )
+                      if not model_path or not os.path.exists(model_path):
+                          continue
+                      try:
+                          model = onnx.load(model_path, load_external_data=False)
+                      except Exception:
+                          continue
+                      if not model.graph.node:
+                          continue
+                      node = model.graph.node[0]
+                      key = (node.domain or "ai.onnx", node.op_type)
+                  counts[key] += 1
+              return counts
+
+          def _count_expanded_onnx_light_backend_tests(op_keys):
+              try:
+                  from onnx_light.onnx_lib.backend.test.case.base import collect_test_case
+              except ImportError:
+                  return Counter()
+
+              sorted_forms = _build_op_form_index(op_keys)
+              counts = Counter()
+              for name, test_case in collect_test_case().items():
+                  if "_expected" not in name:
+                      continue
+                  key = _attribute_test_name(name, sorted_forms)
+                  if key is None:
+                      model = test_case.model
+                      if model is None:
+                          continue
+                      nodes = list(model.graph.node)
+                      if not nodes:
+                          continue
+                      node = nodes[0]
+                      key = (node.domain or "ai.onnx", node.op_type)
+                  counts[key] += 1
+              return counts
 
           # Collect the IR_VERSION and the latest ai.onnx opset version from
           # both packages so that the dashboard can show, as its first table,
@@ -365,24 +429,65 @@ jobs:
                           return int(value)
               return None
 
+          def _optional_row_total(rows, name):
+              found = False
+              total = 0
+              for row in rows:
+                  if name in row:
+                      found = True
+                      total += int(row.get(name) or 0)
+              return total if found else None
+
+          rows = [asdict(r) for r in comparison.rows]
+          if not any(
+              "onnx_backend_tests_expanded" in row
+              or "onnx_light_backend_tests_expanded" in row
+              for row in rows
+          ):
+              op_keys = {(row["domain"], row["name"]) for row in rows}
+              onnx_expanded = _count_expanded_onnx_backend_tests(op_keys)
+              onnx_light_expanded = _count_expanded_onnx_light_backend_tests(op_keys)
+              for row in rows:
+                  key = (row["domain"], row["name"])
+                  onnx_exp = int(onnx_expanded.get(key, 0))
+                  light_exp = int(onnx_light_expanded.get(key, 0))
+                  if onnx_exp:
+                      row["onnx_backend_tests_expanded"] = onnx_exp
+                      row["onnx_backend_tests"] = max(
+                          int(row.get("onnx_backend_tests", 0)) - onnx_exp, 0
+                      )
+                  if light_exp:
+                      row["onnx_light_backend_tests_expanded"] = light_exp
+                      row["onnx_light_backend_tests"] = max(
+                          int(row.get("onnx_light_backend_tests", 0)) - light_exp, 0
+                      )
+
           totals = {
               "onnx": comparison.total_onnx,
               "onnx_light": comparison.total_onnx_light,
               "onnx_shape_inference": comparison.total_onnx_shape_inference,
               "onnx_light_shape_inference": comparison.total_onnx_light_shape_inference,
-              "onnx_backend_tests": comparison.total_onnx_backend_tests,
-              "onnx_light_backend_tests": comparison.total_onnx_light_backend_tests,
+              "onnx_backend_tests": sum(int(row.get("onnx_backend_tests", 0) or 0) for row in rows),
+              "onnx_light_backend_tests": sum(
+                  int(row.get("onnx_light_backend_tests", 0) or 0) for row in rows
+              ),
           }
           optional_totals = {
-              "onnx_backend_tests_expanded": _optional_total(
-                  comparison,
-                  "total_onnx_backend_tests_expanded",
-                  "total_onnx_expanded_backend_tests",
+              "onnx_backend_tests_expanded": (
+                  _optional_total(
+                      comparison,
+                      "total_onnx_backend_tests_expanded",
+                      "total_onnx_expanded_backend_tests",
+                  )
+                  or _optional_row_total(rows, "onnx_backend_tests_expanded")
               ),
-              "onnx_light_backend_tests_expanded": _optional_total(
-                  comparison,
-                  "total_onnx_light_backend_tests_expanded",
-                  "total_onnx_light_expanded_backend_tests",
+              "onnx_light_backend_tests_expanded": (
+                  _optional_total(
+                      comparison,
+                      "total_onnx_light_backend_tests_expanded",
+                      "total_onnx_light_expanded_backend_tests",
+                  )
+                  or _optional_row_total(rows, "onnx_light_backend_tests_expanded")
               ),
           }
           for _key, _value in optional_totals.items():
@@ -395,7 +500,7 @@ jobs:
               "onnx_available": comparison.onnx_available,
               "versions": versions,
               "totals": totals,
-              "rows": [asdict(r) for r in comparison.rows],
+              "rows": rows,
           }
           out = os.environ["OUT"]
           with open(out, "w", encoding="utf-8") as f:
