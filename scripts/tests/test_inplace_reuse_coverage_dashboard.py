@@ -26,6 +26,16 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
         self.assertIn("targetDiv.className = \"onnx-svg\";", text)
         self.assertIn("if (row.mermaid) {", text)
 
+    def test_detail_rows_render_input_output_info(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("function formatNodeIo(node) {", text)
+        self.assertIn('parts.push("in: " + inputs.join(", "));', text)
+        self.assertIn('parts.push("out: " + outputs.join(", "));', text)
+        self.assertIn("function formatNodeOp(node) {", text)
+        self.assertIn("const opText = formatNodeOp(node);", text)
+
 
 if __name__ == "__main__":
     unittest.main()

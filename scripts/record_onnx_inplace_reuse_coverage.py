@@ -104,6 +104,13 @@ def _clear_node_metadata(node) -> None:
     del node.metadata_props[:]
 
 
+def _node_io(node) -> Tuple[List[str], List[str]]:
+    """Return ``(inputs, outputs)`` for one node as display-ready strings."""
+    inputs = [str(name) for name in getattr(node, "input", []) if str(name)]
+    outputs = [str(name) for name in getattr(node, "output", []) if str(name)]
+    return inputs, outputs
+
+
 # ---------------------------------------------------------------------------
 # Mermaid graph rendering (best-effort; failures are silently ignored)
 # ---------------------------------------------------------------------------
@@ -356,6 +363,8 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "model": model,
                 "expected_nodes": expected_nodes,
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
+                "node_inputs": [_node_io(node)[0] for node in nodes],
+                "node_outputs": [_node_io(node)[1] for node in nodes],
                 "mermaid": model_to_mermaid(model),
                 "graph": model_to_svg_graph(model),
             }
@@ -398,6 +407,8 @@ def _score_test(
     expected_nodes: List[Dict[str, str]],
     actual_nodes: List[Dict[str, str]],
     node_ops: Optional[List[str]] = None,
+    node_inputs: Optional[List[List[str]]] = None,
+    node_outputs: Optional[List[List[str]]] = None,
     error: str = "",
     memory: Optional[List[Any]] = None,
     mermaid: str = "",
@@ -420,6 +431,8 @@ def _score_test(
         expected = dict(expected_nodes[index]) if index < len(expected_nodes) else {}
         actual = dict(actual_nodes[index]) if index < len(actual_nodes) else {}
         op_type = node_ops[index] if index < len(node_ops) else ""
+        inputs = list(node_inputs[index]) if node_inputs is not None and index < len(node_inputs) else []
+        outputs = list(node_outputs[index]) if node_outputs is not None and index < len(node_outputs) else []
         keys = sorted(set(expected) | set(actual))
         metadata_matches = sum(1 for key in keys if expected.get(key) == actual.get(key))
         total_metadata += len(keys)
@@ -437,6 +450,8 @@ def _score_test(
                 "expected": expected,
                 "actual": actual,
                 "memory": memory[index] if memory is not None and index < len(memory) else None,
+                "inputs": inputs,
+                "outputs": outputs,
             }
         )
 
@@ -484,6 +499,8 @@ def build_payload(
                 list(test.get("expected_nodes", [])),
                 list(info.get("actual_nodes", [])),
                 node_ops=list(test.get("node_ops", [])),
+                node_inputs=list(test.get("node_inputs", [])),
+                node_outputs=list(test.get("node_outputs", [])),
                 memory=list(info.get("memory", [])) if info.get("memory") is not None else None,
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
@@ -496,6 +513,8 @@ def build_payload(
                 list(test.get("expected_nodes", [])),
                 [],
                 node_ops=list(test.get("node_ops", [])),
+                node_inputs=list(test.get("node_inputs", [])),
+                node_outputs=list(test.get("node_outputs", [])),
                 error=str(exc) or type(exc).__name__,
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
