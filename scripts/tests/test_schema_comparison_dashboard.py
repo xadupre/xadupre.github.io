@@ -26,6 +26,20 @@ class TestSchemaComparisonDashboard(unittest.TestCase):
             content,
         )
 
+    def test_get_total_backend_value_returns_null_when_no_key(self):
+        # When a side has no expanded key registered (e.g. onnx_light before
+        # the expanded column is populated), getTotalBackendValue must return
+        # null rather than 0.  The renderTotals function renders null as an
+        # empty cell, which avoids showing a misleading "0" in the totals
+        # table.
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, "dashboard", "onnx-light", "schema-comparison.html")
+        with open(path, encoding="utf-8") as fh:
+            content = fh.read()
+        # The function must return null immediately when no key is found
+        self.assertIn("if (!key) {", content)
+        self.assertIn("return null;", content)
+
 
 if __name__ == "__main__":
     unittest.main()
