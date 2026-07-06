@@ -17,6 +17,14 @@ class TestSchemaComparisonDashboard(unittest.TestCase):
         self.assertIn('"backend tests (expanded)"', content)
         self.assertIn("const prefix = `${side}_`;", content)
         self.assertIn("key.startsWith(prefix)", content)
+        self.assertIn("state.backendKeys.onnx.main ||", content)
+        self.assertIn("state.backendKeys.onnx_light.main ||", content)
+        self.assertIn('const show = state.reportMode === "expanded";', content)
+        self.assertIn('const showExpanded = state.reportMode === "expanded";', content)
+        self.assertNotIn(
+            'state.hasExpandedBackend && state.reportMode === "expanded"',
+            content,
+        )
 
 
 if __name__ == "__main__":
