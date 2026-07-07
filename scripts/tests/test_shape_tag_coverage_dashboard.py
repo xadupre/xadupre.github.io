@@ -41,6 +41,34 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("row.values", text)
         self.assertIn("Inputs / outputs / initializers", text)
 
+    def test_summary_row_reports_value_mismatches(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        # summarizeRow must iterate over row.values (not only row.nodes)
+        self.assertIn("row.values", text)
+        # val.success is checked to skip matched values
+        self.assertIn("val.success", text)
+        # val.kind and val.name are used in the mismatch description
+        self.assertIn("val.kind", text)
+        self.assertIn("val.name", text)
+
+    def test_values_ratio_card_in_render_ratios(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("result tags matched", text)
+        self.assertIn("totals.values", text)
+        self.assertIn('cls: "values"', text)
+
+    def test_values_column_in_table_and_rows(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn('data-key="values"', text)
+        self.assertIn("matched_values", text)
+        self.assertIn("total_values", text)
+
 
 if __name__ == "__main__":
     unittest.main()
