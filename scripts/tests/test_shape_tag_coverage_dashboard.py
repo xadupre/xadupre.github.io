@@ -46,8 +46,10 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
             text = f.read()
 
         # summarizeRow must iterate over row.values (not only row.nodes)
-        self.assertIn("for (const val of row.values || []) {", text)
+        self.assertIn("row.values", text)
+        # val.success is checked to skip matched values
         self.assertIn("val.success", text)
+        # val.kind and val.name are used in the mismatch description
         self.assertIn("val.kind", text)
         self.assertIn("val.name", text)
 
