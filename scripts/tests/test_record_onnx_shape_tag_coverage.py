@@ -157,6 +157,8 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(row["total_nodes"], 3)
         self.assertEqual(row["matched_metadata"], 2)
         self.assertEqual(row["total_metadata"], 3)
+        self.assertEqual(row["matched_values"], 0)
+        self.assertEqual(row["total_values"], 0)
         self.assertEqual(row["nodes"][2]["op_type"], "Reshape")
         self.assertNotIn("mermaid", row)
         self.assertIn("values", row)
@@ -189,6 +191,10 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertFalse(y_val["success"])
         self.assertEqual(y_val["expected"], {})
         self.assertEqual(y_val["actual"], {"onnx_light.value_tags": "axes"})
+        # One value matches (X), one does not (Y); test fails due to Y mismatch
+        self.assertEqual(row["matched_values"], 1)
+        self.assertEqual(row["total_values"], 2)
+        self.assertFalse(row["success"])
 
     def test_score_test_values_preserves_order(self):
         expected_values = [
@@ -363,6 +369,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
                 "tests": {"pass": 1, "fail": 1},
                 "nodes": {"pass": 2, "fail": 1},
                 "metadata": {"pass": 1, "fail": 1},
+                "values": {"pass": 0, "fail": 0},
             },
         )
         self.assertEqual([row["name"] for row in payload["tests"]], ["test_a", "test_b"])
@@ -401,6 +408,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
                 "tests": {"pass": 1, "fail": 0},
                 "nodes": {"pass": 2, "fail": 0},
                 "metadata": {"pass": 2, "fail": 0},
+                "values": {"pass": 5, "fail": 0},
             },
             "tests": [{"name": "test_a", "success": True}],
         }
