@@ -432,6 +432,7 @@ def _empty_totals() -> Dict[str, Dict[str, int]]:
         "tests": {"pass": 0, "fail": 0},
         "nodes": {"pass": 0, "fail": 0},
         "metadata": {"pass": 0, "fail": 0},
+        "values": {"pass": 0, "fail": 0},
     }
 
 
@@ -490,6 +491,8 @@ def _score_test(
 
     # Build value-level comparison (inputs, outputs, initializers)
     values: List[Dict[str, Any]] = []
+    matched_values = 0
+    total_values = 0
     if expected_values is not None or actual_values is not None:
         exp_map = {v["name"]: v for v in (expected_values or [])}
         act_map = {v["name"]: v for v in (actual_values or [])}
@@ -503,12 +506,18 @@ def _score_test(
             act_entry = act_map.get(val_name, {})
             exp_meta = exp_entry.get("metadata", {})
             act_meta = act_entry.get("metadata", {})
+            val_success = exp_meta == act_meta
+            total_values += 1
+            if val_success:
+                matched_values += 1
+            else:
+                success = False
             values.append({
                 "name": val_name,
                 "kind": exp_entry.get("kind") or act_entry.get("kind", ""),
                 "expected": exp_meta,
                 "actual": act_meta,
-                "success": exp_meta == act_meta,
+                "success": val_success,
             })
 
     row: Dict[str, Any] = {
@@ -519,6 +528,8 @@ def _score_test(
         "total_nodes": total_nodes,
         "matched_metadata": matched_metadata,
         "total_metadata": total_metadata,
+        "matched_values": matched_values,
+        "total_values": total_values,
         "nodes": nodes,
         "values": values,
     }
@@ -587,6 +598,8 @@ def build_payload(
         totals["metadata"]["fail"] += max(
             row["total_metadata"] - row["matched_metadata"], 0
         )
+        totals["values"]["pass"] += row["matched_values"]
+        totals["values"]["fail"] += max(row["total_values"] - row["matched_values"], 0)
         rows.append(row)
 
     now_iso = _format_iso(dt.datetime.now(tz=dt.timezone.utc))

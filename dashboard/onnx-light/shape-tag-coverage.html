@@ -68,6 +68,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .ratio-card.tests .ratio-value { color: #79c0ff; }
 .ratio-card.nodes .ratio-value { color: #d2a8ff; }
 .ratio-card.metadata .ratio-value { color: #ffa657; }
+.ratio-card.values .ratio-value { color: #7ee787; }
 .controls {
   display: flex;
   flex-wrap: wrap;
@@ -256,6 +257,7 @@ table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
           <th data-key="success" class="center">status <span class="arrow"></span></th>
           <th data-key="nodes" class="center">nodes <span class="arrow"></span></th>
           <th data-key="metadata" class="center">metadata <span class="arrow"></span></th>
+          <th data-key="values" class="center">values <span class="arrow"></span></th>
           <th data-key="details">details <span class="arrow"></span></th>
         </tr>
       </thead>
@@ -317,6 +319,20 @@ function summarizeRow(row) {
     }
     mismatches.push("node " + node.index + (node.op_type ? " (" + node.op_type + ")" : "") + ": " + parts.join("; "));
   }
+  for (const val of row.values || []) {
+    if (val.success) continue;
+    const parts = [];
+    const expected = val.expected || {};
+    const actual = val.actual || {};
+    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+    for (const key of keys) {
+      const a = expected[key];
+      const b = actual[key];
+      if (a === b) continue;
+      parts.push(key + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
+    }
+    mismatches.push((val.kind || "value") + " " + (val.name || "?") + ": " + parts.join("; "));
+  }
   return mismatches.length ? mismatches.join(" | ") : "all metadata matched";
 }
 
@@ -338,9 +354,15 @@ function renderRatios(totals) {
     },
     {
       cls: "metadata",
-      label: "metadata entries matched",
+      label: "node metadata entries matched",
       value: pct(totals.metadata.pass, totals.metadata.fail),
       detail: totals.metadata.pass + " / " + (totals.metadata.pass + totals.metadata.fail) + " entries",
+    },
+    {
+      cls: "values",
+      label: "result tags matched (inputs/outputs/initializers)",
+      value: pct((totals.values || {pass:0,fail:0}).pass, (totals.values || {pass:0,fail:0}).fail),
+      detail: (totals.values || {pass:0,fail:0}).pass + " / " + ((totals.values || {pass:0,fail:0}).pass + (totals.values || {pass:0,fail:0}).fail) + " values",
     },
   ];
   for (const card of cards) {
@@ -361,6 +383,7 @@ function compareRows(a, b) {
     if (key === "success") return row.success ? 1 : 0;
     if (key === "nodes") return row.total_nodes ? row.matched_nodes / row.total_nodes : 0;
     if (key === "metadata") return row.total_metadata ? row.matched_metadata / row.total_metadata : 0;
+    if (key === "values") return row.total_values ? row.matched_values / row.total_values : 0;
     if (key === "details") return summarizeRow(row);
     return row.name || "";
   };
@@ -637,7 +660,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 5;
+    td.colSpan = 6;
     td.textContent = state.search ? "No test matches the current filter." : "No shape_tag backend test result is available.";
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -670,6 +693,11 @@ function renderRows() {
     tdMeta.textContent = row.matched_metadata + " / " + row.total_metadata;
     tr.appendChild(tdMeta);
 
+    const tdValues = document.createElement("td");
+    tdValues.className = "center score";
+    tdValues.textContent = (row.matched_values ?? 0) + " / " + (row.total_values ?? 0);
+    tr.appendChild(tdValues);
+
     const tdDetails = document.createElement("td");
     tdDetails.className = "details";
     tdDetails.textContent = summarizeRow(row);
@@ -687,7 +715,7 @@ function renderRows() {
       const detailTr = document.createElement("tr");
       detailTr.className = "detail-row";
       const detailTd = document.createElement("td");
-      detailTd.colSpan = 5;
+      detailTd.colSpan = 6;
       detailTd.appendChild(renderDetailFor(row));
       detailTr.appendChild(detailTd);
       tbody.appendChild(detailTr);
