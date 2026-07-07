@@ -24,16 +24,34 @@ class _FakeNode:
     def __init__(self, op_type, metadata=None):
         self.op_type = op_type
         self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
+        self.input = []
+        self.output = []
+
+
+class _FakeValueInfo:
+    def __init__(self, name, metadata=None):
+        self.name = name
+        self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
+
+
+class _FakeTensorProto:
+    def __init__(self, name, metadata=None):
+        self.name = name
+        self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
 
 
 class _FakeGraph:
-    def __init__(self, nodes):
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
         self.node = nodes
+        self.input = inputs or []
+        self.output = outputs or []
+        self.initializer = initializers or []
+        self.value_info = []
 
 
 class _FakeModel:
-    def __init__(self, nodes):
-        self.graph = _FakeGraph(nodes)
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
+        self.graph = _FakeGraph(nodes, inputs=inputs, outputs=outputs, initializers=initializers)
 
 
 class _FakeTestCase:
@@ -59,6 +77,33 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
                 "onnx_light.release_after": "A",
             },
         )
+
+    def test_value_metadata_filters_unrelated_keys(self):
+        vi = _FakeValueInfo(
+            "X",
+            {"onnx_light.value_tags": "shape", "onnx_light.release_after": "A", "ignored": "x"},
+        )
+        self.assertEqual(
+            rac._value_metadata(vi),
+            {"onnx_light.value_tags": "shape"},
+        )
+
+    def test_graph_value_snapshot_collects_inputs_outputs_initializers(self):
+        inp = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
+        out = _FakeValueInfo("Y", {})
+        init = _FakeTensorProto("W", {"onnx_light.value_tags": "weight"})
+        model = _FakeModel([], inputs=[inp], outputs=[out], initializers=[init])
+        snapshot = rac._graph_value_snapshot(model)
+        names = [s["name"] for s in snapshot]
+        self.assertIn("X", names)
+        self.assertIn("Y", names)
+        self.assertIn("W", names)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        self.assertEqual(x_entry["kind"], "input")
+        y_entry = next(s for s in snapshot if s["name"] == "Y")
+        self.assertEqual(y_entry["kind"], "output")
+        w_entry = next(s for s in snapshot if s["name"] == "W")
+        self.assertEqual(w_entry["kind"], "initializer")
 
     def test_clear_node_metadata_removes_entries(self):
         node = _FakeNode("Abs", {"onnx_light.release_after": "A"})
@@ -87,6 +132,32 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         self.assertEqual(row["total_metadata"], 2)
         self.assertEqual(row["nodes"][2]["op_type"], "Abs")
         self.assertNotIn("mermaid", row)
+        self.assertIn("values", row)
+        self.assertEqual(row["values"], [])
+
+    def test_score_test_includes_values_section(self):
+        expected_values = [
+            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {"name": "Y", "kind": "output", "metadata": {}},
+        ]
+        actual_values = [
+            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {"name": "Y", "kind": "output", "metadata": {"onnx_light.value_tags": "axes"}},
+        ]
+        row = rac._score_test(
+            "test_vals",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_values=expected_values,
+            actual_values=actual_values,
+        )
+        self.assertIn("values", row)
+        self.assertEqual(len(row["values"]), 2)
+        x_val = next(v for v in row["values"] if v["name"] == "X")
+        self.assertTrue(x_val["success"])
+        y_val = next(v for v in row["values"] if v["name"] == "Y")
+        self.assertFalse(y_val["success"])
 
     def test_score_test_includes_mermaid_when_provided(self):
         row = rac._score_test(
@@ -142,6 +213,36 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             graph={"nodes": []},
         )
         self.assertNotIn("graph", row)
+
+    def test_build_payload_passes_values(self):
+        expected_values = [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}]
+        tests = [
+            {
+                "name": "test_vals",
+                "model": "model_v",
+                "expected_nodes": [{"onnx_light.release_after": "A"}],
+                "node_ops": ["Abs"],
+                "expected_values": expected_values,
+            }
+        ]
+
+        def fake_run(model):
+            return {
+                "actual_nodes": [{"onnx_light.release_after": "A"}],
+                "actual_values": [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}],
+            }
+
+        payload = rac.build_payload(
+            tag="release_after",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        row = payload["tests"][0]
+        self.assertIn("values", row)
+        self.assertEqual(len(row["values"]), 1)
+        self.assertEqual(row["values"][0]["name"], "X")
+        self.assertTrue(row["values"][0]["success"])
 
     def test_build_payload_passes_mermaid(self):
         tests = [
