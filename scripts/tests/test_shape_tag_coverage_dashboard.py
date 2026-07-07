@@ -34,6 +34,13 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("function formatNodeOp(node) {", text)
         self.assertIn("const opText = formatNodeOp(node);", text)
 
+    def test_values_section_rendered_in_detail(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("row.values", text)
+        self.assertIn("Inputs / outputs / initializers", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,16 +24,34 @@ class _FakeNode:
     def __init__(self, op_type, metadata=None):
         self.op_type = op_type
         self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
+        self.input = []
+        self.output = []
+
+
+class _FakeValueInfo:
+    def __init__(self, name, metadata=None):
+        self.name = name
+        self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
+
+
+class _FakeTensorProto:
+    def __init__(self, name, metadata=None):
+        self.name = name
+        self.metadata_props = [_FakeMeta(k, v) for k, v in (metadata or {}).items()]
 
 
 class _FakeGraph:
-    def __init__(self, nodes):
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
         self.node = nodes
+        self.input = inputs or []
+        self.output = outputs or []
+        self.initializer = initializers or []
+        self.value_info = []
 
 
 class _FakeModel:
-    def __init__(self, nodes):
-        self.graph = _FakeGraph(nodes)
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
+        self.graph = _FakeGraph(nodes, inputs=inputs, outputs=outputs, initializers=initializers)
 
 
 class _FakeTestCase:
@@ -62,6 +80,58 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             },
         )
 
+    def test_value_metadata_filters_unrelated_keys(self):
+        vi = _FakeValueInfo(
+            "X",
+            {
+                "onnx_light.value_tags": "shape",
+                "onnx_light.node_tag": "something",
+                "ignored": "x",
+            },
+        )
+        self.assertEqual(
+            stc._value_metadata(vi),
+            {"onnx_light.value_tags": "shape"},
+        )
+
+    def test_graph_value_snapshot_collects_inputs_outputs_initializers(self):
+        inp = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
+        out = _FakeValueInfo("Y", {})
+        init = _FakeTensorProto("W", {"onnx_light.value_tags": "weight"})
+        model = _FakeModel([], inputs=[inp], outputs=[out], initializers=[init])
+        snapshot = stc._graph_value_snapshot(model)
+        names = [s["name"] for s in snapshot]
+        self.assertIn("X", names)
+        self.assertIn("Y", names)
+        self.assertIn("W", names)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        self.assertEqual(x_entry["kind"], "input")
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        y_entry = next(s for s in snapshot if s["name"] == "Y")
+        self.assertEqual(y_entry["kind"], "output")
+        self.assertEqual(y_entry["metadata"], {})
+        w_entry = next(s for s in snapshot if s["name"] == "W")
+        self.assertEqual(w_entry["kind"], "initializer")
+        self.assertEqual(w_entry["metadata"], {"onnx_light.value_tags": "weight"})
+
+    def test_graph_value_snapshot_excludes_initializer_from_inputs(self):
+        inp = _FakeValueInfo("X")
+        init = _FakeTensorProto("W")
+        # When the same name appears in both input and initializer, it should not
+        # show up as an "input" kind (only as "initializer").
+        class FakeGraph:
+            node = []
+            input = [_FakeValueInfo("W"), inp]
+            output = []
+            initializer = [init]
+            value_info = []
+        class FakeModel:
+            graph = FakeGraph()
+        snapshot = stc._graph_value_snapshot(FakeModel())
+        kinds = {s["name"]: s["kind"] for s in snapshot}
+        self.assertEqual(kinds.get("W"), "initializer")
+        self.assertEqual(kinds.get("X"), "input")
+
     def test_clear_node_metadata_removes_entries(self):
         node = _FakeNode("Shape", {"onnx_light.node_tag": "shape"})
         stc._clear_node_metadata(node)
@@ -89,6 +159,52 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(row["total_metadata"], 3)
         self.assertEqual(row["nodes"][2]["op_type"], "Reshape")
         self.assertNotIn("mermaid", row)
+        self.assertIn("values", row)
+        self.assertEqual(row["values"], [])
+
+    def test_score_test_includes_values_section(self):
+        expected_values = [
+            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {"name": "Y", "kind": "output", "metadata": {}},
+        ]
+        actual_values = [
+            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {"name": "Y", "kind": "output", "metadata": {"onnx_light.value_tags": "axes"}},
+        ]
+        row = stc._score_test(
+            "test_values",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_values=expected_values,
+            actual_values=actual_values,
+        )
+        self.assertIn("values", row)
+        self.assertEqual(len(row["values"]), 2)
+        x_val = next(v for v in row["values"] if v["name"] == "X")
+        self.assertEqual(x_val["kind"], "input")
+        self.assertTrue(x_val["success"])
+        y_val = next(v for v in row["values"] if v["name"] == "Y")
+        self.assertEqual(y_val["kind"], "output")
+        self.assertFalse(y_val["success"])
+        self.assertEqual(y_val["expected"], {})
+        self.assertEqual(y_val["actual"], {"onnx_light.value_tags": "axes"})
+
+    def test_score_test_values_preserves_order(self):
+        expected_values = [
+            {"name": "A", "kind": "input", "metadata": {}},
+            {"name": "B", "kind": "output", "metadata": {}},
+        ]
+        row = stc._score_test(
+            "test_order",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_values=expected_values,
+            actual_values=expected_values,
+        )
+        names = [v["name"] for v in row["values"]]
+        self.assertEqual(names, ["A", "B"])
 
     def test_score_test_includes_mermaid_when_provided(self):
         row = stc._score_test(
@@ -144,6 +260,36 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             graph={"nodes": []},
         )
         self.assertNotIn("graph", row)
+
+    def test_build_payload_passes_values(self):
+        expected_values = [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}]
+        tests = [
+            {
+                "name": "test_vals",
+                "model": "model_v",
+                "expected_nodes": [{"onnx_light.node_tag": "shape"}],
+                "node_ops": ["Shape"],
+                "expected_values": expected_values,
+            }
+        ]
+
+        def fake_run(model):
+            return {
+                "actual_nodes": [{"onnx_light.node_tag": "shape"}],
+                "actual_values": [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}],
+            }
+
+        payload = stc.build_payload(
+            tag="shape_tag",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        row = payload["tests"][0]
+        self.assertIn("values", row)
+        self.assertEqual(len(row["values"]), 1)
+        self.assertEqual(row["values"][0]["name"], "X")
+        self.assertTrue(row["values"][0]["success"])
 
     def test_build_payload_passes_mermaid(self):
         tests = [

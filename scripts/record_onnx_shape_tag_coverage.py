@@ -35,6 +35,7 @@ METADATA_KEYS: Tuple[str, ...] = (
     "onnx_light.node_tag",
     "onnx_light.value_tags",
 )
+VALUE_METADATA_KEYS: Tuple[str, ...] = ("onnx_light.value_tags",)
 
 
 def _normalize_tags(tag) -> Tuple[str, ...]:
@@ -103,6 +104,36 @@ def _node_metadata(node) -> Dict[str, str]:
 def _clear_node_metadata(node) -> None:
     """Remove every metadata entry from ``node`` in place."""
     del node.metadata_props[:]
+
+
+def _value_metadata(obj) -> Dict[str, str]:
+    """Return VALUE_METADATA_KEYS entries from a value_info or tensor proto."""
+    return {
+        str(entry.key): str(entry.value)
+        for entry in getattr(obj, "metadata_props", [])
+        if str(entry.key) in VALUE_METADATA_KEYS
+    }
+
+
+def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
+    """Collect value-level metadata for a model's graph inputs, outputs, and initializers.
+
+    Returns a list of ``{"name", "kind", "metadata"}`` dicts where ``kind``
+    is ``"input"``, ``"output"``, or ``"initializer"``.
+    """
+    if not hasattr(model, "graph"):
+        return []
+    graph = model.graph
+    init_names = {init.name for init in graph.initializer}
+    result: List[Dict[str, Any]] = []
+    for vi in graph.input:
+        if vi.name not in init_names:
+            result.append({"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)})
+    for vi in graph.output:
+        result.append({"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)})
+    for init in graph.initializer:
+        result.append({"name": init.name, "kind": "initializer", "metadata": _value_metadata(init)})
+    return result
 
 
 def _node_io(node) -> Tuple[List[str], List[str]]:
@@ -337,9 +368,10 @@ def model_to_svg_graph(model: Any) -> Dict[str, str]:
 def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     """Return backend tests whose ``tag`` matches ``tag``.
 
-    Each entry is a dictionary ``{"name", "model", "expected_nodes", "node_ops"}``
-    where ``expected_nodes`` is the per-node metadata subset relevant to the
-    shape-tag analysis.
+    Each entry is a dictionary ``{"name", "model", "expected_nodes", "node_ops",
+    "expected_values"}`` where ``expected_nodes`` is the per-node metadata subset
+    relevant to the shape-tag analysis and ``expected_values`` is the per-value
+    metadata (inputs, outputs, initializers).
     """
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
@@ -366,6 +398,7 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
                 "node_inputs": [_node_io(node)[0] for node in nodes],
                 "node_outputs": [_node_io(node)[1] for node in nodes],
+                "expected_values": _graph_value_snapshot(model),
                 "mermaid": model_to_mermaid(model),
                 "graph": model_to_svg_graph(model),
             }
@@ -381,11 +414,16 @@ def run_shape_tag_analysis(model) -> Dict[str, Any]:
     work = _clone_model(model)
     for node in work.graph.node:
         _clear_node_metadata(node)
+    for vi in list(work.graph.input) + list(work.graph.output) + list(work.graph.value_info):
+        del vi.metadata_props[:]
+    for init in work.graph.initializer:
+        del init.metadata_props[:]
 
     write_value_and_node_tags_to_metadata(work.graph)
 
     return {
         "actual_nodes": [_node_metadata(node) for node in work.graph.node],
+        "actual_values": _graph_value_snapshot(work),
     }
 
 
@@ -404,6 +442,8 @@ def _score_test(
     node_ops: Optional[List[str]] = None,
     node_inputs: Optional[List[List[str]]] = None,
     node_outputs: Optional[List[List[str]]] = None,
+    expected_values: Optional[List[Dict[str, Any]]] = None,
+    actual_values: Optional[List[Dict[str, Any]]] = None,
     error: str = "",
     mermaid: str = "",
     graph: Optional[Dict[str, Any]] = None,
@@ -448,6 +488,29 @@ def _score_test(
             }
         )
 
+    # Build value-level comparison (inputs, outputs, initializers)
+    values: List[Dict[str, Any]] = []
+    if expected_values is not None or actual_values is not None:
+        exp_map = {v["name"]: v for v in (expected_values or [])}
+        act_map = {v["name"]: v for v in (actual_values or [])}
+        # dict.fromkeys preserves insertion order while deduplicating names.
+        all_names = list(dict.fromkeys(
+            [v["name"] for v in (expected_values or [])] +
+            [v["name"] for v in (actual_values or [])]
+        ))
+        for val_name in all_names:
+            exp_entry = exp_map.get(val_name, {})
+            act_entry = act_map.get(val_name, {})
+            exp_meta = exp_entry.get("metadata", {})
+            act_meta = act_entry.get("metadata", {})
+            values.append({
+                "name": val_name,
+                "kind": exp_entry.get("kind") or act_entry.get("kind", ""),
+                "expected": exp_meta,
+                "actual": act_meta,
+                "success": exp_meta == act_meta,
+            })
+
     row: Dict[str, Any] = {
         "name": name,
         "success": success,
@@ -457,6 +520,7 @@ def _score_test(
         "matched_metadata": matched_metadata,
         "total_metadata": total_metadata,
         "nodes": nodes,
+        "values": values,
     }
     if mermaid:
         row["mermaid"] = mermaid
@@ -494,6 +558,8 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 node_inputs=list(test.get("node_inputs", [])),
                 node_outputs=list(test.get("node_outputs", [])),
+                expected_values=list(test.get("expected_values", [])),
+                actual_values=list(info.get("actual_values", [])),
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
             )
@@ -507,6 +573,8 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 node_inputs=list(test.get("node_inputs", [])),
                 node_outputs=list(test.get("node_outputs", [])),
+                expected_values=list(test.get("expected_values", [])),
+                actual_values=[],
                 error=str(exc) or type(exc).__name__,
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
