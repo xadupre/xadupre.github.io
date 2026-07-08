@@ -344,7 +344,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertFalse(row["success"])
         self.assertTrue(row["missing_metadata"])
 
-
+    def test_build_payload_passes_values(self):
         expected_values = [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}]
         tests = [
             {
