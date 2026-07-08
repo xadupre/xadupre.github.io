@@ -520,10 +520,19 @@ def _score_test(
                 "success": val_success,
             })
 
+    # When a test has nodes but no metadata was expected or produced for any of
+    # them, it trivially passes but carries no signal about shape-tag quality.
+    # In shape-tag coverage context this means the expected annotations are
+    # missing from the test case, which is itself an error.
+    missing_metadata = total_nodes > 0 and total_metadata == 0 and not error
+    if missing_metadata:
+        success = False
+
     row: Dict[str, Any] = {
         "name": name,
         "success": success,
         "error": error,
+        "missing_metadata": missing_metadata,
         "matched_nodes": matched_nodes,
         "total_nodes": total_nodes,
         "matched_metadata": matched_metadata,

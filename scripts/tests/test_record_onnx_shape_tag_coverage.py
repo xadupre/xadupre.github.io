@@ -267,6 +267,83 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         )
         self.assertNotIn("graph", row)
 
+    def test_score_test_missing_metadata_flag_when_no_expected_tags(self):
+        """When all nodes have empty expected AND actual metadata, missing_metadata=True and test fails."""
+        row = stc._score_test(
+            "test_no_metadata",
+            expected_nodes=[{}, {}],
+            actual_nodes=[{}, {}],
+            node_ops=["Relu", "Abs"],
+        )
+        self.assertTrue(row["missing_metadata"])
+        self.assertFalse(row["success"])
+        self.assertEqual(row["total_metadata"], 0)
+        self.assertEqual(row["matched_metadata"], 0)
+        # Nodes themselves still appear to match (both empty)
+        self.assertEqual(row["total_nodes"], 2)
+
+    def test_score_test_no_missing_metadata_flag_when_expected_tags_present(self):
+        """When at least one node has expected metadata, missing_metadata=False."""
+        row = stc._score_test(
+            "test_has_metadata",
+            expected_nodes=[{"onnx_light.node_tag": "shape"}, {}],
+            actual_nodes=[{"onnx_light.node_tag": "shape"}, {}],
+            node_ops=["Shape", "Relu"],
+        )
+        self.assertFalse(row["missing_metadata"])
+        self.assertTrue(row["success"])
+        self.assertEqual(row["total_metadata"], 1)
+        self.assertEqual(row["matched_metadata"], 1)
+
+    def test_score_test_no_missing_metadata_flag_when_error_set(self):
+        """When error is already set, missing_metadata stays False even with no metadata."""
+        row = stc._score_test(
+            "test_error",
+            expected_nodes=[{}, {}],
+            actual_nodes=[{}, {}],
+            node_ops=["Relu", "Abs"],
+            error="some exception",
+        )
+        self.assertFalse(row["missing_metadata"])
+        # Error flag is separate; success was already False due to the error
+        self.assertFalse(row["success"])
+
+    def test_score_test_no_missing_metadata_when_no_nodes(self):
+        """When there are no nodes at all, missing_metadata remains False (nothing to check)."""
+        row = stc._score_test(
+            "test_empty_nodes",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+        )
+        self.assertFalse(row["missing_metadata"])
+        self.assertTrue(row["success"])
+
+    def test_build_payload_counts_missing_metadata_as_fail(self):
+        """Tests with no expected metadata on any node are counted as failures in totals."""
+        tests = [
+            {
+                "name": "test_no_tags",
+                "model": "model_no_tags",
+                "expected_nodes": [{}, {}],
+                "node_ops": ["Relu", "Abs"],
+            },
+        ]
+
+        def fake_run(model):
+            return {"actual_nodes": [{}, {}]}
+
+        payload = stc.build_payload(
+            tag="shape_tag",
+            discover=lambda tag: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertEqual(payload["totals"]["tests"], {"pass": 0, "fail": 1})
+        row = payload["tests"][0]
+        self.assertFalse(row["success"])
+        self.assertTrue(row["missing_metadata"])
+
     def test_build_payload_passes_values(self):
         expected_values = [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}]
         tests = [
