@@ -69,6 +69,23 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("matched_values", text)
         self.assertIn("total_values", text)
 
+    def test_summarize_row_reports_missing_metadata(self):
+        """summarizeRow must return a specific message when row.missing_metadata is true."""
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        # The summarizeRow function must check missing_metadata before falling through
+        self.assertIn("row.missing_metadata", text)
+        self.assertIn("No shape tag metadata found", text)
+
+    def test_detail_view_shows_missing_metadata_indicator(self):
+        """renderDetailFor must show a specific message when row.missing_metadata is true."""
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("row.missing_metadata", text)
+        self.assertIn("No shape tag metadata found", text)
+
 
 if __name__ == "__main__":
     unittest.main()
