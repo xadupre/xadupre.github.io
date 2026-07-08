@@ -76,7 +76,7 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
 
         # The summarizeRow function must check missing_metadata before falling through
         self.assertIn("row.missing_metadata", text)
-        self.assertIn("no shape tag metadata found", text)
+        self.assertIn("No shape tag metadata found", text)
 
     def test_detail_view_shows_missing_metadata_indicator(self):
         """renderDetailFor must show a specific message when row.missing_metadata is true."""
