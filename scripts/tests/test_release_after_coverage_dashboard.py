@@ -41,7 +41,8 @@ class TestReleaseAfterCoverageDashboard(unittest.TestCase):
             text = f.read()
 
         self.assertIn("row.values", text)
-        self.assertIn("Inputs / outputs / initializers", text)
+        self.assertIn('filter(val => val.kind !== "input" && val.kind !== "initializer")', text)
+        self.assertIn("Outputs", text)
 
 
 if __name__ == "__main__":
