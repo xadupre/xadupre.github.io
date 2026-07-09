@@ -119,20 +119,28 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     """Collect value-level metadata for a model's graph inputs, outputs, and initializers.
 
     Returns a list of ``{"name", "kind", "metadata"}`` dicts where ``kind``
-    is ``"input"``, ``"output"``, or ``"initializer"``.
+    is ``"input"``, ``"output"``, ``"initializer"``, or ``"result"``.
     """
     if not hasattr(model, "graph"):
         return []
     graph = model.graph
     init_names = {init.name for init in graph.initializer}
+    seen_names: set[str] = set()
     result: List[Dict[str, Any]] = []
     for vi in graph.input:
         if vi.name not in init_names:
+            seen_names.add(vi.name)
             result.append({"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)})
     for vi in graph.output:
+        seen_names.add(vi.name)
         result.append({"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)})
     for init in graph.initializer:
+        seen_names.add(init.name)
         result.append({"name": init.name, "kind": "initializer", "metadata": _value_metadata(init)})
+    for vi in graph.value_info:
+        if vi.name in seen_names:
+            continue
+        result.append({"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)})
     return result
 
 
@@ -506,7 +514,9 @@ def _score_test(
             act_entry = act_map.get(val_name, {})
             exp_meta = exp_entry.get("metadata", {})
             act_meta = act_entry.get("metadata", {})
-            val_success = exp_meta == act_meta
+            exp_has_tags = bool(exp_meta.get("onnx_light.value_tags", ""))
+            act_has_tags = bool(act_meta.get("onnx_light.value_tags", ""))
+            val_success = exp_meta == act_meta and exp_has_tags and act_has_tags
             total_values += 1
             if val_success:
                 matched_values += 1
