@@ -39,7 +39,7 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
             text = f.read()
 
         self.assertIn("row.values", text)
-        self.assertIn("Inputs / outputs / initializers", text)
+        self.assertIn("Inputs / outputs / initializers / results", text)
 
     def test_summary_row_reports_value_mismatches(self):
         with open(PAGE, encoding="utf-8") as f:
@@ -57,7 +57,7 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         with open(PAGE, encoding="utf-8") as f:
             text = f.read()
 
-        self.assertIn("result tags matched", text)
+        self.assertIn("value tags matched", text)
         self.assertIn("totals.values", text)
         self.assertIn('cls: "values"', text)
 

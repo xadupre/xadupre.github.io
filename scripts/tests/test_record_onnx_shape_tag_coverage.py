@@ -41,17 +41,19 @@ class _FakeTensorProto:
 
 
 class _FakeGraph:
-    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None, value_info=None):
         self.node = nodes
         self.input = inputs or []
         self.output = outputs or []
         self.initializer = initializers or []
-        self.value_info = []
+        self.value_info = value_info or []
 
 
 class _FakeModel:
-    def __init__(self, nodes, inputs=None, outputs=None, initializers=None):
-        self.graph = _FakeGraph(nodes, inputs=inputs, outputs=outputs, initializers=initializers)
+    def __init__(self, nodes, inputs=None, outputs=None, initializers=None, value_info=None):
+        self.graph = _FakeGraph(
+            nodes, inputs=inputs, outputs=outputs, initializers=initializers, value_info=value_info
+        )
 
 
 class _FakeTestCase:
@@ -98,12 +100,14 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         inp = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
         out = _FakeValueInfo("Y", {})
         init = _FakeTensorProto("W", {"onnx_light.value_tags": "weight"})
-        model = _FakeModel([], inputs=[inp], outputs=[out], initializers=[init])
+        val = _FakeValueInfo("Z", {"onnx_light.value_tags": "shape"})
+        model = _FakeModel([], inputs=[inp], outputs=[out], initializers=[init], value_info=[val])
         snapshot = stc._graph_value_snapshot(model)
         names = [s["name"] for s in snapshot]
         self.assertIn("X", names)
         self.assertIn("Y", names)
         self.assertIn("W", names)
+        self.assertIn("Z", names)
         x_entry = next(s for s in snapshot if s["name"] == "X")
         self.assertEqual(x_entry["kind"], "input")
         self.assertEqual(x_entry["metadata"], {"onnx_light.value_tags": "weight"})
@@ -113,6 +117,9 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["kind"], "initializer")
         self.assertEqual(w_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        z_entry = next(s for s in snapshot if s["name"] == "Z")
+        self.assertEqual(z_entry["kind"], "result")
+        self.assertEqual(z_entry["metadata"], {"onnx_light.value_tags": "shape"})
 
     def test_graph_value_snapshot_excludes_initializer_from_inputs(self):
         inp = _FakeValueInfo("X")
@@ -198,8 +205,8 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
 
     def test_score_test_values_preserves_order(self):
         expected_values = [
-            {"name": "A", "kind": "input", "metadata": {}},
-            {"name": "B", "kind": "output", "metadata": {}},
+            {"name": "A", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {"name": "B", "kind": "output", "metadata": {"onnx_light.value_tags": "shape"}},
         ]
         row = stc._score_test(
             "test_order",
@@ -211,6 +218,20 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         )
         names = [v["name"] for v in row["values"]]
         self.assertEqual(names, ["A", "B"])
+
+    def test_score_test_values_missing_value_tags_fails(self):
+        row = stc._score_test(
+            "test_values_missing_tag",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_values=[{"name": "R", "kind": "result", "metadata": {}}],
+            actual_values=[{"name": "R", "kind": "result", "metadata": {}}],
+        )
+        self.assertFalse(row["success"])
+        self.assertEqual(row["matched_values"], 0)
+        self.assertEqual(row["total_values"], 1)
+        self.assertFalse(row["values"][0]["success"])
 
     def test_score_test_includes_mermaid_when_provided(self):
         row = stc._score_test(
