@@ -53,7 +53,7 @@ def _run_real_export_test(testcase, entry, cfg, dump_folder):
 
 
 class TestRecordYobxModelValidate(unittest.TestCase):
-    def test_protocol_buffers_env_var_is_set(self):
+    def test_sets_protocol_buffers_env_var(self):
         # The module sets PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python at
         # import time so that SentencePiece-tokenised models (e.g.
         # mistralai/Mistral-7B-v0.3) can load their tokenizer even when
