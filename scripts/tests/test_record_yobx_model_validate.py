@@ -53,6 +53,16 @@ def _run_real_export_test(testcase, entry, cfg, dump_folder):
 
 
 class TestRecordYobxModelValidate(unittest.TestCase):
+    def test_protocol_buffers_env_var_is_set(self):
+        # The module sets PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python at
+        # import time so that SentencePiece-tokenised models (e.g.
+        # mistralai/Mistral-7B-v0.3) can load their tokenizer even when
+        # the C++-backed protobuf wheel pulled in by onnx is installed.
+        self.assertEqual(
+            os.environ.get("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"),
+            "python",
+        )
+
     def test_defaults(self):
         model_ids = {e["model"] for e in rymv.DEFAULT_MODELS}
         self.assertIn("arnir0/Tiny-LLM", model_ids)
