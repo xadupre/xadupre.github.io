@@ -54,6 +54,17 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+# ``sentencepiece`` (used by SentencePiece-tokenised models such as
+# ``mistralai/Mistral-7B-v0.3``) parses its model file with generated
+# protobuf bindings that require the pure-Python implementation when the
+# C++-backed ``protobuf`` wheel pulled in by ``onnx`` (>=4.25.1) is
+# installed.  Forcing the Python implementation here – at module level,
+# before any ``sentencepiece`` import – is the upstream-documented fix
+# for the ``Couldn't instantiate the backend tokenizer … You need to
+# have sentencepiece or tiktoken installed`` error that otherwise shows
+# up in the dashboard even when ``sentencepiece`` *is* installed.
+os.environ.setdefault("PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION", "python")
+
 DEFAULT_DTYPE = "float16"
 DEFAULT_DEVICE = "cpu"
 DEFAULT_ATOL = 0.02
