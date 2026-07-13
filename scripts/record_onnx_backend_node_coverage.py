@@ -35,6 +35,7 @@ import argparse
 import datetime as dt
 import os
 import sys
+import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -184,13 +185,16 @@ def run_test_with_backend(
             "success": False,
             "error": f"unknown backend: {backend}",
             "error_step": "load",
+            "elapsed_s": 0.0,
         }
     if not data_sets:
         return {
             "success": False,
             "error": "no test_data_set_* directory found",
             "error_step": "load",
+            "elapsed_s": 0.0,
         }
+    t0 = time.perf_counter()
     try:
         runner = factory(model)
     except Exception as exc:  # noqa: BLE001
@@ -198,6 +202,7 @@ def run_test_with_backend(
             "success": False,
             "error": _stringify_error(exc),
             "error_step": "load",
+            "elapsed_s": time.perf_counter() - t0,
         }
     for inputs, expected in data_sets:
         try:
@@ -207,6 +212,7 @@ def run_test_with_backend(
                 "success": False,
                 "error": _stringify_error(exc),
                 "error_step": "run",
+                "elapsed_s": time.perf_counter() - t0,
             }
         mismatch = _compare_outputs(expected, actual, rtol=rtol, atol=atol)
         if mismatch is not None:
@@ -214,8 +220,9 @@ def run_test_with_backend(
                 "success": False,
                 "error": mismatch,
                 "error_step": "compare",
+                "elapsed_s": time.perf_counter() - t0,
             }
-    return {"success": True, "error": "", "error_step": ""}
+    return {"success": True, "error": "", "error_step": "", "elapsed_s": time.perf_counter() - t0}
 
 
 def _row_from_results(
@@ -239,6 +246,7 @@ def _row_from_results(
         row["graph"] = graph
     elif previous.get("graph"):
         row["graph"] = previous["graph"]
+    total_elapsed: float = 0.0
     for backend in BACKENDS:
         info = results.get(backend, {})
         success = bool(info.get("success"))
@@ -249,6 +257,10 @@ def _row_from_results(
         step = info.get("error_step") or ""
         if step:
             row[f"{backend}_error_step"] = step
+        elapsed = info.get("elapsed_s")
+        if elapsed is not None:
+            row[f"{backend}_elapsed_s"] = round(float(elapsed), 6)
+            total_elapsed += float(elapsed)
         if success and now_iso is not None:
             row[f"{backend}_last_pass_date"] = now_iso
             pkg = BACKEND_PACKAGE.get(backend)
@@ -262,6 +274,8 @@ def _row_from_results(
             prev_version = previous.get(f"{backend}_last_pass_version")
             if prev_version:
                 row[f"{backend}_last_pass_version"] = prev_version
+    if total_elapsed:
+        row["elapsed_s"] = round(total_elapsed, 6)
     return row
 
 
@@ -345,9 +359,20 @@ def build_payload(
         if (idx + 1) % 50 == 0:
             _log(f"Ran {idx + 1}/{len(tests)} tests.")
 
+    slowest = sorted(
+        (r for r in rows if r.get("elapsed_s")),
+        key=lambda r: r["elapsed_s"],
+        reverse=True,
+    )[:20]
+    slowest_tests = [
+        {k: r[k] for k in ["name"] + [f"{b}_elapsed_s" for b in BACKENDS if f"{b}_elapsed_s" in r] + (["elapsed_s"] if "elapsed_s" in r else [])}
+        for r in slowest
+    ]
+
     return {
         "date": now_iso,
         "kind": kind,
+        "slowest_tests": slowest_tests,
         "tolerances": {"rtol": rtol, "atol": atol},
         "versions": version_map,
         "totals": totals,
