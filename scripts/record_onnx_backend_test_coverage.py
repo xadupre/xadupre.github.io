@@ -261,7 +261,7 @@ def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
                 model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
             if not data_sets:
                 data_sets = _load_test_data_sets(str(existing_dir), model)
-        if model is None:
+        if model is None or not data_sets:
             continue
         onnx_model = _onnx_light_model_to_onnx(model)
         converted_data_sets: List[Tuple[List[Any], List[Any]]] = [
