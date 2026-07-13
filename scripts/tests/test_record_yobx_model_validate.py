@@ -68,6 +68,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         model_ids = {e["model"] for e in rymv.DEFAULT_MODELS}
         self.assertIn("arnir0/Tiny-LLM", model_ids)
         self.assertIn("mistralai/Mistral-7B-v0.3", model_ids)
+        self.assertIn("Qwen/Qwen3-0.6B", model_ids)
         mistral = next(
             e for e in rymv.DEFAULT_MODELS if e["model"] == "mistralai/Mistral-7B-v0.3"
         )
