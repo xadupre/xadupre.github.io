@@ -46,6 +46,7 @@ one) is wired correctly without hitting the full default list of models.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import datetime as dt
 import json
 import math
@@ -550,25 +551,27 @@ def run_validate_one(
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
     )
-    if entry.get("tokenizer_use_fast", True):
-        summary, _data = validate_model(**kwargs)
-        return summary
+    patch_ctx = nullcontext()
+    if not entry.get("tokenizer_use_fast", True):
+        from transformers import AutoTokenizer
 
-    from transformers import AutoTokenizer
+        original_from_pretrained = AutoTokenizer.from_pretrained
 
-    original_from_pretrained = AutoTokenizer.from_pretrained
-
-    def _slow_from_pretrained(cls, pretrained_model_name_or_path, *inputs, **tokenizer_kwargs):
-        tokenizer_kwargs.setdefault("use_fast", False)
-        return original_from_pretrained(
+        def _force_slow_tokenizer_from_pretrained(
             pretrained_model_name_or_path, *inputs, **tokenizer_kwargs
+        ):
+            tokenizer_kwargs.setdefault("use_fast", False)
+            return original_from_pretrained(
+                pretrained_model_name_or_path, *inputs, **tokenizer_kwargs
+            )
+
+        patch_ctx = patch.object(
+            AutoTokenizer,
+            "from_pretrained",
+            new=_force_slow_tokenizer_from_pretrained,
         )
 
-    with patch.object(
-        AutoTokenizer,
-        "from_pretrained",
-        new=classmethod(_slow_from_pretrained),
-    ):
+    with patch_ctx:
         summary, _data = validate_model(**kwargs)
     return summary
 

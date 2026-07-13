@@ -114,12 +114,13 @@ class TestRecordYobxModelValidate(unittest.TestCase):
 
     def test_run_validate_one_can_force_slow_tokenizer(self):
         calls = []
+        sentinel_tokenizer = object()
 
         class FakeAutoTokenizer:
             @classmethod
             def from_pretrained(cls, model_id, **kwargs):
                 calls.append((model_id, dict(kwargs)))
-                return object()
+                return sentinel_tokenizer
 
         fake_transformers = types.ModuleType("transformers")
         fake_transformers.AutoTokenizer = FakeAutoTokenizer
@@ -127,9 +128,12 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         fake_validate_module = types.ModuleType("yobx.torch.validate")
 
         def fake_validate_model(**kwargs):
+            # This resolves against the fake ``transformers`` module injected
+            # into ``sys.modules`` below.
             from transformers import AutoTokenizer
 
-            AutoTokenizer.from_pretrained(kwargs["model_id"])
+            tokenizer = AutoTokenizer.from_pretrained(kwargs["model_id"])
+            test.assertIs(tokenizer, sentinel_tokenizer)
             return {"export": "OK", "discrepancies": "OK"}, None
 
         fake_validate_module.validate_model = fake_validate_model
@@ -148,6 +152,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         sys.modules["yobx.torch"] = fake_yobx_torch
         sys.modules["yobx.torch.validate"] = fake_validate_module
         try:
+            test = self
             summary = rymv.run_validate_one(
                 {
                     "model": "mistralai/Mistral-7B-v0.3",
