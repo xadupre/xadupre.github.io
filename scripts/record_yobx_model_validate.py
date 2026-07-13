@@ -53,6 +53,7 @@ import os
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import patch
 
 # ``sentencepiece`` (used by SentencePiece-tokenised models such as
 # ``mistralai/Mistral-7B-v0.3``) parses its model file with generated
@@ -138,7 +139,7 @@ def default_fp16_tg(model_id):
 
 DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
     default_fp16_tg("arnir0/Tiny-LLM"),
-    default_fp16_tg("mistralai/Mistral-7B-v0.3"),
+    {**default_fp16_tg("mistralai/Mistral-7B-v0.3"), "tokenizer_use_fast": False},
 )
 
 # Each exporter configuration is fully described by a small dict so that the
@@ -535,7 +536,7 @@ def run_validate_one(
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
-    summary, _data = validate_model(
+    kwargs = dict(
         model_id=entry["model"],
         exporter=exporter_cfg["exporter"],
         optimization=exporter_cfg["optimization"],
@@ -549,6 +550,26 @@ def run_validate_one(
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
     )
+    if entry.get("tokenizer_use_fast", True):
+        summary, _data = validate_model(**kwargs)
+        return summary
+
+    from transformers import AutoTokenizer
+
+    original_from_pretrained = AutoTokenizer.from_pretrained
+
+    def _slow_from_pretrained(cls, pretrained_model_name_or_path, *inputs, **tokenizer_kwargs):
+        tokenizer_kwargs.setdefault("use_fast", False)
+        return original_from_pretrained(
+            pretrained_model_name_or_path, *inputs, **tokenizer_kwargs
+        )
+
+    with patch.object(
+        AutoTokenizer,
+        "from_pretrained",
+        new=classmethod(_slow_from_pretrained),
+    ):
+        summary, _data = validate_model(**kwargs)
     return summary
 
 
