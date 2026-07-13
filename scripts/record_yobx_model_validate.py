@@ -141,6 +141,7 @@ def default_fp16_tg(model_id):
 DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
     default_fp16_tg("arnir0/Tiny-LLM"),
     {**default_fp16_tg("mistralai/Mistral-7B-v0.3"), "tokenizer_use_fast": False},
+    default_fp16_tg("Qwen/Qwen3-0.6B"),
 )
 
 # Each exporter configuration is fully described by a small dict so that the
