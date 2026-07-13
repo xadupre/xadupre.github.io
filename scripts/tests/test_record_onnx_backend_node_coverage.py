@@ -164,6 +164,54 @@ class TestRecordOnnxBackendNodeCoverage(unittest.TestCase):
             for backend in rbn.BACKENDS:
                 self.assertIn(backend, data["totals"])
 
+    def test_run_test_with_backend_returns_elapsed_s(self):
+        result = rbn.run_test_with_backend(model=object(), data_sets=[], backend="bogus")
+        self.assertIn("elapsed_s", result)
+        self.assertIsInstance(result["elapsed_s"], float)
+
+    def test_row_from_results_includes_elapsed_s(self):
+        results = {
+            "onnxruntime": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.1},
+            "reference": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.2},
+            "onnx_light": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.3},
+            "yobx": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.4},
+        }
+        row = rbn._row_from_results("test_relu", results)
+        self.assertAlmostEqual(row["onnxruntime_elapsed_s"], 0.1)
+        self.assertAlmostEqual(row["reference_elapsed_s"], 0.2)
+        self.assertAlmostEqual(row["onnx_light_elapsed_s"], 0.3)
+        self.assertAlmostEqual(row["yobx_elapsed_s"], 0.4)
+        self.assertAlmostEqual(row["elapsed_s"], 1.0, places=5)
+
+    def test_build_payload_includes_slowest_tests(self):
+        tests = [
+            {"name": f"test_{i}", "model": f"model_{i}", "data_sets": []}
+            for i in range(5)
+        ]
+        elapsed_map = {
+            "model_0": 0.5,
+            "model_1": 0.1,
+            "model_2": 1.2,
+            "model_3": 0.3,
+            "model_4": 0.8,
+        }
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            return {"success": True, "error": "", "error_step": "", "elapsed_s": elapsed_map[model]}
+
+        payload = rbn.build_payload(
+            kind="node",
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertIn("slowest_tests", payload)
+        slowest = payload["slowest_tests"]
+        self.assertEqual(slowest[0]["name"], "test_2")
+        self.assertEqual(slowest[1]["name"], "test_4")
+        for entry in slowest:
+            self.assertIn("elapsed_s", entry)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
