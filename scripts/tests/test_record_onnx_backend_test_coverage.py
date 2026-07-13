@@ -1279,6 +1279,74 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         finally:
             rbc.build_payload = original_build
 
+    def test_run_test_with_backend_returns_elapsed_s(self):
+        result = rbc.run_test_with_backend(None, [], "totally-unknown")
+        self.assertIn("elapsed_s", result)
+        self.assertIsInstance(result["elapsed_s"], float)
+
+    def test_row_from_results_includes_elapsed_s(self):
+        results = {
+            "onnxruntime": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.1},
+            "reference": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.2},
+            "onnx_light": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.3},
+        }
+        row = rbc._row_from_results("test_relu", results)
+        self.assertAlmostEqual(row["onnxruntime_elapsed_s"], 0.1)
+        self.assertAlmostEqual(row["reference_elapsed_s"], 0.2)
+        self.assertAlmostEqual(row["onnx_light_elapsed_s"], 0.3)
+        self.assertAlmostEqual(row["elapsed_s"], 0.6, places=5)
+
+    def test_build_payload_includes_slowest_tests(self):
+        tests = [
+            {"name": f"test_{i}", "model": f"model_{i}", "data_sets": []}
+            for i in range(5)
+        ]
+        elapsed_map = {
+            "model_0": 0.5,
+            "model_1": 0.1,
+            "model_2": 1.2,
+            "model_3": 0.3,
+            "model_4": 0.8,
+        }
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            return {"success": True, "error": "", "error_step": "", "elapsed_s": elapsed_map[model]}
+
+        payload = rbc.build_payload(
+            kind="node",
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertIn("slowest_tests", payload)
+        slowest = payload["slowest_tests"]
+        # All 5 tests fit in the top 20.
+        self.assertEqual(len(slowest), 5)
+        # Sorted by descending total elapsed time.
+        self.assertEqual(slowest[0]["name"], "test_2")
+        self.assertEqual(slowest[1]["name"], "test_4")
+        self.assertEqual(slowest[2]["name"], "test_0")
+        for entry in slowest:
+            self.assertIn("elapsed_s", entry)
+            self.assertIn("name", entry)
+
+    def test_build_payload_slowest_tests_capped_at_20(self):
+        tests = [
+            {"name": f"test_{i}", "model": f"model_{i}", "data_sets": []}
+            for i in range(25)
+        ]
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            return {"success": True, "error": "", "error_step": "", "elapsed_s": 0.1}
+
+        payload = rbc.build_payload(
+            kind="node",
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+        self.assertLessEqual(len(payload["slowest_tests"]), 20)
+
 
 if __name__ == "__main__":
     unittest.main()
