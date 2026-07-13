@@ -766,6 +766,77 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         np.testing.assert_array_equal(loaded_inputs[0], inp_arr)
         np.testing.assert_array_equal(loaded_outputs[0], out_arr)
 
+    def test_discover_node_tests_skips_when_no_data_sets_on_disk(self):
+        """Test cases with no in-memory data sets and no test_data_set_* dirs are skipped.
+
+        Shape-inference tests like ``test_cc_shape_inference_tiny_llm_inlined``
+        carry a model in-memory but have neither in-memory ``data_sets`` nor
+        ``test_data_set_*`` directories on disk.  ``discover_node_tests`` must
+        silently skip them instead of returning an entry with an empty
+        ``data_sets`` list that would later cause ``run_test_with_backend`` to
+        report "no test_data_set_* directory found" as a load failure for every
+        backend.
+        """
+        import types
+
+        import onnx
+        from onnx import helper
+
+        node = helper.make_node("Relu", ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", onnx.TensorProto.FLOAT, [2])],
+            [helper.make_tensor_value_info("y", onnx.TensorProto.FLOAT, [2])],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # model_dir exists but contains no test_data_set_* subdirectories.
+            tc = types.SimpleNamespace(
+                name="test_cc_shape_inference_tiny_llm_inlined",
+                kind="model",
+                tag="inference",
+                model=model,
+                data_sets=[],
+                model_dir=tmp,
+            )
+
+            fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+            fake_module.collect_test_case = (
+                lambda: {"test_cc_shape_inference_tiny_llm_inlined": tc}
+            )
+            parents = [
+                ("onnx_light", types.ModuleType("onnx_light")),
+                ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+                (
+                    "onnx_light.onnx_lib.backend",
+                    types.ModuleType("onnx_light.onnx_lib.backend"),
+                ),
+                (
+                    "onnx_light.onnx_lib.backend.test",
+                    types.ModuleType("onnx_light.onnx_lib.backend.test"),
+                ),
+                ("onnx_light.onnx_lib.backend.test.case", fake_module),
+            ]
+            saved = {name: sys.modules.get(name) for name, _ in parents}
+            original_model_to_onnx = rbc._onnx_light_model_to_onnx
+            rbc._onnx_light_model_to_onnx = lambda m: m
+            try:
+                for name, mod in parents:
+                    sys.modules[name] = mod
+                discovered = rbc.discover_node_tests(kind="model")
+            finally:
+                rbc._onnx_light_model_to_onnx = original_model_to_onnx
+                for name, mod in saved.items():
+                    if mod is None:
+                        sys.modules.pop(name, None)
+                    else:
+                        sys.modules[name] = mod
+
+        # The test case must be omitted entirely, not included with empty data sets.
+        self.assertEqual(discovered, [])
+
     def test_normalize_kinds_accepts_various_shapes(self):
         self.assertEqual(rbc._normalize_kinds(None), ())
         self.assertEqual(rbc._normalize_kinds(""), ())
