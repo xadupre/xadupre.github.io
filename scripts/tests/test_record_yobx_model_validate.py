@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -68,6 +69,10 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertIn("arnir0/Tiny-LLM", model_ids)
         self.assertIn("mistralai/Mistral-7B-v0.3", model_ids)
         self.assertIn("Qwen/Qwen3-0.6B", model_ids)
+        mistral = next(
+            e for e in rymv.DEFAULT_MODELS if e["model"] == "mistralai/Mistral-7B-v0.3"
+        )
+        self.assertFalse(mistral["tokenizer_use_fast"])
         # Each model entry must declare the per-model fields used by the
         # recorder so the snapshot can carry them.
         for entry in rymv.DEFAULT_MODELS:
@@ -107,6 +112,66 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(entry["task"], "t")
         # Returns a copy so the input is not mutated.
         self.assertIsNot(entry, src)
+
+    def test_run_validate_one_can_force_slow_tokenizer(self):
+        calls = []
+        sentinel_tokenizer = object()
+
+        class FakeAutoTokenizer:
+            @classmethod
+            def from_pretrained(cls, model_id, **kwargs):
+                calls.append((model_id, dict(kwargs)))
+                return sentinel_tokenizer
+
+        fake_transformers = types.ModuleType("transformers")
+        fake_transformers.AutoTokenizer = FakeAutoTokenizer
+
+        fake_validate_module = types.ModuleType("yobx.torch.validate")
+
+        def fake_validate_model(**kwargs):
+            # This resolves against the fake ``transformers`` module injected
+            # into ``sys.modules`` below.
+            from transformers import AutoTokenizer
+
+            tokenizer = AutoTokenizer.from_pretrained(kwargs["model_id"])
+            test.assertIs(tokenizer, sentinel_tokenizer)
+            return {"export": "OK", "discrepancies": "OK"}, None
+
+        fake_validate_module.validate_model = fake_validate_model
+
+        fake_yobx = types.ModuleType("yobx")
+        fake_yobx.__path__ = []
+        fake_yobx_torch = types.ModuleType("yobx.torch")
+        fake_yobx_torch.__path__ = []
+
+        originals = {
+            name: sys.modules.get(name)
+            for name in ("transformers", "yobx", "yobx.torch", "yobx.torch.validate")
+        }
+        sys.modules["transformers"] = fake_transformers
+        sys.modules["yobx"] = fake_yobx
+        sys.modules["yobx.torch"] = fake_yobx_torch
+        sys.modules["yobx.torch.validate"] = fake_validate_module
+        try:
+            test = self
+            summary = rymv.run_validate_one(
+                {
+                    "model": "mistralai/Mistral-7B-v0.3",
+                    "dtype": "float16",
+                    "device": "cpu",
+                    "tokenizer_use_fast": False,
+                },
+                {"label": "yobx", "exporter": "yobx", "optimization": "default"},
+            )
+        finally:
+            for name, module in originals.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        self.assertEqual(summary["export"], "OK")
+        self.assertEqual(calls, [("mistralai/Mistral-7B-v0.3", {"use_fast": False})])
 
     def test_stringify_error_collapses_whitespace_and_truncates(self):
         self.assertEqual(rymv._stringify_error(None), "")

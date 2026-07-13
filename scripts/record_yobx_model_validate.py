@@ -46,6 +46,7 @@ one) is wired correctly without hitting the full default list of models.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import datetime as dt
 import json
 import math
@@ -53,6 +54,7 @@ import os
 import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from unittest.mock import patch
 
 # ``sentencepiece`` (used by SentencePiece-tokenised models such as
 # ``mistralai/Mistral-7B-v0.3``) parses its model file with generated
@@ -138,7 +140,7 @@ def default_fp16_tg(model_id):
 
 DEFAULT_MODELS: Tuple[Dict[str, Any], ...] = (
     default_fp16_tg("arnir0/Tiny-LLM"),
-    default_fp16_tg("mistralai/Mistral-7B-v0.3"),
+    {**default_fp16_tg("mistralai/Mistral-7B-v0.3"), "tokenizer_use_fast": False},
     default_fp16_tg("Qwen/Qwen3-0.6B"),
 )
 
@@ -536,7 +538,7 @@ def run_validate_one(
     # Lazy import so ``--help`` works without the heavy ``torch`` stack.
     from yobx.torch.validate import validate_model
 
-    summary, _data = validate_model(
+    kwargs = dict(
         model_id=entry["model"],
         exporter=exporter_cfg["exporter"],
         optimization=exporter_cfg["optimization"],
@@ -550,6 +552,28 @@ def run_validate_one(
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
     )
+    patch_ctx = nullcontext()
+    if not entry.get("tokenizer_use_fast", True):
+        from transformers import AutoTokenizer
+
+        original_from_pretrained = AutoTokenizer.from_pretrained
+
+        def _force_slow_tokenizer_from_pretrained(
+            pretrained_model_name_or_path, *inputs, **tokenizer_kwargs
+        ):
+            tokenizer_kwargs.setdefault("use_fast", False)
+            return original_from_pretrained(
+                pretrained_model_name_or_path, *inputs, **tokenizer_kwargs
+            )
+
+        patch_ctx = patch.object(
+            AutoTokenizer,
+            "from_pretrained",
+            new=_force_slow_tokenizer_from_pretrained,
+        )
+
+    with patch_ctx:
+        summary, _data = validate_model(**kwargs)
     return summary
 
 
