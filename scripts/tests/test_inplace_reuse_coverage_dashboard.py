@@ -31,9 +31,10 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
             text = f.read()
 
         self.assertIn("function formatNodeIo(node) {", text)
-        self.assertIn('parts.push("in: " + inputs.join(", "));', text)
-        self.assertIn('parts.push("out: " + outputs.join(", "));', text)
+        self.assertIn("return { inputs, outputs };", text)
         self.assertIn("function formatNodeOp(node) {", text)
+        self.assertIn('const inputSig = opType + "(" + io.inputs.join(", ") + ")";', text)
+        self.assertIn('return outputText ? (inputSig + " -> " + outputText) : inputSig;', text)
         self.assertIn("const opText = formatNodeOp(node);", text)
 
     def test_big_examples_shortcuts_are_rendered(self):
