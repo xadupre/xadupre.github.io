@@ -67,6 +67,7 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         model_ids = {e["model"] for e in rymv.DEFAULT_MODELS}
         self.assertIn("arnir0/Tiny-LLM", model_ids)
         self.assertIn("mistralai/Mistral-7B-v0.3", model_ids)
+        self.assertIn("Qwen/Qwen3-0.6B", model_ids)
         # Each model entry must declare the per-model fields used by the
         # recorder so the snapshot can carry them.
         for entry in rymv.DEFAULT_MODELS:
