@@ -18,7 +18,7 @@ try:
     import numpy as np
 
     _HAS_NUMPY = True
-except Exception:  # noqa: BLE001
+except ImportError:
     _HAS_NUMPY = False
 
 

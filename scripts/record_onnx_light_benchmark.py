@@ -313,7 +313,7 @@ def _row_from_results(
         if error:
             row[f"{backend}_error"] = error
         step = info.get("error_step") or ""
-        if step and step != "":
+        if step:
             row[f"{backend}_error_step"] = step
         for metric in ("avg_ms", "min_ms", "max_ms"):
             v = info.get(metric)
