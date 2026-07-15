@@ -239,7 +239,7 @@ def discover_node_tests(kind=DEFAULT_KIND) -> List[Dict[str, Any]]:
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
     kinds = _normalize_kinds(kind)
-    cases = collect_test_case()
+    cases = collect_test_case(include_big=True)
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:

@@ -631,7 +631,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         )
 
         fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda: {
+        fake_module.collect_test_case = lambda include_big=False: {
             "test_tiny_llm": tc_meta,
             "test_no_meta": tc_no_meta,
         }
@@ -684,7 +684,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         )
 
         fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda: {
+        fake_module.collect_test_case = lambda include_big=False: {
             "test_value_meta": tc_value_meta,
             "test_no_meta": tc_no_meta,
         }

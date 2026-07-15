@@ -401,7 +401,7 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
     tags = _normalize_tags(tag)
-    cases = collect_test_case()
+    cases = collect_test_case(include_big=True)
     discovered: List[Dict[str, Any]] = []
     for name, tc in cases.items():
         if not name:
