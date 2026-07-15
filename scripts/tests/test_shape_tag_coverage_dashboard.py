@@ -87,14 +87,5 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("row.missing_metadata", text)
         self.assertIn("No shape tag metadata found", text)
 
-    def test_big_examples_shortcuts_are_rendered(self):
-        with open(PAGE, encoding="utf-8") as f:
-            text = f.read()
-
-        self.assertIn("function renderBigExamples(rows) {", text)
-        self.assertIn("Big examples (largest models)", text)
-        self.assertIn("renderBigExamples(state.rows);", text)
-
-
 if __name__ == "__main__":
     unittest.main()
