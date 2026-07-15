@@ -144,6 +144,11 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     return result
 
 
+def _has_expected_value_metadata(values: Optional[List[Dict[str, Any]]]) -> bool:
+    """Tell if any expected graph value carries shape-tag metadata."""
+    return any(value.get("metadata") for value in (values or []))
+
+
 def _node_io(node) -> Tuple[List[str], List[str]]:
     """Return ``(inputs, outputs)`` for one node as display-ready strings."""
     inputs = [str(name) for name in getattr(node, "input", []) if str(name)]
@@ -395,7 +400,8 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
             continue
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
-        has_metadata = any(expected_nodes)
+        expected_values = _graph_value_snapshot(model)
+        has_metadata = any(expected_nodes) or _has_expected_value_metadata(expected_values)
         if tags and not any(t in tags for t in case_tags) and not has_metadata:
             continue
         discovered.append(
@@ -406,7 +412,7 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
                 "node_inputs": [_node_io(node)[0] for node in nodes],
                 "node_outputs": [_node_io(node)[1] for node in nodes],
-                "expected_values": _graph_value_snapshot(model),
+                "expected_values": expected_values,
                 "mermaid": model_to_mermaid(model),
                 "graph": model_to_svg_graph(model),
             }
@@ -534,7 +540,12 @@ def _score_test(
     # them, it trivially passes but carries no signal about shape-tag quality.
     # In shape-tag coverage context this means the expected annotations are
     # missing from the test case, which is itself an error.
-    missing_metadata = total_nodes > 0 and total_metadata == 0 and not error
+    missing_metadata = (
+        total_nodes > 0
+        and total_metadata == 0
+        and not _has_expected_value_metadata(expected_values)
+        and not error
+    )
     if missing_metadata:
         success = False
 
