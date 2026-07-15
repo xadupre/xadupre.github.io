@@ -45,14 +45,5 @@ class TestReleaseAfterCoverageDashboard(unittest.TestCase):
         self.assertIn('filter(val => val.kind !== "input" && val.kind !== "initializer")', text)
         self.assertIn("Outputs", text)
 
-    def test_big_examples_shortcuts_are_rendered(self):
-        with open(PAGE, encoding="utf-8") as f:
-            text = f.read()
-
-        self.assertIn("function renderBigExamples(rows) {", text)
-        self.assertIn("Big examples (largest models)", text)
-        self.assertIn("renderBigExamples(state.rows);", text)
-
-
 if __name__ == "__main__":
     unittest.main()

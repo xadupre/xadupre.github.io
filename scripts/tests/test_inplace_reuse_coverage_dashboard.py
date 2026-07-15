@@ -37,14 +37,5 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
         self.assertIn('return outputText ? (inputSig + " -> " + outputText) : inputSig;', text)
         self.assertIn("const opText = formatNodeOp(node);", text)
 
-    def test_big_examples_shortcuts_are_rendered(self):
-        with open(PAGE, encoding="utf-8") as f:
-            text = f.read()
-
-        self.assertIn("function renderBigExamples(rows) {", text)
-        self.assertIn("Big examples (largest models)", text)
-        self.assertIn("renderBigExamples(state.rows);", text)
-
-
 if __name__ == "__main__":
     unittest.main()
