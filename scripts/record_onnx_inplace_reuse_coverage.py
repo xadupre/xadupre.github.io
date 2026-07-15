@@ -31,9 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DEFAULT_TAGS: Tuple[str, ...] = ("inplace",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
-METADATA_KEYS: Tuple[str, ...] = (
-    "onnx_light.inplace_reuse",
-)
+METADATA_KEYS: Tuple[str, ...] = ("onnx_light.inplace_reuse",)
 
 
 def _normalize_tags(tag) -> Tuple[str, ...]:
@@ -115,14 +113,10 @@ def _node_io(node) -> Tuple[List[str], List[str]]:
 # Mermaid graph rendering (best-effort; failures are silently ignored)
 # ---------------------------------------------------------------------------
 
+
 def _mermaid_escape(text: str) -> str:
     """Escape ``text`` so it can appear inside a Mermaid ``"..."`` label."""
-    return (
-        str(text)
-        .replace("\\", "\\\\")
-        .replace('"', "&quot;")
-        .replace("\n", " ")
-    )
+    return str(text).replace("\\", "\\\\").replace('"', "&quot;").replace("\n", " ")
 
 
 def _mermaid_dtype_name(onnx_mod: Any, dtype: int) -> str:
@@ -315,7 +309,11 @@ def _normalize_graph(graph: Any) -> Dict[str, str]:
     """Return ``{"svg": ...}`` when ``graph`` carries a non-empty SVG string."""
     if graph is None:
         return {}
-    if isinstance(graph, dict) and isinstance(graph.get("svg"), str) and graph.get("svg"):
+    if (
+        isinstance(graph, dict)
+        and isinstance(graph.get("svg"), str)
+        and graph.get("svg")
+    ):
         return {"svg": graph["svg"]}
     return {}
 
@@ -431,10 +429,20 @@ def _score_test(
         expected = dict(expected_nodes[index]) if index < len(expected_nodes) else {}
         actual = dict(actual_nodes[index]) if index < len(actual_nodes) else {}
         op_type = node_ops[index] if index < len(node_ops) else ""
-        inputs = list(node_inputs[index]) if node_inputs is not None and index < len(node_inputs) else []
-        outputs = list(node_outputs[index]) if node_outputs is not None and index < len(node_outputs) else []
+        inputs = (
+            list(node_inputs[index])
+            if node_inputs is not None and index < len(node_inputs)
+            else []
+        )
+        outputs = (
+            list(node_outputs[index])
+            if node_outputs is not None and index < len(node_outputs)
+            else []
+        )
         keys = sorted(set(expected) | set(actual))
-        metadata_matches = sum(1 for key in keys if expected.get(key) == actual.get(key))
+        metadata_matches = sum(
+            1 for key in keys if expected.get(key) == actual.get(key)
+        )
         total_metadata += len(keys)
         matched_metadata += metadata_matches
         node_success = expected == actual
@@ -449,7 +457,11 @@ def _score_test(
                 "success": node_success,
                 "expected": expected,
                 "actual": actual,
-                "memory": memory[index] if memory is not None and index < len(memory) else None,
+                "memory": (
+                    memory[index]
+                    if memory is not None and index < len(memory)
+                    else None
+                ),
                 "inputs": inputs,
                 "outputs": outputs,
             }
@@ -501,7 +513,11 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 node_inputs=list(test.get("node_inputs", [])),
                 node_outputs=list(test.get("node_outputs", [])),
-                memory=list(info.get("memory", [])) if info.get("memory") is not None else None,
+                memory=(
+                    list(info.get("memory", []))
+                    if info.get("memory") is not None
+                    else None
+                ),
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
             )
@@ -539,13 +555,11 @@ def build_payload(
     }
 
 
-
 def write_payload(json_path: str, payload: Dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, sort_keys=True)
         fh.write("\n")
-
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -570,7 +584,6 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Optionally cap the number of tests executed (useful for debugging).",
     )
     return parser.parse_args(argv)
-
 
 
 def main(argv: Optional[List[str]] = None) -> int:
