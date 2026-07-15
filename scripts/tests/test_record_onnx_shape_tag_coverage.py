@@ -316,6 +316,33 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(row["total_metadata"], 1)
         self.assertEqual(row["matched_metadata"], 1)
 
+    def test_score_test_no_missing_metadata_flag_when_value_tags_present(self):
+        """Value-level tags should count as meaningful metadata for shape-tag coverage."""
+        row = stc._score_test(
+            "test_has_value_metadata",
+            expected_nodes=[{}],
+            actual_nodes=[{}],
+            node_ops=["Identity"],
+            expected_values=[
+                {
+                    "name": "X",
+                    "kind": "input",
+                    "metadata": {"onnx_light.value_tags": "shape"},
+                }
+            ],
+            actual_values=[
+                {
+                    "name": "X",
+                    "kind": "input",
+                    "metadata": {"onnx_light.value_tags": "shape"},
+                }
+            ],
+        )
+        self.assertFalse(row["missing_metadata"])
+        self.assertTrue(row["success"])
+        self.assertEqual(row["matched_values"], 1)
+        self.assertEqual(row["total_values"], 1)
+
     def test_score_test_no_missing_metadata_flag_when_error_set(self):
         """When error is already set, missing_metadata stays False even with no metadata."""
         row = stc._score_test(
@@ -582,6 +609,57 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
 
         names = [d["name"] for d in discovered]
         self.assertIn("test_tiny_llm", names)
+        self.assertNotIn("test_no_meta", names)
+
+    def test_discover_includes_test_with_value_metadata_despite_wrong_tag(self):
+        """Value-level metadata should keep a test even when its tag does not match."""
+        import sys
+        import types
+
+        tc_value_meta = _FakeTestCase(
+            "test_value_meta",
+            _FakeModel(
+                [_FakeNode("Identity")],
+                inputs=[
+                    _FakeValueInfo(
+                        "X", {"onnx_light.value_tags": "shape"}
+                    )
+                ],
+            ),
+            tag="model",
+        )
+        tc_no_meta = _FakeTestCase(
+            "test_no_meta",
+            _FakeModel([_FakeNode("Relu")]),
+            tag="model",
+        )
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda: {
+            "test_value_meta": tc_value_meta,
+            "test_no_meta": tc_no_meta,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
+            ("onnx_light.onnx_lib.backend.test", types.ModuleType("onnx_light.onnx_lib.backend.test")),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = stc.discover_shape_tag_tests(tag="shape_tag")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        names = [d["name"] for d in discovered]
+        self.assertIn("test_value_meta", names)
         self.assertNotIn("test_no_meta", names)
 
 
