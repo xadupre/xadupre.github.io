@@ -430,5 +430,99 @@ class TestBenchmarkBackends(unittest.TestCase):
             self.assertIn(b, rlb._RUNNER_FACTORIES, msg=f"no factory for {b}")
 
 
+class TestNormalizeKinds(unittest.TestCase):
+    def test_none_returns_empty(self):
+        self.assertEqual(rlb._normalize_kinds(None), ())
+
+    def test_empty_string_returns_empty(self):
+        self.assertEqual(rlb._normalize_kinds(""), ())
+
+    def test_single_kind(self):
+        self.assertEqual(rlb._normalize_kinds("node"), ("node",))
+
+    def test_comma_separated(self):
+        self.assertEqual(rlb._normalize_kinds("node,model"), ("node", "model"))
+
+    def test_deduplicates(self):
+        self.assertEqual(rlb._normalize_kinds("node,node"), ("node",))
+
+    def test_strips_whitespace(self):
+        self.assertEqual(rlb._normalize_kinds("node , model"), ("node", "model"))
+
+
+class TestDiscoverNodeTests(unittest.TestCase):
+    """Verify discover_node_tests calls collect_test_case with include_big=True."""
+
+    def test_include_big_true_is_passed(self):
+        import types
+
+        call_kwargs = {}
+
+        def _fake_collect(**kwargs):
+            call_kwargs.update(kwargs)
+            return {}
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = _fake_collect
+        saved = sys.modules.get("onnx_light.onnx_lib.backend.test.case")
+        try:
+            sys.modules["onnx_light.onnx_lib.backend.test.case"] = fake_module
+            rlb.discover_node_tests("node")
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
+            else:
+                sys.modules["onnx_light.onnx_lib.backend.test.case"] = saved
+
+        self.assertIn("include_big", call_kwargs, "include_big keyword not passed")
+        self.assertTrue(call_kwargs["include_big"], "include_big must be True")
+
+    def test_kind_filter_applied(self):
+        import types
+
+        class _FakeTC:
+            kind = "node"
+            model = object()
+            data_sets = [([], [])]
+            model_dir = None
+            tag = ""
+
+        class _FakeTCOther:
+            kind = "simple"
+            model = object()
+            data_sets = [([], [])]
+            model_dir = None
+            tag = ""
+
+        cases = {"test_a": _FakeTC(), "test_b": _FakeTCOther()}
+
+        def _fake_collect(include_big=False):
+            return cases
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = _fake_collect
+        saved = sys.modules.get("onnx_light.onnx_lib.backend.test.case")
+
+        # patch _onnx_light_model_to_onnx and _onnx_light_tensor_to_numpy
+        orig_to_onnx = rlb._onnx_light_model_to_onnx
+        orig_to_np = rlb._onnx_light_tensor_to_numpy
+        rlb._onnx_light_model_to_onnx = lambda m: m
+        rlb._onnx_light_tensor_to_numpy = lambda a: a
+        try:
+            sys.modules["onnx_light.onnx_lib.backend.test.case"] = fake_module
+            discovered = rlb.discover_node_tests("node")
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
+            else:
+                sys.modules["onnx_light.onnx_lib.backend.test.case"] = saved
+            rlb._onnx_light_model_to_onnx = orig_to_onnx
+            rlb._onnx_light_tensor_to_numpy = orig_to_np
+
+        names = [d["name"] for d in discovered]
+        self.assertIn("test_a", names)
+        self.assertNotIn("test_b", names)
+
+
 if __name__ == "__main__":
     unittest.main()

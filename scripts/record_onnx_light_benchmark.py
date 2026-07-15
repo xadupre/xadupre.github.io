@@ -115,20 +115,192 @@ def collect_versions() -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Re-use discover helpers from the coverage script
+# Test-discovery helpers (self-contained, no dependency on other scripts)
 # ---------------------------------------------------------------------------
 
-# Import shared helpers from record_onnx_backend_test_coverage so there is
-# a single source of truth for test discovery and model conversion.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
 
-from record_onnx_backend_test_coverage import (  # noqa: E402
-    _model_input_names,
-    build_graph,
-    discover_node_tests,
-)
+def _normalize_kinds(kind) -> Tuple[str, ...]:
+    """Normalize a ``kind`` filter into a tuple of non-empty kind names."""
+    if kind is None:
+        return ()
+    items: List[str] = []
+    if isinstance(kind, str):
+        items.extend(piece.strip() for piece in kind.split(","))
+    else:
+        for entry in kind:
+            if entry is None:
+                continue
+            items.extend(piece.strip() for piece in str(entry).split(","))
+    seen: Dict[str, None] = {}
+    for item in items:
+        if item and item not in seen:
+            seen[item] = None
+    return tuple(seen)
+
+
+def _onnx_light_model_to_onnx(model):
+    """Convert an ``onnx-light`` ``ModelProto`` into an ``onnx`` ``ModelProto``."""
+    import onnx
+
+    if isinstance(model, onnx.ModelProto):
+        return model
+    out = onnx.ModelProto()
+    out.ParseFromString(model.SerializeToString())
+    return out
+
+
+def _onnx_light_tensor_to_numpy(arr):
+    """Convert an ``onnx-light`` tensor / numpy array to a numpy value."""
+    import numpy as np
+
+    if isinstance(arr, np.ndarray):
+        return arr
+    if isinstance(arr, (list, tuple)):
+        return [_onnx_light_tensor_to_numpy(a) for a in arr]
+    if hasattr(arr, "SerializeToString"):
+        import onnx
+        from onnx import numpy_helper
+
+        content = arr.SerializeToString()
+        proto_name = type(arr).__name__
+        if proto_name == "SequenceProto":
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if proto_name == "OptionalProto":
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+        tensor = onnx.TensorProto()
+        tensor.ParseFromString(content)
+        return numpy_helper.to_array(tensor)
+    return np.asarray(arr)
+
+
+def _load_proto(path: str, type_proto: Any = None):
+    """Load a serialised proto from ``path`` as a numpy value."""
+    import onnx
+    from onnx import numpy_helper
+
+    with open(path, "rb") as fh:
+        content = fh.read()
+
+    if type_proto is not None:
+        if type_proto.HasField("sequence_type"):
+            sequence = onnx.SequenceProto()
+            sequence.ParseFromString(content)
+            return numpy_helper.to_list(sequence)
+        if type_proto.HasField("optional_type"):
+            optional = onnx.OptionalProto()
+            optional.ParseFromString(content)
+            return numpy_helper.to_optional(optional)
+
+    tensor = onnx.TensorProto()
+    tensor.ParseFromString(content)
+    return numpy_helper.to_array(tensor)
+
+
+def _load_test_data_sets(
+    model_dir: str, model: Any = None
+) -> List[Tuple[List[Any], List[Any]]]:
+    """Return ``[(inputs, expected_outputs), ...]`` for ``model_dir``."""
+    input_types: List[Any] = []
+    output_types: List[Any] = []
+    if model is not None:
+        input_types = [inp.type for inp in model.graph.input]
+        output_types = [out.type for out in model.graph.output]
+
+    data_sets: List[Tuple[List[Any], List[Any]]] = []
+    for name in sorted(os.listdir(model_dir)):
+        if not name.startswith("test_data_set_"):
+            continue
+        ds_path = os.path.join(model_dir, name)
+        if not os.path.isdir(ds_path):
+            continue
+        inputs: List[Any] = []
+        i = 0
+        while True:
+            p = os.path.join(ds_path, f"input_{i}.pb")
+            if not os.path.exists(p):
+                break
+            type_proto = input_types[i] if i < len(input_types) else None
+            inputs.append(_load_proto(p, type_proto))
+            i += 1
+        outputs: List[Any] = []
+        j = 0
+        while True:
+            p = os.path.join(ds_path, f"output_{j}.pb")
+            if not os.path.exists(p):
+                break
+            type_proto = output_types[j] if j < len(output_types) else None
+            outputs.append(_load_proto(p, type_proto))
+            j += 1
+        data_sets.append((inputs, outputs))
+    return data_sets
+
+
+def _model_input_names(model) -> List[str]:
+    """Return the names of the graph inputs that are not initializers."""
+    initializer_names = {init.name for init in model.graph.initializer}
+    return [i.name for i in model.graph.input if i.name not in initializer_names]
+
+
+def build_graph(model) -> Dict[str, Any]:
+    """Return an SVG rendering of ``model``'s graph."""
+    from onnx_light.tools import to_svg
+
+    return {"svg": to_svg(model)}
+
+
+def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
+    """Return ``[{"name", "model", "data_sets", "tag"}, ...]`` for every backend test.
+
+    Tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` with
+    ``include_big=True`` so that large test cases (e.g. shape-inference
+    tests for LLM-sized models) are included in the benchmark.
+    """
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
+
+    kinds = _normalize_kinds(kind)
+    cases = collect_test_case(include_big=True)
+    discovered: List[Dict[str, Any]] = []
+    for name, tc in cases.items():
+        if not name:
+            continue
+        case_kind = getattr(tc, "kind", None)
+        if kinds and case_kind not in kinds:
+            continue
+        model = getattr(tc, "model", None)
+        data_sets = getattr(tc, "data_sets", None) or []
+        existing_dir = getattr(tc, "model_dir", None)
+        if existing_dir and (model is None or not data_sets):
+            import onnx
+
+            if model is None:
+                model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
+            if not data_sets:
+                data_sets = _load_test_data_sets(str(existing_dir), model)
+        if model is None or not data_sets:
+            continue
+        onnx_model = _onnx_light_model_to_onnx(model)
+        converted_data_sets: List[Tuple[List[Any], List[Any]]] = [
+            (
+                [_onnx_light_tensor_to_numpy(a) for a in inputs],
+                [_onnx_light_tensor_to_numpy(a) for a in outputs],
+            )
+            for inputs, outputs in data_sets
+        ]
+        tag = getattr(tc, "tag", None) or ""
+        discovered.append(
+            {
+                "name": str(name),
+                "model": onnx_model,
+                "data_sets": converted_data_sets,
+                "tag": str(tag),
+            }
+        )
+    discovered.sort(key=lambda d: d["name"])
+    return discovered
 
 # ---------------------------------------------------------------------------
 # Backend runners (load once, then call N times)
