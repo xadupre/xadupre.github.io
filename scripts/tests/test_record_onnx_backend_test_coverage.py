@@ -141,9 +141,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         matmul = helper.make_node("MatMul", ["x", "w"], ["m"])
         relu = helper.make_node("Relu", ["m"], ["y"], name="act")
         graph = helper.make_graph([matmul, relu], "g", [x, w], [y])
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 18)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
 
         result = rbc.build_graph(model)
         # ``build_graph`` now delegates to ``onnx_light.tools.to_svg`` and
@@ -174,9 +172,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             [y],
             initializer=[const],
         )
-        model = helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", 18)]
-        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
 
         result = rbc.build_graph(model)
         svg = result["svg"]
@@ -203,7 +199,6 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             "test_relu", results, previous={"graph": graph}, graph=None
         )
         self.assertEqual(carried["graph"], graph)
-
 
         tests = [
             {"name": "test_a", "model": "model_a", "data_sets": [("in_a", "out_a")]},
@@ -803,9 +798,9 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             )
 
             fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-            fake_module.collect_test_case = (
-                lambda: {"test_cc_shape_inference_tiny_llm_inlined": tc}
-            )
+            fake_module.collect_test_case = lambda: {
+                "test_cc_shape_inference_tiny_llm_inlined": tc
+            }
             parents = [
                 ("onnx_light", types.ModuleType("onnx_light")),
                 ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
@@ -1286,9 +1281,24 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
 
     def test_row_from_results_includes_elapsed_s(self):
         results = {
-            "onnxruntime": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.1},
-            "reference": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.2},
-            "onnx_light": {"success": True, "error": "", "error_step": "", "elapsed_s": 0.3},
+            "onnxruntime": {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "elapsed_s": 0.1,
+            },
+            "reference": {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "elapsed_s": 0.2,
+            },
+            "onnx_light": {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "elapsed_s": 0.3,
+            },
         }
         row = rbc._row_from_results("test_relu", results)
         self.assertAlmostEqual(row["onnxruntime_elapsed_s"], 0.1)
@@ -1310,7 +1320,12 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         }
 
         def fake_run(model, data_sets, backend, rtol, atol):
-            return {"success": True, "error": "", "error_step": "", "elapsed_s": elapsed_map[model]}
+            return {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "elapsed_s": elapsed_map[model],
+            }
 
         payload = rbc.build_payload(
             kind="node",

@@ -6,20 +6,14 @@ import json
 import os
 import sys
 import tempfile
-import types
 import unittest
+
+import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_light_benchmark as rlb  # noqa: E402
-
-try:
-    import numpy as np
-
-    _HAS_NUMPY = True
-except ImportError:
-    _HAS_NUMPY = False
 
 
 class TestStringifyError(unittest.TestCase):
@@ -81,7 +75,9 @@ class TestRowFromResults(unittest.TestCase):
         return results
 
     def test_speedup_computed_when_both_succeed(self):
-        results = self._make_results(ort_ok=True, light_ok=True, ort_avg=2.0, light_avg=1.0)
+        results = self._make_results(
+            ort_ok=True, light_ok=True, ort_avg=2.0, light_avg=1.0
+        )
         row = rlb._row_from_results("test_relu", results)
         self.assertEqual(row["name"], "test_relu")
         self.assertTrue(row["onnxruntime_success"])
@@ -113,13 +109,17 @@ class TestRowFromResults(unittest.TestCase):
 
     def test_speedup_gt_one_when_onnx_light_is_faster(self):
         # ort_avg > light_avg → speedup > 1 → onnx-light is faster
-        results = self._make_results(ort_ok=True, light_ok=True, ort_avg=4.0, light_avg=1.0)
+        results = self._make_results(
+            ort_ok=True, light_ok=True, ort_avg=4.0, light_avg=1.0
+        )
         row = rlb._row_from_results("test_abs", results)
         self.assertGreater(row["speedup"], 1.0)
 
     def test_speedup_lt_one_when_onnx_light_is_slower(self):
         # ort_avg < light_avg → speedup < 1 → onnx-light is slower
-        results = self._make_results(ort_ok=True, light_ok=True, ort_avg=1.0, light_avg=4.0)
+        results = self._make_results(
+            ort_ok=True, light_ok=True, ort_avg=1.0, light_avg=4.0
+        )
         row = rlb._row_from_results("test_abs", results)
         self.assertLess(row["speedup"], 1.0)
 
@@ -165,7 +165,6 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertIn("no test_data_set", result["error"])
         self.assertEqual(result["error_step"], "load")
 
-    @unittest.skipUnless(_HAS_NUMPY, "numpy required")
     def test_runner_factory_success(self):
         """run_benchmark succeeds when injecting a dummy runner via monkey-patching."""
         import numpy as np
@@ -203,7 +202,6 @@ class TestRunBenchmark(unittest.TestCase):
         # warmup (2) + measure (5) = 7 calls
         self.assertEqual(len(call_log), 7)
 
-    @unittest.skipUnless(_HAS_NUMPY, "numpy required")
     def test_runner_factory_load_failure(self):
         def _bad_factory(model):
             raise RuntimeError("cannot load model")
@@ -224,10 +222,7 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertEqual(result["error_step"], "load")
         self.assertIn("cannot load model", result["error"])
 
-    @unittest.skipUnless(_HAS_NUMPY, "numpy required")
     def test_runner_factory_measure_failure(self):
-        import numpy as np
-
         n_calls = [0]
 
         def _failing_factory(model):
@@ -259,27 +254,21 @@ class TestRunBenchmark(unittest.TestCase):
 
 
 class TestBuildPayload(unittest.TestCase):
-    @unittest.skipUnless(_HAS_NUMPY, "numpy required")
     def test_build_payload_with_stub_discover_and_run(self):
         """build_payload wires together discovery and benchmarking correctly."""
-        import numpy as np
 
         def _discover(_kind):
             return [
                 {
                     "name": "test_abs",
                     "model": object(),
-                    "data_sets": [
-                        ([np.array([1.0])], [np.array([1.0])])
-                    ],
+                    "data_sets": [([np.array([1.0])], [np.array([1.0])])],
                     "tag": "",
                 },
                 {
                     "name": "test_relu",
                     "model": object(),
-                    "data_sets": [
-                        ([np.array([-1.0, 2.0])], [np.array([0.0, 2.0])])
-                    ],
+                    "data_sets": [([np.array([-1.0, 2.0])], [np.array([0.0, 2.0])])],
                     "tag": "mygroup",
                 },
             ]
@@ -319,7 +308,8 @@ class TestBuildPayload(unittest.TestCase):
         # Each test should have been run against both BENCHMARK_BACKENDS.
         for backend in rlb.BENCHMARK_BACKENDS:
             self.assertGreater(
-                sum(1 for b, _, _ in call_log if b == backend), 0,
+                sum(1 for b, _, _ in call_log if b == backend),
+                0,
                 msg=f"{backend} was never called",
             )
 
@@ -343,7 +333,12 @@ class TestBuildPayload(unittest.TestCase):
 
         def _discover(_kind):
             return [
-                {"name": f"test_{i}", "model": object(), "data_sets": [([],)], "tag": ""}
+                {
+                    "name": f"test_{i}",
+                    "model": object(),
+                    "data_sets": [([],)],
+                    "tag": "",
+                }
                 for i in range(20)
             ]
 
@@ -433,6 +428,100 @@ class TestBenchmarkBackends(unittest.TestCase):
     def test_runner_factories_match_benchmark_backends(self):
         for b in rlb.BENCHMARK_BACKENDS:
             self.assertIn(b, rlb._RUNNER_FACTORIES, msg=f"no factory for {b}")
+
+
+class TestNormalizeKinds(unittest.TestCase):
+    def test_none_returns_empty(self):
+        self.assertEqual(rlb._normalize_kinds(None), ())
+
+    def test_empty_string_returns_empty(self):
+        self.assertEqual(rlb._normalize_kinds(""), ())
+
+    def test_single_kind(self):
+        self.assertEqual(rlb._normalize_kinds("node"), ("node",))
+
+    def test_comma_separated(self):
+        self.assertEqual(rlb._normalize_kinds("node,model"), ("node", "model"))
+
+    def test_deduplicates(self):
+        self.assertEqual(rlb._normalize_kinds("node,node"), ("node",))
+
+    def test_strips_whitespace(self):
+        self.assertEqual(rlb._normalize_kinds("node , model"), ("node", "model"))
+
+
+class TestDiscoverNodeTests(unittest.TestCase):
+    """Verify discover_node_tests calls collect_test_case with include_big=True."""
+
+    def test_include_big_true_is_passed(self):
+        import types
+
+        call_kwargs = {}
+
+        def _fake_collect(**kwargs):
+            call_kwargs.update(kwargs)
+            return {}
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = _fake_collect
+        saved = sys.modules.get("onnx_light.onnx_lib.backend.test.case")
+        try:
+            sys.modules["onnx_light.onnx_lib.backend.test.case"] = fake_module
+            rlb.discover_node_tests("node")
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
+            else:
+                sys.modules["onnx_light.onnx_lib.backend.test.case"] = saved
+
+        self.assertIn("include_big", call_kwargs, "include_big keyword not passed")
+        self.assertTrue(call_kwargs["include_big"], "include_big must be True")
+
+    def test_kind_filter_applied(self):
+        import types
+
+        class _FakeTC:
+            kind = "node"
+            model = object()
+            data_sets = [([], [])]
+            model_dir = None
+            tag = ""
+
+        class _FakeTCOther:
+            kind = "simple"
+            model = object()
+            data_sets = [([], [])]
+            model_dir = None
+            tag = ""
+
+        cases = {"test_a": _FakeTC(), "test_b": _FakeTCOther()}
+
+        def _fake_collect(include_big=False):
+            return cases
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = _fake_collect
+        saved = sys.modules.get("onnx_light.onnx_lib.backend.test.case")
+
+        # patch _onnx_light_model_to_onnx and _onnx_light_tensor_to_numpy
+        orig_to_onnx = rlb._onnx_light_model_to_onnx
+        orig_to_np = rlb._onnx_light_tensor_to_numpy
+        rlb._onnx_light_model_to_onnx = lambda m: m
+        rlb._onnx_light_tensor_to_numpy = lambda a: a
+        try:
+            sys.modules["onnx_light.onnx_lib.backend.test.case"] = fake_module
+            discovered = rlb.discover_node_tests("node")
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
+            else:
+                sys.modules["onnx_light.onnx_lib.backend.test.case"] = saved
+            rlb._onnx_light_model_to_onnx = orig_to_onnx
+            rlb._onnx_light_tensor_to_numpy = orig_to_np
+
+        names = [d["name"] for d in discovered]
+        self.assertIn("test_a", names)
+        self.assertNotIn("test_b", names)
 
 
 if __name__ == "__main__":

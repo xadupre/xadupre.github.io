@@ -41,7 +41,9 @@ class _FakeTensorProto:
 
 
 class _FakeGraph:
-    def __init__(self, nodes, inputs=None, outputs=None, initializers=None, value_info=None):
+    def __init__(
+        self, nodes, inputs=None, outputs=None, initializers=None, value_info=None
+    ):
         self.node = nodes
         self.input = inputs or []
         self.output = outputs or []
@@ -50,9 +52,15 @@ class _FakeGraph:
 
 
 class _FakeModel:
-    def __init__(self, nodes, inputs=None, outputs=None, initializers=None, value_info=None):
+    def __init__(
+        self, nodes, inputs=None, outputs=None, initializers=None, value_info=None
+    ):
         self.graph = _FakeGraph(
-            nodes, inputs=inputs, outputs=outputs, initializers=initializers, value_info=value_info
+            nodes,
+            inputs=inputs,
+            outputs=outputs,
+            initializers=initializers,
+            value_info=value_info,
         )
 
 
@@ -101,7 +109,9 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         out = _FakeValueInfo("Y", {})
         init = _FakeTensorProto("W", {"onnx_light.value_tags": "weight"})
         val = _FakeValueInfo("Z", {"onnx_light.value_tags": "shape"})
-        model = _FakeModel([], inputs=[inp], outputs=[out], initializers=[init], value_info=[val])
+        model = _FakeModel(
+            [], inputs=[inp], outputs=[out], initializers=[init], value_info=[val]
+        )
         snapshot = stc._graph_value_snapshot(model)
         names = [s["name"] for s in snapshot]
         self.assertIn("X", names)
@@ -124,6 +134,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
     def test_graph_value_snapshot_excludes_initializer_from_inputs(self):
         inp = _FakeValueInfo("X")
         init = _FakeTensorProto("W")
+
         # When the same name appears in both input and initializer, it should not
         # show up as an "input" kind (only as "initializer").
         class FakeGraph:
@@ -132,8 +143,10 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             output = []
             initializer = [init]
             value_info = []
+
         class FakeModel:
             graph = FakeGraph()
+
         snapshot = stc._graph_value_snapshot(FakeModel())
         kinds = {s["name"]: s["kind"] for s in snapshot}
         self.assertEqual(kinds.get("W"), "initializer")
@@ -173,12 +186,24 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
 
     def test_score_test_includes_values_section(self):
         expected_values = [
-            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
+            {
+                "name": "X",
+                "kind": "input",
+                "metadata": {"onnx_light.value_tags": "shape"},
+            },
             {"name": "Y", "kind": "output", "metadata": {}},
         ]
         actual_values = [
-            {"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
-            {"name": "Y", "kind": "output", "metadata": {"onnx_light.value_tags": "axes"}},
+            {
+                "name": "X",
+                "kind": "input",
+                "metadata": {"onnx_light.value_tags": "shape"},
+            },
+            {
+                "name": "Y",
+                "kind": "output",
+                "metadata": {"onnx_light.value_tags": "axes"},
+            },
         ]
         row = stc._score_test(
             "test_values",
@@ -205,8 +230,16 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
 
     def test_score_test_values_preserves_order(self):
         expected_values = [
-            {"name": "A", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}},
-            {"name": "B", "kind": "output", "metadata": {"onnx_light.value_tags": "shape"}},
+            {
+                "name": "A",
+                "kind": "input",
+                "metadata": {"onnx_light.value_tags": "shape"},
+            },
+            {
+                "name": "B",
+                "kind": "output",
+                "metadata": {"onnx_light.value_tags": "shape"},
+            },
         ]
         row = stc._score_test(
             "test_order",
@@ -393,7 +426,13 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertTrue(row["missing_metadata"])
 
     def test_build_payload_passes_values(self):
-        expected_values = [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}]
+        expected_values = [
+            {
+                "name": "X",
+                "kind": "input",
+                "metadata": {"onnx_light.value_tags": "shape"},
+            }
+        ]
         tests = [
             {
                 "name": "test_vals",
@@ -407,7 +446,13 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         def fake_run(model):
             return {
                 "actual_nodes": [{"onnx_light.node_tag": "shape"}],
-                "actual_values": [{"name": "X", "kind": "input", "metadata": {"onnx_light.value_tags": "shape"}}],
+                "actual_values": [
+                    {
+                        "name": "X",
+                        "kind": "input",
+                        "metadata": {"onnx_light.value_tags": "shape"},
+                    }
+                ],
             }
 
         payload = stc.build_payload(
@@ -445,7 +490,9 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         )
         row = payload["tests"][0]
         self.assertIn("mermaid", row)
-        self.assertEqual(row["mermaid"], "flowchart TD\n    in_X --> op_Shape --> out_S")
+        self.assertEqual(
+            row["mermaid"], "flowchart TD\n    in_X --> op_Shape --> out_S"
+        )
         self.assertEqual(row["graph"], {"svg": "<svg><g/></svg>"})
 
     def test_build_payload_aggregates_totals(self):
@@ -497,7 +544,9 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
                 "values": {"pass": 0, "fail": 0},
             },
         )
-        self.assertEqual([row["name"] for row in payload["tests"]], ["test_a", "test_b"])
+        self.assertEqual(
+            [row["name"] for row in payload["tests"]], ["test_a", "test_b"]
+        )
 
     def test_build_payload_captures_runner_exception(self):
         tests = [
@@ -554,6 +603,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
     def test_main_returns_one_on_failure(self):
         original_build = stc.build_payload
         try:
+
             def fake_build(**kwargs):
                 raise RuntimeError("boom")
 
@@ -562,15 +612,12 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         finally:
             stc.build_payload = original_build
 
-
     def test_discover_includes_test_with_metadata_despite_wrong_tag(self):
         """Tests with METADATA_KEYS metadata are kept even if their tag doesn't match."""
         import sys
         import types
 
-        node_with_meta = _FakeNode(
-            "Shape", {"onnx_light.node_tag": "shape"}
-        )
+        node_with_meta = _FakeNode("Shape", {"onnx_light.node_tag": "shape"})
         tc_meta = _FakeTestCase(
             "test_tiny_llm",
             _FakeModel([node_with_meta]),
@@ -591,8 +638,14 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
             ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
-            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
-            ("onnx_light.onnx_lib.backend.test", types.ModuleType("onnx_light.onnx_lib.backend.test")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
             ("onnx_light.onnx_lib.backend.test.case", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}
@@ -620,11 +673,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             "test_value_meta",
             _FakeModel(
                 [_FakeNode("Identity")],
-                inputs=[
-                    _FakeValueInfo(
-                        "X", {"onnx_light.value_tags": "shape"}
-                    )
-                ],
+                inputs=[_FakeValueInfo("X", {"onnx_light.value_tags": "shape"})],
             ),
             tag="model",
         )
@@ -642,8 +691,14 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
             ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
-            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
-            ("onnx_light.onnx_lib.backend.test", types.ModuleType("onnx_light.onnx_lib.backend.test")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
             ("onnx_light.onnx_lib.backend.test.case", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}

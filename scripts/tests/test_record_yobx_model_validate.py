@@ -21,7 +21,9 @@ _STANDARD_EXPORT_MODULES = ("torch", "yobx", "onnx")
 def _require_modules(testcase, *modules):
     missing = [name for name in modules if importlib.util.find_spec(name) is None]
     if missing:
-        testcase.skipTest(f"optional export stack is not installed ({', '.join(missing)})")
+        testcase.skipTest(
+            f"optional export stack is not installed ({', '.join(missing)})"
+        )
 
 
 def _run_real_export_test(testcase, entry, cfg, dump_folder):
@@ -619,7 +621,9 @@ class TestRecordYobxModelValidate(unittest.TestCase):
             hasattr(TestPerModelPerExporterDispatch, "test_cell_arnir0_Tiny_LLM__yobx")
         )
         self.assertFalse(
-            hasattr(TestPerModelPerExporterDispatch, "test_cell_arnir0_Tiny_LLM__dynamo_ir")
+            hasattr(
+                TestPerModelPerExporterDispatch, "test_cell_arnir0_Tiny_LLM__dynamo_ir"
+            )
         )
         self.assertFalse(
             hasattr(

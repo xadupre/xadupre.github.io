@@ -31,8 +31,12 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("function formatNodeIo(node) {", text)
         self.assertIn("return { inputs, outputs };", text)
         self.assertIn("function formatNodeOp(node) {", text)
-        self.assertIn('const inputSig = opType + "(" + io.inputs.join(", ") + ")";', text)
-        self.assertIn('return outputText ? (inputSig + " -> " + outputText) : inputSig;', text)
+        self.assertIn(
+            'const inputSig = opType + "(" + io.inputs.join(", ") + ")";', text
+        )
+        self.assertIn(
+            'return outputText ? (inputSig + " -> " + outputText) : inputSig;', text
+        )
         self.assertIn("const opText = formatNodeOp(node);", text)
 
     def test_values_section_rendered_in_detail(self):
@@ -86,6 +90,7 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
 
         self.assertIn("row.missing_metadata", text)
         self.assertIn("No shape tag metadata found", text)
+
 
 if __name__ == "__main__":
     unittest.main()

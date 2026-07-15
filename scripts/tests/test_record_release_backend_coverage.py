@@ -14,7 +14,6 @@ sys.path.insert(0, os.path.dirname(HERE))
 
 import record_release_backend_coverage as rbc  # noqa: E402
 
-
 _SAMPLE_PAYLOAD = {
     "date": "2026-06-29T12:30:07Z",
     "kind": "node",
@@ -114,8 +113,12 @@ class TestReadExistingDates(unittest.TestCase):
             with open(csv_path, "w", newline="", encoding="utf-8") as fh:
                 writer = csv.DictWriter(fh, fieldnames=rbc.CSV_FIELDS)
                 writer.writeheader()
-                writer.writerow({f: "" for f in rbc.CSV_FIELDS} | {"date": "2026-06-29T00:00:00Z"})
-                writer.writerow({f: "" for f in rbc.CSV_FIELDS} | {"date": "2026-06-30T00:00:00Z"})
+                writer.writerow(
+                    {f: "" for f in rbc.CSV_FIELDS} | {"date": "2026-06-29T00:00:00Z"}
+                )
+                writer.writerow(
+                    {f: "" for f in rbc.CSV_FIELDS} | {"date": "2026-06-30T00:00:00Z"}
+                )
             dates = rbc.read_existing_dates(csv_path)
             self.assertEqual(dates, ["2026-06-29T00:00:00Z", "2026-06-30T00:00:00Z"])
 

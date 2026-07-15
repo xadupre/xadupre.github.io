@@ -217,7 +217,9 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
                 "metadata": {"pass": 1, "fail": 1},
             },
         )
-        self.assertEqual([row["name"] for row in payload["tests"]], ["test_a", "test_b"])
+        self.assertEqual(
+            [row["name"] for row in payload["tests"]], ["test_a", "test_b"]
+        )
 
     def test_build_payload_captures_runner_exception(self):
         tests = [
@@ -273,6 +275,7 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
     def test_main_returns_one_on_failure(self):
         original_build = ric.build_payload
         try:
+
             def fake_build(**kwargs):
                 raise RuntimeError("boom")
 
@@ -281,15 +284,12 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         finally:
             ric.build_payload = original_build
 
-
     def test_discover_includes_test_with_metadata_despite_wrong_tag(self):
         """Tests with METADATA_KEYS metadata are kept even if their tag doesn't match."""
         import sys
         import types
 
-        node_with_meta = _FakeNode(
-            "Abs", {"onnx_light.inplace_reuse": "0:0:equal"}
-        )
+        node_with_meta = _FakeNode("Abs", {"onnx_light.inplace_reuse": "0:0:equal"})
         tc_meta = _FakeTestCase(
             "test_tiny_llm",
             _FakeModel([node_with_meta]),
@@ -310,8 +310,14 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
             ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
-            ("onnx_light.onnx_lib.backend", types.ModuleType("onnx_light.onnx_lib.backend")),
-            ("onnx_light.onnx_lib.backend.test", types.ModuleType("onnx_light.onnx_lib.backend.test")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
             ("onnx_light.onnx_lib.backend.test.case", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}

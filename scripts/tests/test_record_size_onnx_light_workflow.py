@@ -1,12 +1,13 @@
 import os
 import unittest
 
-
 HERE = os.path.dirname(__file__)
 
 
 class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
-    def test_schema_comparison_keeps_backend_counts_from_compute_schema_comparison(self):
+    def test_schema_comparison_keeps_backend_counts_from_compute_schema_comparison(
+        self,
+    ):
         # The schema-comparison snapshot must preserve per-operator backend
         # test counts returned by ``compute_schema_comparison()``. Replacing
         # them with ``collect_snippets()`` undercounts ONNX tests because
@@ -46,7 +47,9 @@ class TestRecordSizeOnnxLightWorkflow(unittest.TestCase):
         self.assertIn('row["onnx_backend_tests_expanded"] = onnx_exp', content)
         self.assertIn('row["onnx_light_backend_tests_expanded"] = light_exp', content)
         self.assertIn('int(row.get("onnx_backend_tests", 0)) - onnx_exp', content)
-        self.assertIn('int(row.get("onnx_light_backend_tests", 0)) - light_exp', content)
+        self.assertIn(
+            'int(row.get("onnx_light_backend_tests", 0)) - light_exp', content
+        )
 
     def test_schema_comparison_preserves_zero_expanded_totals(self):
         root = os.path.dirname(os.path.dirname(HERE))
