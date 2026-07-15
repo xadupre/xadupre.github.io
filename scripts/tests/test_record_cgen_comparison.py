@@ -37,8 +37,12 @@ class TestParseSupportOps(unittest.TestCase):
         rows = rcc.parse_support_ops(content)
         self.assertEqual(len(rows), 3)
         self.assertEqual(rows[0], {"domain": "ai.onnx", "name": "Abs", "in_cgen": True})
-        self.assertEqual(rows[1], {"domain": "ai.onnx", "name": "Affine", "in_cgen": False})
-        self.assertEqual(rows[2], {"domain": "ai.onnx.ml", "name": "LabelEncoder", "in_cgen": True})
+        self.assertEqual(
+            rows[1], {"domain": "ai.onnx", "name": "Affine", "in_cgen": False}
+        )
+        self.assertEqual(
+            rows[2], {"domain": "ai.onnx.ml", "name": "LabelEncoder", "in_cgen": True}
+        )
 
     def test_skips_header_row(self):
         content = "| Operator | Supported |\n| Abs | ✅ |\n"
@@ -81,8 +85,12 @@ class TestMergeRows(unittest.TestCase):
         cgen_map = {"abs": "https://raw.example.com/abs_op.c.j2"}
         rows = rcc.merge_rows(cgen, light, onnx_light_map, cgen_map)
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["onnx_light_source_url"], "https://raw.example.com/abs.cc")
-        self.assertEqual(rows[0]["cgen_source_url"], "https://raw.example.com/abs_op.c.j2")
+        self.assertEqual(
+            rows[0]["onnx_light_source_url"], "https://raw.example.com/abs.cc"
+        )
+        self.assertEqual(
+            rows[0]["cgen_source_url"], "https://raw.example.com/abs_op.c.j2"
+        )
 
     def test_merge_with_source_code_map(self):
         light = [self._make_light("Abs")]
@@ -205,7 +213,9 @@ class TestFindSourceUrls(unittest.TestCase):
 class TestCamelToSnake(unittest.TestCase):
     def test_basic(self):
         self.assertEqual(rcc._camel_to_snake("Abs"), "abs")
-        self.assertEqual(rcc._camel_to_snake("BatchNormalization"), "batch_normalization")
+        self.assertEqual(
+            rcc._camel_to_snake("BatchNormalization"), "batch_normalization"
+        )
         self.assertEqual(rcc._camel_to_snake("AveragePool"), "average_pool")
         self.assertEqual(rcc._camel_to_snake("Conv"), "conv")
 
@@ -238,7 +248,9 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
             [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
             [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
         )
-        return helper.make_model(graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)])
+        return helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
+        )
 
     def test_single_node_models_indexed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -264,7 +276,9 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
                 [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
                 [helper.make_tensor_value_info("z", TensorProto.FLOAT, [1])],
             )
-            model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)])
+            model = helper.make_model(
+                graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
+            )
             onnx.save(model, os.path.join(multi_dir, "model.onnx"))
 
             result = rcc.build_op_to_test_model_map(tmpdir)

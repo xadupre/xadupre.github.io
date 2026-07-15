@@ -69,6 +69,7 @@ DEFAULT_KIND: str = "node"
 # Helpers shared with record_onnx_backend_test_coverage
 # ---------------------------------------------------------------------------
 
+
 def _log(message: str) -> None:
     """Print ``message`` prefixed with a UTC timestamp."""
     now = dt.datetime.now(tz=dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -124,19 +125,15 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from record_onnx_backend_test_coverage import (  # noqa: E402
-    _onnx_light_model_to_onnx,
-    _onnx_light_tensor_to_numpy,
     _model_input_names,
-    _normalize_kinds,
-    _load_test_data_sets,
     build_graph,
     discover_node_tests,
 )
 
-
 # ---------------------------------------------------------------------------
 # Backend runners (load once, then call N times)
 # ---------------------------------------------------------------------------
+
 
 def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
@@ -158,21 +155,15 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
     input_names = _model_input_names(model)
-    evaluator_input_names = getattr(evaluator, "input_names", None)
 
     def _run(inputs: List[Any]) -> List[Any]:
         import numpy as np
 
         feeds: Dict[str, Any] = {}
         for name, value in zip(input_names, inputs):
-            map_keys_name = f"{name}_keys"
-            map_values_name = f"{name}_values"
-            if (
-                isinstance(value, dict)
-                and evaluator_input_names
-                and map_keys_name in evaluator_input_names
-                and map_values_name in evaluator_input_names
-            ):
+            if isinstance(value, dict):
+                map_keys_name = f"{name}_keys"
+                map_values_name = f"{name}_values"
                 items = list(value.items())
                 feeds[map_keys_name] = np.asarray([k for k, _ in items])
                 feeds[map_values_name] = np.asarray([v for _, v in items])
@@ -192,6 +183,7 @@ _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] 
 # ---------------------------------------------------------------------------
 # Benchmark core
 # ---------------------------------------------------------------------------
+
 
 def run_benchmark(
     model: Any,
@@ -326,7 +318,13 @@ def _row_from_results(
     light_avg = results.get("onnx_light", {}).get("avg_ms")
     ort_ok = results.get("onnxruntime", {}).get("success", False)
     light_ok = results.get("onnx_light", {}).get("success", False)
-    if ort_ok and light_ok and ort_avg is not None and light_avg is not None and light_avg > 0:
+    if (
+        ort_ok
+        and light_ok
+        and ort_avg is not None
+        and light_avg is not None
+        and light_avg > 0
+    ):
         row["speedup"] = round(ort_avg / light_avg, 4)
 
     return row
@@ -335,6 +333,7 @@ def _row_from_results(
 # ---------------------------------------------------------------------------
 # Top-level payload builder
 # ---------------------------------------------------------------------------
+
 
 def build_payload(
     kind: str = DEFAULT_KIND,
@@ -400,8 +399,7 @@ def build_payload(
 
     # Summary stats across all tests that both backends succeeded on.
     both_ok = [
-        r for r in rows
-        if r.get("onnxruntime_success") and r.get("onnx_light_success")
+        r for r in rows if r.get("onnxruntime_success") and r.get("onnx_light_success")
     ]
     speedups = [r["speedup"] for r in both_ok if "speedup" in r]
     summary: Dict[str, Any] = {"both_succeeded": len(both_ok), "total": len(rows)}
@@ -446,6 +444,7 @@ def load_previous_payload(json_path: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)

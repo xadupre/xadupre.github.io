@@ -1,7 +1,6 @@
 import os
 import unittest
 
-
 HERE = os.path.dirname(__file__)
 
 
@@ -25,6 +24,7 @@ class TestSchemaComparisonDashboard(unittest.TestCase):
             'state.hasExpandedBackend && state.reportMode === "expanded"',
             content,
         )
+
 
 if __name__ == "__main__":
     unittest.main()

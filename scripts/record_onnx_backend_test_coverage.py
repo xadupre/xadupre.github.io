@@ -683,7 +683,12 @@ def run_test_with_backend(
                 "error_step": "compare",
                 "elapsed_s": time.perf_counter() - t0,
             }
-    return {"success": True, "error": "", "error_step": "", "elapsed_s": time.perf_counter() - t0}
+    return {
+        "success": True,
+        "error": "",
+        "error_step": "",
+        "elapsed_s": time.perf_counter() - t0,
+    }
 
 
 def _row_from_results(
@@ -857,7 +862,12 @@ def build_payload(
         reverse=True,
     )[:20]
     slowest_tests = [
-        {k: r[k] for k in ["name"] + [f"{b}_elapsed_s" for b in BACKENDS if f"{b}_elapsed_s" in r] + (["elapsed_s"] if "elapsed_s" in r else [])}
+        {
+            k: r[k]
+            for k in ["name"]
+            + [f"{b}_elapsed_s" for b in BACKENDS if f"{b}_elapsed_s" in r]
+            + (["elapsed_s"] if "elapsed_s" in r else [])
+        }
         for r in slowest
     ]
 
