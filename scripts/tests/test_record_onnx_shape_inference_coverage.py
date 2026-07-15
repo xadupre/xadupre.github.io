@@ -1210,7 +1210,7 @@ class TestTagFiltering(unittest.TestCase):
         import types
 
         fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda: cases
+        fake_module.collect_test_case = lambda include_big=False: cases
         parent_pkg = types.ModuleType("onnx_light.onnx_lib.backend.test")
         parent_pkg.case = fake_module
         backend_pkg = types.ModuleType("onnx_light.onnx_lib.backend")
