@@ -88,9 +88,7 @@ def fetch_github_tree(
     keys), or an empty list when the request fails (e.g. rate-limited or
     network unavailable).
     """
-    url = (
-        f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
-    )
+    url = f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1"
     headers: Dict[str, str] = {
         "User-Agent": "xadupre.github.io-record-cgen-comparison",
         "Accept": "application/vnd.github+json",
@@ -105,7 +103,12 @@ def fetch_github_tree(
         entries = data.get("tree", [])
         _log(f"  Got {len(entries)} tree entries for {owner}/{repo}.")
         return entries
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, OSError) as exc:
+    except (
+        urllib.error.URLError,
+        urllib.error.HTTPError,
+        json.JSONDecodeError,
+        OSError,
+    ) as exc:
         _log(f"  Warning: failed to fetch tree for {owner}/{repo}: {exc}")
         return []
 
@@ -308,8 +311,7 @@ def build_cgen_source_code_map(
     """
     op_to_model = build_op_to_test_model_map(test_data_dir)
     _log(
-        f"Built op→model map with {len(op_to_model)} entries "
-        f"from {test_data_dir}."
+        f"Built op→model map with {len(op_to_model)} entries " f"from {test_data_dir}."
     )
 
     result: Dict[Tuple[str, str], str] = {}
@@ -486,7 +488,9 @@ def build_payload(
     _log(f"Loaded {len(light_rows)} operators from schema_comparison.json.")
 
     # Attempt to fetch GitHub trees for source-URL lookup (best-effort).
-    onnx_light_tree = fetch_github_tree(ONNX_LIGHT_OWNER, ONNX_LIGHT_REPO, token=github_token)
+    onnx_light_tree = fetch_github_tree(
+        ONNX_LIGHT_OWNER, ONNX_LIGHT_REPO, token=github_token
+    )
     onnx_light_source_map = build_onnx_light_source_map(onnx_light_tree)
     _log(f"Built onnx-light source map with {len(onnx_light_source_map)} entries.")
 
@@ -501,7 +505,9 @@ def build_payload(
         if test_node_dir:
             cgen_source_code_map = build_cgen_source_code_map(cgen_rows, test_node_dir)
         else:
-            _log("ONNX backend test data directory not found; skipping emx-onnx-cgen compile step.")
+            _log(
+                "ONNX backend test data directory not found; skipping emx-onnx-cgen compile step."
+            )
     elif skip_cgen_compile:
         _log("Skipping emx-onnx-cgen compile step (--skip-cgen-compile).")
     else:

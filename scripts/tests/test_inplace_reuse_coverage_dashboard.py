@@ -7,9 +7,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(
-    REPO_ROOT, "dashboard", "onnx-light", "inplace-reuse-coverage.html"
-)
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light", "inplace-reuse-coverage.html")
 
 
 class TestInplaceReuseCoverageDashboard(unittest.TestCase):
@@ -23,7 +21,7 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
             'const doc = new DOMParser().parseFromString(row.graph.svg, "image/svg+xml");',
             text,
         )
-        self.assertIn("targetDiv.className = \"onnx-svg\";", text)
+        self.assertIn('targetDiv.className = "onnx-svg";', text)
         self.assertIn("if (row.mermaid) {", text)
 
     def test_detail_rows_render_input_output_info(self):
@@ -33,9 +31,14 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
         self.assertIn("function formatNodeIo(node) {", text)
         self.assertIn("return { inputs, outputs };", text)
         self.assertIn("function formatNodeOp(node) {", text)
-        self.assertIn('const inputSig = opType + "(" + io.inputs.join(", ") + ")";', text)
-        self.assertIn('return outputText ? (inputSig + " -> " + outputText) : inputSig;', text)
+        self.assertIn(
+            'const inputSig = opType + "(" + io.inputs.join(", ") + ")";', text
+        )
+        self.assertIn(
+            'return outputText ? (inputSig + " -> " + outputText) : inputSig;', text
+        )
         self.assertIn("const opText = formatNodeOp(node);", text)
+
 
 if __name__ == "__main__":
     unittest.main()

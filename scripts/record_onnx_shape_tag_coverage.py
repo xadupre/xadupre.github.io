@@ -130,17 +130,29 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     for vi in graph.input:
         if vi.name not in init_names:
             seen_names.add(vi.name)
-            result.append({"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)})
+            result.append(
+                {"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)}
+            )
     for vi in graph.output:
         seen_names.add(vi.name)
-        result.append({"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)})
+        result.append(
+            {"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)}
+        )
     for init in graph.initializer:
         seen_names.add(init.name)
-        result.append({"name": init.name, "kind": "initializer", "metadata": _value_metadata(init)})
+        result.append(
+            {
+                "name": init.name,
+                "kind": "initializer",
+                "metadata": _value_metadata(init),
+            }
+        )
     for vi in graph.value_info:
         if vi.name in seen_names:
             continue
-        result.append({"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)})
+        result.append(
+            {"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)}
+        )
     return result
 
 
@@ -160,14 +172,10 @@ def _node_io(node) -> Tuple[List[str], List[str]]:
 # Mermaid graph rendering (best-effort; failures are silently ignored)
 # ---------------------------------------------------------------------------
 
+
 def _mermaid_escape(text: str) -> str:
     """Escape ``text`` so it can appear inside a Mermaid ``"..."`` label."""
-    return (
-        str(text)
-        .replace("\\", "\\\\")
-        .replace('"', "&quot;")
-        .replace("\n", " ")
-    )
+    return str(text).replace("\\", "\\\\").replace('"', "&quot;").replace("\n", " ")
 
 
 def _mermaid_dtype_name(onnx_mod: Any, dtype: int) -> str:
@@ -360,7 +368,11 @@ def _normalize_graph(graph: Any) -> Dict[str, str]:
     """Return ``{"svg": ...}`` when ``graph`` carries a non-empty SVG string."""
     if graph is None:
         return {}
-    if isinstance(graph, dict) and isinstance(graph.get("svg"), str) and graph.get("svg"):
+    if (
+        isinstance(graph, dict)
+        and isinstance(graph.get("svg"), str)
+        and graph.get("svg")
+    ):
         return {"svg": graph["svg"]}
     return {}
 
@@ -401,7 +413,9 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
         expected_values = _graph_value_snapshot(model)
-        has_metadata = any(expected_nodes) or _has_expected_value_metadata(expected_values)
+        has_metadata = any(expected_nodes) or _has_expected_value_metadata(
+            expected_values
+        )
         if tags and not any(t in tags for t in case_tags) and not has_metadata:
             continue
         discovered.append(
@@ -423,12 +437,16 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
 
 def run_shape_tag_analysis(model) -> Dict[str, Any]:
     """Run onnx-light's shape-tag metadata analysis on ``model``."""
-    from onnx_light.onnx_optim.shape_inference import write_value_and_node_tags_to_metadata
+    from onnx_light.onnx_optim.shape_inference import (
+        write_value_and_node_tags_to_metadata,
+    )
 
     work = _clone_model(model)
     for node in work.graph.node:
         _clear_node_metadata(node)
-    for vi in list(work.graph.input) + list(work.graph.output) + list(work.graph.value_info):
+    for vi in (
+        list(work.graph.input) + list(work.graph.output) + list(work.graph.value_info)
+    ):
         del vi.metadata_props[:]
     for init in work.graph.initializer:
         del init.metadata_props[:]
@@ -480,10 +498,20 @@ def _score_test(
         expected = dict(expected_nodes[index]) if index < len(expected_nodes) else {}
         actual = dict(actual_nodes[index]) if index < len(actual_nodes) else {}
         op_type = node_ops[index] if index < len(node_ops) else ""
-        inputs = list(node_inputs[index]) if node_inputs is not None and index < len(node_inputs) else []
-        outputs = list(node_outputs[index]) if node_outputs is not None and index < len(node_outputs) else []
+        inputs = (
+            list(node_inputs[index])
+            if node_inputs is not None and index < len(node_inputs)
+            else []
+        )
+        outputs = (
+            list(node_outputs[index])
+            if node_outputs is not None and index < len(node_outputs)
+            else []
+        )
         keys = sorted(set(expected) | set(actual))
-        metadata_matches = sum(1 for key in keys if expected.get(key) == actual.get(key))
+        metadata_matches = sum(
+            1 for key in keys if expected.get(key) == actual.get(key)
+        )
         total_metadata += len(keys)
         matched_metadata += metadata_matches
         node_success = expected == actual
@@ -511,10 +539,12 @@ def _score_test(
         exp_map = {v["name"]: v for v in (expected_values or [])}
         act_map = {v["name"]: v for v in (actual_values or [])}
         # dict.fromkeys preserves insertion order while deduplicating names.
-        all_names = list(dict.fromkeys(
-            [v["name"] for v in (expected_values or [])] +
-            [v["name"] for v in (actual_values or [])]
-        ))
+        all_names = list(
+            dict.fromkeys(
+                [v["name"] for v in (expected_values or [])]
+                + [v["name"] for v in (actual_values or [])]
+            )
+        )
         for val_name in all_names:
             exp_entry = exp_map.get(val_name, {})
             act_entry = act_map.get(val_name, {})
@@ -528,13 +558,15 @@ def _score_test(
                 matched_values += 1
             else:
                 success = False
-            values.append({
-                "name": val_name,
-                "kind": exp_entry.get("kind") or act_entry.get("kind", ""),
-                "expected": exp_meta,
-                "actual": act_meta,
-                "success": val_success,
-            })
+            values.append(
+                {
+                    "name": val_name,
+                    "kind": exp_entry.get("kind") or act_entry.get("kind", ""),
+                    "expected": exp_meta,
+                    "actual": act_meta,
+                    "success": val_success,
+                }
+            )
 
     # When a test has nodes but no metadata was expected or produced for any of
     # them, it trivially passes but carries no signal about shape-tag quality.
@@ -675,9 +707,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    json_path = os.path.join(
-        args.cache_dir, "onnx-light", "shape_tag_coverage.json"
-    )
+    json_path = os.path.join(args.cache_dir, "onnx-light", "shape_tag_coverage.json")
     try:
         payload = build_payload(tag=args.tag, limit=args.limit)
     except Exception as exc:  # noqa: BLE001

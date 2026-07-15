@@ -41,6 +41,7 @@ FOOTER_RE = re.compile(
 )
 SCRIPT_RE = re.compile(r'<script\s+src="((?:\.\./)*)assets/last-updated\.js"')
 
+
 class _DocLinkParser(HTMLParser):
     def __init__(self):
         super().__init__()
