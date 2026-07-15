@@ -627,7 +627,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             model_dir=None,
         )
         fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda: {
+        fake_module.collect_test_case = lambda include_big=False: {
             "test_relu_light": node_tc,
             "test_simple_other": simple_tc,
         }
@@ -723,7 +723,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             )
 
             fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-            fake_module.collect_test_case = lambda: {"test_tiny_llm": tc}
+            fake_module.collect_test_case = lambda include_big=False: {"test_tiny_llm": tc}
             parents = [
                 ("onnx_light", types.ModuleType("onnx_light")),
                 ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
@@ -798,7 +798,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             )
 
             fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-            fake_module.collect_test_case = lambda: {
+            fake_module.collect_test_case = lambda include_big=False: {
                 "test_cc_shape_inference_tiny_llm_inlined": tc
             }
             parents = [
@@ -878,7 +878,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         }
 
         fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda: cases
+        fake_module.collect_test_case = lambda include_big=False: cases
         parents = [
             ("onnx_light", types.ModuleType("onnx_light")),
             ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
