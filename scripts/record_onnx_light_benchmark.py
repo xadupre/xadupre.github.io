@@ -170,7 +170,11 @@ def _cc_tensor_to_numpy(tensor):
 
 
 def _cc_data_sets_to_python(test_case) -> List[Tuple[List[Any], List[Any]]]:
-    """Convert C++ backend-test datasets into positional python inputs."""
+    """Convert C++ backend-test datasets into ``(inputs, outputs)`` tuples.
+
+    The benchmark only consumes positional inputs, so the output side of
+    each tuple is kept empty.
+    """
 
     graph_inputs = list(test_case.model.graph.input)
     data_sets: List[Tuple[List[Any], List[Any]]] = []
@@ -194,7 +198,7 @@ def _cc_data_sets_to_python(test_case) -> List[Tuple[List[Any], List[Any]]]:
                 inputs.append(values_arr)
                 continue
             inputs.append(by_name.get(gi.name))
-        data_sets.append((inputs, []))
+        data_sets.append((inputs, []))  # benchmark runs measure execution only
     return data_sets
 
 
