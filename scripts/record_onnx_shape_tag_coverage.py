@@ -550,8 +550,14 @@ def _score_test(
             act_entry = act_map.get(val_name, {})
             exp_meta = exp_entry.get("metadata", {})
             act_meta = act_entry.get("metadata", {})
-            exp_has_tags = bool(exp_meta.get("onnx_light.value_tags", ""))
-            act_has_tags = bool(act_meta.get("onnx_light.value_tags", ""))
+            exp_tags = str(exp_meta.get("onnx_light.value_tags", "")).strip()
+            act_tags = str(act_meta.get("onnx_light.value_tags", "")).strip()
+            # Values with no shape-tag metadata on either side carry no signal for
+            # shape-tag coverage and should not dilute the ratio.
+            if not exp_tags and not act_tags:
+                continue
+            exp_has_tags = bool(exp_tags)
+            act_has_tags = bool(act_tags)
             val_success = exp_meta == act_meta and exp_has_tags and act_has_tags
             total_values += 1
             if val_success:
