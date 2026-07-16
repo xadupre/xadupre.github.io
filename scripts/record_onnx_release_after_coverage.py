@@ -150,8 +150,9 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
         value_info_meta = _value_metadata(vi)
         if not value_info_meta:
             continue
-        merged = dict(value_info_meta)
-        merged.update(row.get("metadata", {}))
+        merged = dict(row.get("metadata", {}))
+        for key, value in value_info_meta.items():
+            merged.setdefault(key, value)
         row["metadata"] = merged
     return result
 
