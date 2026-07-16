@@ -456,6 +456,8 @@ class TestDiscoverNodeTests(unittest.TestCase):
     def test_benchmark_mode_is_preferred_when_available(self):
         import types
 
+        expected_inputs = np.array([1.0, 2.0], dtype=np.float32)
+
         class _FakeInputType:
             @staticmethod
             def has_map_type():
@@ -491,10 +493,10 @@ class TestDiscoverNodeTests(unittest.TestCase):
 
         class _FakeCase:
             def __init__(self):
-                self.name = "test_cc_abs_benchmark"
+                self.name = "test_cc_benchmark"
                 self.kind = "node"
                 self.model = _FakeModel()
-                self.data_sets = [_FakeDataSet(np.array([1.0, 2.0], dtype=np.float32))]
+                self.data_sets = [_FakeDataSet(expected_inputs)]
                 self.tag = "bench"
 
         call_kwargs = {}
@@ -542,15 +544,13 @@ class TestDiscoverNodeTests(unittest.TestCase):
 
         self.assertEqual(call_kwargs["include_big"], True)
         self.assertEqual(call_kwargs["mode"], _FakeTestMode.BENCHMARK)
-        self.assertEqual([d["name"] for d in discovered], ["test_cc_abs_benchmark"])
+        self.assertEqual([d["name"] for d in discovered], ["test_cc_benchmark"])
         self.assertEqual(discovered[0]["tag"], "bench")
         data_sets = discovered[0]["data_sets"]
         self.assertEqual(len(data_sets), 1)
         first_inputs, _ = data_sets[0]
         self.assertEqual(len(first_inputs), 1)
-        np.testing.assert_allclose(
-            first_inputs[0], np.array([1.0, 2.0], dtype=np.float32)
-        )
+        np.testing.assert_allclose(first_inputs[0], expected_inputs)
 
     def test_include_big_true_is_passed(self):
         import types
