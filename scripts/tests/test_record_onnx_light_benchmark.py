@@ -548,6 +548,9 @@ class TestDiscoverNodeTests(unittest.TestCase):
         self.assertEqual(len(data_sets), 1)
         first_inputs, _ = data_sets[0]
         self.assertEqual(len(first_inputs), 1)
+        np.testing.assert_allclose(
+            first_inputs[0], np.array([1.0, 2.0], dtype=np.float32)
+        )
 
     def test_include_big_true_is_passed(self):
         import types
