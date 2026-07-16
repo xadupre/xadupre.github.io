@@ -148,16 +148,18 @@ def _cc_tensor_to_numpy(tensor):
         int(onnx.TensorProto.FLOAT16): np.float16,
     }
     if ml_dtypes is not None:
-        dtype_map.update(
-            {
-                int(onnx.TensorProto.BFLOAT16): ml_dtypes.bfloat16,
-                int(onnx.TensorProto.FLOAT8E4M3FN): ml_dtypes.float8_e4m3fn,
-                int(onnx.TensorProto.FLOAT8E4M3FNUZ): ml_dtypes.float8_e4m3fnuz,
-                int(onnx.TensorProto.FLOAT8E5M2): ml_dtypes.float8_e5m2,
-                int(onnx.TensorProto.FLOAT8E5M2FNUZ): ml_dtypes.float8_e5m2fnuz,
-                int(onnx.TensorProto.FLOAT8E8M0): ml_dtypes.float8_e8m0fnu,
-            }
+        optional_ml_dtypes = (
+            (onnx.TensorProto.BFLOAT16, "bfloat16"),
+            (onnx.TensorProto.FLOAT8E4M3FN, "float8_e4m3fn"),
+            (onnx.TensorProto.FLOAT8E4M3FNUZ, "float8_e4m3fnuz"),
+            (onnx.TensorProto.FLOAT8E5M2, "float8_e5m2"),
+            (onnx.TensorProto.FLOAT8E5M2FNUZ, "float8_e5m2fnuz"),
+            (onnx.TensorProto.FLOAT8E8M0, "float8_e8m0fnu"),
         )
+        for onnx_type, attr_name in optional_ml_dtypes:
+            dtype = getattr(ml_dtypes, attr_name, None)
+            if dtype is not None:
+                dtype_map[int(onnx_type)] = dtype
 
     dtype = dtype_map.get(int(tensor.data_type))
     if dtype is None:
@@ -201,7 +203,7 @@ def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
     """Discover benchmark-sized backend tests when onnx-light exposes them."""
     try:
         from onnx_light.onnx.backend import TestMode, collect_test_cases
-    except Exception:  # noqa: BLE001
+    except (ImportError, AttributeError):
         return None
 
     try:

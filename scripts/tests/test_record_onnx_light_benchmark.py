@@ -544,8 +544,10 @@ class TestDiscoverNodeTests(unittest.TestCase):
         self.assertEqual(call_kwargs["mode"], _FakeTestMode.BENCHMARK)
         self.assertEqual([d["name"] for d in discovered], ["test_cc_abs_benchmark"])
         self.assertEqual(discovered[0]["tag"], "bench")
-        self.assertEqual(len(discovered[0]["data_sets"]), 1)
-        self.assertEqual(len(discovered[0]["data_sets"][0][0]), 1)
+        data_sets = discovered[0]["data_sets"]
+        self.assertEqual(len(data_sets), 1)
+        first_inputs, _ = data_sets[0]
+        self.assertEqual(len(first_inputs), 1)
 
     def test_include_big_true_is_passed(self):
         import types
