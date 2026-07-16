@@ -122,24 +122,38 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
         return []
     graph = model.graph
     init_names = {init.name for init in graph.initializer}
+    by_name: Dict[str, Dict[str, Any]] = {}
     result: List[Dict[str, Any]] = []
     for vi in graph.input:
         if vi.name not in init_names:
-            result.append(
-                {"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)}
-            )
+            row = {"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)}
+            result.append(row)
+            by_name[vi.name] = row
     for vi in graph.output:
-        result.append(
-            {"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)}
-        )
+        row = {"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)}
+        result.append(row)
+        by_name[vi.name] = row
     for init in graph.initializer:
-        result.append(
-            {
-                "name": init.name,
-                "kind": "initializer",
-                "metadata": _value_metadata(init),
-            }
-        )
+        row = {
+            "name": init.name,
+            "kind": "initializer",
+            "metadata": _value_metadata(init),
+        }
+        result.append(row)
+        by_name[init.name] = row
+    # Some onnx-light pipelines store value tags for graph outputs in ``value_info``
+    # only; merge those tags into the matching output/input entries.
+    for vi in graph.value_info:
+        row = by_name.get(vi.name)
+        if row is None:
+            continue
+        value_info_meta = _value_metadata(vi)
+        if not value_info_meta:
+            continue
+        merged = dict(row.get("metadata", {}))
+        for key, value in value_info_meta.items():
+            merged.setdefault(key, value)
+        row["metadata"] = merged
     return result
 
 
