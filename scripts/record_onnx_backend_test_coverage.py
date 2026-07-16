@@ -585,7 +585,12 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
     input_names = _model_input_names(model)
-    evaluator_input_names = getattr(evaluator, "input_names", None)
+    raw_evaluator_input_names = getattr(evaluator, "input_names", None)
+    evaluator_input_names = None
+    if raw_evaluator_input_names:
+        evaluator_input_names = {
+            str(getattr(name, "name", name)) for name in raw_evaluator_input_names
+        }
 
     def _run(inputs: List[Any]) -> List[Any]:
         import numpy as np

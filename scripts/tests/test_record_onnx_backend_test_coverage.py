@@ -519,6 +519,69 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         )
         np.testing.assert_array_equal(actual[0], np.array([1.0, -3.0]))
 
+    def test_run_with_onnx_light_expands_map_inputs_with_named_input_descriptors(self):
+        import types
+
+        import numpy as np
+        import onnx
+        from onnx import helper
+
+        node = helper.make_node("Identity", ["x"], ["y"])
+        map_type = helper.make_map_type_proto(
+            onnx.TensorProto.INT64,
+            helper.make_tensor_type_proto(onnx.TensorProto.FLOAT, []),
+        )
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_value_info("x", map_type)],
+            [helper.make_value_info("y", map_type)],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+
+        constructed: dict = {}
+
+        class _FakeInput:
+            def __init__(self, name):
+                self.name = name
+
+        class _FakeEvaluator:
+            input_names = [_FakeInput("x_keys"), _FakeInput("x_values")]
+
+            def __init__(self, proto):
+                constructed["proto"] = proto
+
+            def run(self, output_names, feeds):
+                constructed["feeds"] = feeds
+                return [feeds["x_values"]]
+
+        fake_reference = types.ModuleType("onnx_light.onnx.reference")
+        fake_reference.ReferenceEvaluator = _FakeEvaluator
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx", types.ModuleType("onnx_light.onnx")),
+            ("onnx_light.onnx.reference", fake_reference),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            runner = rbc._run_with_onnx_light(model)
+            actual = runner([{2: 1.0, 5: -3.0}])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(constructed["proto"], model.SerializeToString())
+        np.testing.assert_array_equal(constructed["feeds"]["x_keys"], np.array([2, 5]))
+        np.testing.assert_array_equal(
+            constructed["feeds"]["x_values"], np.array([1.0, -3.0])
+        )
+        np.testing.assert_array_equal(actual[0], np.array([1.0, -3.0]))
+
     def test_row_from_results_includes_tag_when_provided(self):
         row = rbc._row_from_results(
             "test_qlinearmatmul",
