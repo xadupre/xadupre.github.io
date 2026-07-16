@@ -252,7 +252,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         names = [v["name"] for v in row["values"]]
         self.assertEqual(names, ["A", "B"])
 
-    def test_score_test_values_missing_value_tags_fails(self):
+    def test_score_test_values_without_value_tags_are_ignored(self):
         row = stc._score_test(
             "test_values_missing_tag",
             expected_nodes=[],
@@ -261,10 +261,10 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             expected_values=[{"name": "R", "kind": "result", "metadata": {}}],
             actual_values=[{"name": "R", "kind": "result", "metadata": {}}],
         )
-        self.assertFalse(row["success"])
+        self.assertTrue(row["success"])
         self.assertEqual(row["matched_values"], 0)
-        self.assertEqual(row["total_values"], 1)
-        self.assertFalse(row["values"][0]["success"])
+        self.assertEqual(row["total_values"], 0)
+        self.assertEqual(row["values"], [])
 
     def test_score_test_includes_mermaid_when_provided(self):
         row = stc._score_test(
