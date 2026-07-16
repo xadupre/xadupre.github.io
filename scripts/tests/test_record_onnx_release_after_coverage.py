@@ -111,6 +111,16 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["kind"], "initializer")
 
+    def test_graph_value_snapshot_merges_output_metadata_from_value_info(self):
+        out = _FakeValueInfo("Y", {})
+        model = _FakeModel([], outputs=[out])
+        model.graph.value_info = [_FakeValueInfo("Y", {"onnx_light.value_tags": "axes"})]
+
+        snapshot = rac._graph_value_snapshot(model)
+        y_entry = next(s for s in snapshot if s["name"] == "Y")
+        self.assertEqual(y_entry["kind"], "output")
+        self.assertEqual(y_entry["metadata"], {"onnx_light.value_tags": "axes"})
+
     def test_clear_node_metadata_removes_entries(self):
         node = _FakeNode("Abs", {"onnx_light.release_after": "A"})
         rac._clear_node_metadata(node)
