@@ -1,10 +1,9 @@
 """Benchmark ``onnx-light`` vs ``onnxruntime`` on the backend test cases.
 
-The script discovers every backend node test bundled with the installed
-``onnx-light`` package (via
-``onnx_light.onnx_lib.backend.test.case.collect_test_case``) and measures
-the processing time of both ``onnxruntime`` and the ``onnx-light``
-reference implementation backed by its C++ ``KernelDispatchTable``.
+The script discovers every benchmark-sized backend node test bundled with
+the installed ``onnx-light`` package and measures the processing time of
+both ``onnxruntime`` and the ``onnx-light`` reference implementation
+backed by its C++ ``KernelDispatchTable``.
 
 For each test the measurement protocol is:
 
@@ -117,6 +116,126 @@ def collect_versions() -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 # Test-discovery helpers (self-contained, no dependency on other scripts)
 # ---------------------------------------------------------------------------
+
+
+def _cc_tensor_to_numpy(tensor):
+    """Convert a C++ backend-test tensor into a numpy value."""
+    import numpy as np
+    import onnx
+
+    try:
+        import ml_dtypes  # type: ignore
+    except ImportError:  # pragma: no cover - optional dependency
+        ml_dtypes = None
+
+    if int(tensor.data_type) == int(onnx.TensorProto.STRING):
+        values = tensor.string_data()
+        arr = np.array(values, dtype=object)
+        return arr.reshape(tuple(int(d) for d in tensor.shape))
+
+    dtype_map = {
+        int(onnx.TensorProto.FLOAT): np.float32,
+        int(onnx.TensorProto.DOUBLE): np.float64,
+        int(onnx.TensorProto.INT32): np.int32,
+        int(onnx.TensorProto.INT64): np.int64,
+        int(onnx.TensorProto.UINT8): np.uint8,
+        int(onnx.TensorProto.INT8): np.int8,
+        int(onnx.TensorProto.BOOL): np.bool_,
+        int(onnx.TensorProto.UINT16): np.uint16,
+        int(onnx.TensorProto.INT16): np.int16,
+        int(onnx.TensorProto.UINT32): np.uint32,
+        int(onnx.TensorProto.UINT64): np.uint64,
+        int(onnx.TensorProto.FLOAT16): np.float16,
+    }
+    if ml_dtypes is not None:
+        dtype_map.update(
+            {
+                int(onnx.TensorProto.BFLOAT16): ml_dtypes.bfloat16,
+                int(onnx.TensorProto.FLOAT8E4M3FN): ml_dtypes.float8_e4m3fn,
+                int(onnx.TensorProto.FLOAT8E4M3FNUZ): ml_dtypes.float8_e4m3fnuz,
+                int(onnx.TensorProto.FLOAT8E5M2): ml_dtypes.float8_e5m2,
+                int(onnx.TensorProto.FLOAT8E5M2FNUZ): ml_dtypes.float8_e5m2fnuz,
+                int(onnx.TensorProto.FLOAT8E8M0): ml_dtypes.float8_e8m0fnu,
+            }
+        )
+
+    dtype = dtype_map.get(int(tensor.data_type))
+    if dtype is None:
+        raise NotImplementedError(
+            f"Cannot convert benchmark input tensor with data_type={tensor.data_type}."
+        )
+    arr = np.frombuffer(tensor.raw_data(), dtype=dtype)
+    return arr.reshape(tuple(int(d) for d in tensor.shape))
+
+
+def _cc_data_sets_to_python(test_case) -> List[Tuple[List[Any], List[Any]]]:
+    """Convert C++ backend-test datasets into positional python inputs."""
+
+    graph_inputs = list(test_case.model.graph.input)
+    data_sets: List[Tuple[List[Any], List[Any]]] = []
+    for ds in test_case.data_sets:
+        by_name = {_tensor.name: _cc_tensor_to_numpy(_tensor) for _tensor in ds.inputs}
+        maps_by_name = {m.name: m for m in ds.maps} if getattr(ds, "maps", None) else {}
+        inputs: List[Any] = []
+        for gi in graph_inputs:
+            if gi.type.has_map_type():
+                if gi.name in maps_by_name:
+                    m = maps_by_name[gi.name]
+                    inputs.append(_cc_tensor_to_numpy(m.keys))
+                    inputs.append(_cc_tensor_to_numpy(m.values))
+                    continue
+                keys_arr = by_name.get(f"{gi.name}_keys")
+                values_arr = by_name.get(f"{gi.name}_values")
+                if keys_arr is None or values_arr is None:
+                    inputs.append(by_name.get(gi.name))
+                    continue
+                inputs.append(keys_arr)
+                inputs.append(values_arr)
+                continue
+            inputs.append(by_name.get(gi.name))
+        data_sets.append((inputs, []))
+    return data_sets
+
+
+def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
+    """Discover benchmark-sized backend tests when onnx-light exposes them."""
+    try:
+        from onnx_light.onnx.backend import TestMode, collect_test_cases
+    except Exception:  # noqa: BLE001
+        return None
+
+    try:
+        cases = collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
+    except TypeError:
+        return None
+
+    kinds = _normalize_kinds(kind)
+    discovered: List[Dict[str, Any]] = []
+    for tc in cases:
+        name = getattr(tc, "name", "")
+        if not name:
+            continue
+        case_kind = getattr(tc, "kind", None)
+        if kinds and case_kind not in kinds:
+            continue
+        model = getattr(tc, "model", None)
+        if model is None:
+            continue
+        onnx_model = _onnx_light_model_to_onnx(model)
+        data_sets = _cc_data_sets_to_python(tc)
+        if not data_sets:
+            continue
+        tag = getattr(tc, "tag", None) or ""
+        discovered.append(
+            {
+                "name": str(name),
+                "model": onnx_model,
+                "data_sets": data_sets,
+                "tag": str(tag),
+            }
+        )
+    discovered.sort(key=lambda d: d["name"])
+    return discovered
 
 
 def _normalize_kinds(kind) -> Tuple[str, ...]:
@@ -255,10 +374,16 @@ def build_graph(model) -> Dict[str, Any]:
 def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
     """Return ``[{"name", "model", "data_sets", "tag"}, ...]`` for every backend test.
 
-    Tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` with
-    ``include_big=True`` so that large test cases (e.g. shape-inference
-    tests for LLM-sized models) are included in the benchmark.
+    When available, benchmark-sized C++ backend tests are preferred so the
+    dashboard measures the dedicated benchmark corpus rather than the
+    standard correctness-only cases. Older ``onnx-light`` builds fall back
+    to ``onnx_light.onnx_lib.backend.test.case.collect_test_case`` with
+    ``include_big=True``.
     """
+    benchmark_cases = _discover_benchmark_mode_tests(kind)
+    if benchmark_cases is not None:
+        return benchmark_cases
+
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
     kinds = _normalize_kinds(kind)
