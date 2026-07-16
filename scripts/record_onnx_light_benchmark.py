@@ -154,7 +154,7 @@ def _cc_tensor_to_numpy(tensor):
             (onnx.TensorProto.FLOAT8E4M3FNUZ, "float8_e4m3fnuz"),
             (onnx.TensorProto.FLOAT8E5M2, "float8_e5m2"),
             (onnx.TensorProto.FLOAT8E5M2FNUZ, "float8_e5m2fnuz"),
-            (onnx.TensorProto.FLOAT8E8M0, "float8_e8m0fnu"),
+            (onnx.TensorProto.FLOAT8E8M0, "float8_e8m0fnuz"),
         )
         for onnx_type, attr_name in optional_ml_dtypes:
             dtype = getattr(ml_dtypes, attr_name, None)
