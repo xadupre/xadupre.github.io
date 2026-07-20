@@ -157,6 +157,11 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     return result
 
 
+def _has_expected_value_metadata(values: Optional[List[Dict[str, Any]]]) -> bool:
+    """Tell if any expected graph value carries release-after related metadata."""
+    return any(value.get("metadata") for value in (values or []))
+
+
 def _node_io(node) -> Tuple[List[str], List[str]]:
     """Return ``(inputs, outputs)`` for one node as display-ready strings."""
     inputs = [str(name) for name in getattr(node, "input", []) if str(name)]
@@ -408,7 +413,10 @@ def discover_release_after_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
             continue
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
-        has_metadata = any(expected_nodes)
+        expected_values = _graph_value_snapshot(model)
+        has_metadata = any(expected_nodes) or _has_expected_value_metadata(
+            expected_values
+        )
         if tags and not any(t in tags for t in case_tags) and not has_metadata:
             continue
         discovered.append(
@@ -419,7 +427,7 @@ def discover_release_after_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
                 "node_inputs": [_node_io(node)[0] for node in nodes],
                 "node_outputs": [_node_io(node)[1] for node in nodes],
-                "expected_values": _graph_value_snapshot(model),
+                "expected_values": expected_values,
                 "mermaid": model_to_mermaid(model),
                 "graph": model_to_svg_graph(model),
             }
