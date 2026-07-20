@@ -334,9 +334,13 @@ def model_to_svg_graph(model: Any) -> Dict[str, str]:
 def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     """Return backend tests whose ``tag`` matches ``tag``.
 
-    Each entry is a dictionary ``{"name", "model", "expected_nodes", "node_ops"}``
-    where ``expected_nodes`` is the per-node metadata subset relevant to the
-    in-place analysis.
+    Each entry is a dictionary with keys ``"name"``, ``"model"``,
+    ``"expected_nodes"``, ``"node_ops"``, ``"expected_inputs"``, and
+    ``"graph_input_names"``.  ``expected_nodes`` and ``expected_inputs`` hold
+    the per-node / per-graph-input metadata subsets relevant to the in-place
+    analysis.  Tests with ``"_big_"`` in their name are always included so
+    that large model test cases (e.g. qwen3) appear on the coverage page even
+    when they do not carry a matching tag.
     """
     from onnx_light.onnx_lib.backend.test.case import collect_test_case
 
@@ -352,14 +356,20 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
             continue
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
-        has_metadata = any(expected_nodes)
-        if tags and not any(t in tags for t in case_tags) and not has_metadata:
+        graph_inputs = list(getattr(model.graph, "input", []))
+        expected_inputs = [_node_metadata(vi) for vi in graph_inputs]
+        graph_input_names = [str(getattr(vi, "name", "")) for vi in graph_inputs]
+        has_metadata = any(expected_nodes) or any(expected_inputs)
+        is_big = "_big_" in str(name)
+        if tags and not any(t in tags for t in case_tags) and not has_metadata and not is_big:
             continue
         discovered.append(
             {
                 "name": str(name),
                 "model": model,
                 "expected_nodes": expected_nodes,
+                "expected_inputs": expected_inputs,
+                "graph_input_names": graph_input_names,
                 "node_ops": [str(getattr(node, "op_type", "")) for node in nodes],
                 "node_inputs": [_node_io(node)[0] for node in nodes],
                 "node_outputs": [_node_io(node)[1] for node in nodes],
@@ -378,6 +388,8 @@ def run_inplace_analysis(model) -> Dict[str, Any]:
     work = _clone_model(model)
     for node in work.graph.node:
         _clear_node_metadata(node)
+    for vi in work.graph.input:
+        _clear_node_metadata(vi)
 
     ctx = si.ShapesContext()
     si.compute_shape_model(ctx, work)
@@ -388,6 +400,7 @@ def run_inplace_analysis(model) -> Dict[str, Any]:
 
     return {
         "actual_nodes": [_node_metadata(node) for node in work.graph.node],
+        "actual_inputs": [_node_metadata(vi) for vi in work.graph.input],
         "memory": list(getattr(inplace, "memory", [])),
     }
 
@@ -407,6 +420,9 @@ def _score_test(
     node_ops: Optional[List[str]] = None,
     node_inputs: Optional[List[List[str]]] = None,
     node_outputs: Optional[List[List[str]]] = None,
+    expected_inputs: Optional[List[Dict[str, str]]] = None,
+    actual_inputs: Optional[List[Dict[str, str]]] = None,
+    graph_input_names: Optional[List[str]] = None,
     error: str = "",
     memory: Optional[List[Any]] = None,
     mermaid: str = "",
@@ -417,6 +433,10 @@ def _score_test(
     The ``"mermaid"`` key is only present in the returned dict when a
     non-empty ``mermaid`` string is provided, so consumers should use
     ``row.get("mermaid", "")`` to retrieve it safely.
+
+    When ``expected_inputs`` / ``actual_inputs`` are provided the
+    per-graph-input metadata is scored in the same way as node metadata and
+    the results are stored in a top-level ``"inputs"`` list on the row.
     """
     node_ops = list(node_ops or [])
     total_nodes = max(len(expected_nodes), len(actual_nodes), len(node_ops))
@@ -467,6 +487,37 @@ def _score_test(
             }
         )
 
+    # Score graph-level input metadata (e.g. onnx_light.inplace_reuse on
+    # ValueInfoProto entries in graph.input).
+    scored_inputs: List[Dict[str, Any]] = []
+    if expected_inputs is not None or actual_inputs is not None:
+        exp_inp = list(expected_inputs or [])
+        act_inp = list(actual_inputs or [])
+        inp_names = list(graph_input_names or [])
+        total_inp = max(len(exp_inp), len(act_inp))
+        for idx in range(total_inp):
+            exp = dict(exp_inp[idx]) if idx < len(exp_inp) else {}
+            act = dict(act_inp[idx]) if idx < len(act_inp) else {}
+            input_name = inp_names[idx] if idx < len(inp_names) else ""
+            keys = sorted(set(exp) | set(act))
+            metadata_matches = sum(
+                1 for key in keys if exp.get(key) == act.get(key)
+            )
+            total_metadata += len(keys)
+            matched_metadata += metadata_matches
+            inp_success = exp == act
+            if not inp_success:
+                success = False
+            scored_inputs.append(
+                {
+                    "index": idx,
+                    "name": input_name,
+                    "success": inp_success,
+                    "expected": exp,
+                    "actual": act,
+                }
+            )
+
     row: Dict[str, Any] = {
         "name": name,
         "success": success,
@@ -477,6 +528,8 @@ def _score_test(
         "total_metadata": total_metadata,
         "nodes": nodes,
     }
+    if scored_inputs:
+        row["inputs"] = scored_inputs
     if mermaid:
         row["mermaid"] = mermaid
     normalized_graph = _normalize_graph(graph)
@@ -513,6 +566,17 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 node_inputs=list(test.get("node_inputs", [])),
                 node_outputs=list(test.get("node_outputs", [])),
+                expected_inputs=(
+                    list(test["expected_inputs"])
+                    if test.get("expected_inputs") is not None
+                    else None
+                ),
+                actual_inputs=(
+                    list(info["actual_inputs"])
+                    if info.get("actual_inputs") is not None
+                    else None
+                ),
+                graph_input_names=list(test.get("graph_input_names", [])),
                 memory=(
                     list(info.get("memory", []))
                     if info.get("memory") is not None
@@ -531,6 +595,13 @@ def build_payload(
                 node_ops=list(test.get("node_ops", [])),
                 node_inputs=list(test.get("node_inputs", [])),
                 node_outputs=list(test.get("node_outputs", [])),
+                expected_inputs=(
+                    list(test["expected_inputs"])
+                    if test.get("expected_inputs") is not None
+                    else None
+                ),
+                actual_inputs=None,
+                graph_input_names=list(test.get("graph_input_names", [])),
                 error=str(exc) or type(exc).__name__,
                 mermaid=test.get("mermaid", ""),
                 graph=test.get("graph"),
