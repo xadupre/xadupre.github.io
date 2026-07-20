@@ -284,6 +284,164 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         finally:
             ric.build_payload = original_build
 
+    def test_score_test_scores_graph_input_metadata(self):
+        """Graph-level input metadata is scored alongside node metadata."""
+        row = ric._score_test(
+            "test_with_inputs",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_inputs=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            actual_inputs=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            graph_input_names=["X"],
+        )
+        self.assertTrue(row["success"])
+        self.assertEqual(len(row["inputs"]), 1)
+        self.assertEqual(row["inputs"][0]["name"], "X")
+        self.assertTrue(row["inputs"][0]["success"])
+        self.assertEqual(row["matched_metadata"], 1)
+        self.assertEqual(row["total_metadata"], 1)
+
+    def test_score_test_fails_on_input_metadata_mismatch(self):
+        row = ric._score_test(
+            "test_input_mismatch",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+            expected_inputs=[{"onnx_light.inplace_reuse": "0:0:equal"}],
+            actual_inputs=[{"onnx_light.inplace_reuse": "0:0:greater"}],
+            graph_input_names=["X"],
+        )
+        self.assertFalse(row["success"])
+        self.assertFalse(row["inputs"][0]["success"])
+        self.assertEqual(row["matched_metadata"], 0)
+        self.assertEqual(row["total_metadata"], 1)
+
+    def test_score_test_omits_inputs_key_when_none(self):
+        """``inputs`` key is absent when no graph-input metadata is provided."""
+        row = ric._score_test(
+            "test_no_inputs",
+            expected_nodes=[],
+            actual_nodes=[],
+            node_ops=[],
+        )
+        self.assertNotIn("inputs", row)
+
+    def test_discover_includes_big_test_without_tag_or_metadata(self):
+        """Tests with ``_big_`` in their name are always included."""
+        import sys
+        import types
+
+        node_plain = _FakeNode("MatMul")
+        tc_big = _FakeTestCase(
+            "test_cc_shape_inference_big_qwen3_4_layers_like",
+            _FakeModel([node_plain]),
+            tag="model",
+        )
+        tc_small = _FakeTestCase(
+            "test_no_meta_no_tag",
+            _FakeModel([node_plain]),
+            tag="model",
+        )
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: {
+            "test_cc_shape_inference_big_qwen3_4_layers_like": tc_big,
+            "test_no_meta_no_tag": tc_small,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = ric.discover_inplace_tests(tag="inplace")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        names = [d["name"] for d in discovered]
+        self.assertIn("test_cc_shape_inference_big_qwen3_4_layers_like", names)
+        self.assertNotIn("test_no_meta_no_tag", names)
+
+    def test_discover_includes_graph_input_metadata(self):
+        """``expected_inputs`` captures metadata from ``graph.input`` entries."""
+        import sys
+        import types
+
+        # A ValueInfoProto-like fake with metadata on graph.input
+        vi_with_meta = _FakeNode(
+            "input", {"onnx_light.inplace_reuse": "0:0:equal"}
+        )
+        vi_with_meta.name = "X"
+
+        class _FakeGraphWithInputs:
+            def __init__(self, nodes, inputs):
+                self.node = nodes
+                self.input = inputs
+
+        class _FakeModelWithInputs:
+            def __init__(self, nodes, inputs):
+                self.graph = _FakeGraphWithInputs(nodes, inputs)
+
+        tc = _FakeTestCase(
+            "test_big_with_input_meta",
+            _FakeModelWithInputs([_FakeNode("Abs")], [vi_with_meta]),
+            tag="model",
+        )
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: {
+            "test_big_with_input_meta": tc,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = ric.discover_inplace_tests(tag="inplace")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(len(discovered), 1, (
+            "Test with graph-input metadata should be included even when its "
+            "tag does not match and no node carries metadata."
+        ))
+        entry = discovered[0]
+        self.assertEqual(entry["name"], "test_big_with_input_meta")
+        self.assertEqual(entry["expected_inputs"], [{"onnx_light.inplace_reuse": "0:0:equal"}])
+        self.assertEqual(entry["graph_input_names"], ["X"])
+
     def test_discover_includes_test_with_metadata_despite_wrong_tag(self):
         """Tests with METADATA_KEYS metadata are kept even if their tag doesn't match."""
         import sys
