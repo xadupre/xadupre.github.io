@@ -39,6 +39,15 @@ class TestInplaceReuseCoverageDashboard(unittest.TestCase):
         )
         self.assertIn("const opText = formatNodeOp(node);", text)
 
+    def test_detail_renders_graph_inputs_section(self):
+        """Dashboard renders a separate section for graph-level input metadata."""
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("const graphInputs = Array.isArray(row.inputs) ? row.inputs : [];", text)
+        self.assertIn("graph inputs", text)
+        self.assertIn("for (const inp of graphInputs) {", text)
+
 
 if __name__ == "__main__":
     unittest.main()
