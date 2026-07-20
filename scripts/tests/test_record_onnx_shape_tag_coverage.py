@@ -152,6 +152,33 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(kinds.get("W"), "initializer")
         self.assertEqual(kinds.get("X"), "input")
 
+    def test_graph_value_snapshot_merges_value_info_into_input_output(self):
+        # onnx-light sometimes stores value_tags for graph inputs/outputs in
+        # graph.value_info (with the same name). Those tags should be merged
+        # into the input/output entry rather than appearing as a separate result.
+        inp = _FakeValueInfo("X", {})  # no tags on the input itself
+        out = _FakeValueInfo("Y", {})  # no tags on the output itself
+        # value_info carries the tags
+        vi_x = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
+        vi_y = _FakeValueInfo("Y", {"onnx_light.value_tags": "axes"})
+        model = _FakeModel(
+            [],
+            inputs=[inp],
+            outputs=[out],
+            value_info=[vi_x, vi_y],
+        )
+        snapshot = stc._graph_value_snapshot(model)
+        names = [s["name"] for s in snapshot]
+        # X and Y appear exactly once (as input/output), not as extra "result" entries
+        self.assertEqual(names.count("X"), 1)
+        self.assertEqual(names.count("Y"), 1)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        self.assertEqual(x_entry["kind"], "input")
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        y_entry = next(s for s in snapshot if s["name"] == "Y")
+        self.assertEqual(y_entry["kind"], "output")
+        self.assertEqual(y_entry["metadata"], {"onnx_light.value_tags": "axes"})
+
     def test_clear_node_metadata_removes_entries(self):
         node = _FakeNode("Shape", {"onnx_light.node_tag": "shape"})
         stc._clear_node_metadata(node)
