@@ -120,39 +120,54 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
 
     Returns a list of ``{"name", "kind", "metadata"}`` dicts where ``kind``
     is ``"input"``, ``"output"``, ``"initializer"``, or ``"result"``.
+
+    Some onnx-light pipelines store value tags for graph inputs/outputs in
+    ``value_info`` only; those tags are merged into the matching entry so that
+    the snapshot reflects the full set of annotations regardless of where
+    onnx-light chose to write them.
     """
     if not hasattr(model, "graph"):
         return []
     graph = model.graph
     init_names = {init.name for init in graph.initializer}
-    seen_names: set[str] = set()
+    by_name: Dict[str, Dict[str, Any]] = {}
     result: List[Dict[str, Any]] = []
     for vi in graph.input:
         if vi.name not in init_names:
-            seen_names.add(vi.name)
-            result.append(
-                {"name": vi.name, "kind": "input", "metadata": _value_metadata(vi)}
-            )
-    for vi in graph.output:
-        seen_names.add(vi.name)
-        result.append(
-            {"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)}
-        )
-    for init in graph.initializer:
-        seen_names.add(init.name)
-        result.append(
-            {
-                "name": init.name,
-                "kind": "initializer",
-                "metadata": _value_metadata(init),
+            row: Dict[str, Any] = {
+                "name": vi.name,
+                "kind": "input",
+                "metadata": _value_metadata(vi),
             }
-        )
+            result.append(row)
+            by_name[vi.name] = row
+    for vi in graph.output:
+        row = {"name": vi.name, "kind": "output", "metadata": _value_metadata(vi)}
+        result.append(row)
+        by_name[vi.name] = row
+    for init in graph.initializer:
+        row = {
+            "name": init.name,
+            "kind": "initializer",
+            "metadata": _value_metadata(init),
+        }
+        result.append(row)
+        by_name[init.name] = row
     for vi in graph.value_info:
-        if vi.name in seen_names:
-            continue
-        result.append(
-            {"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)}
-        )
+        existing = by_name.get(vi.name)
+        if existing is not None:
+            # Merge value_info metadata into the input/output/initializer entry so
+            # that tags stored only in value_info are visible for those values.
+            vi_meta = _value_metadata(vi)
+            if vi_meta:
+                merged = dict(existing.get("metadata", {}))
+                for key, value in vi_meta.items():
+                    merged.setdefault(key, value)
+                existing["metadata"] = merged
+        else:
+            result.append(
+                {"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)}
+            )
     return result
 
 
