@@ -477,6 +477,67 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         self.assertIn("test_tiny_llm", names)
         self.assertNotIn("test_no_meta", names)
 
+    def test_discover_includes_test_with_value_metadata_despite_wrong_tag(self):
+        """Tests with value-level metadata are kept even if their tag doesn't match."""
+        import sys
+        import types
+
+        # A model with no node-level metadata but with VALUE_METADATA_KEYS on a value
+        vi_with_meta = _FakeValueInfo("X", {"onnx_light.value_tags": "shape"})
+        node_plain = _FakeNode("Relu")
+        model_with_value_meta = _FakeModel([node_plain], inputs=[vi_with_meta])
+
+        tc_value_meta = _FakeTestCase(
+            "test_cc_shape_inference_big_qwen3",
+            model_with_value_meta,
+            tag="model",
+        )
+        node_no_meta = _FakeNode("Abs")
+        tc_no_meta = _FakeTestCase(
+            "test_plain_no_meta",
+            _FakeModel([node_no_meta]),
+            tag="model",
+        )
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: {
+            "test_cc_shape_inference_big_qwen3": tc_value_meta,
+            "test_plain_no_meta": tc_no_meta,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = rac.discover_release_after_tests(tag="release_after")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        names = [d["name"] for d in discovered]
+        self.assertIn("test_cc_shape_inference_big_qwen3", names)
+        self.assertNotIn("test_plain_no_meta", names)
+        # Also verify the expected_values are captured correctly
+        matches = [d for d in discovered if d["name"] == "test_cc_shape_inference_big_qwen3"]
+        self.assertEqual(len(matches), 1)
+        qwen_entry = matches[0]
+        self.assertTrue(any(v.get("metadata") for v in qwen_entry["expected_values"]))
+
 
 if __name__ == "__main__":
     unittest.main()
