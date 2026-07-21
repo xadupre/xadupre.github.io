@@ -63,6 +63,13 @@ N_MEASURE: int = 10
 
 DEFAULT_KIND: str = "node"
 
+#: Suffix identifying the genuine benchmark-sized backend test cases. In
+#: ``TestMode.BENCHMARK`` mode ``onnx-light`` registers large, benchmark-sized
+#: models under names ending with this suffix. Operators that do not provide a
+#: benchmark variant still emit their small correctness cases in that mode, so
+#: the discovery step filters on this suffix to keep only the benchmark models.
+BENCHMARK_NAME_SUFFIX: str = "_benchmark"
+
 
 # ---------------------------------------------------------------------------
 # Helpers shared with record_onnx_backend_test_coverage
@@ -203,7 +210,13 @@ def _cc_data_sets_to_python(test_case) -> List[Tuple[List[Any], List[Any]]]:
 
 
 def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
-    """Discover benchmark-sized backend tests when onnx-light exposes them."""
+    """Discover benchmark-sized backend tests when onnx-light exposes them.
+
+    Only cases whose name ends with :data:`BENCHMARK_NAME_SUFFIX` are kept:
+    ``TestMode.BENCHMARK`` also returns the standard correctness cases for
+    operators that do not provide a benchmark variant, and those tiny models
+    are not meaningful to benchmark.
+    """
     try:
         from onnx_light.onnx.backend import TestMode, collect_test_cases
     except (ImportError, AttributeError):
@@ -219,6 +232,12 @@ def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
     for tc in cases:
         name = getattr(tc, "name", "")
         if not name:
+            continue
+        # ``TestMode.BENCHMARK`` still emits the small correctness cases for
+        # operators that do not register a benchmark variant. Keep only the
+        # genuine benchmark-sized models so the dashboard does not time tiny
+        # correctness inputs.
+        if not str(name).endswith(BENCHMARK_NAME_SUFFIX):
             continue
         case_kind = getattr(tc, "kind", None)
         if kinds and case_kind not in kinds:
