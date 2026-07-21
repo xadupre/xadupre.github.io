@@ -552,6 +552,99 @@ class TestDiscoverNodeTests(unittest.TestCase):
         self.assertEqual(len(first_inputs), 1)
         np.testing.assert_allclose(first_inputs[0], expected_inputs)
 
+    def test_benchmark_mode_filters_out_non_benchmark_cases(self):
+        import types
+
+        expected_inputs = np.array([1.0, 2.0], dtype=np.float32)
+
+        class _FakeInputType:
+            @staticmethod
+            def has_map_type():
+                return False
+
+        class _FakeInput:
+            def __init__(self, name):
+                self.name = name
+                self.type = _FakeInputType()
+
+        class _FakeGraph:
+            def __init__(self):
+                self.input = [_FakeInput("x")]
+
+        class _FakeModel:
+            def __init__(self):
+                self.graph = _FakeGraph()
+
+        class _FakeTensor:
+            def __init__(self, name, array):
+                self.name = name
+                self.data_type = 1
+                self.shape = array.shape
+                self._raw = array.astype(np.float32).tobytes()
+
+            def raw_data(self):
+                return self._raw
+
+        class _FakeDataSet:
+            def __init__(self, array):
+                self.inputs = [_FakeTensor("x", array)]
+                self.maps = []
+
+        class _FakeCase:
+            def __init__(self, name):
+                self.name = name
+                self.kind = "node"
+                self.model = _FakeModel()
+                self.data_sets = [_FakeDataSet(expected_inputs)]
+                self.tag = ""
+
+        class _FakeTestMode:
+            BENCHMARK = "BENCHMARK"
+
+        def _fake_collect_test_cases(**kwargs):
+            # ``TestMode.BENCHMARK`` returns a genuine benchmark model plus a
+            # leftover correctness case whose name lacks the benchmark suffix.
+            return [
+                _FakeCase("test_cc_abs_benchmark"),
+                _FakeCase("test_cc_add_nan_inf"),
+            ]
+
+        fake_backend = types.ModuleType("onnx_light.onnx.backend")
+        fake_backend.TestMode = _FakeTestMode
+        fake_backend.collect_test_cases = _fake_collect_test_cases
+
+        saved_light = sys.modules.get("onnx_light")
+        saved_onnx_pkg = sys.modules.get("onnx_light.onnx")
+        saved_backend = sys.modules.get("onnx_light.onnx.backend")
+        orig_to_onnx = rlb._onnx_light_model_to_onnx
+        orig_cc_tensor_to_numpy = rlb._cc_tensor_to_numpy
+        rlb._onnx_light_model_to_onnx = lambda m: m
+        rlb._cc_tensor_to_numpy = (
+            lambda t: np.frombuffer(t.raw_data(), dtype=np.float32).reshape(t.shape)
+        )
+        try:
+            sys.modules["onnx_light"] = types.ModuleType("onnx_light")
+            sys.modules["onnx_light.onnx"] = types.ModuleType("onnx_light.onnx")
+            sys.modules["onnx_light.onnx.backend"] = fake_backend
+            discovered = rlb.discover_node_tests("node")
+        finally:
+            if saved_light is None:
+                sys.modules.pop("onnx_light", None)
+            else:
+                sys.modules["onnx_light"] = saved_light
+            if saved_onnx_pkg is None:
+                sys.modules.pop("onnx_light.onnx", None)
+            else:
+                sys.modules["onnx_light.onnx"] = saved_onnx_pkg
+            if saved_backend is None:
+                sys.modules.pop("onnx_light.onnx.backend", None)
+            else:
+                sys.modules["onnx_light.onnx.backend"] = saved_backend
+            rlb._onnx_light_model_to_onnx = orig_to_onnx
+            rlb._cc_tensor_to_numpy = orig_cc_tensor_to_numpy
+
+        self.assertEqual([d["name"] for d in discovered], ["test_cc_abs_benchmark"])
+
     def test_include_big_true_is_passed(self):
         import types
 
