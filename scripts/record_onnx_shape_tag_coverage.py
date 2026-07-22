@@ -31,11 +31,15 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DEFAULT_TAGS: Tuple[str, ...] = ("shape_tag",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
-METADATA_KEYS: Tuple[str, ...] = (
-    "onnx_light.node_tag",
-    "onnx_light.value_tags",
-)
-VALUE_METADATA_KEYS: Tuple[str, ...] = ("onnx_light.value_tags",)
+# Metadata keys written by onnx-light's ``write_value_and_node_tags_to_metadata``.
+# ``onnx_light.node_tag`` is stored on each node, ``onnx_light.value_tag`` (singular)
+# on each value proto (input/output/initializer/value_info) and
+# ``onnx_light.value_tags`` (plural) is a graph-level JSON map ``{name: tag}``.
+NODE_TAG_METADATA_KEY: str = "onnx_light.node_tag"
+VALUE_TAG_METADATA_KEY: str = "onnx_light.value_tag"
+VALUE_TAGS_METADATA_KEY: str = "onnx_light.value_tags"
+METADATA_KEYS: Tuple[str, ...] = (NODE_TAG_METADATA_KEY,)
+VALUE_METADATA_KEYS: Tuple[str, ...] = (VALUE_TAG_METADATA_KEY,)
 
 
 def _normalize_tags(tag) -> Tuple[str, ...]:
@@ -115,6 +119,29 @@ def _value_metadata(obj) -> Dict[str, str]:
     }
 
 
+def _graph_level_value_tags(graph) -> Dict[str, str]:
+    """Return the graph-level ``value_tags`` JSON aggregate as a ``{name: tag}`` map.
+
+    onnx-light stores the full value-to-tag mapping as a JSON object in the
+    graph's ``onnx_light.value_tags`` metadata entry, in addition to the
+    per-value ``onnx_light.value_tag`` annotations. Reading this aggregate
+    ensures tags that are only recorded at the graph level (for example on
+    graph inputs) are not lost. Returns an empty dict when the entry is absent
+    or not decodable.
+    """
+    for entry in getattr(graph, "metadata_props", []):
+        if str(entry.key) != VALUE_TAGS_METADATA_KEY:
+            continue
+        try:
+            payload = json.loads(str(entry.value))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return {}
+        if isinstance(payload, dict):
+            return {str(name): str(tag) for name, tag in payload.items()}
+        return {}
+    return {}
+
+
 def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     """Collect value-level metadata for a model's graph inputs, outputs, and initializers.
 
@@ -168,6 +195,27 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
             result.append(
                 {"name": vi.name, "kind": "result", "metadata": _value_metadata(vi)}
             )
+    # Merge the graph-level ``value_tags`` JSON aggregate so that tags recorded
+    # only at the graph level (e.g. on graph inputs) are reflected per value.
+    aggregate = _graph_level_value_tags(graph)
+    if aggregate:
+        known = {row["name"] for row in result}
+        for row in result:
+            tag = aggregate.get(row["name"])
+            if tag and VALUE_TAG_METADATA_KEY not in row["metadata"]:
+                merged = dict(row["metadata"])
+                merged[VALUE_TAG_METADATA_KEY] = tag
+                row["metadata"] = merged
+        for name, tag in aggregate.items():
+            if name and name not in known:
+                result.append(
+                    {
+                        "name": name,
+                        "kind": "result",
+                        "metadata": {VALUE_TAG_METADATA_KEY: tag},
+                    }
+                )
+                known.add(name)
     return result
 
 
@@ -457,6 +505,7 @@ def run_shape_tag_analysis(model) -> Dict[str, Any]:
     )
 
     work = _clone_model(model)
+    del work.graph.metadata_props[:]
     for node in work.graph.node:
         _clear_node_metadata(node)
     for vi in (
@@ -565,8 +614,8 @@ def _score_test(
             act_entry = act_map.get(val_name, {})
             exp_meta = exp_entry.get("metadata", {})
             act_meta = act_entry.get("metadata", {})
-            exp_tags = str(exp_meta.get("onnx_light.value_tags", "")).strip()
-            act_tags = str(act_meta.get("onnx_light.value_tags", "")).strip()
+            exp_tags = str(exp_meta.get(VALUE_TAG_METADATA_KEY, "")).strip()
+            act_tags = str(act_meta.get(VALUE_TAG_METADATA_KEY, "")).strip()
             # Values with no shape-tag metadata on either side carry no signal for
             # shape-tag coverage and should not dilute the ratio.
             if not exp_tags and not act_tags:
