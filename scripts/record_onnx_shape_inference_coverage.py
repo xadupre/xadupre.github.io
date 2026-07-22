@@ -933,12 +933,10 @@ def _drop_shapeless_value_info(model):
 
 
 def _run_onnx_light_optim(model):
-    """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
+    """Run the experimental ``onnx-light`` shape inference.
 
-    The experimental shape inference shipped inside ``onnx-light``'s
-    ``onnx_optim`` submodule mutates the model in place; we round-trip
-    the result back to an ``onnx.ModelProto`` so the comparison helpers
-    can score it uniformly.
+    The Python entry point lives in
+    ``onnx_light.onnx_core.shape_inference`` after the refactoring.
 
     ``prefill_with_value_info_output=True`` lets the inference anchor on
     the model's declared ``graph.output`` shapes (preserved by
@@ -954,7 +952,7 @@ def _run_onnx_light_optim(model):
     """
     import onnx
     import onnx_light.onnx as onnxl
-    from onnx_light.onnx_optim.shape_inference import infer_shapes_model
+    from onnx_light.onnx_core.shape_inference import infer_shapes_model
 
     prepared = onnx.ModelProto()
     prepared.CopyFrom(model)
