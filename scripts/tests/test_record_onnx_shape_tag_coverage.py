@@ -42,18 +42,33 @@ class _FakeTensorProto:
 
 class _FakeGraph:
     def __init__(
-        self, nodes, inputs=None, outputs=None, initializers=None, value_info=None
+        self,
+        nodes,
+        inputs=None,
+        outputs=None,
+        initializers=None,
+        value_info=None,
+        metadata=None,
     ):
         self.node = nodes
         self.input = inputs or []
         self.output = outputs or []
         self.initializer = initializers or []
         self.value_info = value_info or []
+        self.metadata_props = [
+            _FakeMeta(k, v) for k, v in (metadata or {}).items()
+        ]
 
 
 class _FakeModel:
     def __init__(
-        self, nodes, inputs=None, outputs=None, initializers=None, value_info=None
+        self,
+        nodes,
+        inputs=None,
+        outputs=None,
+        initializers=None,
+        value_info=None,
+        metadata=None,
     ):
         self.graph = _FakeGraph(
             nodes,
@@ -61,6 +76,7 @@ class _FakeModel:
             outputs=outputs,
             initializers=initializers,
             value_info=value_info,
+            metadata=metadata,
         )
 
 
@@ -86,7 +102,6 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             stc._node_metadata(node),
             {
                 "onnx_light.node_tag": "shape",
-                "onnx_light.value_tags": "shape",
             },
         )
 
@@ -94,21 +109,21 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         vi = _FakeValueInfo(
             "X",
             {
-                "onnx_light.value_tags": "shape",
+                "onnx_light.value_tag": "shape",
                 "onnx_light.node_tag": "something",
                 "ignored": "x",
             },
         )
         self.assertEqual(
             stc._value_metadata(vi),
-            {"onnx_light.value_tags": "shape"},
+            {"onnx_light.value_tag": "shape"},
         )
 
     def test_graph_value_snapshot_collects_inputs_outputs_initializers(self):
-        inp = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
+        inp = _FakeValueInfo("X", {"onnx_light.value_tag": "weight"})
         out = _FakeValueInfo("Y", {})
-        init = _FakeTensorProto("W", {"onnx_light.value_tags": "weight"})
-        val = _FakeValueInfo("Z", {"onnx_light.value_tags": "shape"})
+        init = _FakeTensorProto("W", {"onnx_light.value_tag": "weight"})
+        val = _FakeValueInfo("Z", {"onnx_light.value_tag": "shape"})
         model = _FakeModel(
             [], inputs=[inp], outputs=[out], initializers=[init], value_info=[val]
         )
@@ -120,16 +135,16 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertIn("Z", names)
         x_entry = next(s for s in snapshot if s["name"] == "X")
         self.assertEqual(x_entry["kind"], "input")
-        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tag": "weight"})
         y_entry = next(s for s in snapshot if s["name"] == "Y")
         self.assertEqual(y_entry["kind"], "output")
         self.assertEqual(y_entry["metadata"], {})
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["kind"], "initializer")
-        self.assertEqual(w_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        self.assertEqual(w_entry["metadata"], {"onnx_light.value_tag": "weight"})
         z_entry = next(s for s in snapshot if s["name"] == "Z")
         self.assertEqual(z_entry["kind"], "result")
-        self.assertEqual(z_entry["metadata"], {"onnx_light.value_tags": "shape"})
+        self.assertEqual(z_entry["metadata"], {"onnx_light.value_tag": "shape"})
 
     def test_graph_value_snapshot_excludes_initializer_from_inputs(self):
         inp = _FakeValueInfo("X")
@@ -159,8 +174,8 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         inp = _FakeValueInfo("X", {})  # no tags on the input itself
         out = _FakeValueInfo("Y", {})  # no tags on the output itself
         # value_info carries the tags
-        vi_x = _FakeValueInfo("X", {"onnx_light.value_tags": "weight"})
-        vi_y = _FakeValueInfo("Y", {"onnx_light.value_tags": "axes"})
+        vi_x = _FakeValueInfo("X", {"onnx_light.value_tag": "weight"})
+        vi_y = _FakeValueInfo("Y", {"onnx_light.value_tag": "axes"})
         model = _FakeModel(
             [],
             inputs=[inp],
@@ -174,10 +189,56 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(names.count("Y"), 1)
         x_entry = next(s for s in snapshot if s["name"] == "X")
         self.assertEqual(x_entry["kind"], "input")
-        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tags": "weight"})
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tag": "weight"})
         y_entry = next(s for s in snapshot if s["name"] == "Y")
         self.assertEqual(y_entry["kind"], "output")
-        self.assertEqual(y_entry["metadata"], {"onnx_light.value_tags": "axes"})
+        self.assertEqual(y_entry["metadata"], {"onnx_light.value_tag": "axes"})
+
+    def test_graph_value_snapshot_merges_graph_level_value_tags(self):
+        # onnx-light also records the whole value->tag map as a JSON object in the
+        # graph-level ``onnx_light.value_tags`` metadata entry. Those tags should be
+        # surfaced per value even when the per-value ``onnx_light.value_tag`` entry
+        # is absent, and intermediate names should appear as ``result`` entries.
+        inp = _FakeValueInfo("X", {})
+        out = _FakeValueInfo("Y", {})
+        model = _FakeModel(
+            [],
+            inputs=[inp],
+            outputs=[out],
+            metadata={
+                "onnx_light.value_tags": json.dumps(
+                    {"X": "weight", "Y": "shape", "S": "shape"}
+                )
+            },
+        )
+        snapshot = stc._graph_value_snapshot(model)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tag": "weight"})
+        y_entry = next(s for s in snapshot if s["name"] == "Y")
+        self.assertEqual(y_entry["metadata"], {"onnx_light.value_tag": "shape"})
+        # "S" only exists in the aggregate; it should be added as a result entry.
+        s_entry = next(s for s in snapshot if s["name"] == "S")
+        self.assertEqual(s_entry["kind"], "result")
+        self.assertEqual(s_entry["metadata"], {"onnx_light.value_tag": "shape"})
+
+    def test_graph_value_snapshot_prefers_per_value_tag_over_aggregate(self):
+        # A per-value ``onnx_light.value_tag`` entry takes precedence over the
+        # graph-level aggregate for the same name.
+        inp = _FakeValueInfo("X", {"onnx_light.value_tag": "weight"})
+        model = _FakeModel(
+            [],
+            inputs=[inp],
+            metadata={"onnx_light.value_tags": json.dumps({"X": "shape"})},
+        )
+        snapshot = stc._graph_value_snapshot(model)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        self.assertEqual(x_entry["metadata"], {"onnx_light.value_tag": "weight"})
+
+    def test_graph_level_value_tags_handles_invalid_json(self):
+        model = _FakeModel(
+            [], metadata={"onnx_light.value_tags": "not-json"}
+        )
+        self.assertEqual(stc._graph_level_value_tags(model.graph), {})
 
     def test_clear_node_metadata_removes_entries(self):
         node = _FakeNode("Shape", {"onnx_light.node_tag": "shape"})
@@ -216,7 +277,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             {
                 "name": "X",
                 "kind": "input",
-                "metadata": {"onnx_light.value_tags": "shape"},
+                "metadata": {"onnx_light.value_tag": "shape"},
             },
             {"name": "Y", "kind": "output", "metadata": {}},
         ]
@@ -224,12 +285,12 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             {
                 "name": "X",
                 "kind": "input",
-                "metadata": {"onnx_light.value_tags": "shape"},
+                "metadata": {"onnx_light.value_tag": "shape"},
             },
             {
                 "name": "Y",
                 "kind": "output",
-                "metadata": {"onnx_light.value_tags": "axes"},
+                "metadata": {"onnx_light.value_tag": "axes"},
             },
         ]
         row = stc._score_test(
@@ -249,7 +310,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
         self.assertEqual(y_val["kind"], "output")
         self.assertFalse(y_val["success"])
         self.assertEqual(y_val["expected"], {})
-        self.assertEqual(y_val["actual"], {"onnx_light.value_tags": "axes"})
+        self.assertEqual(y_val["actual"], {"onnx_light.value_tag": "axes"})
         # One value matches (X), one does not (Y); test fails due to Y mismatch
         self.assertEqual(row["matched_values"], 1)
         self.assertEqual(row["total_values"], 2)
@@ -260,12 +321,12 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             {
                 "name": "A",
                 "kind": "input",
-                "metadata": {"onnx_light.value_tags": "shape"},
+                "metadata": {"onnx_light.value_tag": "shape"},
             },
             {
                 "name": "B",
                 "kind": "output",
-                "metadata": {"onnx_light.value_tags": "shape"},
+                "metadata": {"onnx_light.value_tag": "shape"},
             },
         ]
         row = stc._score_test(
@@ -387,14 +448,14 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
                 {
                     "name": "X",
                     "kind": "input",
-                    "metadata": {"onnx_light.value_tags": "shape"},
+                    "metadata": {"onnx_light.value_tag": "shape"},
                 }
             ],
             actual_values=[
                 {
                     "name": "X",
                     "kind": "input",
-                    "metadata": {"onnx_light.value_tags": "shape"},
+                    "metadata": {"onnx_light.value_tag": "shape"},
                 }
             ],
         )
@@ -457,7 +518,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             {
                 "name": "X",
                 "kind": "input",
-                "metadata": {"onnx_light.value_tags": "shape"},
+                "metadata": {"onnx_light.value_tag": "shape"},
             }
         ]
         tests = [
@@ -477,7 +538,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
                     {
                         "name": "X",
                         "kind": "input",
-                        "metadata": {"onnx_light.value_tags": "shape"},
+                        "metadata": {"onnx_light.value_tag": "shape"},
                     }
                 ],
             }
@@ -700,7 +761,7 @@ class TestRecordOnnxShapeTagCoverage(unittest.TestCase):
             "test_value_meta",
             _FakeModel(
                 [_FakeNode("Identity")],
-                inputs=[_FakeValueInfo("X", {"onnx_light.value_tags": "shape"})],
+                inputs=[_FakeValueInfo("X", {"onnx_light.value_tag": "shape"})],
             ),
             tag="model",
         )
