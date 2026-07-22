@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib
 import itertools
 import json
 import os
@@ -933,12 +934,13 @@ def _drop_shapeless_value_info(model):
 
 
 def _run_onnx_light_optim(model):
-    """Run ``onnx_light.onnx_optim.shape_inference.infer_shapes_model``.
+    """Run the experimental ``onnx-light`` shape inference.
 
-    The experimental shape inference shipped inside ``onnx-light``'s
-    ``onnx_optim`` submodule mutates the model in place; we round-trip
-    the result back to an ``onnx.ModelProto`` so the comparison helpers
-    can score it uniformly.
+    The Python entry point used to live in
+    ``onnx_light.onnx_optim.shape_inference`` and was moved to
+    ``onnx_light.onnx_core.shape_inference`` after a refactoring. Keep
+    both import locations working so this coverage script keeps running
+    across onnx-light versions.
 
     ``prefill_with_value_info_output=True`` lets the inference anchor on
     the model's declared ``graph.output`` shapes (preserved by
@@ -954,7 +956,8 @@ def _run_onnx_light_optim(model):
     """
     import onnx
     import onnx_light.onnx as onnxl
-    from onnx_light.onnx_optim.shape_inference import infer_shapes_model
+
+    infer_shapes_model = _get_onnx_light_optim_infer_shapes_model()
 
     prepared = onnx.ModelProto()
     prepared.CopyFrom(model)
@@ -965,6 +968,26 @@ def _run_onnx_light_optim(model):
     out = onnx.ModelProto()
     out.ParseFromString(light.SerializeToString())
     return out
+
+
+def _get_onnx_light_optim_infer_shapes_model():
+    """Return the compatible ``onnx-light`` optim shape-inference entry point."""
+    last_error = None
+    for module_name in (
+        "onnx_light.onnx_core.shape_inference",
+        "onnx_light.onnx_optim.shape_inference",
+    ):
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            last_error = exc
+            continue
+        infer_shapes_model = getattr(module, "infer_shapes_model", None)
+        if infer_shapes_model is not None:
+            return infer_shapes_model
+    if last_error is not None:
+        raise last_error
+    raise ImportError("Unable to import onnx-light optim shape inference")
 
 
 def _run_onnx(model):
