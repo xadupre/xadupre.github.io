@@ -972,22 +972,20 @@ def _run_onnx_light_optim(model):
 
 def _get_onnx_light_optim_infer_shapes_model():
     """Return the compatible ``onnx-light`` optim shape-inference entry point."""
-    last_error = None
+    errors = []
     for module_name in (
         "onnx_light.onnx_core.shape_inference",
         "onnx_light.onnx_optim.shape_inference",
     ):
         try:
             module = importlib.import_module(module_name)
-        except ImportError as exc:
-            last_error = exc
-            continue
-        infer_shapes_model = getattr(module, "infer_shapes_model", None)
-        if infer_shapes_model is not None:
-            return infer_shapes_model
-    if last_error is not None:
-        raise last_error
-    raise ImportError("Unable to import onnx-light optim shape inference")
+            return module.infer_shapes_model
+        except (AttributeError, ImportError) as exc:
+            errors.append(f"{module_name}: {exc}")
+    raise ImportError(
+        "Unable to import onnx-light optim shape inference from "
+        f"compatible module paths ({'; '.join(errors)})"
+    )
 
 
 def _run_onnx(model):
