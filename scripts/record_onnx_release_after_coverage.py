@@ -32,7 +32,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 DEFAULT_TAGS: Tuple[str, ...] = ("release_after",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
 METADATA_KEYS: Tuple[str, ...] = ("onnx_light.release_after",)
-VALUE_METADATA_KEYS: Tuple[str, ...] = ("onnx_light.value_tags",)
+VALUE_METADATA_KEYS: Tuple[str, ...] = (
+    "onnx_light.value_tags",
+    "onnx_light.release_after",
+    "onnx_light.released",
+    "onnx_light.unlocked",
+)
 
 
 def _normalize_tags(tag) -> Tuple[str, ...]:
