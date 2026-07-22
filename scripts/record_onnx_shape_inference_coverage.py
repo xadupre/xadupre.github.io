@@ -45,7 +45,6 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
-import importlib
 import itertools
 import json
 import os
@@ -936,11 +935,8 @@ def _drop_shapeless_value_info(model):
 def _run_onnx_light_optim(model):
     """Run the experimental ``onnx-light`` shape inference.
 
-    The Python entry point used to live in
-    ``onnx_light.onnx_optim.shape_inference`` and was moved to
-    ``onnx_light.onnx_core.shape_inference`` after a refactoring. Keep
-    both import locations working so this coverage script keeps running
-    across onnx-light versions.
+    The Python entry point lives in
+    ``onnx_light.onnx_core.shape_inference`` after the refactoring.
 
     ``prefill_with_value_info_output=True`` lets the inference anchor on
     the model's declared ``graph.output`` shapes (preserved by
@@ -956,8 +952,7 @@ def _run_onnx_light_optim(model):
     """
     import onnx
     import onnx_light.onnx as onnxl
-
-    infer_shapes_model = _get_onnx_light_optim_infer_shapes_model()
+    from onnx_light.onnx_core.shape_inference import infer_shapes_model
 
     prepared = onnx.ModelProto()
     prepared.CopyFrom(model)
@@ -968,24 +963,6 @@ def _run_onnx_light_optim(model):
     out = onnx.ModelProto()
     out.ParseFromString(light.SerializeToString())
     return out
-
-
-def _get_onnx_light_optim_infer_shapes_model():
-    """Return the compatible ``onnx-light`` optim shape-inference entry point."""
-    errors = []
-    for module_name in (
-        "onnx_light.onnx_core.shape_inference",
-        "onnx_light.onnx_optim.shape_inference",
-    ):
-        try:
-            module = importlib.import_module(module_name)
-            return module.infer_shapes_model
-        except (AttributeError, ImportError) as exc:
-            errors.append(f"{module_name}: {exc}")
-    raise ImportError(
-        "Unable to import onnx-light optim shape inference from "
-        f"compatible module paths ({'; '.join(errors)})"
-    )
 
 
 def _run_onnx(model):

@@ -603,32 +603,6 @@ class TestRunTestWithBackend(unittest.TestCase):
         self.assertEqual(info["error"], "AssertionError")
 
 
-class TestOnnxLightOptimImportCompatibility(unittest.TestCase):
-    def test_prefers_refactored_onnx_core_import(self):
-        sentinel = object()
-
-        def fake_import(name):
-            if name == "onnx_light.onnx_core.shape_inference":
-                return type("FakeModule", (), {"infer_shapes_model": sentinel})()
-            raise AssertionError(f"unexpected import: {name}")
-
-        with mock.patch.object(rsi.importlib, "import_module", side_effect=fake_import):
-            self.assertIs(rsi._get_onnx_light_optim_infer_shapes_model(), sentinel)
-
-    def test_falls_back_to_legacy_onnx_optim_import(self):
-        sentinel = object()
-
-        def fake_import(name):
-            if name == "onnx_light.onnx_core.shape_inference":
-                raise ImportError("moved module not available")
-            if name == "onnx_light.onnx_optim.shape_inference":
-                return type("FakeModule", (), {"infer_shapes_model": sentinel})()
-            raise AssertionError(f"unexpected import: {name}")
-
-        with mock.patch.object(rsi.importlib, "import_module", side_effect=fake_import):
-            self.assertIs(rsi._get_onnx_light_optim_infer_shapes_model(), sentinel)
-
-
 class TestDropShapelessValueInfo(unittest.TestCase):
     def test_drops_value_info_without_shape_keeps_shaped_ones(self):
         # ``strip_shapes(keep_outputs=True)`` leaves intermediate
