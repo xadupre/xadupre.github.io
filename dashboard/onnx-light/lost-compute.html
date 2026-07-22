@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light lost compute</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.chart-wrap {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 55vh;
+  min-height: 320px;
+}
+.hint { font-size: 0.8em; color: #8b949e; text-align: center; margin-top: 0.5em; }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
+.summary {
+  width: 100%;
+  max-width: 1100px;
+  margin-bottom: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+  display: none;
+}
+.summary.visible { display: block; }
+.summary h2 { margin: 0 0 0.5em; font-size: 1em; color: #c9d1d9; }
+.summary .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.6em;
+}
+.summary .cell {
+  background: rgba(13, 17, 23, 0.6);
+  border: 1px solid rgba(139, 148, 158, 0.2);
+  border-radius: 8px;
+  padding: 0.6em 0.8em;
+}
+.summary .cell .k { font-size: 0.75em; color: #8b949e; }
+.summary .cell .v { font-size: 1.2em; color: #c9d1d9; font-family: monospace; }
+.last-observations {
+  width: 100%;
+  max-width: 1100px;
+  margin-top: 1em;
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  box-sizing: border-box;
+}
+.last-observations h2 {
+  margin: 0 0 0.5em;
+  font-size: 1em;
+  color: #c9d1d9;
+}
+.last-observations .table-scroll { overflow-x: auto; }
+.last-observations table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.last-observations th, .last-observations td {
+  text-align: left;
+  padding: 0.35em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  white-space: nowrap;
+}
+.last-observations th { color: #8b949e; font-weight: normal; }
+.last-observations td { color: #c9d1d9; font-family: monospace; }
+.last-observations td.workflow { white-space: normal; font-family: sans-serif; }
+.conclusion-failure { color: #f85149; }
+.conclusion-cancelled { color: #d29922; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.2.0/dist/chartjs-plugin-zoom.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; lost compute</h1>
+</header>
+<div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
+<div id="message" class="message info"></div>
+<div id="summary" class="summary">
+  <h2>Summary</h2>
+  <div class="grid">
+    <div class="cell"><div class="k">total lost compute (hours)</div><div class="v" id="sumLostHours">0</div></div>
+    <div class="cell"><div class="k">lost: failed runs (hours)</div><div class="v" id="sumFailedHours" style="color:#f85149;">0</div></div>
+    <div class="cell"><div class="k">failed runs</div><div class="v" id="sumFailed" style="color:#f85149;">0</div></div>
+    <div class="cell"><div class="k">lost: cancelled runs (hours)</div><div class="v" id="sumCancelledHours" style="color:#d29922;">0</div></div>
+    <div class="cell"><div class="k">cancelled runs</div><div class="v" id="sumCancelled" style="color:#d29922;">0</div></div>
+    <div class="cell"><div class="k">total merged PRs</div><div class="v" id="sumPRs">0</div></div>
+  </div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">lost compute per week (failed + cancelled CI runs, in minutes)</h2>
+  <div class="chart-container"><canvas id="chartLostCompute"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">merged pull requests per week</h2>
+  <div class="chart-container"><canvas id="chartPRs"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">lost compute vs merged PRs per week (failed and cancelled separately)</h2>
+  <div class="chart-container"><canvas id="chartCombined"></canvas></div>
+  <div class="hint">Failed (red) and cancelled (amber) compute (minutes, left axis) vs merged PRs (right axis, green line). Drag to pan, scroll to zoom. Double-click to reset.</div>
+</div>
+<div id="lastObservations" class="last-observations" style="display:none;">
+  <h2>Last 20 failed / cancelled runs</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>created_at</th>
+          <th>workflow</th>
+          <th>conclusion</th>
+          <th>event</th>
+          <th>duration (min)</th>
+        </tr>
+      </thead>
+      <tbody id="lastObservationsBody"></tbody>
+    </table>
+  </div>
+</div>
+<script>
+const BUILD_CSV_URL = "../../cache_data/onnx-light/build_durations.csv";
+const PR_CSV_URL = "../../cache_data/onnx-light/pr_stats.csv";
+const REPO = "onnx-light";
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+// Minimal CSV parser that handles double-quoted fields.
+function parseCSVRaw(text) {
+  const rows = [];
+  let i = 0;
+  let field = "";
+  let row = [];
+  let inQuotes = false;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++; continue;
+    }
+    if (c === '"') { inQuotes = true; i++; continue; }
+    if (c === ',') { row.push(field); field = ""; i++; continue; }
+    if (c === '\n' || c === '\r') {
+      if (field.length || row.length) { row.push(field); rows.push(row); }
+      field = ""; row = [];
+      if (c === '\r' && text[i + 1] === '\n') i += 2; else i++;
+      continue;
+    }
+    field += c; i++;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function parseBuildCSV(text) {
+  const rows = parseCSVRaw(text);
+  if (rows.length === 0) return [];
+  const header = rows.shift();
+  const idx = {
+    run_id: header.indexOf("run_id"),
+    workflow: header.indexOf("workflow"),
+    event: header.indexOf("event"),
+    conclusion: header.indexOf("conclusion"),
+    created_at: header.indexOf("created_at"),
+    duration_seconds: header.indexOf("duration_seconds"),
+  };
+  return rows.map(cols => ({
+    run_id: cols[idx.run_id] || "",
+    workflow: cols[idx.workflow] || "",
+    event: cols[idx.event] || "",
+    conclusion: cols[idx.conclusion] || "",
+    created_at: cols[idx.created_at] || "",
+    duration_seconds: Number(cols[idx.duration_seconds]) || 0,
+    createdDate: cols[idx.created_at] ? new Date(cols[idx.created_at]) : null,
+  })).filter(r => r.created_at && r.createdDate && !isNaN(r.createdDate.getTime()));
+}
+
+function parsePRCSV(text) {
+  const rows = parseCSVRaw(text);
+  if (rows.length === 0) return [];
+  const header = rows.shift();
+  const idx = {
+    merged_at: header.indexOf("merged_at"),
+  };
+  return rows.map(cols => ({
+    merged_at: cols[idx.merged_at] || "",
+    mergedDate: cols[idx.merged_at] ? new Date(cols[idx.merged_at]) : null,
+  })).filter(r => r.merged_at && r.mergedDate && !isNaN(r.mergedDate.getTime()));
+}
+
+// Floor a Date to the Monday of its ISO week (UTC).
+function weekStart(d) {
+  const utc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = utc.getUTCDay(); // 0=Sun ... 6=Sat
+  const diff = (day + 6) % 7; // days since Monday
+  utc.setUTCDate(utc.getUTCDate() - diff);
+  return utc;
+}
+
+function isoDate(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function aggregateLostComputeWeekly(buildRows) {
+  const lostConclusions = new Set(["failure", "cancelled"]);
+  const map = new Map();
+  for (const r of buildRows) {
+    if (!lostConclusions.has(r.conclusion)) continue;
+    const wk = weekStart(r.createdDate);
+    const key = isoDate(wk);
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = { week: wk, failure: 0, cancelled: 0 };
+      map.set(key, bucket);
+    }
+    if (r.conclusion === "failure") bucket.failure += r.duration_seconds;
+    else if (r.conclusion === "cancelled") bucket.cancelled += r.duration_seconds;
+  }
+  return Array.from(map.values()).sort((a, b) => a.week - b.week);
+}
+
+function aggregatePRsWeekly(prRows) {
+  const map = new Map();
+  for (const r of prRows) {
+    const wk = weekStart(r.mergedDate);
+    const key = isoDate(wk);
+    let bucket = map.get(key);
+    if (!bucket) {
+      bucket = { week: wk, count: 0 };
+      map.set(key, bucket);
+    }
+    bucket.count += 1;
+  }
+  return Array.from(map.values()).sort((a, b) => a.week - b.week);
+}
+
+const PALETTE = {
+  failure: "#f85149",
+  cancelled: "#d29922",
+  prs: "#58a6ff",
+  prsRight: "#3fb950",
+};
+
+const ZOOM_PLUGIN = {
+  pan: { enabled: true, mode: "xy" },
+  zoom: {
+    wheel: { enabled: true },
+    pinch: { enabled: true },
+    mode: "xy",
+  },
+};
+
+function axisX(label) {
+  return {
+    type: "time",
+    time: { unit: "week", tooltipFormat: "yyyy-MM-dd" },
+    title: { display: true, text: label || "week starting (Mon, UTC)", color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9" },
+    grid: { color: "rgba(139,148,158,0.25)" },
+  };
+}
+
+function axisY(label) {
+  return {
+    title: { display: true, text: label, color: "#c9d1d9" },
+    ticks: { color: "#c9d1d9", precision: 0 },
+    grid: { color: "rgba(139,148,158,0.25)" },
+    beginAtZero: true,
+  };
+}
+
+function secToMin(s) { return s / 60; }
+
+const COMMON_OPTIONS = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "nearest", intersect: false },
+  plugins: {
+    legend: { labels: { color: "#c9d1d9" } },
+    zoom: ZOOM_PLUGIN,
+  },
+};
+
+Promise.all([
+  fetch(BUILD_CSV_URL, { cache: "no-store" }),
+  fetch(PR_CSV_URL, { cache: "no-store" }),
+])
+  .then(([buildResp, prResp]) => {
+    const buildPromise = buildResp.status === 404 ? Promise.resolve(null) :
+      buildResp.ok ? buildResp.text() : Promise.reject(new Error("HTTP " + buildResp.status));
+    const prPromise = prResp.status === 404 ? Promise.resolve(null) :
+      prResp.ok ? prResp.text() : Promise.reject(new Error("HTTP " + prResp.status));
+    return Promise.all([buildPromise, prPromise]);
+  })
+  .then(([buildText, prText]) => {
+    const buildRows = buildText ? parseBuildCSV(buildText) : [];
+    const prRows = prText ? parsePRCSV(prText) : [];
+
+    if (buildRows.length === 0 && prRows.length === 0) {
+      showMessage(
+        "No data available yet for " + REPO + ". " +
+        "The CSV files have not been generated yet.",
+        "info"
+      );
+      return;
+    }
+
+    // Compute summary stats.
+    let lostSeconds = 0, failedCount = 0, cancelledCount = 0;
+    let failedSeconds = 0, cancelledSeconds = 0;
+    const lostConclusions = new Set(["failure", "cancelled"]);
+    for (const r of buildRows) {
+      if (!lostConclusions.has(r.conclusion)) continue;
+      lostSeconds += r.duration_seconds;
+      if (r.conclusion === "failure") { failedCount++; failedSeconds += r.duration_seconds; }
+      else if (r.conclusion === "cancelled") { cancelledCount++; cancelledSeconds += r.duration_seconds; }
+    }
+    const lostHours = (lostSeconds / 3600).toFixed(1);
+    document.getElementById("sumLostHours").textContent = String(lostHours);
+    document.getElementById("sumFailedHours").textContent = (failedSeconds / 3600).toFixed(1);
+    document.getElementById("sumFailed").textContent = String(failedCount);
+    document.getElementById("sumCancelledHours").textContent = (cancelledSeconds / 3600).toFixed(1);
+    document.getElementById("sumCancelled").textContent = String(cancelledCount);
+    document.getElementById("sumPRs").textContent = String(prRows.length);
+    document.getElementById("summary").classList.add("visible");
+
+    // Weekly aggregations.
+    const lostWeekly = aggregateLostComputeWeekly(buildRows);
+    const prWeekly = aggregatePRsWeekly(prRows);
+
+    const charts = [];
+
+    // Chart 1: lost compute per week (stacked bar: failure + cancelled).
+    if (lostWeekly.length > 0) {
+      const lostWeeks = lostWeekly.map(b => b.week);
+      const chart1 = new Chart(document.getElementById("chartLostCompute").getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: lostWeeks,
+          datasets: [
+            {
+              label: "failed",
+              data: lostWeekly.map(b => secToMin(b.failure)),
+              backgroundColor: PALETTE.failure,
+              borderColor: PALETTE.failure,
+              stack: "lost",
+            },
+            {
+              label: "cancelled",
+              data: lostWeekly.map(b => secToMin(b.cancelled)),
+              backgroundColor: PALETTE.cancelled,
+              borderColor: PALETTE.cancelled,
+              stack: "lost",
+            },
+          ],
+        },
+        options: Object.assign({}, COMMON_OPTIONS, {
+          scales: {
+            x: Object.assign({}, axisX(), { stacked: true }),
+            y: Object.assign({}, axisY("lost compute (min)"), { stacked: true }),
+          },
+        }),
+      });
+      charts.push(chart1);
+    } else {
+      document.getElementById("chartLostCompute").parentElement.parentElement.style.display = "none";
+    }
+
+    // Chart 2: merged PRs per week.
+    if (prWeekly.length > 0) {
+      const prWeeks = prWeekly.map(b => b.week);
+      const chart2 = new Chart(document.getElementById("chartPRs").getContext("2d"), {
+        type: "bar",
+        data: {
+          labels: prWeeks,
+          datasets: [
+            {
+              label: "merged PRs",
+              data: prWeekly.map(b => b.count),
+              backgroundColor: PALETTE.prs,
+              borderColor: PALETTE.prs,
+            },
+          ],
+        },
+        options: Object.assign({}, COMMON_OPTIONS, {
+          scales: {
+            x: axisX(),
+            y: axisY("merged PRs"),
+          },
+        }),
+      });
+      charts.push(chart2);
+    } else {
+      document.getElementById("chartPRs").parentElement.parentElement.style.display = "none";
+    }
+
+    // Chart 3: combined — failed (red) + cancelled (amber) stacked bars (left) + PRs line (right) per week.
+    if (lostWeekly.length > 0 || prWeekly.length > 0) {
+      // Build a unified set of weeks.
+      const allWeekKeys = new Set([
+        ...lostWeekly.map(b => isoDate(b.week)),
+        ...prWeekly.map(b => isoDate(b.week)),
+      ]);
+      const allWeeks = Array.from(allWeekKeys).sort().map(k => new Date(k));
+
+      const lostMap = new Map(lostWeekly.map(b => [isoDate(b.week), b]));
+      const prMap = new Map(prWeekly.map(b => [isoDate(b.week), b]));
+
+      const failureData = allWeeks.map(w => {
+        const b = lostMap.get(isoDate(w));
+        return { x: w, y: b ? secToMin(b.failure) : 0 };
+      });
+      const cancelledData = allWeeks.map(w => {
+        const b = lostMap.get(isoDate(w));
+        return { x: w, y: b ? secToMin(b.cancelled) : 0 };
+      });
+      const prData = allWeeks.map(w => {
+        const b = prMap.get(isoDate(w));
+        return { x: w, y: b ? b.count : 0 };
+      });
+
+      const chart3 = new Chart(document.getElementById("chartCombined").getContext("2d"), {
+        type: "bar",
+        data: {
+          datasets: [
+            {
+              type: "bar",
+              label: "failed (min)",
+              data: failureData,
+              backgroundColor: "rgba(248, 81, 73, 0.7)",
+              borderColor: PALETTE.failure,
+              yAxisID: "yLeft",
+              stack: "lost",
+              order: 2,
+            },
+            {
+              type: "bar",
+              label: "cancelled (min)",
+              data: cancelledData,
+              backgroundColor: "rgba(210, 153, 34, 0.7)",
+              borderColor: PALETTE.cancelled,
+              yAxisID: "yLeft",
+              stack: "lost",
+              order: 2,
+            },
+            {
+              type: "line",
+              label: "merged PRs",
+              data: prData,
+              borderColor: PALETTE.prsRight,
+              backgroundColor: PALETTE.prsRight,
+              tension: 0.15,
+              pointRadius: 3,
+              yAxisID: "yRight",
+              order: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { labels: { color: "#c9d1d9" } },
+            zoom: ZOOM_PLUGIN,
+          },
+          scales: {
+            x: Object.assign({}, axisX(), { stacked: true }),
+            yLeft: {
+              type: "linear",
+              position: "left",
+              stacked: true,
+              title: { display: true, text: "lost compute (min)", color: "#c9d1d9" },
+              ticks: { color: "#c9d1d9", precision: 0 },
+              grid: { color: "rgba(139,148,158,0.25)" },
+              beginAtZero: true,
+            },
+            yRight: {
+              type: "linear",
+              position: "right",
+              title: { display: true, text: "merged PRs", color: "#c9d1d9" },
+              ticks: { color: "#c9d1d9", precision: 0 },
+              grid: { drawOnChartArea: false },
+              beginAtZero: true,
+            },
+          },
+        },
+      });
+      charts.push(chart3);
+    } else {
+      document.getElementById("chartCombined").parentElement.parentElement.style.display = "none";
+    }
+
+    for (const ch of charts) {
+      ch.canvas.ondblclick = () => ch.resetZoom();
+    }
+
+    // Last 20 failed/cancelled runs table.
+    const lostRuns = buildRows
+      .filter(r => lostConclusions.has(r.conclusion))
+      .sort((a, b) => b.createdDate - a.createdDate)
+      .slice(0, 20);
+    if (lostRuns.length > 0) {
+      const tbody = document.getElementById("lastObservationsBody");
+      for (const r of lostRuns) {
+        const tr = document.createElement("tr");
+        const mins = (r.duration_seconds / 60).toFixed(2);
+        const fields = [r.created_at, r.workflow, r.conclusion, r.event, mins];
+        fields.forEach((v, i) => {
+          const td = document.createElement("td");
+          td.textContent = v;
+          if (i === 1) td.className = "workflow";
+          if (i === 2) td.className = "conclusion-" + r.conclusion;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      }
+      document.getElementById("lastObservations").style.display = "block";
+    }
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/build_durations.csv,../../cache_data/onnx-light/pr_stats.csv" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+</body>
+</html>
