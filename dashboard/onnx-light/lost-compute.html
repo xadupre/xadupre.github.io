@@ -129,10 +129,12 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
     <div class="cell"><div class="k">lost: cancelled runs (hours)</div><div class="v" id="sumCancelledHours" style="color:#d29922;">0</div></div>
     <div class="cell"><div class="k">cancelled runs</div><div class="v" id="sumCancelled" style="color:#d29922;">0</div></div>
     <div class="cell"><div class="k">total merged PRs</div><div class="v" id="sumPRs">0</div></div>
+    <div class="cell"><div class="k">successful compute (hours)</div><div class="v" id="sumSuccessHours" style="color:#3fb950;">0</div></div>
+    <div class="cell"><div class="k">success ratio</div><div class="v" id="sumSuccessRatio">0%</div></div>
   </div>
 </div>
 <div class="chart-wrap">
-  <h2 class="chart-title">lost compute per week (failed + cancelled CI runs, in minutes)</h2>
+  <h2 class="chart-title">compute per week (failed, cancelled and successful CI runs, in hours)</h2>
   <div class="chart-container"><canvas id="chartLostCompute"></canvas></div>
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
@@ -142,9 +144,9 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
 <div class="chart-wrap">
-  <h2 class="chart-title">lost compute vs merged PRs per week (failed and cancelled separately)</h2>
+  <h2 class="chart-title">compute vs success ratio per week</h2>
   <div class="chart-container"><canvas id="chartCombined"></canvas></div>
-  <div class="hint">Failed (red) and cancelled (amber) compute (minutes, left axis) vs merged PRs (right axis, green line). Drag to pan, scroll to zoom. Double-click to reset.</div>
+  <div class="hint">Failed (red), cancelled (amber) and successful (green) compute (hours, left axis) vs success ratio (right axis, blue line). Drag to pan, scroll to zoom. Double-click to reset.</div>
 </div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 20 failed / cancelled runs</h2>
@@ -253,20 +255,20 @@ function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-function aggregateLostComputeWeekly(buildRows) {
-  const lostConclusions = new Set(["failure", "cancelled"]);
+function aggregateComputeWeekly(buildRows) {
   const map = new Map();
   for (const r of buildRows) {
-    if (!lostConclusions.has(r.conclusion)) continue;
     const wk = weekStart(r.createdDate);
     const key = isoDate(wk);
     let bucket = map.get(key);
     if (!bucket) {
-      bucket = { week: wk, failure: 0, cancelled: 0 };
+      bucket = { week: wk, failure: 0, cancelled: 0, success: 0, totalCount: 0, successCount: 0 };
       map.set(key, bucket);
     }
+    bucket.totalCount += 1;
     if (r.conclusion === "failure") bucket.failure += r.duration_seconds;
     else if (r.conclusion === "cancelled") bucket.cancelled += r.duration_seconds;
+    else if (r.conclusion === "success") { bucket.success += r.duration_seconds; bucket.successCount += 1; }
   }
   return Array.from(map.values()).sort((a, b) => a.week - b.week);
 }
@@ -289,8 +291,9 @@ function aggregatePRsWeekly(prRows) {
 const PALETTE = {
   failure: "#f85149",
   cancelled: "#d29922",
+  success: "#3fb950",
   prs: "#58a6ff",
-  prsRight: "#3fb950",
+  ratio: "#79c0ff",
 };
 
 const ZOOM_PLUGIN = {
@@ -321,7 +324,7 @@ function axisY(label) {
   };
 }
 
-function secToMin(s) { return s / 60; }
+function secToHour(s) { return s / 3600; }
 
 const COMMON_OPTIONS = {
   responsive: true,
@@ -358,15 +361,14 @@ Promise.all([
     }
 
     // Compute summary stats.
-    let lostSeconds = 0, failedCount = 0, cancelledCount = 0;
-    let failedSeconds = 0, cancelledSeconds = 0;
-    const lostConclusions = new Set(["failure", "cancelled"]);
+    let failedCount = 0, cancelledCount = 0, successCount = 0;
+    let failedSeconds = 0, cancelledSeconds = 0, successSeconds = 0;
     for (const r of buildRows) {
-      if (!lostConclusions.has(r.conclusion)) continue;
-      lostSeconds += r.duration_seconds;
       if (r.conclusion === "failure") { failedCount++; failedSeconds += r.duration_seconds; }
       else if (r.conclusion === "cancelled") { cancelledCount++; cancelledSeconds += r.duration_seconds; }
+      else if (r.conclusion === "success") { successCount++; successSeconds += r.duration_seconds; }
     }
+    const lostSeconds = failedSeconds + cancelledSeconds;
     const lostHours = (lostSeconds / 3600).toFixed(1);
     document.getElementById("sumLostHours").textContent = String(lostHours);
     document.getElementById("sumFailedHours").textContent = (failedSeconds / 3600).toFixed(1);
@@ -374,42 +376,53 @@ Promise.all([
     document.getElementById("sumCancelledHours").textContent = (cancelledSeconds / 3600).toFixed(1);
     document.getElementById("sumCancelled").textContent = String(cancelledCount);
     document.getElementById("sumPRs").textContent = String(prRows.length);
+    document.getElementById("sumSuccessHours").textContent = (successSeconds / 3600).toFixed(1);
+    // Ratio uses all run attempts as denominator, consistent with the weekly aggregation.
+    const totalRunCount = buildRows.length;
+    document.getElementById("sumSuccessRatio").textContent = totalRunCount > 0 ? (successCount * 100 / totalRunCount).toFixed(1) + "%" : "0%";
     document.getElementById("summary").classList.add("visible");
 
     // Weekly aggregations.
-    const lostWeekly = aggregateLostComputeWeekly(buildRows);
+    const computeWeekly = aggregateComputeWeekly(buildRows);
     const prWeekly = aggregatePRsWeekly(prRows);
 
     const charts = [];
 
-    // Chart 1: lost compute per week (stacked bar: failure + cancelled).
-    if (lostWeekly.length > 0) {
-      const lostWeeks = lostWeekly.map(b => b.week);
+    // Chart 1: compute per week (stacked bar: failure + cancelled + success).
+    if (computeWeekly.length > 0) {
+      const computeWeeks = computeWeekly.map(b => b.week);
       const chart1 = new Chart(document.getElementById("chartLostCompute").getContext("2d"), {
         type: "bar",
         data: {
-          labels: lostWeeks,
+          labels: computeWeeks,
           datasets: [
             {
               label: "failed",
-              data: lostWeekly.map(b => secToMin(b.failure)),
+              data: computeWeekly.map(b => secToHour(b.failure)),
               backgroundColor: PALETTE.failure,
               borderColor: PALETTE.failure,
-              stack: "lost",
+              stack: "compute",
             },
             {
               label: "cancelled",
-              data: lostWeekly.map(b => secToMin(b.cancelled)),
+              data: computeWeekly.map(b => secToHour(b.cancelled)),
               backgroundColor: PALETTE.cancelled,
               borderColor: PALETTE.cancelled,
-              stack: "lost",
+              stack: "compute",
+            },
+            {
+              label: "successful",
+              data: computeWeekly.map(b => secToHour(b.success)),
+              backgroundColor: PALETTE.success,
+              borderColor: PALETTE.success,
+              stack: "compute",
             },
           ],
         },
         options: Object.assign({}, COMMON_OPTIONS, {
           scales: {
             x: Object.assign({}, axisX(), { stacked: true }),
-            y: Object.assign({}, axisY("lost compute (min)"), { stacked: true }),
+            y: Object.assign({}, axisY("compute (hours)"), { stacked: true }),
           },
         }),
       });
@@ -446,29 +459,26 @@ Promise.all([
       document.getElementById("chartPRs").parentElement.parentElement.style.display = "none";
     }
 
-    // Chart 3: combined — failed (red) + cancelled (amber) stacked bars (left) + PRs line (right) per week.
-    if (lostWeekly.length > 0 || prWeekly.length > 0) {
-      // Build a unified set of weeks.
-      const allWeekKeys = new Set([
-        ...lostWeekly.map(b => isoDate(b.week)),
-        ...prWeekly.map(b => isoDate(b.week)),
-      ]);
-      const allWeeks = Array.from(allWeekKeys).sort().map(k => new Date(k));
-
-      const lostMap = new Map(lostWeekly.map(b => [isoDate(b.week), b]));
-      const prMap = new Map(prWeekly.map(b => [isoDate(b.week), b]));
+    // Chart 3: combined — failed (red) + cancelled (amber) + successful (green) stacked bars (left) + ratio line (right) per week.
+    if (computeWeekly.length > 0) {
+      const computeMap = new Map(computeWeekly.map(b => [isoDate(b.week), b]));
+      const allWeeks = computeWeekly.map(b => b.week);
 
       const failureData = allWeeks.map(w => {
-        const b = lostMap.get(isoDate(w));
-        return { x: w, y: b ? secToMin(b.failure) : 0 };
+        const b = computeMap.get(isoDate(w));
+        return { x: w, y: b ? secToHour(b.failure) : 0 };
       });
       const cancelledData = allWeeks.map(w => {
-        const b = lostMap.get(isoDate(w));
-        return { x: w, y: b ? secToMin(b.cancelled) : 0 };
+        const b = computeMap.get(isoDate(w));
+        return { x: w, y: b ? secToHour(b.cancelled) : 0 };
       });
-      const prData = allWeeks.map(w => {
-        const b = prMap.get(isoDate(w));
-        return { x: w, y: b ? b.count : 0 };
+      const successData = allWeeks.map(w => {
+        const b = computeMap.get(isoDate(w));
+        return { x: w, y: b ? secToHour(b.success) : 0 };
+      });
+      const ratioData = allWeeks.map(w => {
+        const b = computeMap.get(isoDate(w));
+        return { x: w, y: b && b.totalCount > 0 ? (b.successCount / b.totalCount) * 100 : 0 };
       });
 
       const chart3 = new Chart(document.getElementById("chartCombined").getContext("2d"), {
@@ -477,30 +487,40 @@ Promise.all([
           datasets: [
             {
               type: "bar",
-              label: "failed (min)",
+              label: "failed (hours)",
               data: failureData,
               backgroundColor: "rgba(248, 81, 73, 0.7)",
               borderColor: PALETTE.failure,
               yAxisID: "yLeft",
-              stack: "lost",
+              stack: "compute",
               order: 2,
             },
             {
               type: "bar",
-              label: "cancelled (min)",
+              label: "cancelled (hours)",
               data: cancelledData,
               backgroundColor: "rgba(210, 153, 34, 0.7)",
               borderColor: PALETTE.cancelled,
               yAxisID: "yLeft",
-              stack: "lost",
+              stack: "compute",
+              order: 2,
+            },
+            {
+              type: "bar",
+              label: "successful (hours)",
+              data: successData,
+              backgroundColor: "rgba(63, 185, 80, 0.7)",
+              borderColor: PALETTE.success,
+              yAxisID: "yLeft",
+              stack: "compute",
               order: 2,
             },
             {
               type: "line",
-              label: "merged PRs",
-              data: prData,
-              borderColor: PALETTE.prsRight,
-              backgroundColor: PALETTE.prsRight,
+              label: "success ratio (%)",
+              data: ratioData,
+              borderColor: PALETTE.ratio,
+              backgroundColor: PALETTE.ratio,
               tension: 0.15,
               pointRadius: 3,
               yAxisID: "yRight",
@@ -522,7 +542,7 @@ Promise.all([
               type: "linear",
               position: "left",
               stacked: true,
-              title: { display: true, text: "lost compute (min)", color: "#c9d1d9" },
+              title: { display: true, text: "compute (hours)", color: "#c9d1d9" },
               ticks: { color: "#c9d1d9", precision: 0 },
               grid: { color: "rgba(139,148,158,0.25)" },
               beginAtZero: true,
@@ -530,10 +550,11 @@ Promise.all([
             yRight: {
               type: "linear",
               position: "right",
-              title: { display: true, text: "merged PRs", color: "#c9d1d9" },
-              ticks: { color: "#c9d1d9", precision: 0 },
+              title: { display: true, text: "success ratio (%)", color: "#c9d1d9" },
+              ticks: { color: "#c9d1d9", precision: 1 },
               grid: { drawOnChartArea: false },
               beginAtZero: true,
+              max: 100,
             },
           },
         },
@@ -548,6 +569,7 @@ Promise.all([
     }
 
     // Last 20 failed/cancelled runs table.
+    const lostConclusions = new Set(["failure", "cancelled"]);
     const lostRuns = buildRows
       .filter(r => lostConclusions.has(r.conclusion))
       .sort((a, b) => b.createdDate - a.createdDate)
