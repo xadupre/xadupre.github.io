@@ -392,7 +392,7 @@ def run_inplace_analysis(model) -> Dict[str, Any]:
         _clear_node_metadata(vi)
 
     ctx = si.ShapesContext()
-    si.compute_shape_model(ctx, work)
+    ctx.compute_shape_model(work)
 
     inplace = si.ComputeContext()
     inplace.compute_inplace_reuse_graph(work.graph, ctx)
