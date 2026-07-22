@@ -451,7 +451,7 @@ def run_release_after_analysis(model) -> Dict[str, Any]:
         del init.metadata_props[:]
 
     ctx = si.ShapesContext()
-    si.compute_shape_model(ctx, work)
+    ctx.compute_shape_model(work)
 
     inplace = si.ComputeContext()
     inplace.compute_inplace_reuse_graph(work.graph, ctx)
