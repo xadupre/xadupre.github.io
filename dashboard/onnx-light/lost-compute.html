@@ -130,7 +130,8 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
     <div class="cell"><div class="k">cancelled runs</div><div class="v" id="sumCancelled" style="color:#d29922;">0</div></div>
     <div class="cell"><div class="k">total merged PRs</div><div class="v" id="sumPRs">0</div></div>
     <div class="cell"><div class="k">successful compute (hours)</div><div class="v" id="sumSuccessHours" style="color:#3fb950;">0</div></div>
-    <div class="cell"><div class="k">success ratio</div><div class="v" id="sumSuccessRatio">0%</div></div>
+    <div class="cell"><div class="k">success ratio (jobs)</div><div class="v" id="sumSuccessRatio">0%</div></div>
+    <div class="cell"><div class="k">success ratio (hours)</div><div class="v" id="sumSuccessRatioHours">0%</div></div>
   </div>
 </div>
 <div class="chart-wrap">
@@ -146,7 +147,7 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
 <div class="chart-wrap">
   <h2 class="chart-title">compute vs success ratio per week</h2>
   <div class="chart-container"><canvas id="chartCombined"></canvas></div>
-  <div class="hint">Failed (red), cancelled (amber) and successful (green) compute (hours, left axis) vs success ratio (right axis, blue line). Drag to pan, scroll to zoom. Double-click to reset.</div>
+  <div class="hint">Failed (red), cancelled (amber) and successful (green) compute (hours, left axis) vs success ratio by jobs (solid blue) and by hours (dashed purple), both on the right axis. Drag to pan, scroll to zoom. Double-click to reset.</div>
 </div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 20 failed / cancelled runs</h2>
@@ -294,6 +295,7 @@ const PALETTE = {
   success: "#3fb950",
   prs: "#58a6ff",
   ratio: "#79c0ff",
+  ratioHours: "#d2a8ff",
 };
 
 const ZOOM_PLUGIN = {
@@ -377,9 +379,11 @@ Promise.all([
     document.getElementById("sumCancelled").textContent = String(cancelledCount);
     document.getElementById("sumPRs").textContent = String(prRows.length);
     document.getElementById("sumSuccessHours").textContent = (successSeconds / 3600).toFixed(1);
-    // Ratio uses all run attempts as denominator, consistent with the weekly aggregation.
+    // Ratios use all run attempts as denominator, consistent with the weekly aggregation.
     const totalRunCount = buildRows.length;
     document.getElementById("sumSuccessRatio").textContent = totalRunCount > 0 ? (successCount * 100 / totalRunCount).toFixed(1) + "%" : "0%";
+    const totalSeconds = failedSeconds + cancelledSeconds + successSeconds;
+    document.getElementById("sumSuccessRatioHours").textContent = totalSeconds > 0 ? (successSeconds * 100 / totalSeconds).toFixed(1) + "%" : "0%";
     document.getElementById("summary").classList.add("visible");
 
     // Weekly aggregations.
@@ -480,6 +484,11 @@ Promise.all([
         const b = computeMap.get(isoDate(w));
         return { x: w, y: b && b.totalCount > 0 ? (b.successCount / b.totalCount) * 100 : 0 };
       });
+      const ratioHoursData = allWeeks.map(w => {
+        const b = computeMap.get(isoDate(w));
+        const total = b ? (b.failure + b.cancelled + b.success) : 0;
+        return { x: w, y: total > 0 ? (b.success / total) * 100 : 0 };
+      });
 
       const chart3 = new Chart(document.getElementById("chartCombined").getContext("2d"), {
         type: "bar",
@@ -517,10 +526,22 @@ Promise.all([
             },
             {
               type: "line",
-              label: "success ratio (%)",
+              label: "success ratio by jobs (%)",
               data: ratioData,
               borderColor: PALETTE.ratio,
               backgroundColor: PALETTE.ratio,
+              tension: 0.15,
+              pointRadius: 3,
+              yAxisID: "yRight",
+              order: 1,
+            },
+            {
+              type: "line",
+              label: "success ratio by hours (%)",
+              data: ratioHoursData,
+              borderColor: PALETTE.ratioHours,
+              backgroundColor: PALETTE.ratioHours,
+              borderDash: [6, 4],
               tension: 0.15,
               pointRadius: 3,
               yAxisID: "yRight",
