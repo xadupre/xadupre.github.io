@@ -78,6 +78,17 @@ class TestRecordBuildDurations(unittest.TestCase):
         self.assertGreater(delta.days, 175)
         self.assertLess(delta.days, 185)
 
+    def test_determine_since_override_ignores_cache(self):
+        override = dt.datetime(2023, 1, 1, tzinfo=dt.timezone.utc)
+        latest = dt.datetime(2024, 5, 1, tzinfo=dt.timezone.utc)
+        # Even though ``latest`` is more recent, ``since_override`` wins.
+        self.assertEqual(rbd.determine_since(latest, 6, since_override=override), override)
+
+    def test_determine_since_override_ignores_months_fallback(self):
+        override = dt.datetime(2020, 6, 1, tzinfo=dt.timezone.utc)
+        # Cache is empty (latest=None) but override still takes precedence.
+        self.assertEqual(rbd.determine_since(None, 6, since_override=override), override)
+
     def test_iter_workflow_runs_splits_saturated_windows(self):
         # Simulate a repository with > 1000 runs per week so that the initial
         # weekly windows saturate the GitHub 1000-result cap. The fake
@@ -512,7 +523,7 @@ class TestRecordBuildDurations(unittest.TestCase):
     def test_main_continues_after_repo_failure(self):
         calls: list[str] = []
 
-        def fake_process(repo, cache_dir, months, token):
+        def fake_process(repo, cache_dir, months, token, since_override=None):
             calls.append(repo)
             if repo == "owner/bad":
                 raise urllib.error.HTTPError(
