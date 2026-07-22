@@ -86,12 +86,17 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             {
                 "onnx_light.value_tags": "shape",
                 "onnx_light.release_after": "A",
+                "onnx_light.unlocked": "Y",
                 "ignored": "x",
             },
         )
         self.assertEqual(
             rac._value_metadata(vi),
-            {"onnx_light.value_tags": "shape"},
+            {
+                "onnx_light.value_tags": "shape",
+                "onnx_light.release_after": "A",
+                "onnx_light.unlocked": "Y",
+            },
         )
 
     def test_graph_value_snapshot_collects_inputs_outputs_initializers(self):
@@ -110,6 +115,16 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         self.assertEqual(y_entry["kind"], "output")
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["kind"], "initializer")
+
+    def test_graph_value_snapshot_keeps_release_metadata_on_inputs_and_initializers(self):
+        inp = _FakeValueInfo("X", {"onnx_light.unlocked": "A"})
+        init = _FakeTensorProto("W", {"onnx_light.release_after": "B"})
+        model = _FakeModel([], inputs=[inp], initializers=[init])
+        snapshot = rac._graph_value_snapshot(model)
+        x_entry = next(s for s in snapshot if s["name"] == "X")
+        w_entry = next(s for s in snapshot if s["name"] == "W")
+        self.assertEqual(x_entry["metadata"], {"onnx_light.unlocked": "A"})
+        self.assertEqual(w_entry["metadata"], {"onnx_light.release_after": "B"})
 
     def test_graph_value_snapshot_merges_output_metadata_from_value_info(self):
         out = _FakeValueInfo("Y", {})
