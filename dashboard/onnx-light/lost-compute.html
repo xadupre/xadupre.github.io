@@ -123,9 +123,11 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
 <div id="summary" class="summary">
   <h2>Summary</h2>
   <div class="grid">
-    <div class="cell"><div class="k">lost compute (hours)</div><div class="v" id="sumLostHours">0</div></div>
-    <div class="cell"><div class="k">failed runs</div><div class="v" id="sumFailed">0</div></div>
-    <div class="cell"><div class="k">cancelled runs</div><div class="v" id="sumCancelled">0</div></div>
+    <div class="cell"><div class="k">total lost compute (hours)</div><div class="v" id="sumLostHours">0</div></div>
+    <div class="cell"><div class="k">lost: failed runs (hours)</div><div class="v" id="sumFailedHours" style="color:#f85149;">0</div></div>
+    <div class="cell"><div class="k">failed runs</div><div class="v" id="sumFailed" style="color:#f85149;">0</div></div>
+    <div class="cell"><div class="k">lost: cancelled runs (hours)</div><div class="v" id="sumCancelledHours" style="color:#d29922;">0</div></div>
+    <div class="cell"><div class="k">cancelled runs</div><div class="v" id="sumCancelled" style="color:#d29922;">0</div></div>
     <div class="cell"><div class="k">total merged PRs</div><div class="v" id="sumPRs">0</div></div>
   </div>
 </div>
@@ -140,9 +142,9 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
 <div class="chart-wrap">
-  <h2 class="chart-title">lost compute vs merged PRs per week</h2>
+  <h2 class="chart-title">lost compute vs merged PRs per week (failed and cancelled separately)</h2>
   <div class="chart-container"><canvas id="chartCombined"></canvas></div>
-  <div class="hint">Lost compute (minutes, left axis) vs merged PRs (right axis). Drag to pan, scroll to zoom. Double-click to reset.</div>
+  <div class="hint">Failed (red) and cancelled (amber) compute (minutes, left axis) vs merged PRs (right axis, green line). Drag to pan, scroll to zoom. Double-click to reset.</div>
 </div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 20 failed / cancelled runs</h2>
@@ -357,16 +359,19 @@ Promise.all([
 
     // Compute summary stats.
     let lostSeconds = 0, failedCount = 0, cancelledCount = 0;
+    let failedSeconds = 0, cancelledSeconds = 0;
     const lostConclusions = new Set(["failure", "cancelled"]);
     for (const r of buildRows) {
       if (!lostConclusions.has(r.conclusion)) continue;
       lostSeconds += r.duration_seconds;
-      if (r.conclusion === "failure") failedCount++;
-      else if (r.conclusion === "cancelled") cancelledCount++;
+      if (r.conclusion === "failure") { failedCount++; failedSeconds += r.duration_seconds; }
+      else if (r.conclusion === "cancelled") { cancelledCount++; cancelledSeconds += r.duration_seconds; }
     }
     const lostHours = (lostSeconds / 3600).toFixed(1);
     document.getElementById("sumLostHours").textContent = String(lostHours);
+    document.getElementById("sumFailedHours").textContent = (failedSeconds / 3600).toFixed(1);
     document.getElementById("sumFailed").textContent = String(failedCount);
+    document.getElementById("sumCancelledHours").textContent = (cancelledSeconds / 3600).toFixed(1);
     document.getElementById("sumCancelled").textContent = String(cancelledCount);
     document.getElementById("sumPRs").textContent = String(prRows.length);
     document.getElementById("summary").classList.add("visible");
@@ -441,7 +446,7 @@ Promise.all([
       document.getElementById("chartPRs").parentElement.parentElement.style.display = "none";
     }
 
-    // Chart 3: combined — lost compute (left) + PRs (right) per week.
+    // Chart 3: combined — failed (red) + cancelled (amber) stacked bars (left) + PRs line (right) per week.
     if (lostWeekly.length > 0 || prWeekly.length > 0) {
       // Build a unified set of weeks.
       const allWeekKeys = new Set([
@@ -453,9 +458,13 @@ Promise.all([
       const lostMap = new Map(lostWeekly.map(b => [isoDate(b.week), b]));
       const prMap = new Map(prWeekly.map(b => [isoDate(b.week), b]));
 
-      const lostData = allWeeks.map(w => {
+      const failureData = allWeeks.map(w => {
         const b = lostMap.get(isoDate(w));
-        return { x: w, y: b ? secToMin(b.failure + b.cancelled) : 0 };
+        return { x: w, y: b ? secToMin(b.failure) : 0 };
+      });
+      const cancelledData = allWeeks.map(w => {
+        const b = lostMap.get(isoDate(w));
+        return { x: w, y: b ? secToMin(b.cancelled) : 0 };
       });
       const prData = allWeeks.map(w => {
         const b = prMap.get(isoDate(w));
@@ -468,11 +477,22 @@ Promise.all([
           datasets: [
             {
               type: "bar",
-              label: "lost compute (min)",
-              data: lostData,
-              backgroundColor: "rgba(248, 81, 73, 0.5)",
+              label: "failed (min)",
+              data: failureData,
+              backgroundColor: "rgba(248, 81, 73, 0.7)",
               borderColor: PALETTE.failure,
               yAxisID: "yLeft",
+              stack: "lost",
+              order: 2,
+            },
+            {
+              type: "bar",
+              label: "cancelled (min)",
+              data: cancelledData,
+              backgroundColor: "rgba(210, 153, 34, 0.7)",
+              borderColor: PALETTE.cancelled,
+              yAxisID: "yLeft",
+              stack: "lost",
               order: 2,
             },
             {
@@ -497,10 +517,11 @@ Promise.all([
             zoom: ZOOM_PLUGIN,
           },
           scales: {
-            x: axisX(),
+            x: Object.assign({}, axisX(), { stacked: true }),
             yLeft: {
               type: "linear",
               position: "left",
+              stacked: true,
               title: { display: true, text: "lost compute (min)", color: "#c9d1d9" },
               ticks: { color: "#c9d1d9", precision: 0 },
               grid: { color: "rgba(139,148,158,0.25)" },
