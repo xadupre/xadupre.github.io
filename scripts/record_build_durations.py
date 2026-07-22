@@ -129,8 +129,18 @@ def read_existing(csv_path: str) -> tuple[set[str], dt.datetime | None]:
     return seen, latest
 
 
-def determine_since(latest: dt.datetime | None, months: int) -> dt.datetime:
-    """Pick the lower bound of the query based on the existing cache."""
+def determine_since(
+    latest: dt.datetime | None,
+    months: int,
+    since_override: dt.datetime | None = None,
+) -> dt.datetime:
+    """Pick the lower bound of the query based on the existing cache.
+
+    If ``since_override`` is provided it takes priority over both the cache
+    and the ``months`` fallback, enabling an explicit historical backfill.
+    """
+    if since_override is not None:
+        return since_override
     now = dt.datetime.now(tz=dt.timezone.utc)
     default = now - dt.timedelta(days=months * 30)
     if latest is None:
@@ -585,12 +595,21 @@ def record_jobs_for_run(run: dict, repo: str, cache_dir: str, token: str | None)
     return added
 
 
-def process_repo(repo: str, cache_dir: str, months: int, token: str | None) -> int:
+def process_repo(
+    repo: str,
+    cache_dir: str,
+    months: int,
+    token: str | None,
+    since_override: dt.datetime | None = None,
+) -> int:
     """Fetch new runs for ``repo`` and append them to the cache files.
 
     Returns the number of new run rows appended to the workflow-level CSV.
     For each new run, per-job rows are also recorded under
     ``cache_data/<repo>/jobs/<job_name>.csv`` (one file per job).
+
+    When ``since_override`` is provided the script fetches from that date
+    regardless of what is already cached, enabling a historical backfill.
     """
     repo_name = repo.split("/", 1)[-1]
     csv_path = os.path.join(cache_dir, repo_name, "build_durations.csv")
@@ -606,7 +625,7 @@ def process_repo(repo: str, cache_dir: str, months: int, token: str | None) -> i
         seen |= job_seen
     if job_latest is not None and (latest is None or job_latest > latest):
         latest = job_latest
-    since = determine_since(latest, months)
+    since = determine_since(latest, months, since_override)
     _log(
         f"[{repo}] cache file: {csv_path} "
         f"({len(seen)} run(s) already recorded, "
@@ -713,6 +732,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Number of months to look back when the cache is empty (default: 6).",
     )
     parser.add_argument(
+        "--since",
+        default=None,
+        metavar="DATE",
+        help=(
+            "Explicit lower bound for the fetch in ISO 8601 format "
+            "(e.g. 2024-01-01 or 2024-01-01T00:00:00Z). "
+            "When provided, overrides both the cache and --months, "
+            "enabling a historical backfill."
+        ),
+    )
+    parser.add_argument(
         "--repo",
         action="append",
         dest="repos",
@@ -722,9 +752,19 @@ def main(argv: list[str] | None = None) -> int:
 
     repos = args.repos or list(DEFAULT_REPOS)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+
+    since_override: dt.datetime | None = None
+    if args.since:
+        raw = args.since.strip()
+        if len(raw) == 10:  # YYYY-MM-DD
+            raw = raw + "T00:00:00Z"
+        since_override = _parse_iso(raw)
+
     _log("record_build_durations.py starting")
     _log(f"  cache directory : {args.cache_dir}")
     _log(f"  months fallback : {args.months}")
+    if since_override is not None:
+        _log(f"  since override  : {_format_iso(since_override)} (--since overrides cache and --months)")
     _log(f"  repositories    : {', '.join(repos)}")
     if not token:
         _log("  authentication  : anonymous (no GITHUB_TOKEN/GH_TOKEN set)")
@@ -738,7 +778,7 @@ def main(argv: list[str] | None = None) -> int:
     for index, repo in enumerate(repos, start=1):
         _log(f"==> [{index}/{len(repos)}] processing repository {repo}")
         try:
-            total += process_repo(repo, args.cache_dir, args.months, token)
+            total += process_repo(repo, args.cache_dir, args.months, token, since_override)
         except urllib.error.HTTPError as exc:
             # Do not abort: keep going so that whatever was already saved
             # for previous repositories (and for this one, thanks to the

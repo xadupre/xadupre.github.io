@@ -69,6 +69,15 @@ class TestRecordPrStats(unittest.TestCase):
         self.assertGreater(delta.days, 175)
         self.assertLess(delta.days, 185)
 
+    def test_determine_since_override_ignores_cache(self):
+        override = dt.datetime(2023, 1, 1, tzinfo=dt.timezone.utc)
+        latest = dt.datetime(2024, 5, 1, tzinfo=dt.timezone.utc)
+        self.assertEqual(rps.determine_since(latest, 6, since_override=override), override)
+
+    def test_determine_since_override_ignores_months_fallback(self):
+        override = dt.datetime(2020, 6, 1, tzinfo=dt.timezone.utc)
+        self.assertEqual(rps.determine_since(None, 6, since_override=override), override)
+
     def test_fetch_pr_stats_counts_commits_and_comments(self):
         pr = {
             "number": 42,
@@ -184,7 +193,7 @@ class TestRecordPrStats(unittest.TestCase):
     def test_main_continues_after_repo_failure(self):
         calls: list[str] = []
 
-        def fake_process(repo, cache_dir, months, token):
+        def fake_process(repo, cache_dir, months, token, since_override=None):
             calls.append(repo)
             if repo == "owner/bad":
                 raise urllib.error.HTTPError(
