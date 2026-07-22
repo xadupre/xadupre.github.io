@@ -452,7 +452,7 @@ def discover_shape_tag_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
 
 def run_shape_tag_analysis(model) -> Dict[str, Any]:
     """Run onnx-light's shape-tag metadata analysis on ``model``."""
-    from onnx_light.onnx_optim.shape_inference import (
+    from onnx_light.tools import (
         write_value_and_node_tags_to_metadata,
     )
 
