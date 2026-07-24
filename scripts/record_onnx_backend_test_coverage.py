@@ -580,6 +580,11 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
     in-memory ``onnx.ModelProto`` produced by :func:`discover_node_tests`
     is therefore serialised and re-parsed by the evaluator so it sees a
     proto of its own type.
+
+    ``ReferenceEvaluator`` executes the model through onnx-light's
+    ``ExecutionPlan`` / ``RuntimeSession`` machinery (the same reusable
+    runtime session exercised by the C++ backend), converting the feed
+    dictionary to/from the runtime ``Tensor`` type.
     """
     from onnx_light.onnx.reference import ReferenceEvaluator
 

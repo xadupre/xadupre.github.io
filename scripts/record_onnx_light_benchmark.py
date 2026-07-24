@@ -5,6 +5,12 @@ the installed ``onnx-light`` package and measures the processing time of
 both ``onnxruntime`` and the ``onnx-light`` reference implementation
 backed by its C++ ``KernelDispatchTable``.
 
+``onnx-light`` runs a model through a reusable ``RuntimeSession`` that
+resolves every kernel once and then replays them on each subsequent run, so
+the benchmark builds the model's ``ExecutionPlan`` and ``RuntimeSession``
+once (outside the timed loop) and reuses them across the measured
+iterations.
+
 For each test the measurement protocol is:
 
 1. Load / compile the model once (not timed).
@@ -125,8 +131,12 @@ def collect_versions() -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _cc_tensor_to_numpy(tensor):
-    """Convert a C++ backend-test tensor into a numpy value."""
+def _cc_numpy_dtype_for(data_type: int):
+    """Return the numpy dtype for a fixed-width ``TensorProto`` data type.
+
+    Returns ``None`` for types without a directly reinterpretable numpy dtype
+    (e.g. STRING and packed sub-byte types), which must be handled out of band.
+    """
     import numpy as np
     import onnx
 
@@ -134,11 +144,6 @@ def _cc_tensor_to_numpy(tensor):
         import ml_dtypes  # type: ignore
     except ImportError:  # pragma: no cover - optional dependency
         ml_dtypes = None
-
-    if int(tensor.data_type) == int(onnx.TensorProto.STRING):
-        values = tensor.string_data()
-        arr = np.array(values, dtype=object)
-        return arr.reshape(tuple(int(d) for d in tensor.shape))
 
     dtype_map = {
         int(onnx.TensorProto.FLOAT): np.float32,
@@ -167,7 +172,20 @@ def _cc_tensor_to_numpy(tensor):
             if dtype is not None:
                 dtype_map[int(onnx_type)] = dtype
 
-    dtype = dtype_map.get(int(tensor.data_type))
+    return dtype_map.get(int(data_type))
+
+
+def _cc_tensor_to_numpy(tensor):
+    """Convert a C++ backend-test tensor into a numpy value."""
+    import numpy as np
+    import onnx
+
+    if int(tensor.data_type) == int(onnx.TensorProto.STRING):
+        values = tensor.string_data()
+        arr = np.array(values, dtype=object)
+        return arr.reshape(tuple(int(d) for d in tensor.shape))
+
+    dtype = _cc_numpy_dtype_for(int(tensor.data_type))
     if dtype is None:
         raise NotImplementedError(
             f"Cannot convert benchmark input tensor with data_type={tensor.data_type}."
@@ -471,7 +489,81 @@ def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
-def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
+def _runtime_tensor_to_numpy(runtime, numpy_helper, tensor):
+    """Convert an onnx-light runtime ``Tensor`` into a :class:`numpy.ndarray`.
+
+    Standard fixed-width dtypes are reinterpreted from the tensor's raw byte
+    view returned by ``runtime.tensor_to_numpy`` (no copy); packed sub-byte
+    types and strings fall back to the general ``numpy_helper.to_array`` path
+    via ``runtime.tensor_to_proto``.
+    """
+    import numpy as np
+
+    dtype = _cc_numpy_dtype_for(int(tensor.data_type))
+    if dtype is not None:
+        raw = runtime.tensor_to_numpy(tensor)
+        arr = raw.view(dtype)
+        return arr.reshape(tuple(int(d) for d in tensor.shape))
+    return numpy_helper.to_array(runtime.tensor_to_proto(tensor))
+
+
+def _make_onnx_light_runtime_session_runner(model) -> Callable[[List[Any]], List[Any]]:
+    """Run ``model`` through onnx-light's ``ExecutionPlan`` + ``RuntimeSession``.
+
+    onnx-light now exposes a reusable
+    :class:`~onnx_light.onnx_py._onnxpykernels.runtime.RuntimeSession` that
+    resolves every kernel once (on its first ``run``) and replays the cached
+    kernels on subsequent runs, mirroring how an inference runtime prepares an
+    executable graph once and then runs it repeatedly.
+
+    The benchmark builds the plan and session a single time (outside the timed
+    loop) so the measured iterations reflect the model's execution rather than
+    the one-off kernel initialisation. Only the numeric backend-test corpus is
+    benchmarked, so positional inputs are wired to the graph's declared
+    (non-initializer) inputs by name.
+    """
+    import numpy as np
+    from onnx_light.onnx_lib import ModelProto as _LModelProto
+    from onnx_light.onnx_lib import numpy_helper as _lnh
+    from onnx_light.onnx_py._onnxpykernels import runtime as _rt
+
+    lmodel = model
+    if not isinstance(model, _LModelProto):
+        lmodel = _LModelProto()
+        lmodel.ParseFromString(model.SerializeToString())
+
+    version = 18
+    for opset in lmodel.opset_import:
+        if opset.domain in ("", "ai.onnx"):
+            version = int(opset.version)
+            break
+
+    initializers = list(lmodel.graph.initializer)
+    initializer_names = {init.name for init in initializers}
+    input_names = [vi.name for vi in lmodel.graph.input if vi.name not in initializer_names]
+    output_names = [vi.name for vi in lmodel.graph.output]
+
+    # Build the execution plan and the reusable session once; the session
+    # caches the resolved kernels after its first ``run`` call.
+    plan = _rt.ExecutionPlan(lmodel.graph)
+    session = _rt.RuntimeSession(plan)
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
+        for name, value in zip(input_names, inputs):
+            arr = np.ascontiguousarray(value)
+            ctx.set(name, _rt.tensor_from_proto(_lnh.from_array(arr, name=name)))
+        _rt.register_model_functions(lmodel, ctx)
+        for init in initializers:
+            if not ctx.has(init.name):
+                ctx.set(init.name, _rt.tensor_from_proto(init), "initializer")
+        session.run(ctx)
+        return [_runtime_tensor_to_numpy(_rt, _lnh, ctx.get(name)) for name in output_names]
+
+    return _run
+
+
+def _make_onnx_light_reference_runner(model) -> Callable[[List[Any]], List[Any]]:
     from onnx_light.onnx.reference import ReferenceEvaluator
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
@@ -493,6 +585,20 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
         return list(evaluator.run(None, feeds))
 
     return _run
+
+
+def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
+    """Build the onnx-light runner for ``model``.
+
+    Prefers the reusable ``RuntimeSession`` execution path (init kernels once,
+    run repeatedly). Falls back to the ``ReferenceEvaluator`` wrapper when the
+    low-level runtime bindings are unavailable (older onnx-light builds) or the
+    model cannot be prepared through them.
+    """
+    try:
+        return _make_onnx_light_runtime_session_runner(model)
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return _make_onnx_light_reference_runner(model)
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
