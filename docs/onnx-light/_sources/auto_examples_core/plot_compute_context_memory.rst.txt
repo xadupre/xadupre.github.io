@@ -31,12 +31,12 @@ symbolic, these quantities stay symbolic as well.
 This example shows how to:
 
 1. Build a small graph with one symbolic dimension ``N``.
-2. Run shape inference and memory analysis.
+2. Run every analysis at once with :meth:`ComputeContext.compute`.
 3. Print a table with the symbolic memory expressions for every node.
 4. Evaluate ``total_bytes`` for a few concrete values of ``N`` and plot the
    resulting curves.
 
-.. GENERATED FROM PYTHON SOURCE LINES 20-47
+.. GENERATED FROM PYTHON SOURCE LINES 20-44
 
 .. code-block:: Python
 
@@ -58,9 +58,6 @@ This example shows how to:
         NODE_MEMORY_OUTPUT_ALLOCATION_BYTES_KEY,
         NODE_MEMORY_OUTPUTS_KEY,
         NODE_MEMORY_TOTAL_BYTES_KEY,
-        ShapesContext,
-        apply_inferred_shapes_to_model,
-        compute_shape_model,
     )
 
     # Built-in operator schemas must be registered before shape inference.
@@ -74,7 +71,7 @@ This example shows how to:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 48-67
+.. GENERATED FROM PYTHON SOURCE LINES 45-64
 
 Build a graph with one symbolic dimension
 +++++++++++++++++++++++++++++++++++++++++
@@ -96,7 +93,7 @@ leading dimension into ``2*N``, ``S`` is tagged as a shape tensor, and the
 last two nodes can reuse their input buffers in place. The memory table
 therefore mixes constant terms, symbolic terms, and zero-allocation steps.
 
-.. GENERATED FROM PYTHON SOURCE LINES 67-96
+.. GENERATED FROM PYTHON SOURCE LINES 64-93
 
 .. code-block:: Python
 
@@ -151,27 +148,26 @@ therefore mixes constant terms, symbolic terms, and zero-allocation steps.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 97-103
+.. GENERATED FROM PYTHON SOURCE LINES 94-103
 
-Run shape inference and memory analysis
-+++++++++++++++++++++++++++++++++++++++
+Run every analysis at once
+++++++++++++++++++++++++++
 
-``ComputeContext`` consumes the symbolic shapes produced by
-:class:`ShapesContext`. Passing ``value_tags`` lets the per-source buckets
-keep semantic labels such as ``shape``.
+:meth:`ComputeContext.compute` chains shape inference, value/node tagging,
+in-place reuse (with release-after and shape-tag classification) and per-node
+peak memory, keeping every result alive inside the context. The symbolic
+shapes it infers, the semantic ``shape`` tags and the reuse opportunities all
+feed the per-node memory buckets. :meth:`ComputeContext.write_to_model` then
+pushes the inferred shapes and annotations back into the model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 103-145
+.. GENERATED FROM PYTHON SOURCE LINES 103-141
 
 .. code-block:: Python
 
 
-    shape_context = ShapesContext()
-    compute_shape_model(shape_context, model)
-    apply_inferred_shapes_to_model(shape_context, model)
-
     compute_context = ComputeContext()
-    value_tags, _ = compute_context.compute_value_and_node_tags(model.graph)
-    compute_context.compute_inplace_reuse_graph(model.graph, shape_context, value_tags=value_tags)
+    compute_context.compute(model)
+    compute_context.write_to_model(model)
     memory_profiles = compute_context.memory
 
 
@@ -213,7 +209,7 @@ keep semantic labels such as ``shape``.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 146-157
+.. GENERATED FROM PYTHON SOURCE LINES 142-153
 
 Symbolic per-node memory table
 ++++++++++++++++++++++++++++++
@@ -227,7 +223,7 @@ The table below shows the symbolic profile computed for each node:
 The source buckets make it easy to see which bytes come from live inputs,
 initializers, intermediates, or newly allocated outputs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 157-202
+.. GENERATED FROM PYTHON SOURCE LINES 153-198
 
 .. code-block:: Python
 
@@ -298,7 +294,47 @@ initializers, intermediates, or newly allocated outputs.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 203-209
+.. GENERATED FROM PYTHON SOURCE LINES 199-206
+
+Per-node peak scratch memory
+++++++++++++++++++++++++++++
+
+:meth:`ComputeContext.compute` also estimates the extra scratch memory each
+operator needs on top of its inputs and outputs. Operators without a
+registered peak-memory function (or whose relevant shapes stay symbolic)
+report ``0``.
+
+.. GENERATED FROM PYTHON SOURCE LINES 206-213
+
+.. code-block:: Python
+
+
+    print("\nPer-node peak scratch memory (bytes):")
+    for node_index, node in enumerate(model.graph.node):
+        peak = compute_context.node_peak_memory(node_index)
+        print(f"  node{node_index} {node.op_type:>8}: {peak}")
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+
+    Per-node peak scratch memory (bytes):
+      node0   MatMul: 0
+      node1   Concat: 0
+      node2    Shape: 0
+      node3      Abs: 0
+      node4  Reshape: 0
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 214-220
 
 Evaluate the symbolic expressions
 +++++++++++++++++++++++++++++++++
@@ -307,7 +343,7 @@ Once concrete values are chosen for ``N``, the symbolic totals become plain
 integers. Each line below evaluates the same node-wise ``total_bytes`` curve
 under a different assignment.
 
-.. GENERATED FROM PYTHON SOURCE LINES 209-237
+.. GENERATED FROM PYTHON SOURCE LINES 220-248
 
 .. code-block:: Python
 
@@ -366,7 +402,7 @@ under a different assignment.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.119 seconds)
+   **Total running time of the script:** (0 minutes 0.147 seconds)
 
 
 .. _sphx_glr_download_auto_examples_core_plot_compute_context_memory.py:
