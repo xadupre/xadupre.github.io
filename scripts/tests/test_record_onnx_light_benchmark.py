@@ -503,6 +503,9 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             telemetry["registered"] += 1
 
         runtime.register_model_functions = _register
+        # Mirrors the real ``runtime.tensor_to_numpy`` which returns a 1-D
+        # uint8 byte view; ``_runtime_tensor_to_numpy`` reinterprets it as the
+        # tensor's dtype (float32 here) and reshapes it.
         runtime.tensor_to_numpy = lambda t: np.asarray(out_value, dtype=np.float32).view(np.uint8)
         runtime.tensor_to_proto = lambda t: t
 
