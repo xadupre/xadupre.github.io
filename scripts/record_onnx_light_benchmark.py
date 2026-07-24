@@ -406,6 +406,32 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+def _type_proto_kind(type_proto: Any) -> str:
+    """Return ``"sequence"``, ``"map"`` or ``"tensor"`` for a graph value type.
+
+    The low-level ``RuntimeSession`` execution path keeps tensor, sequence and
+    map values in separate name-keyed stores on :class:`RuntimeContext`. The
+    kind of a graph input/output therefore selects which store the benchmark
+    feeds (``set`` / ``put_sequence`` / ``put_map``) and reads back (``get`` /
+    ``get_sequence`` / ``get_map``). Both the protobuf ``HasField`` API and
+    onnx-light's ``has_*_type()`` accessors are supported.
+    """
+    if type_proto is None:
+        return "tensor"
+    for field, kind in (("sequence_type", "sequence"), ("map_type", "map")):
+        has_field = getattr(type_proto, "HasField", None)
+        if callable(has_field):
+            try:
+                if has_field(field):
+                    return kind
+            except (ValueError, KeyError):
+                pass
+        method = getattr(type_proto, f"has_{field}", None)
+        if callable(method) and method():
+            return kind
+    return "tensor"
+
+
 def build_graph(model) -> Dict[str, Any]:
     """Return an SVG rendering of ``model``'s graph."""
     from onnx_light.tools import to_svg
@@ -540,8 +566,16 @@ def _make_onnx_light_runtime_session_runner(model) -> Callable[[List[Any]], List
 
     initializers = list(lmodel.graph.initializer)
     initializer_names = {init.name for init in initializers}
-    input_names = [vi.name for vi in lmodel.graph.input if vi.name not in initializer_names]
+    graph_inputs = [vi for vi in lmodel.graph.input if vi.name not in initializer_names]
+    input_names = [vi.name for vi in graph_inputs]
+    input_kinds = [_type_proto_kind(getattr(vi, "type", None)) for vi in graph_inputs]
     output_names = [vi.name for vi in lmodel.graph.output]
+    output_kinds = [
+        _type_proto_kind(getattr(vi, "type", None)) for vi in lmodel.graph.output
+    ]
+
+    def _to_tensor(name: str, value: Any):
+        return _rt.tensor_from_proto(_lnh.from_array(np.ascontiguousarray(value), name=name))
 
     # Build the execution plan and the reusable session once; the session
     # caches the resolved kernels after its first ``run`` call.
@@ -550,15 +584,32 @@ def _make_onnx_light_runtime_session_runner(model) -> Callable[[List[Any]], List
 
     def _run(inputs: List[Any]) -> List[Any]:
         ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
-        for name, value in zip(input_names, inputs):
-            arr = np.ascontiguousarray(value)
-            ctx.set(name, _rt.tensor_from_proto(_lnh.from_array(arr, name=name)))
+        # Sequence and map inputs live in dedicated stores on the context, so
+        # feed each graph input through the store matching its declared type.
+        for name, kind, value in zip(input_names, input_kinds, inputs):
+            if kind == "sequence":
+                ctx.put_sequence(name, [_to_tensor(name, elem) for elem in value])
+            elif kind == "map":
+                ctx.put_map(name, value)
+            else:
+                ctx.set(name, _to_tensor(name, value))
         _rt.register_model_functions(lmodel, ctx)
         for init in initializers:
             if not ctx.has(init.name):
                 ctx.set(init.name, _rt.tensor_from_proto(init), "initializer")
         session.run(ctx)
-        return [_runtime_tensor_to_numpy(_rt, _lnh, ctx.get(name)) for name in output_names]
+        # Read every graph output back from the store matching its type.
+        results: List[Any] = []
+        for name, kind in zip(output_names, output_kinds):
+            if kind == "sequence":
+                results.append(
+                    [_runtime_tensor_to_numpy(_rt, _lnh, t) for t in ctx.get_sequence(name)]
+                )
+            elif kind == "map":
+                results.append(ctx.get_map(name))
+            else:
+                results.append(_runtime_tensor_to_numpy(_rt, _lnh, ctx.get(name)))
+        return results
 
     return _run
 
