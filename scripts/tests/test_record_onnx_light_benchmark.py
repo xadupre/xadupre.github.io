@@ -419,6 +419,175 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.limit, 10)
 
 
+class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
+    """The onnx-light runner drives the model through a reusable RuntimeSession."""
+
+    def _install_fake_onnx_light(self, out_value):
+        """Register minimal fake ``onnx_light`` modules exposing the runtime API.
+
+        Returns ``(model, telemetry)`` where ``telemetry`` records how many
+        ``ExecutionPlan`` / ``RuntimeSession`` objects were built and how many
+        times the session was run, so the test can assert the plan/session are
+        built once and reused.
+        """
+        import types
+
+        import onnx
+
+        telemetry = {"plans": 0, "sessions": 0, "runs": 0, "registered": 0}
+
+        class _FakeModelProto:
+            pass
+
+        class _Named:
+            def __init__(self, name):
+                self.name = name
+
+        class _Opset:
+            def __init__(self, domain, version):
+                self.domain = domain
+                self.version = version
+
+        class _Graph:
+            def __init__(self):
+                self.input = [_Named("x")]
+                self.output = [_Named("y")]
+                self.initializer = []
+
+        model = _FakeModelProto()
+        model.opset_import = [_Opset("", 18)]
+        model.graph = _Graph()
+
+        class _OutTensor:
+            data_type = int(onnx.TensorProto.FLOAT)
+            shape = (2,)
+
+        out_tensor = _OutTensor()
+
+        class _RuntimeContext:
+            def __init__(self, kctx):
+                self._store = {}
+
+            def set(self, name, tensor, kind=None):
+                self._store[name] = tensor
+
+            def has(self, name):
+                return name in self._store
+
+            def get(self, name):
+                return self._store[name]
+
+        class _RuntimeSession:
+            def __init__(self, plan):
+                telemetry["sessions"] += 1
+                self._plan = plan
+
+            def run(self, ctx):
+                telemetry["runs"] += 1
+                ctx.set("y", out_tensor)
+
+        class _ExecutionPlan:
+            def __init__(self, graph):
+                telemetry["plans"] += 1
+                self.graph = graph
+
+        runtime = types.ModuleType("onnx_light.onnx_py._onnxpykernels.runtime")
+        runtime.RuntimeContext = _RuntimeContext
+        runtime.KernelContext = lambda opset: ("kctx", opset)
+        runtime.default_opset = lambda v: v
+        runtime.ExecutionPlan = _ExecutionPlan
+        runtime.RuntimeSession = _RuntimeSession
+        runtime.tensor_from_proto = lambda tp: ("tensor", tp)
+
+        def _register(model_, ctx):
+            telemetry["registered"] += 1
+
+        runtime.register_model_functions = _register
+        # Mirrors the real ``runtime.tensor_to_numpy`` which returns a 1-D
+        # uint8 byte view; ``_runtime_tensor_to_numpy`` reinterprets it as the
+        # tensor's dtype (float32 here) and reshapes it.
+        runtime.tensor_to_numpy = lambda t: np.asarray(out_value, dtype=np.float32).view(np.uint8)
+        runtime.tensor_to_proto = lambda t: t
+
+        numpy_helper = types.ModuleType("onnx_light.onnx_lib.numpy_helper")
+        numpy_helper.from_array = lambda arr, name=None: {"name": name, "arr": arr}
+        numpy_helper.to_array = lambda tp: np.asarray(out_value, dtype=np.float32)
+
+        onnx_lib = types.ModuleType("onnx_light.onnx_lib")
+        onnx_lib.ModelProto = _FakeModelProto
+        onnx_lib.numpy_helper = numpy_helper
+
+        onnx_light = types.ModuleType("onnx_light")
+        onnx_py = types.ModuleType("onnx_light.onnx_py")
+        pyk = types.ModuleType("onnx_light.onnx_py._onnxpykernels")
+        pyk.runtime = runtime
+        onnx_py._onnxpykernels = pyk
+
+        modules = {
+            "onnx_light": onnx_light,
+            "onnx_light.onnx_lib": onnx_lib,
+            "onnx_light.onnx_lib.numpy_helper": numpy_helper,
+            "onnx_light.onnx_py": onnx_py,
+            "onnx_light.onnx_py._onnxpykernels": pyk,
+            "onnx_light.onnx_py._onnxpykernels.runtime": runtime,
+        }
+        return model, telemetry, modules
+
+    def test_runtime_session_is_built_once_and_reused(self):
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        model, telemetry, modules = self._install_fake_onnx_light(out_value)
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_runtime_session_runner(model)
+            first = runner([np.array([1.0, 2.0], dtype=np.float32)])
+            second = runner([np.array([3.0, 4.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        np.testing.assert_allclose(first[0], out_value)
+        np.testing.assert_allclose(second[0], out_value)
+        # ExecutionPlan and RuntimeSession are built exactly once, then reused
+        # across both runs.
+        self.assertEqual(telemetry["plans"], 1)
+        self.assertEqual(telemetry["sessions"], 1)
+        self.assertEqual(telemetry["runs"], 2)
+
+    def test_make_onnx_light_runner_prefers_runtime_session(self):
+        sentinel_session = object()
+        sentinel_reference = object()
+        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_reference = rlb._make_onnx_light_reference_runner
+        try:
+            rlb._make_onnx_light_runtime_session_runner = lambda model: sentinel_session
+            rlb._make_onnx_light_reference_runner = lambda model: sentinel_reference
+            self.assertIs(rlb._make_onnx_light_runner(object()), sentinel_session)
+        finally:
+            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_reference
+
+    def test_make_onnx_light_runner_falls_back_to_reference(self):
+        sentinel_reference = object()
+        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_reference = rlb._make_onnx_light_reference_runner
+
+        def _raise(model):
+            raise ImportError("no runtime bindings")
+
+        try:
+            rlb._make_onnx_light_runtime_session_runner = _raise
+            rlb._make_onnx_light_reference_runner = lambda model: sentinel_reference
+            self.assertIs(rlb._make_onnx_light_runner(object()), sentinel_reference)
+        finally:
+            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_reference
+
+
 class TestBenchmarkBackends(unittest.TestCase):
     def test_benchmark_backends_contains_ort_and_onnx_light(self):
         self.assertIn("onnxruntime", rlb.BENCHMARK_BACKENDS)
