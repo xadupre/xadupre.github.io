@@ -422,13 +422,15 @@ class TestParseArgs(unittest.TestCase):
 class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
     """The onnx-light runner drives the model through a reusable RuntimeSession."""
 
-    def _install_fake_onnx_light(self, out_value):
+    def _install_fake_onnx_light(self, out_value, input_kind="tensor", output_kind="tensor"):
         """Register minimal fake ``onnx_light`` modules exposing the runtime API.
 
         Returns ``(model, telemetry)`` where ``telemetry`` records how many
         ``ExecutionPlan`` / ``RuntimeSession`` objects were built and how many
         times the session was run, so the test can assert the plan/session are
-        built once and reused.
+        built once and reused. ``input_kind`` / ``output_kind`` select the graph
+        boundary type (``"tensor"``, ``"sequence"`` or ``"map"``) so the runner's
+        non-tensor stores can be exercised.
         """
         import types
 
@@ -436,12 +438,16 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
         telemetry = {"plans": 0, "sessions": 0, "runs": 0, "registered": 0}
 
+        def _type_for(kind):
+            return None if kind == "tensor" else _FakeTypeProto(kind)
+
         class _FakeModelProto:
             pass
 
         class _Named:
-            def __init__(self, name):
+            def __init__(self, name, type_proto=None):
                 self.name = name
+                self.type = type_proto
 
         class _Opset:
             def __init__(self, domain, version):
@@ -450,8 +456,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
         class _Graph:
             def __init__(self):
-                self.input = [_Named("x")]
-                self.output = [_Named("y")]
+                self.input = [_Named("x", _type_for(input_kind))]
+                self.output = [_Named("y", _type_for(output_kind))]
                 self.initializer = []
 
         model = _FakeModelProto()
@@ -467,6 +473,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         class _RuntimeContext:
             def __init__(self, kctx):
                 self._store = {}
+                self._sequences = {}
+                self._maps = {}
 
             def set(self, name, tensor, kind=None):
                 self._store[name] = tensor
@@ -477,6 +485,18 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             def get(self, name):
                 return self._store[name]
 
+            def put_sequence(self, name, values):
+                self._sequences[name] = list(values)
+
+            def get_sequence(self, name):
+                return self._sequences[name]
+
+            def put_map(self, name, mapping):
+                self._maps[name] = dict(mapping)
+
+            def get_map(self, name):
+                return self._maps[name]
+
         class _RuntimeSession:
             def __init__(self, plan):
                 telemetry["sessions"] += 1
@@ -484,7 +504,12 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
             def run(self, ctx):
                 telemetry["runs"] += 1
-                ctx.set("y", out_tensor)
+                if output_kind == "sequence":
+                    ctx.put_sequence("y", [out_tensor])
+                elif output_kind == "map":
+                    ctx.put_map("y", {1: 2})
+                else:
+                    ctx.set("y", out_tensor)
 
         class _ExecutionPlan:
             def __init__(self, graph):
@@ -602,18 +627,18 @@ class _FakeTypeProto:
         return False
 
 
-class TestNonTensorTypeDetection(unittest.TestCase):
-    def test_tensor_type_is_not_non_tensor(self):
-        self.assertFalse(rlb._type_proto_is_non_tensor(_FakeTypeProto("tensor")))
+class TestTypeProtoKindDetection(unittest.TestCase):
+    def test_tensor_type_is_tensor(self):
+        self.assertEqual(rlb._type_proto_kind(_FakeTypeProto("tensor")), "tensor")
 
-    def test_sequence_type_is_non_tensor(self):
-        self.assertTrue(rlb._type_proto_is_non_tensor(_FakeTypeProto("sequence")))
+    def test_sequence_type_is_sequence(self):
+        self.assertEqual(rlb._type_proto_kind(_FakeTypeProto("sequence")), "sequence")
 
-    def test_map_type_is_non_tensor(self):
-        self.assertTrue(rlb._type_proto_is_non_tensor(_FakeTypeProto("map")))
+    def test_map_type_is_map(self):
+        self.assertEqual(rlb._type_proto_kind(_FakeTypeProto("map")), "map")
 
-    def test_none_type_is_not_non_tensor(self):
-        self.assertFalse(rlb._type_proto_is_non_tensor(None))
+    def test_none_type_is_tensor(self):
+        self.assertEqual(rlb._type_proto_kind(None), "tensor")
 
     def test_has_method_fallback_detects_sequence(self):
         class _Type:
@@ -625,55 +650,71 @@ class TestNonTensorTypeDetection(unittest.TestCase):
             def has_map_type():
                 return False
 
-        self.assertTrue(rlb._type_proto_is_non_tensor(_Type()))
+        self.assertEqual(rlb._type_proto_kind(_Type()), "sequence")
 
-    def test_graph_with_sequence_output_is_non_tensor(self):
-        class _Value:
-            def __init__(self, type_proto):
-                self.type = type_proto
+    def test_has_method_fallback_detects_map(self):
+        class _Type:
+            @staticmethod
+            def has_sequence_type():
+                return False
 
-        class _Graph:
-            input = [_Value(_FakeTypeProto("tensor"))]
-            output = [_Value(_FakeTypeProto("sequence"))]
+            @staticmethod
+            def has_map_type():
+                return True
 
-        self.assertTrue(rlb._graph_has_non_tensor_io(_Graph()))
-
-    def test_graph_with_only_tensor_io_is_tensor(self):
-        class _Value:
-            def __init__(self, type_proto):
-                self.type = type_proto
-
-        class _Graph:
-            input = [_Value(_FakeTypeProto("tensor"))]
-            output = [_Value(_FakeTypeProto("tensor"))]
-
-        self.assertFalse(rlb._graph_has_non_tensor_io(_Graph()))
+        self.assertEqual(rlb._type_proto_kind(_Type()), "map")
 
 
-class TestRuntimeSessionSequenceFallback(unittest.TestCase):
-    def test_runtime_session_rejects_sequence_output(self):
+class TestRuntimeSessionSequenceIO(unittest.TestCase):
+    def _run_with_kinds(self, out_value, input_kind, output_kind, inputs):
         helper = TestOnnxLightRuntimeSessionRunner()
-        out_value = np.array([1.5, 2.5], dtype=np.float32)
-        model, telemetry, modules = helper._install_fake_onnx_light(out_value)
-        # Turn the single graph output into a sequence-typed value so the
-        # RuntimeSession path must defer to the reference evaluator.
-        model.graph.output[0].type = _FakeTypeProto("sequence")
+        model, telemetry, modules = helper._install_fake_onnx_light(
+            out_value, input_kind=input_kind, output_kind=output_kind
+        )
 
         saved = {name: sys.modules.get(name) for name in modules}
         try:
             sys.modules.update(modules)
-            with self.assertRaises(ValueError):
-                rlb._make_onnx_light_runtime_session_runner(model)
+            runner = rlb._make_onnx_light_runtime_session_runner(model)
+            result = runner(inputs)
         finally:
             for name, mod in saved.items():
                 if mod is None:
                     sys.modules.pop(name, None)
                 else:
                     sys.modules[name] = mod
+        return result, telemetry
 
-        # The plan/session must not be built when the model is rejected early.
-        self.assertEqual(telemetry["plans"], 0)
-        self.assertEqual(telemetry["sessions"], 0)
+    def test_sequence_output_is_returned_as_list(self):
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        result, telemetry = self._run_with_kinds(
+            out_value, "tensor", "sequence", [np.array([1.0, 2.0], dtype=np.float32)]
+        )
+        # The single graph output is a sequence, so it is materialised as a
+        # Python list of numpy arrays rather than rejected.
+        self.assertIsInstance(result[0], list)
+        np.testing.assert_allclose(result[0][0], out_value)
+        self.assertEqual(telemetry["plans"], 1)
+        self.assertEqual(telemetry["sessions"], 1)
+
+    def test_sequence_input_is_fed_through_put_sequence(self):
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        seq_input = [
+            np.array([1.0, 2.0], dtype=np.float32),
+            np.array([3.0, 4.0], dtype=np.float32),
+        ]
+        result, telemetry = self._run_with_kinds(
+            out_value, "sequence", "sequence", [seq_input]
+        )
+        self.assertIsInstance(result[0], list)
+        np.testing.assert_allclose(result[0][0], out_value)
+
+    def test_map_output_is_returned(self):
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        result, _ = self._run_with_kinds(
+            out_value, "tensor", "map", [np.array([1.0, 2.0], dtype=np.float32)]
+        )
+        self.assertEqual(result[0], {1: 2})
 
 
 class TestBenchmarkBackends(unittest.TestCase):
