@@ -88,6 +88,25 @@ def _python_version_from_filename(filename: str) -> tuple[int, int] | None:
     return int(tag[0]), int(tag[1:])
 
 
+def latest_release_files(metadata: dict) -> list[dict]:
+    """Return the distribution files of the package's latest release.
+
+    The PyPI JSON API (``/pypi/<package>/json``) exposes the files belonging to
+    the version reported in ``info.version`` directly under the top-level
+    ``urls`` key. This is the canonical way to obtain the latest release's
+    artifacts. The ``releases`` mapping is keyed by the *raw* version strings
+    used at upload time, so ``releases[info.version]`` can come back empty when
+    ``info.version`` is normalised differently from the uploaded version (for
+    example ``1.22`` versus ``1.22.0``). ``urls`` is therefore preferred, with
+    ``releases[version]`` kept as a fallback for robustness.
+    """
+    files = metadata.get("urls")
+    if files:
+        return files
+    version = metadata.get("info", {}).get("version", "")
+    return metadata.get("releases", {}).get(version, [])
+
+
 def pick_latest_linux_wheel(files: Iterable[dict]) -> dict | None:
     """Pick the manylinux x86_64 wheel with the highest CPython version.
 
@@ -162,7 +181,7 @@ def build_row(
 ) -> dict[str, str]:
     """Build the CSV row for the latest release of ``package``."""
     version = metadata["info"]["version"]
-    files = metadata.get("releases", {}).get(version, [])
+    files = latest_release_files(metadata)
     wheel = pick_latest_linux_wheel(files)
     if wheel is None:
         raise RuntimeError(f"No manylinux x86_64 wheel found for {package} {version}.")
