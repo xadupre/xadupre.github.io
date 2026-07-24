@@ -167,6 +167,17 @@ table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
   font-size: 0.85em;
   margin-bottom: 0.4em;
 }
+.detail-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  color: #8b949e;
+  font-size: 0.82em;
+  margin-bottom: 0.5em;
+  cursor: pointer;
+  user-select: none;
+}
+.detail-filter input { cursor: pointer; }
 .detail-graph {
   margin-top: 0.8em;
   padding: 0.6em 0.8em;
@@ -415,24 +426,7 @@ function formatNodeOp(node) {
   return outputText ? (inputSig + " -> " + outputText) : inputSig;
 }
 
-function renderDetailFor(row) {
-  const wrap = document.createElement("div");
-  wrap.className = "detail-wrap";
-
-  if (row.error) {
-    const div = document.createElement("div");
-    div.className = "detail-error";
-    div.textContent = "Error: " + row.error;
-    wrap.appendChild(div);
-  }
-
-  if (row.missing_metadata) {
-    const div = document.createElement("div");
-    div.className = "detail-error";
-    div.textContent = "No shape tag metadata found: expected annotations are missing from the test case.";
-    wrap.appendChild(div);
-  }
-
+function buildNodeTable(nodes) {
   const table = document.createElement("table");
   table.className = "detail-table";
   const thead = document.createElement("thead");
@@ -446,7 +440,7 @@ function renderDetailFor(row) {
   table.appendChild(thead);
 
   const tbody = document.createElement("tbody");
-  for (const node of row.nodes || []) {
+  for (const node of nodes) {
     const expected = node.expected || {};
     const actual = node.actual || {};
     const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
@@ -505,28 +499,23 @@ function renderDetailFor(row) {
     });
   }
   table.appendChild(tbody);
-  wrap.appendChild(table);
+  return table;
+}
 
-  const values = row.values || [];
-  if (values.length) {
-    const valTitle = document.createElement("div");
-    valTitle.className = "detail-graph-title";
-    valTitle.style.marginTop = "0.8em";
-    valTitle.textContent = "Inputs / outputs / initializers / results";
-    wrap.appendChild(valTitle);
-    const valTable = document.createElement("table");
-    valTable.className = "detail-table";
-    const vHead = document.createElement("thead");
-    const vHeadRow = document.createElement("tr");
-    for (const label of ["name", "kind", "key", "expected", "actual", "match"]) {
-      const th = document.createElement("th");
-      th.textContent = label;
-      vHeadRow.appendChild(th);
-    }
-    vHead.appendChild(vHeadRow);
-    valTable.appendChild(vHead);
-    const vBody = document.createElement("tbody");
-    for (const val of values) {
+function buildValueTable(values) {
+  const valTable = document.createElement("table");
+  valTable.className = "detail-table";
+  const vHead = document.createElement("thead");
+  const vHeadRow = document.createElement("tr");
+  for (const label of ["name", "kind", "key", "expected", "actual", "match"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    vHeadRow.appendChild(th);
+  }
+  vHead.appendChild(vHeadRow);
+  valTable.appendChild(vHead);
+  const vBody = document.createElement("tbody");
+  for (const val of values) {
       const expected = val.expected || {};
       const actual = val.actual || {};
       const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
@@ -578,8 +567,81 @@ function renderDetailFor(row) {
       });
     }
     valTable.appendChild(vBody);
-    wrap.appendChild(valTable);
+  return valTable;
+}
+
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  if (row.error) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "Error: " + row.error;
+    wrap.appendChild(div);
   }
+
+  if (row.missing_metadata) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "No shape tag metadata found: expected annotations are missing from the test case.";
+    wrap.appendChild(div);
+  }
+
+  const allNodes = row.nodes || [];
+  const allValues = row.values || [];
+  const failingNodes = allNodes.filter(n => n && n.success === false);
+  const failingValues = allValues.filter(v => v && v.success === false);
+  const hasMismatch = failingNodes.length > 0 || failingValues.length > 0;
+
+  // When a test fails, the full per-node/per-value tables can hold hundreds
+  // of matching rows that bury the handful of mismatches. Default to showing
+  // only the mismatching rows so the failure is readable, while still keeping
+  // the table visible and letting the user reveal everything on demand.
+  const state = { onlyMismatches: hasMismatch };
+
+  const tablesWrap = document.createElement("div");
+
+  if (hasMismatch) {
+    const controls = document.createElement("label");
+    controls.className = "detail-filter";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.onlyMismatches;
+    checkbox.addEventListener("change", (event) => {
+      event.stopPropagation();
+      state.onlyMismatches = checkbox.checked;
+      renderTables();
+    });
+    controls.appendChild(checkbox);
+    controls.appendChild(document.createTextNode(" Show only mismatches"));
+    controls.addEventListener("click", (event) => event.stopPropagation());
+    wrap.appendChild(controls);
+  }
+
+  function renderTables() {
+    tablesWrap.innerHTML = "";
+    const nodes = state.onlyMismatches ? failingNodes : allNodes;
+    const values = state.onlyMismatches ? failingValues : allValues;
+
+    // Always keep a table on screen: render the node table unless we are
+    // filtering to mismatches and only the value table has rows to show.
+    if (nodes.length || !values.length) {
+      tablesWrap.appendChild(buildNodeTable(nodes));
+    }
+
+    if (values.length) {
+      const valTitle = document.createElement("div");
+      valTitle.className = "detail-graph-title";
+      valTitle.style.marginTop = "0.8em";
+      valTitle.textContent = "Inputs / outputs / initializers / results";
+      tablesWrap.appendChild(valTitle);
+      tablesWrap.appendChild(buildValueTable(values));
+    }
+  }
+
+  renderTables();
+  wrap.appendChild(tablesWrap);
 
   if (hasValidSvgGraph(row) || row.mermaid) {
     const graphWrap = document.createElement("div");
