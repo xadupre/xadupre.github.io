@@ -588,6 +588,94 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_reference_runner = saved_reference
 
 
+class _FakeTypeProto:
+    """Minimal ``TypeProto`` stand-in exposing a protobuf-like ``HasField``."""
+
+    def __init__(self, kind):
+        self._kind = kind  # "tensor", "sequence" or "map"
+
+    def HasField(self, field):
+        if field == "sequence_type":
+            return self._kind == "sequence"
+        if field == "map_type":
+            return self._kind == "map"
+        return False
+
+
+class TestNonTensorTypeDetection(unittest.TestCase):
+    def test_tensor_type_is_not_non_tensor(self):
+        self.assertFalse(rlb._type_proto_is_non_tensor(_FakeTypeProto("tensor")))
+
+    def test_sequence_type_is_non_tensor(self):
+        self.assertTrue(rlb._type_proto_is_non_tensor(_FakeTypeProto("sequence")))
+
+    def test_map_type_is_non_tensor(self):
+        self.assertTrue(rlb._type_proto_is_non_tensor(_FakeTypeProto("map")))
+
+    def test_none_type_is_not_non_tensor(self):
+        self.assertFalse(rlb._type_proto_is_non_tensor(None))
+
+    def test_has_method_fallback_detects_sequence(self):
+        class _Type:
+            @staticmethod
+            def has_sequence_type():
+                return True
+
+            @staticmethod
+            def has_map_type():
+                return False
+
+        self.assertTrue(rlb._type_proto_is_non_tensor(_Type()))
+
+    def test_graph_with_sequence_output_is_non_tensor(self):
+        class _Value:
+            def __init__(self, type_proto):
+                self.type = type_proto
+
+        class _Graph:
+            input = [_Value(_FakeTypeProto("tensor"))]
+            output = [_Value(_FakeTypeProto("sequence"))]
+
+        self.assertTrue(rlb._graph_has_non_tensor_io(_Graph()))
+
+    def test_graph_with_only_tensor_io_is_tensor(self):
+        class _Value:
+            def __init__(self, type_proto):
+                self.type = type_proto
+
+        class _Graph:
+            input = [_Value(_FakeTypeProto("tensor"))]
+            output = [_Value(_FakeTypeProto("tensor"))]
+
+        self.assertFalse(rlb._graph_has_non_tensor_io(_Graph()))
+
+
+class TestRuntimeSessionSequenceFallback(unittest.TestCase):
+    def test_runtime_session_rejects_sequence_output(self):
+        helper = TestOnnxLightRuntimeSessionRunner()
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        model, telemetry, modules = helper._install_fake_onnx_light(out_value)
+        # Turn the single graph output into a sequence-typed value so the
+        # RuntimeSession path must defer to the reference evaluator.
+        model.graph.output[0].type = _FakeTypeProto("sequence")
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            with self.assertRaises(ValueError):
+                rlb._make_onnx_light_runtime_session_runner(model)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # The plan/session must not be built when the model is rejected early.
+        self.assertEqual(telemetry["plans"], 0)
+        self.assertEqual(telemetry["sessions"], 0)
+
+
 class TestBenchmarkBackends(unittest.TestCase):
     def test_benchmark_backends_contains_ort_and_onnx_light(self):
         self.assertIn("onnxruntime", rlb.BENCHMARK_BACKENDS)

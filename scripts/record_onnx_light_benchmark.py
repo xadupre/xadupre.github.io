@@ -406,6 +406,40 @@ def _model_input_names(model) -> List[str]:
     return [i.name for i in model.graph.input if i.name not in initializer_names]
 
 
+def _type_proto_is_non_tensor(type_proto: Any) -> bool:
+    """Return ``True`` when ``type_proto`` is a ``sequence`` or ``map`` type.
+
+    The low-level ``RuntimeSession`` execution path exchanges plain tensors
+    with :class:`RuntimeContext` (``tensor_from_proto`` / ``ctx.get``), so it
+    cannot feed sequence/map inputs nor retrieve sequence/map outputs. Such
+    models must be routed to the ``ReferenceEvaluator`` instead, which handles
+    ``seq(T)`` values as Python ``list`` objects and ``map(K, V)`` values as
+    Python ``dict`` objects natively.
+    """
+    if type_proto is None:
+        return False
+    for field in ("sequence_type", "map_type"):
+        has_field = getattr(type_proto, "HasField", None)
+        if callable(has_field):
+            try:
+                if has_field(field):
+                    return True
+            except (ValueError, KeyError):
+                pass
+        method = getattr(type_proto, f"has_{field}", None)
+        if callable(method) and method():
+            return True
+    return False
+
+
+def _graph_has_non_tensor_io(graph) -> bool:
+    """Return ``True`` when any graph input or output is a sequence or map."""
+    for value_info in list(graph.input) + list(graph.output):
+        if _type_proto_is_non_tensor(getattr(value_info, "type", None)):
+            return True
+    return False
+
+
 def build_graph(model) -> Dict[str, Any]:
     """Return an SVG rendering of ``model``'s graph."""
     from onnx_light.tools import to_svg
@@ -537,6 +571,16 @@ def _make_onnx_light_runtime_session_runner(model) -> Callable[[List[Any]], List
         if opset.domain in ("", "ai.onnx"):
             version = int(opset.version)
             break
+
+    # The RuntimeSession path only exchanges plain tensors with the
+    # RuntimeContext, so sequence/map typed inputs or outputs cannot be fed or
+    # retrieved through it. Defer such models to the ReferenceEvaluator, which
+    # handles sequences and maps natively.
+    if _graph_has_non_tensor_io(lmodel.graph):
+        raise ValueError(
+            "model has sequence/map graph inputs or outputs; "
+            "falling back to the reference evaluator"
+        )
 
     initializers = list(lmodel.graph.initializer)
     initializer_names = {init.name for init in initializers}
