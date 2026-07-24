@@ -80,6 +80,33 @@ class TestRecordOnnxStats(unittest.TestCase):
         ]
         self.assertIsNone(ros.pick_latest_linux_wheel(files))
 
+    def test_latest_release_files_prefers_urls(self):
+        # ``urls`` holds the files of the version reported in ``info.version``
+        # and must be used in preference to the ``releases`` mapping.
+        metadata = {
+            "info": {"version": "1.22.0"},
+            "urls": [{"filename": "from-urls.whl"}],
+            "releases": {"1.22.0": [{"filename": "from-releases.whl"}]},
+        }
+        files = ros.latest_release_files(metadata)
+        self.assertEqual(files, [{"filename": "from-urls.whl"}])
+
+    def test_latest_release_files_falls_back_to_releases(self):
+        # When ``urls`` is missing or empty (e.g. an older cached payload or a
+        # normalised ``info.version`` mismatch), fall back to the ``releases``
+        # entry for the reported version.
+        metadata = {
+            "info": {"version": "1.22.0"},
+            "urls": [],
+            "releases": {"1.22.0": [{"filename": "from-releases.whl"}]},
+        }
+        files = ros.latest_release_files(metadata)
+        self.assertEqual(files, [{"filename": "from-releases.whl"}])
+
+    def test_latest_release_files_empty_when_nothing_available(self):
+        metadata = {"info": {"version": "1.22.0"}}
+        self.assertEqual(ros.latest_release_files(metadata), [])
+
     def test_append_row_creates_file_with_header(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = os.path.join(tmp, "onnx", "stats.csv")
