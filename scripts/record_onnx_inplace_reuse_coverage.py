@@ -383,7 +383,7 @@ def discover_inplace_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
 
 def run_inplace_analysis(model) -> Dict[str, Any]:
     """Run onnx-light's inplace metadata analysis on ``model``."""
-    from onnx_light.onnx_optim import shape_inference as si
+    from onnx_light.onnx_core import shape_inference as si
 
     work = _clone_model(model)
     for node in work.graph.node:
@@ -392,7 +392,7 @@ def run_inplace_analysis(model) -> Dict[str, Any]:
         _clear_node_metadata(vi)
 
     ctx = si.ShapesContext()
-    ctx.compute_shape_model(work)
+    si.compute_shape_model(ctx, work)
 
     inplace = si.ComputeContext()
     inplace.compute_inplace_reuse_graph(work.graph, ctx)
