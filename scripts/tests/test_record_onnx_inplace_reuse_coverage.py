@@ -494,6 +494,85 @@ class TestRecordOnnxInplaceReuseCoverage(unittest.TestCase):
         self.assertIn("test_tiny_llm", names)
         self.assertNotIn("test_no_meta", names)
 
+    def test_run_inplace_analysis_uses_onnx_core_module(self):
+        """``run_inplace_analysis`` imports ``onnx_light.onnx_core.shape_inference``
+        and drives it with the module-level ``compute_shape_model(ctx, model)``
+        API rather than the (non-existent) ``onnx_light.onnx_optim`` submodule.
+        """
+        import sys
+        import types
+
+        calls = []
+
+        class _FakeShapesContext:
+            pass
+
+        class _FakeComputeContext:
+            def __init__(self):
+                self.memory = [1, 2, 3]
+
+            def compute_inplace_reuse_graph(self, graph, ctx):
+                calls.append(("compute_inplace_reuse_graph", graph, ctx))
+
+            def write_to_metadata(self, graph):
+                calls.append(("write_to_metadata", graph))
+
+        def _fake_compute_shape_model(ctx, model):
+            calls.append(("compute_shape_model", ctx, model))
+
+        si = types.ModuleType("onnx_light.onnx_core.shape_inference")
+        si.ShapesContext = _FakeShapesContext
+        si.ComputeContext = _FakeComputeContext
+        si.compute_shape_model = _fake_compute_shape_model
+
+        core = types.ModuleType("onnx_light.onnx_core")
+        core.shape_inference = si
+
+        work = _FakeModelWithGraphInput([_FakeNode("Abs")], [])
+
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_core", core),
+            ("onnx_light.onnx_core.shape_inference", si),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        saved_clone = ric._clone_model
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            ric._clone_model = lambda model: work
+            result = ric.run_inplace_analysis(object())
+        finally:
+            ric._clone_model = saved_clone
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # ``compute_shape_model`` must be called as a module-level function with
+        # ``(ctx, model)`` and before the in-place reuse computation.
+        self.assertEqual(calls[0][0], "compute_shape_model")
+        self.assertIsInstance(calls[0][1], _FakeShapesContext)
+        self.assertIs(calls[0][2], work)
+        names = [c[0] for c in calls]
+        self.assertEqual(
+            names,
+            ["compute_shape_model", "compute_inplace_reuse_graph", "write_to_metadata"],
+        )
+        self.assertEqual(result["memory"], [1, 2, 3])
+
+
+class _FakeGraphWithInput:
+    def __init__(self, nodes, inputs):
+        self.node = nodes
+        self.input = inputs
+
+
+class _FakeModelWithGraphInput:
+    def __init__(self, nodes, inputs):
+        self.graph = _FakeGraphWithInput(nodes, inputs)
+
 
 if __name__ == "__main__":
     unittest.main()
