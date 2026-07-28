@@ -1,0 +1,88 @@
+name: DOC locodellm
+
+# Manually triggered workflow only. Only the repository owner (xadupre) is
+# allowed to actually run the build; any other actor will see the job skipped.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/locodellm to build"
+        required: false
+        default: "main"
+  schedule:
+    # Rebuild documentation biweekly (1st and 3rd Monday of each month) so it stays in sync with the source repository.
+    - cron: "37 7 1-7,15-21 * 1"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish documentation.
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Use a dedicated bot token (when available) so that the push
+          # below is allowed to bypass branch protection rules. Falls
+          # back to the default ``GITHUB_TOKEN`` when ``BOT_TOKEN`` is
+          # not configured.
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout locodellm
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/locodellm
+          ref: ${{ inputs.ref }}
+          path: locodellm
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install graphviz
+        uses: ts-graphviz/setup-graphviz@v2
+
+      - name: Install locodellm with doc dependencies
+        working-directory: locodellm
+        run: |
+          pip install -e ".[docs]"
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Build documentation
+        working-directory: locodellm
+        run: |
+          sphinx-build -b html docs docs/_build/html -j auto
+
+      - name: Copy documentation into site/docs/locodellm
+        run: |
+          rm -rf site/docs/locodellm
+          mkdir -p site/docs/locodellm
+          cp -r locodellm/docs/_build/html/. site/docs/locodellm/
+          # Disable Jekyll so that files/folders starting with "_" are served by GitHub Pages.
+          touch site/docs/locodellm/.nojekyll
+
+      - name: Commit and push updated documentation
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/locodellm
+          if git diff --cached --quiet; then
+            echo "No documentation changes to commit."
+          else
+            built_sha="$(git -C ../locodellm rev-parse HEAD)"
+            git commit -m "Update locodellm documentation (from ${built_sha})"
+            git push
+          fi
