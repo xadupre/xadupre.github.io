@@ -58,6 +58,21 @@ class TestShapeTagCoverageDashboard(unittest.TestCase):
         self.assertIn("val.kind", text)
         self.assertIn("val.name", text)
 
+    def test_summary_row_is_concise_and_grouped(self):
+        """summarizeRow must group mismatches into readable counts by kind
+        instead of dumping every mismatch, and hint users to expand the row."""
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        # Grouped count wording rather than a full concatenation of mismatches.
+        self.assertIn("value tag", text)
+        self.assertIn("node tag", text)
+        self.assertIn("mismatch", text)
+        # A hint that the full breakdown is available by expanding the row.
+        self.assertIn("Expand the row for the full list.", text)
+        # Mismatches are grouped by kind via a per-kind counter.
+        self.assertIn("byKind", text)
+
     def test_values_ratio_card_in_render_ratios(self):
         with open(PAGE, encoding="utf-8") as f:
             text = f.read()
