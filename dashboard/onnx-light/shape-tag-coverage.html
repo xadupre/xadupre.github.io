@@ -242,6 +242,8 @@ table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
     (<code>shape</code>, <code>axes</code> or <code>weight</code>) via
     <code>onnx_light.node_tag</code> and <code>onnx_light.value_tags</code>
     metadata keys.
+    The <em>details</em> column summarises why a test fails &mdash; how many
+    node and value tags were labelled differently from the expected annotations.
     Click a row to see the per-node metadata detail and the model graph.
   </p>
 </header>
@@ -269,7 +271,7 @@ table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
           <th data-key="nodes" class="center">nodes <span class="arrow"></span></th>
           <th data-key="metadata" class="center">metadata <span class="arrow"></span></th>
           <th data-key="values" class="center">values <span class="arrow"></span></th>
-          <th data-key="details">details <span class="arrow"></span></th>
+          <th data-key="details" title="Summary of why a test fails: how many node/value tags differ from the expected annotations. Expand a row for the full per-node and per-value breakdown.">details <span class="arrow"></span></th>
         </tr>
       </thead>
       <tbody id="rowsBody"></tbody>
@@ -313,39 +315,71 @@ function formatTestName(name) {
   return String(name || "");
 }
 
+function describeTagDiff(expected, actual) {
+  // Human-readable "key expected=… actual=…" list for the tag keys that
+  // differ between the expected and computed metadata of a single node/value.
+  const parts = [];
+  const exp = expected || {};
+  const act = actual || {};
+  const keys = Array.from(new Set([...Object.keys(exp), ...Object.keys(act)])).sort();
+  for (const key of keys) {
+    const a = exp[key];
+    const b = act[key];
+    if (a === b) continue;
+    const shortKey = key.replace("onnx_light.", "");
+    parts.push(shortKey + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
+  }
+  return parts.join("; ");
+}
+
+// The "details" column summarises why a test fails: how many node tags and
+// value tags the onnx_light algorithm labelled differently from the expected
+// annotations. A test such as the qwen graph has hundreds of mismatches, so we
+// report grouped counts plus one concrete example instead of dumping every
+// mismatch into the cell. The full per-node/per-value list is available by
+// expanding the row.
 function summarizeRow(row) {
   if (row.error) return row.error;
-  if (row.missing_metadata) return "no shape tag metadata found: expected annotations are missing from the test case";
-  const mismatches = [];
-  for (const node of row.nodes || []) {
-    if (node.success) continue;
-    const parts = [];
-    const expected = node.expected || {};
-    const actual = node.actual || {};
-    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
-    for (const key of keys) {
-      const a = expected[key];
-      const b = actual[key];
-      if (a === b) continue;
-      parts.push(key + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
-    }
-    mismatches.push("node " + node.index + (node.op_type ? " (" + node.op_type + ")" : "") + ": " + parts.join("; "));
+  if (row.missing_metadata) return "No shape tag metadata found: expected annotations are missing from the test case.";
+
+  const nodeMismatches = (row.nodes || []).filter(node => node && node.success === false);
+  const valueMismatches = (row.values || []).filter(val => val && val.success === false);
+  const total = nodeMismatches.length + valueMismatches.length;
+  if (!total) return "all metadata matched";
+
+  const groups = [];
+  if (nodeMismatches.length) {
+    groups.push(nodeMismatches.length + " node tag" + (nodeMismatches.length === 1 ? "" : "s"));
   }
-  for (const val of row.values || []) {
-    if (val.success) continue;
-    const parts = [];
-    const expected = val.expected || {};
-    const actual = val.actual || {};
-    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
-    for (const key of keys) {
-      const a = expected[key];
-      const b = actual[key];
-      if (a === b) continue;
-      parts.push(key + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
+  if (valueMismatches.length) {
+    const byKind = {};
+    for (const val of valueMismatches) {
+      const kind = val.kind || "value";
+      byKind[kind] = (byKind[kind] || 0) + 1;
     }
-    mismatches.push((val.kind || "value") + " " + (val.name || "?") + ": " + parts.join("; "));
+    const kindParts = Object.keys(byKind).sort()
+      .map(kind => byKind[kind] + " " + kind + (byKind[kind] === 1 ? "" : "s"));
+    groups.push(valueMismatches.length + " value tag" + (valueMismatches.length === 1 ? "" : "s") +
+      " (" + kindParts.join(", ") + ")");
   }
-  return mismatches.length ? mismatches.join(" | ") : "all metadata matched";
+
+  // One concrete example keeps the summary informative without flooding the
+  // cell with hundreds of rows.
+  let example = "";
+  const node = nodeMismatches[0];
+  const val = valueMismatches[0];
+  if (node) {
+    const diff = describeTagDiff(node.expected, node.actual);
+    example = "node " + node.index + (node.op_type ? " (" + node.op_type + ")" : "") + (diff ? ": " + diff : "");
+  } else if (val) {
+    const diff = describeTagDiff(val.expected, val.actual);
+    example = (val.kind || "value") + " " + (val.name || "?") + (diff ? ": " + diff : "");
+  }
+
+  let summary = total + " mismatch" + (total === 1 ? "" : "es") + " — " + groups.join(", ");
+  if (example) summary += ". e.g. " + example;
+  summary += ". Expand the row for the full list.";
+  return summary;
 }
 
 function escapeRegex(text) {
