@@ -427,31 +427,39 @@ of a <code class="docutils literal notranslate"><span class="pre">float32</span>
 <ul class="simple">
 <li><p><strong>onnxruntime</strong> - running a single-node <code class="docutils literal notranslate"><span class="pre">Abs</span></code> ONNX model.</p></li>
 <li><p><strong>onnx-light + onnx-light-cpu</strong> - the SIMD-accelerated <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel that
-<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> dispatches to. <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> picks the fastest kernel
-registered for the operator, and <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> provides exactly this
-kernel (<code class="docutils literal notranslate"><span class="pre">abs</span></code>) with runtime AVX-512/AVX2/AVX/SSE2 dispatch.</p></li>
+<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> dispatches to. The <em>same</em> ONNX model used by onnxruntime is
+evaluated by an <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> <code class="xref py py-class docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> on which the
+<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel has been registered
+(<a class="reference internal" href="../api.html#onnx_light_cpu.register_kernels" title="onnx_light_cpu.register_kernels"><code class="xref py py-func docutils literal notranslate"><span class="pre">onnx_light_cpu.register_kernels()</span></code></a>); the kernel provides runtime
+AVX-512/AVX2/AVX/SSE2 dispatch.</p></li>
 <li><p><strong>numpy</strong> - <code class="xref py py-func docutils literal notranslate"><span class="pre">numpy.abs()</span></code>, used as a reference baseline.</p></li>
 </ul>
 <p>The three back-ends compute the same result; the goal here is to see how their
-timings evolve as the array grows from a few hundred to several million
+timings evolve as the array grows from a few hundred to a hundred million
 elements.</p>
 <section id="setup">
 <h2>Setup<a class="headerlink" href="#setup" title="Link to this heading">#</a></h2>
-<p>Import the compiled <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> kernel and report which SIMD level the
-current CPU provides. The mapping is <code class="docutils literal notranslate"><span class="pre">0=None</span></code>, <code class="docutils literal notranslate"><span class="pre">1=SSE2</span></code>, <code class="docutils literal notranslate"><span class="pre">2=AVX</span></code>,
-<code class="docutils literal notranslate"><span class="pre">3=AVX2</span></code> and <code class="docutils literal notranslate"><span class="pre">4=AVX512</span></code>.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<p>Import the <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> registration helper and report which SIMD level
+the current CPU provides. The mapping is <code class="docutils literal notranslate"><span class="pre">0=None</span></code>, <code class="docutils literal notranslate"><span class="pre">1=SSE2</span></code>, <code class="docutils literal notranslate"><span class="pre">2=AVX</span></code>,
+<code class="docutils literal notranslate"><span class="pre">3=AVX2</span></code> and <code class="docutils literal notranslate"><span class="pre">4=AVX512</span></code>. <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> is not published on PyPI, so when
+it is not importable the example falls back to calling the compiled kernel
+directly; this keeps the documentation build working everywhere.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">importlib.util</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorProto</span><span class="p">,</span> <span class="n">helper</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_kernels</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="nb">abs</span><span class="p">,</span>
+    <span class="nb">abs</span> <span class="k">as</span> <span class="n">cpu_abs</span><span class="p">,</span>
     <span class="n">detect_simd_level</span><span class="p">,</span>
     <span class="n">has_cpu_kernels</span><span class="p">,</span>
 <span class="p">)</span>
+
+<span class="n">_HAS_ONNX_LIGHT</span> <span class="o">=</span> <span class="n">importlib</span><span class="o">.</span><span class="n">util</span><span class="o">.</span><span class="n">find_spec</span><span class="p">(</span><span class="s2">&quot;onnx_light&quot;</span><span class="p">)</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
 
 <span class="n">_SIMD_NAMES</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;scalar&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span> <span class="s2">&quot;SSE2&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">&quot;AVX&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="s2">&quot;AVX2&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span> <span class="s2">&quot;AVX-512&quot;</span><span class="p">}</span>
 
@@ -461,14 +469,15 @@ current CPU provides. The mapping is <code class="docutils literal notranslate">
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;CPU kernels available, SIMD level: </span><span class="si">{</span><span class="n">level</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">simd_name</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 3 (AVX2)
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 4 (AVX-512)
 </pre></div>
 </div>
 </section>
-<section id="build-the-onnx-model-for-onnxruntime">
-<h2>Build the ONNX model for onnxruntime<a class="headerlink" href="#build-the-onnx-model-for-onnxruntime" title="Link to this heading">#</a></h2>
+<section id="build-the-shared-onnx-model">
+<h2>Build the shared ONNX model<a class="headerlink" href="#build-the-shared-onnx-model" title="Link to this heading">#</a></h2>
 <p>A single <code class="docutils literal notranslate"><span class="pre">Abs</span></code> node operating on a 1-D <code class="docutils literal notranslate"><span class="pre">float32</span></code> tensor of dynamic length
-is enough to benchmark the runtime.</p>
+is enough to benchmark the runtimes. The exact same model is fed to
+onnxruntime and to onnx-light so the comparison is apples-to-apples.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">graph</span> <span class="o">=</span> <span class="n">helper</span><span class="o">.</span><span class="n">make_graph</span><span class="p">(</span>
     <span class="p">[</span><span class="n">helper</span><span class="o">.</span><span class="n">make_node</span><span class="p">(</span><span class="s2">&quot;Abs&quot;</span><span class="p">,</span> <span class="p">[</span><span class="s2">&quot;X&quot;</span><span class="p">],</span> <span class="p">[</span><span class="s2">&quot;Y&quot;</span><span class="p">])],</span>
     <span class="s2">&quot;abs_bench&quot;</span><span class="p">,</span>
@@ -481,6 +490,32 @@ is enough to benchmark the runtime.</p>
 <span class="n">session</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
     <span class="n">model</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">(),</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;CPUExecutionProvider&quot;</span><span class="p">]</span>
 <span class="p">)</span>
+</pre></div>
+</div>
+</section>
+<section id="build-the-onnx-light-evaluator">
+<h2>Build the onnx-light evaluator<a class="headerlink" href="#build-the-onnx-light-evaluator" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> evaluates the same model with its C++ runtime. Registering the
+onnx-light-cpu kernels overrides the built-in <code class="docutils literal notranslate"><span class="pre">Abs</span></code> so every <code class="docutils literal notranslate"><span class="pre">Abs</span></code> node in
+the model dispatches to the SIMD-accelerated kernel. When <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> is
+not installed the same kernel is invoked directly through the compiled
+extension so the benchmark still runs.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="n">_HAS_ONNX_LIGHT</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
+
+    <span class="n">light_session</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+    <span class="n">register_kernels</span><span class="p">(</span><span class="n">light_session</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;X&quot;</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+
+    <span class="n">light_label</span> <span class="o">=</span> <span class="s2">&quot;onnx-light + onnx-light-cpu&quot;</span>
+<span class="k">else</span><span class="p">:</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">):</span>
+        <span class="k">return</span> <span class="n">cpu_abs</span><span class="p">(</span><span class="n">inp</span><span class="p">)</span>
+
+    <span class="n">light_label</span> <span class="o">=</span> <span class="s2">&quot;onnx-light-cpu&quot;</span>
 </pre></div>
 </div>
 </section>
@@ -503,7 +538,7 @@ shrinks as the arrays grow so the whole benchmark stays fast.</p>
 <h2>Run the benchmark<a class="headerlink" href="#run-the-benchmark" title="Link to this heading">#</a></h2>
 <p>For every size the same input is fed to the three back-ends. The results are
 checked against <code class="xref py py-func docutils literal notranslate"><span class="pre">numpy.abs()</span></code> to make sure every implementation agrees.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">sizes</span> <span class="o">=</span> <span class="p">[</span><span class="mi">10</span><span class="o">**</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">8</span><span class="p">)]</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">sizes</span> <span class="o">=</span> <span class="p">[</span><span class="mi">10</span><span class="o">**</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">9</span><span class="p">)]</span>
 <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
 <span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
@@ -515,8 +550,8 @@ checked against <code class="xref py py-func docutils literal notranslate"><span
 
     <span class="n">numpy_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">repeat</span><span class="p">)</span>
 
-    <span class="n">cpu_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="nb">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">repeat</span><span class="p">)</span>
-    <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="nb">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
+    <span class="n">cpu_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">repeat</span><span class="p">)</span>
+    <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
 
     <span class="n">ort_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;X&quot;</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span> <span class="n">repeat</span><span class="p">)</span>
     <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;X&quot;</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
@@ -534,12 +569,13 @@ checked against <code class="xref py py-func docutils literal notranslate"><span
 <span class="n">ort_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=      100 | numpy=      1.08 us | onnx-light-cpu=      1.58 us | onnxruntime=      7.96 us
-size=     1000 | numpy=      1.48 us | onnx-light-cpu=      1.79 us | onnxruntime=      8.03 us
-size=    10000 | numpy=      2.46 us | onnx-light-cpu=      2.66 us | onnxruntime=      9.73 us
-size=   100000 | numpy=     17.00 us | onnx-light-cpu=     17.42 us | onnxruntime=     20.22 us
-size=  1000000 | numpy=    165.44 us | onnx-light-cpu=    171.49 us | onnxruntime=    176.53 us
-size= 10000000 | numpy=   3734.15 us | onnx-light-cpu=   3618.38 us | onnxruntime=   1855.32 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=      100 | numpy=      0.80 us | onnx-light-cpu=      1.23 us | onnxruntime=      5.57 us
+size=     1000 | numpy=      1.11 us | onnx-light-cpu=      1.37 us | onnxruntime=      5.68 us
+size=    10000 | numpy=      1.96 us | onnx-light-cpu=      2.03 us | onnxruntime=      6.74 us
+size=   100000 | numpy=     10.92 us | onnx-light-cpu=      8.99 us | onnxruntime=     10.54 us
+size=  1000000 | numpy=    104.09 us | onnx-light-cpu=    104.28 us | onnxruntime=     58.51 us
+size= 10000000 | numpy=   3543.24 us | onnx-light-cpu=   3420.85 us | onnxruntime=   1391.11 us
+size=100000000 | numpy=  32434.21 us | onnx-light-cpu=  30929.90 us | onnxruntime=  19875.90 us
 </pre></div>
 </div>
 </section>
@@ -557,7 +593,7 @@ second), which highlights the fixed per-call overhead at small sizes.</p>
     <span class="n">sizes</span><span class="p">,</span>
     <span class="n">cpu_times</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">,</span>
     <span class="s2">&quot;o-&quot;</span><span class="p">,</span>
-    <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onnx-light + onnx-light-cpu&quot;</span><span class="p">,</span>
+    <span class="n">label</span><span class="o">=</span><span class="n">light_label</span><span class="p">,</span>
     <span class="n">color</span><span class="o">=</span><span class="s2">&quot;#4a9eff&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">sizes</span><span class="p">,</span> <span class="n">ort_times</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">,</span> <span class="s2">&quot;o-&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onnxruntime&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;#f4a259&quot;</span><span class="p">)</span>
@@ -573,7 +609,7 @@ second), which highlights the fixed per-call overhead at small sizes.</p>
     <span class="n">sizes</span><span class="p">,</span>
     <span class="n">sizes</span> <span class="o">/</span> <span class="n">cpu_times</span><span class="p">,</span>
     <span class="s2">&quot;o-&quot;</span><span class="p">,</span>
-    <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onnx-light + onnx-light-cpu&quot;</span><span class="p">,</span>
+    <span class="n">label</span><span class="o">=</span><span class="n">light_label</span><span class="p">,</span>
     <span class="n">color</span><span class="o">=</span><span class="s2">&quot;#4a9eff&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">ax_tput</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">sizes</span><span class="p">,</span> <span class="n">sizes</span> <span class="o">/</span> <span class="n">ort_times</span><span class="p">,</span> <span class="s2">&quot;o-&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;onnxruntime&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;#f4a259&quot;</span><span class="p">)</span>
@@ -588,7 +624,7 @@ second), which highlights the fixed per-call overhead at small sizes.</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX2), Abs throughput" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.805 seconds)</p>
+<img src="../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX-512), Abs throughput" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.482 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-abs-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/29dcac8d7cec0c33ff7a15f3411d6f61/plot_abs_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_abs_benchmark.ipynb</span></code></a></p>
@@ -652,7 +688,8 @@ second), which highlights the fixed per-call overhead at small sizes.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#setup">Setup</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-the-onnx-model-for-onnxruntime">Build the ONNX model for onnxruntime</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-the-shared-onnx-model">Build the shared ONNX model</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-the-onnx-light-evaluator">Build the onnx-light evaluator</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#timing-helper">Timing helper</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run-the-benchmark">Run the benchmark</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#plot-the-timings">Plot the timings</a></li>
