@@ -36,7 +36,15 @@ class TestStringifyError(unittest.TestCase):
 
 
 class TestRowFromResults(unittest.TestCase):
-    def _make_results(self, ort_ok=True, light_ok=True, ort_avg=1.0, light_avg=0.5):
+    def _make_results(
+        self,
+        ort_ok=True,
+        light_ok=True,
+        ort_avg=1.0,
+        light_avg=0.5,
+        cpu_ok=True,
+        cpu_avg=0.25,
+    ):
         results = {}
         if ort_ok:
             results["onnxruntime"] = {
@@ -70,6 +78,23 @@ class TestRowFromResults(unittest.TestCase):
             results["onnx_light"] = {
                 "success": False,
                 "error": "light load error",
+                "error_step": "load",
+            }
+        if cpu_ok:
+            results["onnx_light_cpu"] = {
+                "success": True,
+                "error": "",
+                "error_step": "",
+                "avg_ms": cpu_avg,
+                "min_ms": cpu_avg * 0.9,
+                "max_ms": cpu_avg * 1.1,
+                "n_warmup": 3,
+                "n_measure": 10,
+            }
+        else:
+            results["onnx_light_cpu"] = {
+                "success": False,
+                "error": "cpu load error",
                 "error_step": "load",
             }
         return results
@@ -149,6 +174,28 @@ class TestRowFromResults(unittest.TestCase):
         row = rlb._row_from_results("test_relu", results)
         self.assertNotIn("onnxruntime_error_step", row)
         self.assertNotIn("onnx_light_error_step", row)
+
+    def test_speedup_cpu_computed_when_ort_and_cpu_succeed(self):
+        results = self._make_results(
+            ort_ok=True, light_ok=True, ort_avg=2.0, light_avg=1.0, cpu_avg=0.5
+        )
+        row = rlb._row_from_results("test_abs", results)
+        self.assertTrue(row["onnx_light_cpu_success"])
+        self.assertAlmostEqual(row["onnx_light_cpu_avg_ms"], 0.5)
+        # speedup_cpu = ort_avg / cpu_avg = 2.0 / 0.5 = 4.0
+        self.assertAlmostEqual(row["speedup_cpu"], 4.0)
+
+    def test_no_speedup_cpu_when_cpu_fails(self):
+        results = self._make_results(ort_ok=True, light_ok=True, cpu_ok=False)
+        row = rlb._row_from_results("test_abs", results)
+        self.assertFalse(row["onnx_light_cpu_success"])
+        self.assertNotIn("speedup_cpu", row)
+        self.assertIn("onnx_light_cpu_error", row)
+
+    def test_no_speedup_cpu_when_ort_fails(self):
+        results = self._make_results(ort_ok=False, light_ok=True, cpu_ok=True)
+        row = rlb._row_from_results("test_abs", results)
+        self.assertNotIn("speedup_cpu", row)
 
 
 class TestRunBenchmark(unittest.TestCase):
@@ -327,6 +374,12 @@ class TestBuildPayload(unittest.TestCase):
         self.assertEqual(summary["total"], 2)
         self.assertEqual(summary["both_succeeded"], 2)
         self.assertIn("avg_speedup", summary)
+        # The onnx-light-cpu backend is timed as well, so its summary and
+        # per-row speedup are present too.
+        self.assertEqual(summary["cpu_succeeded"], 2)
+        self.assertIn("avg_speedup_cpu", summary)
+        for row in payload["tests"]:
+            self.assertIn("speedup_cpu", row, msg=row["name"])
 
     def test_build_payload_limit(self):
         """The ``limit`` parameter caps the number of tests."""
@@ -436,7 +489,13 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
         import onnx
 
-        telemetry = {"plans": 0, "sessions": 0, "runs": 0, "registered": 0}
+        telemetry = {
+            "plans": 0,
+            "sessions": 0,
+            "runs": 0,
+            "registered": 0,
+            "registered_kernels": 0,
+        }
 
         def _type_for(kind):
             return None if kind == "tensor" else _FakeTypeProto(kind)
@@ -475,6 +534,7 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
                 self._store = {}
                 self._sequences = {}
                 self._maps = {}
+                self._custom_kernels = {}
 
             def set(self, name, tensor, kind=None):
                 self._store[name] = tensor
@@ -484,6 +544,13 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
             def get(self, name):
                 return self._store[name]
+
+            def put(self, name, tensor, kind=None):
+                self._store[name] = tensor
+
+            def register_custom_kernel(self, domain, op_type, fn):
+                telemetry["registered_kernels"] += 1
+                self._custom_kernels[(domain, op_type)] = fn
 
             def put_sequence(self, name, values):
                 self._sequences[name] = list(values)
@@ -612,6 +679,190 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
 
+    def test_cpu_runner_registers_custom_kernels_on_context(self):
+        """The onnx-light-cpu runner registers its kernels on every context."""
+        out_value = np.array([1.5, 2.5], dtype=np.float32)
+        model, telemetry, modules = self._install_fake_onnx_light(out_value)
+
+        provider_calls = {"n": 0}
+
+        def _provider(runtime, numpy_helper):
+            provider_calls["n"] += 1
+            return [("", "Abs", lambda node, ctx: None)]
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_runtime_session_runner(
+                model, custom_kernels_provider=_provider
+            )
+            runner([np.array([1.0, 2.0], dtype=np.float32)])
+            runner([np.array([3.0, 4.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # The provider is consulted once (at build time); its registration is
+        # reapplied to the fresh context on every run.
+        self.assertEqual(provider_calls["n"], 1)
+        self.assertEqual(telemetry["registered_kernels"], 2)
+
+    def test_make_onnx_light_cpu_runner_passes_provider(self):
+        saved_session = rlb._make_onnx_light_runtime_session_runner
+        captured = {}
+
+        def _fake(model, custom_kernels_provider=None):
+            captured["provider"] = custom_kernels_provider
+            return "runner"
+
+        try:
+            rlb._make_onnx_light_runtime_session_runner = _fake
+            result = rlb._make_onnx_light_cpu_runner(object())
+        finally:
+            rlb._make_onnx_light_runtime_session_runner = saved_session
+
+        self.assertEqual(result, "runner")
+        self.assertIs(
+            captured["provider"], rlb._onnx_light_cpu_kernel_registrations
+        )
+
+
+class TestOnnxLightCpuKernelRegistrations(unittest.TestCase):
+    """The onnx-light-cpu provider overrides Abs with the SIMD kernels."""
+
+    def _install_fake_cpu(self, has_kernels=True):
+        import types
+
+        calls = []
+
+        def _make(name):
+            def _kernel(inp, out):
+                calls.append(name)
+                out[:] = np.abs(inp)
+
+            return _kernel
+
+        cpukernels = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
+        cpukernels.abs_float32 = _make("float32")
+        cpukernels.abs_float64 = _make("float64")
+        cpukernels.abs_int32 = _make("int32")
+        cpukernels.abs_int64 = _make("int64")
+        cpukernels.detect_simd_level = lambda: 3
+        cpukernels.has_cpu_kernels = lambda: has_kernels
+
+        onnx_light_cpu = types.ModuleType("onnx_light_cpu")
+        onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        onnx_py._cpukernels = cpukernels
+        onnx_light_cpu.onnx_py = onnx_py
+
+        modules = {
+            "onnx_light_cpu": onnx_light_cpu,
+            "onnx_light_cpu.onnx_py": onnx_py,
+            "onnx_light_cpu.onnx_py._cpukernels": cpukernels,
+        }
+        return modules, calls
+
+    def _fake_runtime_and_helper(self):
+        import onnx
+
+        class _Tensor:
+            def __init__(self, arr):
+                self._arr = np.ascontiguousarray(arr)
+                self.data_type = int(onnx.TensorProto.FLOAT)
+                self.shape = self._arr.shape
+
+        class _Runtime:
+            @staticmethod
+            def tensor_to_numpy(t):
+                return t._arr.view(np.uint8)
+
+            @staticmethod
+            def tensor_from_proto(arr):
+                return _Tensor(arr)
+
+        class _Helper:
+            @staticmethod
+            def from_array(arr, name=None):
+                return arr
+
+        return _Runtime, _Helper, _Tensor
+
+    def test_returns_abs_registration(self):
+        modules, _ = self._install_fake_cpu()
+        runtime, helper, _ = self._fake_runtime_and_helper()
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            regs = rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(len(regs), 1)
+        domain, op_type, fn = regs[0]
+        self.assertEqual(domain, "")
+        self.assertEqual(op_type, "Abs")
+        self.assertTrue(callable(fn))
+
+    def test_abs_kernel_uses_cpu_and_writes_output(self):
+        import types
+
+        modules, calls = self._install_fake_cpu()
+        runtime, helper, tensor_cls = self._fake_runtime_and_helper()
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            regs = rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        _, _, fn = regs[0]
+
+        inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
+        store = {"x": tensor_cls(inp)}
+        captured = {}
+
+        class _Ctx:
+            def get(self, name):
+                return store[name]
+
+            def put(self, name, tensor, kind=None):
+                captured["name"] = name
+                captured["tensor"] = tensor
+                captured["kind"] = kind
+
+        node = types.SimpleNamespace(input=["x"], output=["y"])
+        fn(node, _Ctx())
+
+        self.assertEqual(calls, ["float32"])
+        self.assertEqual(captured["name"], "y")
+        np.testing.assert_allclose(captured["tensor"]._arr, np.abs(inp))
+
+    def test_raises_when_cpu_kernels_unavailable(self):
+        modules, _ = self._install_fake_cpu(has_kernels=False)
+        runtime, helper, _ = self._fake_runtime_and_helper()
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            with self.assertRaises(RuntimeError):
+                rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
 
 class _FakeTypeProto:
     """Minimal ``TypeProto`` stand-in exposing a protobuf-like ``HasField``."""
@@ -721,6 +972,7 @@ class TestBenchmarkBackends(unittest.TestCase):
     def test_benchmark_backends_contains_ort_and_onnx_light(self):
         self.assertIn("onnxruntime", rlb.BENCHMARK_BACKENDS)
         self.assertIn("onnx_light", rlb.BENCHMARK_BACKENDS)
+        self.assertIn("onnx_light_cpu", rlb.BENCHMARK_BACKENDS)
         self.assertNotIn("reference", rlb.BENCHMARK_BACKENDS)
 
     def test_runner_factories_match_benchmark_backends(self):
