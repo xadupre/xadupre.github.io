@@ -6,6 +6,7 @@ onnx-light-kernel-images
 
    getting_started
    kernels
+   auto_examples/index
    api
 
 .. include:: ../README.md
