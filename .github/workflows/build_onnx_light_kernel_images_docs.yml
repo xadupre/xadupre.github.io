@@ -52,17 +52,44 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install documentation dependencies
+      - name: Install onnx-light from the latest GitHub release wheel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The gallery example ``examples/plot_image_formats.py`` imports the
+          # onnx-light Python package (``onnx_light``). Building onnx-light from
+          # source is expensive, so install the most recent prebuilt CPython
+          # 3.12 manylinux wheel published on the onnx-light GitHub releases
+          # page. ``gh release download`` (without a tag) targets the latest
+          # release, and the glob keeps the glibc (manylinux) wheel rather than
+          # the musllinux one.
+          python -m pip install --upgrade pip
+          wheel_dir="$(mktemp -d)"
+          gh release download \
+            --repo xadupre/onnx-light \
+            --pattern 'onnx_light-*cp312-cp312*manylinux*x86_64*.whl' \
+            --dir "${wheel_dir}"
+          wheel="$(ls -1 "${wheel_dir}"/onnx_light-*.whl | sort -V | tail -n1)"
+          if [ -z "${wheel}" ]; then
+            echo "No onnx_light wheel found in the latest onnx-light release." >&2
+            exit 1
+          fi
+          echo "Installing ${wheel}"
+          pip install "${wheel}"
+
+      - name: Build and install onnx-light-kernel-images with doc dependencies
         working-directory: onnx-light-kernel-images
         run: |
-          # Install the documentation dependencies (mirroring the ``docs`` extra
-          # in pyproject.toml) rather than building the C++ package. The Sphinx
-          # configuration enables the ``sphinx_gallery`` extension and the
-          # gallery example relies on Pillow and matplotlib, so those must be
-          # available for ``sphinx-build`` to import the extensions and render
-          # the gallery.
-          pip install pydata-sphinx-theme "sphinx>=7" sphinx-copybutton \
-            sphinx-gallery myst-parser pillow matplotlib
+          # Build the compiled ImageDecoder kernels: the gallery example imports
+          # ``onnx_light_kernel_images.onnx_py._imgpykernels`` (a nanobind
+          # extension), so the package itself must be built and installed, not
+          # just its documentation dependencies. The prebuilt onnx-light C++ SDK
+          # archive required to compile the extension is fetched automatically by
+          # CMake (see the repository's CMakeLists.txt). The ``docs`` extra pulls
+          # in the Sphinx theme/extensions plus Pillow and matplotlib needed to
+          # render the gallery.
+          pip install scikit-build-core nanobind
+          pip install ".[docs]" -v
 
       - name: pip freeze
         run: pip freeze
