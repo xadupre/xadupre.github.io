@@ -265,7 +265,12 @@ table.benchmark tr.graph-row > td {
     the <em>average</em> time per dataset is reported.
     <strong>Speedup</strong> = <code>onnxruntime&nbsp;avg</code> /
     <code>onnx&#8209;light&nbsp;avg</code>:
-    values&nbsp;&gt;&nbsp;1 mean onnx&#8209;light is faster.
+    values&nbsp;&gt;&nbsp;1 mean onnx&#8209;light is faster. The
+    <code>onnx&#8209;light&nbsp;+&nbsp;cpu</code> column runs the same
+    onnx&#8209;light runtime with the
+    <a href="../../docs/onnx-light-cpu/index.html"><code>onnx&#8209;light&#8209;cpu</code></a>
+    SIMD kernels layered on top, and its speedup uses the same
+    <code>onnxruntime&nbsp;avg</code> baseline.
   </p>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -312,7 +317,9 @@ table.benchmark tr.graph-row > td {
           <th data-key="name">Test <span class="arrow"></span></th>
           <th data-key="onnxruntime_avg_ms" class="center"><code>onnxruntime</code> avg <span class="arrow"></span></th>
           <th data-key="onnx_light_avg_ms" class="center"><code>onnx-light</code> avg <span class="arrow"></span></th>
+          <th data-key="onnx_light_cpu_avg_ms" class="center"><code>onnx-light + cpu</code> avg <span class="arrow"></span></th>
           <th data-key="speedup" class="center">speedup <span class="arrow"></span></th>
+          <th data-key="speedup_cpu" class="center">speedup (cpu) <span class="arrow"></span></th>
           <th data-key="status" class="center">status <span class="arrow"></span></th>
         </tr>
       </thead>
@@ -404,6 +411,11 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   }
   addCard("faster", "onnx-light faster", String(nFaster), "of " + bothOk + " jointly successful");
   addCard("slower", "onnx-light slower", String(nSlower), "of " + bothOk + " jointly successful");
+  const avgSpeedupCpu = summary.avg_speedup_cpu;
+  if (avgSpeedupCpu !== undefined) {
+    const clsCpu = avgSpeedupCpu >= 1 ? "faster" : "slower";
+    addCard(clsCpu, "avg speedup (ort / light+cpu)", avgSpeedupCpu.toFixed(2) + "×", "onnx-light with onnx-light-cpu kernels vs onnxruntime");
+  }
   if (nWarmup !== undefined) addCard("neutral", "warm-up iterations", String(nWarmup), "not timed");
   if (nMeasure !== undefined) addCard("neutral", "timed iterations", String(nMeasure), "per test");
 }
@@ -587,7 +599,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 5;
+    td.colSpan = 7;
     td.textContent = state.regexError
       ? "Fix the filter regex to see results."
       : state.search ? "No test matches the current filter." : "No test recorded.";
@@ -634,6 +646,19 @@ function renderRows() {
         lightTd.className = "center status-fail";
       }
 
+      /* onnx-light + cpu avg */
+      const cpuTd = document.createElement("td");
+      cpuTd.className = "center time-light";
+      if (r.onnx_light_cpu_success && r.onnx_light_cpu_avg_ms !== undefined) {
+        cpuTd.textContent = formatMs(r.onnx_light_cpu_avg_ms);
+        cpuTd.title = "min: " + formatMs(r.onnx_light_cpu_min_ms) + "  max: " + formatMs(r.onnx_light_cpu_max_ms);
+      } else {
+        cpuTd.textContent = r.onnx_light_cpu_error
+          ? "\u2717 " + shortenError(r.onnx_light_cpu_error)
+          : "—";
+        cpuTd.className = "center status-fail";
+      }
+
       /* Speedup */
       const speedupTd = document.createElement("td");
       speedupTd.className = "center";
@@ -647,6 +672,19 @@ function renderRows() {
         speedupTd.classList.add("speedup-neutral");
       }
 
+      /* Speedup (onnx-light + cpu) */
+      const speedupCpuTd = document.createElement("td");
+      speedupCpuTd.className = "center";
+      if (r.speedup_cpu !== undefined) {
+        speedupCpuTd.textContent = formatSpeedup(r.speedup_cpu);
+        if (r.speedup_cpu > 1) speedupCpuTd.classList.add("speedup-faster");
+        else if (r.speedup_cpu < 1) speedupCpuTd.classList.add("speedup-slower");
+        else speedupCpuTd.classList.add("speedup-neutral");
+      } else {
+        speedupCpuTd.textContent = "—";
+        speedupCpuTd.classList.add("speedup-neutral");
+      }
+
       /* Status */
       const statusTd = document.createElement("td");
       statusTd.className = "center";
@@ -658,10 +696,12 @@ function renderRows() {
       tr.appendChild(nameTd);
       tr.appendChild(ortTd);
       tr.appendChild(lightTd);
+      tr.appendChild(cpuTd);
       tr.appendChild(speedupTd);
+      tr.appendChild(speedupCpuTd);
       tr.appendChild(statusTd);
 
-      const graphRow = appendGraphRow(tr, nameTd, r, 5);
+      const graphRow = appendGraphRow(tr, nameTd, r, 7);
       body.appendChild(tr);
       if (graphRow) body.appendChild(graphRow);
     }
