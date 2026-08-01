@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>How to use a custom kernel &#8212; onnx-light 0.1.9 documentation</title>
+    <title>How to use a custom kernel &#8212; onnx-light 0.1.11 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=8618f531"></script>
+    <script src="../_static/documentation_options.js?v=1e825a29"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.9 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.9 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.11 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.11 documentation - Home"/>
   
   
 </a></div>
@@ -414,6 +414,7 @@
 <li class="toctree-l2"><a class="reference internal" href="collect_backend_test_cases.html">How to collect backend test cases (by op type or by name)</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">How to use a custom kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="use_custom_shape_inference.html">How to use a custom optim shape inference function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="register_builtin_operators.html">How to register a built-in kernel, test case, shape inference, light op or peak memory function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="onnx_graph_manipulations.html">How to use ONNX graph manipulation helpers</a></li>
 </ul>
 </details></li>
@@ -614,10 +615,12 @@ C++</label><div class="sd-tab-content docutils">
 </div>
 </div>
 </div>
-<p>Registrations are stored on the evaluator and reapplied to the fresh
-<code class="xref py py-class docutils literal notranslate"><span class="pre">RuntimeContext</span></code> built on every
-<a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.run" title="onnx_light.onnx.reference.ReferenceEvaluator.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a> call, so the
-same evaluator can be reused across runs.</p>
+<p>Registrations are stored on the evaluator’s persistent
+<code class="xref py py-class docutils literal notranslate"><span class="pre">RuntimeContext</span></code>, so the same evaluator can be reused across runs.
+Registering or unregistering a kernel invalidates the evaluator’s cached
+runtime sessions; the next
+<a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.run" title="onnx_light.onnx.reference.ReferenceEvaluator.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a> recreates them
+and picks up the updated dispatch.</p>
 </section>
 <section id="override-a-built-in-kernel">
 <h2>Override a built-in kernel<a class="headerlink" href="#override-a-built-in-kernel" title="Link to this heading">#</a></h2>
@@ -642,9 +645,33 @@ Python</label><div class="sd-tab-content docutils">
 </pre></div>
 </div>
 </div>
-<input id="sd-tab-item-3" name="sd-tab-set-1" type="radio">
-<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-3">
-C++</label><div class="sd-tab-content docutils">
+</div>
+</section>
+<section id="unregister-a-kernel-and-restore-the-original">
+<h2>Unregister a kernel and restore the original<a class="headerlink" href="#unregister-a-kernel-and-restore-the-original" title="Link to this heading">#</a></h2>
+<p><a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.unregister_custom_kernel" title="onnx_light.onnx.reference.ReferenceEvaluator.unregister_custom_kernel"><code class="xref py py-meth docutils literal notranslate"><span class="pre">unregister_custom_kernel()</span></code></a>
+removes a previously registered custom kernel. Because custom kernels are
+consulted before the built-in
+<a class="reference internal" href="../api/cpp/onnx_core/runtime/kernel_dispatch_table.html#_CPPv4N10onnx_light4core7runtime19KernelDispatchTableEv" title="onnx_light::core::runtime::KernelDispatchTable"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::core::runtime::KernelDispatchTable()</span></code></a>, unregistering one
+that overrode a built-in operator restores the original built-in kernel on the
+next <a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.run" title="onnx_light.onnx.reference.ReferenceEvaluator.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a>. It returns
+<code class="docutils literal notranslate"><span class="pre">True</span></code> when a custom kernel was removed and <code class="docutils literal notranslate"><span class="pre">False</span></code> otherwise; the empty
+domain is normalised to <code class="docutils literal notranslate"><span class="pre">&quot;ai.onnx&quot;</span></code> just like when registering.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">sess</span><span class="o">.</span><span class="n">register_custom_kernel</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;Abs&quot;</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">node</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="o">-</span><span class="n">x</span><span class="p">)</span>
+<span class="c1"># ... use the negated override ...</span>
+<span class="n">sess</span><span class="o">.</span><span class="n">unregister_custom_kernel</span><span class="p">(</span><span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="s2">&quot;Abs&quot;</span><span class="p">)</span>  <span class="c1"># restores the built-in Abs</span>
+<span class="p">(</span><span class="n">y</span><span class="p">,)</span> <span class="o">=</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">2.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">3.0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)})</span>
+<span class="c1"># y == [1., 2., 3.] (built-in Abs again)</span>
+</pre></div>
+</div>
+<p>At the C++ / low-level binding layer the same is achieved with
+<a class="reference internal" href="../api/cpp/onnx_core/runtime/runtime_context.html#_CPPv4N10onnx_light4core7runtime14RuntimeContext22UnregisterCustomKernelERKNSt6stringERKNSt6stringE" title="onnx_light::core::runtime::RuntimeContext::UnregisterCustomKernel"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::core::runtime::RuntimeContext::UnregisterCustomKernel()</span></code></a>,
+which erases the custom entry so <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">RunNode()</span></code> falls back to the built-in
+kernel.</p>
+<blockquote>
+<div><div class="sd-tab-item docutils">
+<p class="sd-tab-label rubric">C++</p>
+<div class="sd-tab-content docutils">
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_light</span><span class="o">::</span><span class="nn">core</span><span class="o">::</span><span class="nn">runtime</span><span class="p">;</span>
 
 <span class="n">RuntimeContext</span><span class="w"> </span><span class="nf">rt</span><span class="p">(</span><span class="n">KernelContext</span><span class="p">(</span><span class="cm">/*opset=*/</span><span class="mi">18</span><span class="p">));</span>
@@ -668,6 +695,7 @@ C++</label><div class="sd-tab-content docutils">
 </div>
 </div>
 </div>
+</div></blockquote>
 </section>
 <section id="use-the-low-level-context-binding">
 <h2>Use the low-level context binding<a class="headerlink" href="#use-the-low-level-context-binding" title="Link to this heading">#</a></h2>
@@ -678,8 +706,8 @@ to read sequences or to participate in the event log — use the low-level
 tensor encoding/decoding.  This Python binding mirrors the C++
 <a class="reference internal" href="../api/cpp/onnx_core/runtime/runtime_context.html#_CPPv4N10onnx_light4core7runtime14RuntimeContextE" title="onnx_light::core::runtime::RuntimeContext"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::core::runtime::RuntimeContext</span></code></a> one-to-one.</p>
 <div class="sd-tab-set docutils">
-<input checked="checked" id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
-<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-4">
+<input checked="checked" id="sd-tab-item-3" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="python" for="sd-tab-item-3">
 Python</label><div class="sd-tab-content docutils">
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_py._onnxpykernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">runtime</span> <span class="k">as</span> <span class="n">rt</span>
 
@@ -692,12 +720,14 @@ Python</label><div class="sd-tab-content docutils">
     <span class="n">c</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">node</span><span class="o">.</span><span class="n">output</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="o">...</span><span class="p">,</span> <span class="s2">&quot;output&quot;</span><span class="p">)</span>
 
 <span class="n">ctx</span><span class="o">.</span><span class="n">register_custom_kernel</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;Scale&quot;</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
-<span class="n">rt</span><span class="o">.</span><span class="n">run_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span>
+<span class="n">rt</span><span class="o">.</span><span class="n">register_model_functions</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">ctx</span><span class="p">)</span>
+<span class="n">plan</span> <span class="o">=</span> <span class="n">ctx</span><span class="o">.</span><span class="n">get_execution_plan</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="p">)</span>
+<span class="n">rt</span><span class="o">.</span><span class="n">RuntimeSession</span><span class="p">(</span><span class="n">plan</span><span class="p">)</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">ctx</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
-<input id="sd-tab-item-5" name="sd-tab-set-2" type="radio">
-<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-5">
+<input id="sd-tab-item-4" name="sd-tab-set-2" type="radio">
+<label class="sd-tab-label" data-sync-group="tab" data-sync-id="cpp" for="sd-tab-item-4">
 C++</label><div class="sd-tab-content docutils">
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_core/runtime/run_nodes.h&quot;</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_core/runtime/runtime_context.h&quot;</span>
@@ -714,7 +744,9 @@ C++</label><div class="sd-tab-content docutils">
 <span class="w">      </span><span class="c1">// ...</span>
 <span class="w">      </span><span class="n">c</span><span class="p">.</span><span class="n">Put</span><span class="p">(</span><span class="n">node</span><span class="p">.</span><span class="n">output</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span><span class="w"> </span><span class="cm">/* Tensor */</span><span class="w"> </span><span class="p">...);</span>
 <span class="w">    </span><span class="p">});</span>
-<span class="n">RunModel</span><span class="p">(</span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">);</span>
+<span class="n">RegisterModelFunctions</span><span class="p">(</span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">ctx</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">plan</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ctx</span><span class="p">.</span><span class="n">GetExecutionPlan</span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">graph</span><span class="p">());</span>
+<span class="n">RuntimeSession</span><span class="p">(</span><span class="n">plan</span><span class="p">).</span><span class="n">Run</span><span class="p">(</span><span class="n">ctx</span><span class="p">);</span>
 </pre></div>
 </div>
 </div>
