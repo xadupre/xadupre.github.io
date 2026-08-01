@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Extend ReferenceEvaluator with a custom kernel &#8212; onnx-light 0.1.9 documentation</title>
+    <title>Extend ReferenceEvaluator with a custom kernel &#8212; onnx-light 0.1.11 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=8618f531"></script>
+    <script src="../_static/documentation_options.js?v=1e825a29"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.9 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.9 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.11 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.11 documentation - Home"/>
   
   
 </a></div>
@@ -418,6 +418,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../howto/collect_backend_test_cases.html">How to collect backend test cases (by op type or by name)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/use_custom_kernel.html">How to use a custom kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/use_custom_shape_inference.html">How to use a custom optim shape inference function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../howto/register_builtin_operators.html">How to register a built-in kernel, test case, shape inference, light op or peak memory function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/onnx_graph_manipulations.html">How to use ONNX graph manipulation helpers</a></li>
 </ul>
 </details></li>
@@ -546,9 +547,11 @@ hook makes it possible to plug a Python callable into the runtime without
 touching the C++ dispatch table. The callable is invoked as
 <code class="docutils literal notranslate"><span class="pre">fn(node,</span> <span class="pre">*numpy_inputs)</span></code> and must return either a single
 <a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)"><code class="xref py py-class docutils literal notranslate"><span class="pre">numpy.ndarray</span></code></a> or a tuple/list of arrays for multi-output ops.
-Registrations are reapplied to the fresh <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> built on
-every <a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.run" title="onnx_light.onnx.reference.ReferenceEvaluator.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a> call, so
-the same evaluator can be reused safely across runs.</p>
+Registrations are stored on the evaluator’s persistent <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>.
+Registering or unregistering
+a kernel invalidates cached runtime sessions, and the next
+<a class="reference internal" href="../api/python/onnx/reference.html#onnx_light.onnx.reference.ReferenceEvaluator.run" title="onnx_light.onnx.reference.ReferenceEvaluator.run"><code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code></a> call recreates
+them, so the same evaluator can be reused safely across runs.</p>
 <p>This example:</p>
 <ul class="simple">
 <li><p>parses a small ONNX graph that calls <code class="docutils literal notranslate"><span class="pre">my.domain.Scale</span></code> — an operator
@@ -598,8 +601,9 @@ a single array or a tuple/list of arrays — one per declared output.</p>
 <h2>Register and run<a class="headerlink" href="#register-and-run" title="Link to this heading">#</a></h2>
 <p><code class="xref py py-meth docutils literal notranslate"><span class="pre">register_custom_kernel()</span></code> is a wrapper around the low-level
 <code class="xref py py-meth docutils literal notranslate"><span class="pre">RuntimeContext.register_custom_kernel()</span></code> binding. The
-registration is stored on the evaluator and reapplied to every
-fresh <code class="xref py py-class docutils literal notranslate"><span class="pre">RuntimeContext</span></code> it builds, so the same evaluator can
+registration is stored on the evaluator. Registering or unregistering
+invalidates cached runtime sessions, and the next
+<code class="xref py py-meth docutils literal notranslate"><span class="pre">ReferenceEvaluator.run()</span></code> recreates them, so the same evaluator can
 run multiple inputs without re-registering.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">sess</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 <span class="n">sess</span><span class="o">.</span><span class="n">register_custom_kernel</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;Scale&quot;</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
@@ -648,7 +652,7 @@ including the matching low-level Python
 (<code class="docutils literal notranslate"><span class="pre">RuntimeContext.register_custom_kernel</span></code>) and C++
 (<code class="docutils literal notranslate"><span class="pre">RuntimeContext::RegisterCustomKernel</span></code>) entry points.</p></li>
 </ul>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.005 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.004 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-backend-plot-custom-kernel-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/f9b262e170ee44c3bf520af5d423b0dd/plot_custom_kernel.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_custom_kernel.ipynb</span></code></a></p>

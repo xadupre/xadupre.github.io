@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Standalone C++ example: load an ONNX file with onnx_light &#8212; onnx-light 0.1.9 documentation</title>
+    <title>Standalone C++ example: load an ONNX file with onnx_light &#8212; onnx-light 0.1.11 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=8618f531"></script>
+    <script src="../_static/documentation_options.js?v=1e825a29"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.9 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.9 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.11 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.11 documentation - Home"/>
   
   
 </a></div>
@@ -418,6 +418,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../howto/collect_backend_test_cases.html">How to collect backend test cases (by op type or by name)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/use_custom_kernel.html">How to use a custom kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/use_custom_shape_inference.html">How to use a custom optim shape inference function</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../howto/register_builtin_operators.html">How to register a built-in kernel, test case, shape inference, light op or peak memory function</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../howto/onnx_graph_manipulations.html">How to use ONNX graph manipulation helpers</a></li>
 </ul>
 </details></li>
@@ -577,9 +578,17 @@ optional <code class="docutils literal notranslate"><span class="pre">nocopy</sp
 </div>
 <p>Example output:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Loaded: path/to/model.onnx
+  File size (MB)   : 42.000
+  Iterations       : 10
+  Num threads      : 1
+  Copy mode        : default
+  Touch pages      : false
+  Total load (ms)  : 53.210
   Average load (ms): 5.321
+  Median load (ms) : 5.300
   Min load (ms)    : 5.002
   Max load (ms)    : 5.889
+  Std load (ms)    : 0.250
   IR version       : 9
   Producer name    : my_framework
   Graph name       : my_graph
@@ -611,11 +620,12 @@ messages and does not need operator-aware APIs:</p>
 </section>
 <section id="main-cc">
 <h2>main.cc<a class="headerlink" href="#main-cc" title="Link to this heading">#</a></h2>
-<p>The program opens the ONNX file with <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::utils::FileStream</span></code>,
-parses it with <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::ParseModelProtoFromStream()</span></code>, reports parse-time
-statistics from repeated in-process iterations, and prints model metadata.
-File-not-found and parse errors are caught and reported to <code class="docutils literal notranslate"><span class="pre">stderr</span></code>.
-Before timing, the program tunes the glibc allocator
+<p>The program opens the ONNX file with <a class="reference internal" href="../api/cpp/onnx_proto/stream.html#_CPPv4N10onnx_light5utils14MmapFileStreamE" title="onnx_light::utils::MmapFileStream"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::utils::MmapFileStream</span></code></a>
+(the default fast path) or <a class="reference internal" href="../api/cpp/onnx_proto/stream.html#_CPPv4N10onnx_light5utils10FileStreamE" title="onnx_light::utils::FileStream"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::utils::FileStream</span></code></a> (for the
+<code class="docutils literal notranslate"><span class="pre">nocopy</span></code> mode), parses it with <a class="reference internal" href="../api/cpp/onnx_proto/onnx_helper.html#_CPPv4N10onnx_light25ParseModelProtoFromStreamER10ModelProtoRN5utils12BinaryStreamER12ParseOptionsb" title="onnx_light::ParseModelProtoFromStream"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::ParseModelProtoFromStream()</span></code></a>,
+reports parse-time statistics from repeated in-process iterations, and prints
+model metadata. File-not-found and parse errors are caught and reported to
+<code class="docutils literal notranslate"><span class="pre">stderr</span></code>. Before timing, the program tunes the glibc allocator
 (<code class="docutils literal notranslate"><span class="pre">mallopt(M_TRIM_THRESHOLD,</span> <span class="pre">-1)</span></code> and <code class="docutils literal notranslate"><span class="pre">mallopt(M_MMAP_MAX,</span> <span class="pre">0)</span></code>) so that the
 large per-tensor <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> buffers freed at the end of each iteration are
 kept in the allocator arena for reuse instead of being returned to the OS.
@@ -623,15 +633,17 @@ Without this, every iteration re-<code class="docutils literal notranslate"><spa
 kernel’s page zero-fill cost on first touch, which dominates the measurement
 and makes the short-lived executable look several times slower than the
 equivalent in-process Python loop (whose long-lived heap already retains the
-freed blocks).
-<code class="docutils literal notranslate"><span class="pre">FileStream</span></code> reads the file sequentially using a buffered read-ahead approach:</p>
+freed blocks). A warm-up iteration is also executed before timing to avoid
+cold-cache effects. An abbreviated illustration of the core parse-and-print
+pattern:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx.h&quot;</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_helper.h&quot;</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;stream.h&quot;</span>
 
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;iostream&gt;</span>
-<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;stdexcept&gt;</span>
 <span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;string&gt;</span>
+
+<span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_light</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">ONNX_LIGHT_NAMESPACE</span><span class="p">;</span>
 
 <span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">argc</span><span class="p">,</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="n">argv</span><span class="p">[])</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">argc</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">2</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
@@ -641,11 +653,11 @@ freed blocks).
 
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">file_path</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">];</span>
 
-<span class="w">  </span><span class="n">onnx</span><span class="o">::</span><span class="n">ModelProto</span><span class="w"> </span><span class="n">model</span><span class="p">;</span>
+<span class="w">  </span><span class="n">onnx_light</span><span class="o">::</span><span class="n">ModelProto</span><span class="w"> </span><span class="n">model</span><span class="p">;</span>
 <span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="n">onnx</span><span class="o">::</span><span class="n">utils</span><span class="o">::</span><span class="n">FileStream</span><span class="w"> </span><span class="n">stream</span><span class="p">(</span><span class="n">file_path</span><span class="p">);</span>
-<span class="w">    </span><span class="n">onnx</span><span class="o">::</span><span class="n">ParseOptions</span><span class="w"> </span><span class="n">opts</span><span class="p">;</span>
-<span class="w">    </span><span class="n">onnx</span><span class="o">::</span><span class="n">ParseModelProtoFromStream</span><span class="p">(</span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">opts</span><span class="p">);</span>
+<span class="w">    </span><span class="n">onnx_light</span><span class="o">::</span><span class="n">utils</span><span class="o">::</span><span class="n">MmapFileStream</span><span class="w"> </span><span class="n">stream</span><span class="p">(</span><span class="n">file_path</span><span class="p">);</span>
+<span class="w">    </span><span class="n">onnx_light</span><span class="o">::</span><span class="n">ParseOptions</span><span class="w"> </span><span class="n">opts</span><span class="p">;</span>
+<span class="w">    </span><span class="n">onnx_light</span><span class="o">::</span><span class="n">ParseModelProtoFromStream</span><span class="p">(</span><span class="n">model</span><span class="p">,</span><span class="w"> </span><span class="n">stream</span><span class="p">,</span><span class="w"> </span><span class="n">opts</span><span class="p">);</span>
 <span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exception</span><span class="w"> </span><span class="o">&amp;</span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cerr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Error loading &#39;&quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">file_path</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;&#39;: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="n">what</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 <span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
@@ -654,17 +666,17 @@ freed blocks).
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;Loaded: &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">file_path</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">has_ir_version</span><span class="p">())</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  IR version   : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_ir_version</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  IR version       : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_ir_version</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">has_producer_name</span><span class="p">())</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Producer     : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_producer_name</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Producer name    : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_producer_name</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">model</span><span class="p">.</span><span class="n">has_graph</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">onnx</span><span class="o">::</span><span class="n">GraphProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">graph</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_graph</span><span class="p">();</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Graph name   : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_name</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Nodes        : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_node</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Inputs       : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_input</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Outputs      : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_output</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
-<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Initializers : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_initializer</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">onnx_light</span><span class="o">::</span><span class="n">GraphProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">graph</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">model</span><span class="p">.</span><span class="n">ref_graph</span><span class="p">();</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Graph name       : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_name</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Nodes            : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_node</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Inputs           : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_input</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Outputs          : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_output</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;  Initializers     : &quot;</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">ref_initializer</span><span class="p">().</span><span class="n">size</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="s">&quot;</span><span class="se">\n</span><span class="s">&quot;</span><span class="p">;</span>
 <span class="w">  </span><span class="p">}</span>
 
 <span class="w">  </span><span class="k">return</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
@@ -675,23 +687,22 @@ freed blocks).
 <section id="key-api-types">
 <h2>Key API types<a class="headerlink" href="#key-api-types" title="Link to this heading">#</a></h2>
 <dl class="simple">
-<dt><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::utils::FileStream</span></code></dt><dd><p>Buffered binary input stream.  Constructed with the path to the <code class="docutils literal notranslate"><span class="pre">.onnx</span></code>
-file; throws <code class="docutils literal notranslate"><span class="pre">std::runtime_error</span></code> if the file cannot be opened.  Uses a
-read-ahead buffer and supports optional parallel tensor loading via an
-internal thread pool.  Also serves as the base class for
-<code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::utils::TwoFilesStream</span></code>.</p>
+<dt><a class="reference internal" href="../api/cpp/onnx_proto/stream.html#_CPPv4N10onnx_light5utils14MmapFileStreamE" title="onnx_light::utils::MmapFileStream"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::utils::MmapFileStream</span></code></a></dt><dd><p>Memory-mapped binary input stream.  Used as the default stream for fast
+single-file loads; falls back to a <code class="docutils literal notranslate"><span class="pre">FileStream</span></code>-backed path when
+<code class="docutils literal notranslate"><span class="pre">no_copy=true</span></code> is requested.  Also serves as the base class for the
+external-data stream <a class="reference internal" href="../api/cpp/onnx_proto/stream.html#_CPPv4N10onnx_light5utils14TwoFilesStreamE" title="onnx_light::utils::TwoFilesStream"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::utils::TwoFilesStream</span></code></a>.</p>
 </dd>
-<dt><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::ParseOptions</span></code></dt><dd><p>Controls parsing behaviour.  Set <code class="docutils literal notranslate"><span class="pre">num_threads</span> <span class="pre">=</span> <span class="pre">N</span></code> (with <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>,
+<dt><a class="reference internal" href="../api/cpp/onnx_proto/stream_class.html#_CPPv4N10onnx_light12ParseOptionsE" title="onnx_light::ParseOptions"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::ParseOptions</span></code></a></dt><dd><p>Controls parsing behaviour.  Set <code class="docutils literal notranslate"><span class="pre">num_threads</span> <span class="pre">=</span> <span class="pre">N</span></code> (with <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>,
 or a negative value to use the number of CPU cores) to enable parallel
 tensor loading across <em>N</em> threads
 (useful for large models with many initializers).</p>
 </dd>
-<dt><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx::ParseModelProtoFromStream()</span></code></dt><dd><p>Parses the binary protobuf stream into a <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::ModelProto</span></code>.
+<dt><a class="reference internal" href="../api/cpp/onnx_proto/onnx_helper.html#_CPPv4N10onnx_light25ParseModelProtoFromStreamER10ModelProtoRN5utils12BinaryStreamER12ParseOptionsb" title="onnx_light::ParseModelProtoFromStream"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::ParseModelProtoFromStream()</span></code></a></dt><dd><p>Parses the binary protobuf stream into a <a class="reference internal" href="../api/cpp/onnx_proto/onnx.html#_CPPv4N10onnx_light10ModelProtoE" title="onnx_light::ModelProto"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::ModelProto</span></code></a>.
 Handles both single-file models and models with external data (via
-<code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::utils::TwoFilesStream</span></code>).</p>
+<a class="reference internal" href="../api/cpp/onnx_proto/stream.html#_CPPv4N10onnx_light5utils14TwoFilesStreamE" title="onnx_light::utils::TwoFilesStream"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::utils::TwoFilesStream</span></code></a>).</p>
 </dd>
-<dt><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::ModelProto</span></code></dt><dd><p>Top-level ONNX model container.  Access the embedded graph with
-<code class="docutils literal notranslate"><span class="pre">model.ref_graph()</span></code> (returns <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx::GraphProto</span></code>).</p>
+<dt><a class="reference internal" href="../api/cpp/onnx_proto/onnx.html#_CPPv4N10onnx_light10ModelProtoE" title="onnx_light::ModelProto"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::ModelProto</span></code></a></dt><dd><p>Top-level ONNX model container.  Access the embedded graph with
+<code class="docutils literal notranslate"><span class="pre">model.ref_graph()</span></code> (returns <a class="reference internal" href="../api/cpp/onnx_proto/onnx.html#_CPPv4N10onnx_light10GraphProtoE" title="onnx_light::GraphProto"><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::GraphProto</span></code></a>).</p>
 </dd>
 </dl>
 </section>

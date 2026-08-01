@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>How the C++ libraries are split &#8212; onnx-light 0.1.9 documentation</title>
+    <title>How the C++ libraries are split &#8212; onnx-light 0.1.11 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=8618f531"></script>
+    <script src="../_static/documentation_options.js?v=1e825a29"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.9 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.9 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.11 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.11 documentation - Home"/>
   
   
 </a></div>
@@ -566,9 +566,83 @@ ONNX graphs (<code class="docutils literal notranslate"><span class="pre">Gradie
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> and <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> it belongs to the
 extended build variant and is only built when
 <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_KERNELS=ON</span></code>.</p>
+<section id="core-extension-registration-pattern-examples">
+<h2>Core/extension registration pattern (examples)<a class="headerlink" href="#core-extension-registration-pattern-examples" title="Link to this heading">#</a></h2>
+<p>The same design pattern is reused across shape inference, peak-memory
+estimation, kernels, backend tests, and operator schemas:
+<code class="docutils literal notranslate"><span class="pre">onnx_core</span></code> defines the generic types / registries / dispatch APIs, while
+the concrete ONNX operator implementations live in sibling libraries
+(<code class="docutils literal notranslate"><span class="pre">onnx_extensions</span></code> and <code class="docutils literal notranslate"><span class="pre">onnx_op</span></code>) and are wired in explicitly.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 20.0%" />
+<col style="width: 40.0%" />
+<col style="width: 40.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Feature</p></th>
+<th class="head"><p>Core side (mechanism only)</p></th>
+<th class="head"><p>Extension side (concrete implementations)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Shape inference</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/shapes/dispatch_table.h</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">ComputeShapeFn</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterComputeShapeFn</span></code> /
+<code class="docutils literal notranslate"><span class="pre">DispatchTable</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/shapes/dispatch_table.cc</span></code> builds
+<code class="docutils literal notranslate"><span class="pre">BuiltinShapeFunctions()</span></code> and registers them through
+<code class="docutils literal notranslate"><span class="pre">RegisterShapeFunctions()</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Peak memory</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/shapes/dispatch_table.h</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">ComputePeakMemoryFn</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterComputePeakMemoryFn</span></code> /
+<code class="docutils literal notranslate"><span class="pre">ComputePeakMemory</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/shapes/dispatch_table.cc</span></code> builds
+<code class="docutils literal notranslate"><span class="pre">BuiltinPeakMemoryFunctions()</span></code> and registers them through
+<code class="docutils literal notranslate"><span class="pre">RegisterPeakMemoryFunctions()</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Runtime kernels</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/runtime/kernel_dispatch_table.h</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">NodeKernelFn</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterKernelFn</span></code> / <code class="docutils literal notranslate"><span class="pre">KernelDispatchTable</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/kernels/kernel_dispatch_table.cc</span></code> builds
+<code class="docutils literal notranslate"><span class="pre">BuiltinKernelFunctions()</span></code> and registers them through
+<code class="docutils literal notranslate"><span class="pre">RegisterKernelFunctions()</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Backend tests</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/backend_test/test_case_registry.h/.cc</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">TestCasesCollectorFn</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterTestCasesCollector</span></code> /
+<code class="docutils literal notranslate"><span class="pre">GetRegisteredCollectors</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/backend_test/collect_test_cases.cc</span></code> registers
+every category collector and implements <code class="docutils literal notranslate"><span class="pre">CollectTestCases</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Light operator schema</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/light_op_schema/light_op_schema.h</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code> and related schema data structures.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_op/operator_sets*.cc</span></code> implements per-domain schema history,
+and <code class="docutils literal notranslate"><span class="pre">onnx_op/operator_sets.cc</span></code> aggregates them through
+<code class="docutils literal notranslate"><span class="pre">GetAllOnnxOpSchemasWithHistory</span></code>.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For the first three rows above, explicit registration keeps <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>
+independent from the extension libraries:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// shape inference + peak memory</span>
+<span class="n">onnx_shapes</span><span class="o">::</span><span class="n">RegisterShapeFunctions</span><span class="p">();</span>
+<span class="n">onnx_shapes</span><span class="o">::</span><span class="n">RegisterPeakMemoryFunctions</span><span class="p">();</span>
+
+<span class="c1">// runtime kernels</span>
+<span class="n">onnx_kernels</span><span class="o">::</span><span class="n">RegisterKernelFunctions</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>This means a downstream binary can keep linking minimal. If it never calls
+shape inference, peak-memory estimation, runtime execution, or backend-test
+collection, it does not need to link the corresponding extension library.</p>
 <p>When installed (<code class="docutils literal notranslate"><span class="pre">cmake</span> <span class="pre">--install</span></code>) all libraries are exported under the
 <code class="docutils literal notranslate"><span class="pre">onnx_light::</span></code> namespace and can be consumed individually through
 <code class="docutils literal notranslate"><span class="pre">find_package(onnx_light)</span></code>.</p>
+</section>
 <section id="summary-of-each-library">
 <h2>Summary of each library<a class="headerlink" href="#summary-of-each-library" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -788,6 +862,7 @@ C++ packaging and of the shared <code class="docutils literal notranslate"><span
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#core-extension-registration-pattern-examples">Core/extension registration pattern (examples)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#summary-of-each-library">Summary of each library</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-to-link-for-a-given-use-case">What to link for a given use case</a></li>
 </ul>
