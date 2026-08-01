@@ -97,10 +97,12 @@ back through :cpp:func:`onnx_light::core::runtime::RuntimeContext::Put`.
           // node has op_type="Scale", domain="my.domain", input "x", output "y".
           RunNode(node, rt);  // y == [3., 6., 9.]
 
-Registrations are stored on the evaluator and reapplied to the fresh
-:class:`RuntimeContext` built on every
-:py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.run` call, so the
-same evaluator can be reused across runs.
+Registrations are stored on the evaluator's persistent
+:class:`RuntimeContext`, so the same evaluator can be reused across runs.
+Registering or unregistering a kernel invalidates the evaluator's cached
+runtime sessions; the next
+:py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.run` recreates them
+and picks up the updated dispatch.
 
 Override a built-in kernel
 --------------------------
@@ -127,6 +129,31 @@ kernel without patching the C++ runtime.
           sess.register_custom_kernel("", "Abs", lambda node, x: -x)
           (y,) = sess.run(None, {"x": np.array([-1.0, -2.0, -3.0], dtype=np.float32)})
           # Abs replaced by negation: y == [1., 2., 3.]
+
+Unregister a kernel and restore the original
+--------------------------------------------
+
+:py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.unregister_custom_kernel`
+removes a previously registered custom kernel. Because custom kernels are
+consulted before the built-in
+:cpp:func:`onnx_light::core::runtime::KernelDispatchTable`, unregistering one
+that overrode a built-in operator restores the original built-in kernel on the
+next :py:meth:`~onnx_light.onnx.reference.ReferenceEvaluator.run`. It returns
+``True`` when a custom kernel was removed and ``False`` otherwise; the empty
+domain is normalised to ``"ai.onnx"`` just like when registering.
+
+.. code-block:: python
+
+    sess.register_custom_kernel("", "Abs", lambda node, x: -x)
+    # ... use the negated override ...
+    sess.unregister_custom_kernel("", "Abs")  # restores the built-in Abs
+    (y,) = sess.run(None, {"x": np.array([-1.0, -2.0, -3.0], dtype=np.float32)})
+    # y == [1., 2., 3.] (built-in Abs again)
+
+At the C++ / low-level binding layer the same is achieved with
+:cpp:func:`onnx_light::core::runtime::RuntimeContext::UnregisterCustomKernel`,
+which erases the custom entry so :cpp:func:`RunNode` falls back to the built-in
+kernel.
 
    .. tab-item:: C++
       :sync: cpp
@@ -181,7 +208,9 @@ tensor encoding/decoding.  This Python binding mirrors the C++
               c.put(str(node.output[0]), ..., "output")
 
           ctx.register_custom_kernel("my.domain", "Scale", scale)
-          rt.run_model(model, ctx)
+          rt.register_model_functions(model, ctx)
+          plan = ctx.get_execution_plan(model.graph)
+          rt.RuntimeSession(plan).run(ctx)
 
    .. tab-item:: C++
       :sync: cpp
@@ -203,7 +232,9 @@ tensor encoding/decoding.  This Python binding mirrors the C++
                 // ...
                 c.Put(node.output(0), /* Tensor */ ...);
               });
-          RunModel(model, ctx);
+          RegisterModelFunctions(model, ctx);
+          const auto &plan = ctx.GetExecutionPlan(model.graph());
+          RuntimeSession(plan).Run(ctx);
 
 The low-level binding and the C++ tab above are two faces of the same
 :cpp:func:`onnx_light::core::runtime::RuntimeContext::RegisterCustomKernel` entry
