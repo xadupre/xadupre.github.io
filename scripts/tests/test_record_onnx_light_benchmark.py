@@ -679,146 +679,113 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
 
-    def test_cpu_runner_registers_custom_kernels_on_context(self):
-        """The onnx-light-cpu runner registers its kernels on every context."""
-        out_value = np.array([1.5, 2.5], dtype=np.float32)
-        model, telemetry, modules = self._install_fake_onnx_light(out_value)
+    def test_make_onnx_light_cpu_runner_uses_reference_evaluator_with_register(self):
+        """The cpu runner reuses the reference runner, passing register_kernels."""
+        import types
 
-        provider_calls = {"n": 0}
-
-        def _provider(runtime, numpy_helper):
-            provider_calls["n"] += 1
-            return [("", "Abs", lambda node, ctx: None)]
-
-        saved = {name: sys.modules.get(name) for name in modules}
-        try:
-            sys.modules.update(modules)
-            runner = rlb._make_onnx_light_runtime_session_runner(
-                model, custom_kernels_provider=_provider
-            )
-            runner([np.array([1.0, 2.0], dtype=np.float32)])
-            runner([np.array([3.0, 4.0], dtype=np.float32)])
-        finally:
-            for name, mod in saved.items():
-                if mod is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = mod
-
-        # The provider is consulted once (at build time); its registration is
-        # reapplied to the fresh context on every run.
-        self.assertEqual(provider_calls["n"], 1)
-        self.assertEqual(telemetry["registered_kernels"], 2)
-
-    def test_make_onnx_light_cpu_runner_passes_provider(self):
-        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_reference = rlb._make_onnx_light_reference_runner
         captured = {}
 
-        def _fake(model, custom_kernels_provider=None):
-            captured["provider"] = custom_kernels_provider
+        def _fake(model, register=None):
+            captured["register"] = register
             return "runner"
 
+        register_sentinel = object()
+        cpu_module = types.ModuleType("onnx_light_cpu")
+        cpu_module.register_kernels = register_sentinel
+        saved = sys.modules.get("onnx_light_cpu")
         try:
-            rlb._make_onnx_light_runtime_session_runner = _fake
+            rlb._make_onnx_light_reference_runner = _fake
+            sys.modules["onnx_light_cpu"] = cpu_module
             result = rlb._make_onnx_light_cpu_runner(object())
         finally:
-            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_reference
+            if saved is None:
+                sys.modules.pop("onnx_light_cpu", None)
+            else:
+                sys.modules["onnx_light_cpu"] = saved
 
         self.assertEqual(result, "runner")
-        self.assertIs(
-            captured["provider"], rlb._onnx_light_cpu_kernel_registrations
-        )
+        self.assertIs(captured["register"], register_sentinel)
+
+    def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
+        """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
+        saved = sys.modules.get("onnx_light_cpu")
+        try:
+            # Ensure the package is not importable so the import raises.
+            sys.modules["onnx_light_cpu"] = None
+            with self.assertRaises((ImportError, AttributeError)):
+                rlb._make_onnx_light_cpu_runner(object())
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light_cpu", None)
+            else:
+                sys.modules["onnx_light_cpu"] = saved
 
 
-class TestOnnxLightCpuKernelRegistrations(unittest.TestCase):
-    """The onnx-light-cpu provider overrides Abs with the SIMD kernels."""
+class TestOnnxLightCpuRunner(unittest.TestCase):
+    """The onnx-light-cpu backend evaluates the model via a ReferenceEvaluator
+    with the onnx-light-cpu kernels registered on it (``register_kernels``)."""
 
-    def _install_fake_cpu(self, has_kernels=True):
+    def _install_fakes(self):
         import types
 
-        calls = []
+        events = {"evaluators": 0, "registered": [], "runs": 0}
 
-        def _make(name):
-            def _kernel(inp, out):
-                calls.append(name)
-                out[:] = np.abs(inp)
+        class _FakeEvaluator:
+            def __init__(self, model_bytes):
+                events["evaluators"] += 1
+                self.model_bytes = model_bytes
 
-            return _kernel
+            def register_custom_kernel(self, domain, op_type, fn):
+                events["registered"].append((domain, op_type))
 
-        cpukernels = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
-        cpukernels.abs_float32 = _make("float32")
-        cpukernels.abs_float64 = _make("float64")
-        cpukernels.abs_int32 = _make("int32")
-        cpukernels.abs_int64 = _make("int64")
-        cpukernels.detect_simd_level = lambda: 3
-        cpukernels.has_cpu_kernels = lambda: has_kernels
+            def run(self, output_names, feeds):
+                events["runs"] += 1
+                events["last_feeds"] = dict(feeds)
+                return [np.abs(v) for v in feeds.values()]
 
-        onnx_light_cpu = types.ModuleType("onnx_light_cpu")
-        onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
-        onnx_py._cpukernels = cpukernels
-        onnx_light_cpu.onnx_py = onnx_py
+        def register_kernels(sess, domain=""):
+            for op in ("Abs", "Exp", "Log", "Not"):
+                sess.register_custom_kernel(domain, op, lambda *a, **k: None)
+            return sess
+
+        reference = types.ModuleType("onnx_light.onnx.reference")
+        reference.ReferenceEvaluator = _FakeEvaluator
+        onnx_pkg = types.ModuleType("onnx_light.onnx")
+        onnx_pkg.reference = reference
+        onnx_light = types.ModuleType("onnx_light")
+        onnx_light.onnx = onnx_pkg
+        cpu = types.ModuleType("onnx_light_cpu")
+        cpu.register_kernels = register_kernels
 
         modules = {
-            "onnx_light_cpu": onnx_light_cpu,
-            "onnx_light_cpu.onnx_py": onnx_py,
-            "onnx_light_cpu.onnx_py._cpukernels": cpukernels,
+            "onnx_light": onnx_light,
+            "onnx_light.onnx": onnx_pkg,
+            "onnx_light.onnx.reference": reference,
+            "onnx_light_cpu": cpu,
         }
-        return modules, calls
+        return modules, events
 
-    def _fake_runtime_and_helper(self):
-        import onnx
-
-        class _Tensor:
-            def __init__(self, arr):
-                self._arr = np.ascontiguousarray(arr)
-                self.data_type = int(onnx.TensorProto.FLOAT)
-                self.shape = self._arr.shape
-
-        class _Runtime:
-            @staticmethod
-            def tensor_to_numpy(t):
-                return t._arr.view(np.uint8)
-
-            @staticmethod
-            def tensor_from_proto(arr):
-                return _Tensor(arr)
-
-        class _Helper:
-            @staticmethod
-            def from_array(arr, name=None):
-                return arr
-
-        return _Runtime, _Helper, _Tensor
-
-    def test_returns_abs_registration(self):
-        modules, _ = self._install_fake_cpu()
-        runtime, helper, _ = self._fake_runtime_and_helper()
-        saved = {name: sys.modules.get(name) for name in modules}
-        try:
-            sys.modules.update(modules)
-            regs = rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
-        finally:
-            for name, mod in saved.items():
-                if mod is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = mod
-
-        self.assertEqual(len(regs), 1)
-        domain, op_type, fn = regs[0]
-        self.assertEqual(domain, "")
-        self.assertEqual(op_type, "Abs")
-        self.assertTrue(callable(fn))
-
-    def test_abs_kernel_uses_cpu_and_writes_output(self):
+    @staticmethod
+    def _fake_model():
         import types
 
-        modules, calls = self._install_fake_cpu()
-        runtime, helper, tensor_cls = self._fake_runtime_and_helper()
+        graph = types.SimpleNamespace(
+            input=[types.SimpleNamespace(name="x")], initializer=[]
+        )
+        return types.SimpleNamespace(
+            graph=graph, SerializeToString=lambda: b"model"
+        )
+
+    def test_cpu_runner_registers_kernels_and_runs(self):
+        modules, events = self._install_fakes()
+        model = self._fake_model()
         saved = {name: sys.modules.get(name) for name in modules}
         try:
             sys.modules.update(modules)
-            regs = rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            out = runner([np.array([-1.0, 2.0], dtype=np.float32)])
         finally:
             for name, mod in saved.items():
                 if mod is None:
@@ -826,42 +793,17 @@ class TestOnnxLightCpuKernelRegistrations(unittest.TestCase):
                 else:
                     sys.modules[name] = mod
 
-        _, _, fn = regs[0]
-
-        inp = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
-        store = {"x": tensor_cls(inp)}
-        captured = {}
-
-        class _Ctx:
-            def get(self, name):
-                return store[name]
-
-            def put(self, name, tensor, kind=None):
-                captured["name"] = name
-                captured["tensor"] = tensor
-                captured["kind"] = kind
-
-        node = types.SimpleNamespace(input=["x"], output=["y"])
-        fn(node, _Ctx())
-
-        self.assertEqual(calls, ["float32"])
-        self.assertEqual(captured["name"], "y")
-        np.testing.assert_allclose(captured["tensor"]._arr, np.abs(inp))
-
-    def test_raises_when_cpu_kernels_unavailable(self):
-        modules, _ = self._install_fake_cpu(has_kernels=False)
-        runtime, helper, _ = self._fake_runtime_and_helper()
-        saved = {name: sys.modules.get(name) for name in modules}
-        try:
-            sys.modules.update(modules)
-            with self.assertRaises(RuntimeError):
-                rlb._onnx_light_cpu_kernel_registrations(runtime, helper)
-        finally:
-            for name, mod in saved.items():
-                if mod is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = mod
+        # A single evaluator is built and the onnx-light-cpu kernels are
+        # registered on it before running (Abs/Exp/Log/Not).
+        self.assertEqual(events["evaluators"], 1)
+        self.assertIn(("", "Abs"), events["registered"])
+        self.assertEqual(
+            {op for _, op in events["registered"]},
+            {"Abs", "Exp", "Log", "Not"},
+        )
+        self.assertEqual(events["runs"], 1)
+        self.assertEqual(events["last_feeds"]["x"].tolist(), [-1.0, 2.0])
+        np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
 
 class _FakeTypeProto:
