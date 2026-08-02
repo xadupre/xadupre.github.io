@@ -436,6 +436,60 @@ include. Every kernel dispatches at runtime to the best available SIMD path.</p>
 <span class="p">}</span><span class="w"> </span><span class="c1">// namespace onnx_light_cpu</span>
 </pre></div>
 </div>
+<section id="parallel-iteration-helper">
+<h3>Parallel iteration helper<a class="headerlink" href="#parallel-iteration-helper" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/parallel_for.h</span></code> provides a header-only, cost-aware
+<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> built on a persistent thread pool (workers are created once and
+reused). Before dispatching any worker threads it consults a small cost model,
+<code class="docutils literal notranslate"><span class="pre">ParallelForBlockCount</span></code>, that combines the processor (hardware thread count)
+with an estimate of the loop cost (iteration count times <code class="docutils literal notranslate"><span class="pre">cost_per_element</span></code>).
+Ranges that are too small — or whose per-element work is too cheap — run inline
+on the calling thread, because waking worker threads would cost more than the
+work saved. Every block is disjoint and covers the range exactly once, so
+element-wise results are independent of the thread count (bit-exact).</p>
+<p>When a kernel vectorises its inner loop it processes several values per SIMD
+instruction (e.g. AVX handles 8 <code class="docutils literal notranslate"><span class="pre">float</span></code> at a time, AVX-512 handles 16).
+<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> therefore accepts a <code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> argument and rounds every
+block size up to a multiple of it, so each block is a whole number of SIMD
+vectors and the vectorised loop never processes a scalar remainder in the middle
+of the range. <code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes&lt;T&gt;()</span></code> returns the lane count for element
+type <code class="docutils literal notranslate"><span class="pre">T</span></code> at the widest supported register (AVX-512, 64 bytes): 16 for
+<code class="docutils literal notranslate"><span class="pre">float</span></code>, 8 for <code class="docutils literal notranslate"><span class="pre">double</span></code>, 32 for a 2-byte half, 64 for <code class="docutils literal notranslate"><span class="pre">std::int8_t</span></code>.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="p">{</span>
+
+<span class="c1">// Number of threads ParallelFor may use (&gt;= 1, includes the caller).</span>
+<span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="nf">ParallelForThreadCount</span><span class="p">()</span><span class="w"> </span><span class="k">noexcept</span><span class="p">;</span>
+
+<span class="c1">// Number of T elements the widest SIMD register processes at once (&gt;= 1).</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">T</span><span class="o">&gt;</span><span class="w"> </span><span class="k">constexpr</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">ParallelForSimdLanes</span><span class="p">()</span><span class="w"> </span><span class="k">noexcept</span><span class="p">;</span>
+
+<span class="c1">// Cost model: number of blocks to split [0, total) into given a relative</span>
+<span class="c1">// per-iteration cost. Returns 1 to mean &quot;run inline, do not parallelize&quot;.</span>
+<span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="nf">ParallelForBlockCount</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">total</span><span class="p">,</span>
+<span class="w">                                   </span><span class="kt">double</span><span class="w"> </span><span class="n">cost_per_element</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">1.0</span><span class="p">)</span><span class="w"> </span><span class="k">noexcept</span><span class="p">;</span>
+
+<span class="c1">// Runs fn(begin, end) over disjoint sub-ranges covering [0, total). The</span>
+<span class="c1">// cost_per_element overload lets heavier kernels parallelize smaller ranges;</span>
+<span class="c1">// block_multiple keeps each block a whole number of SIMD vectors.</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">Fn</span><span class="o">&gt;</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">ParallelFor</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="n">Fn</span><span class="w"> </span><span class="n">fn</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">Fn</span><span class="o">&gt;</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">ParallelFor</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">cost_per_element</span><span class="p">,</span><span class="w"> </span><span class="n">Fn</span><span class="w"> </span><span class="n">fn</span><span class="p">);</span>
+<span class="k">template</span><span class="w"> </span><span class="o">&lt;</span><span class="k">typename</span><span class="w"> </span><span class="nc">Fn</span><span class="o">&gt;</span>
+<span class="kt">void</span><span class="w"> </span><span class="n">ParallelFor</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">total</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">cost_per_element</span><span class="p">,</span>
+<span class="w">                 </span><span class="n">std</span><span class="o">::</span><span class="kt">int64_t</span><span class="w"> </span><span class="n">block_multiple</span><span class="p">,</span><span class="w"> </span><span class="n">Fn</span><span class="w"> </span><span class="n">fn</span><span class="p">);</span>
+
+<span class="p">}</span><span class="w"> </span><span class="c1">// namespace onnx_light_cpu</span>
+</pre></div>
+</div>
+<p>Every public kernel (<code class="docutils literal notranslate"><span class="pre">Abs*</span></code>, <code class="docutils literal notranslate"><span class="pre">Exp*</span></code>/<code class="docutils literal notranslate"><span class="pre">Log*</span></code> and <code class="docutils literal notranslate"><span class="pre">NotBool</span></code>) already routes
+its work through <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code>. The memory-bandwidth-bound <code class="docutils literal notranslate"><span class="pre">Abs</span></code>/<code class="docutils literal notranslate"><span class="pre">Not</span></code>
+kernels pass <code class="docutils literal notranslate"><span class="pre">cost_per_element</span> <span class="pre">=</span> <span class="pre">1</span></code> (so they only parallelize on large arrays),
+while the compute-bound <code class="docutils literal notranslate"><span class="pre">Exp</span></code>/<code class="docutils literal notranslate"><span class="pre">Log</span></code> kernels pass a higher cost so the same
+sized ranges parallelize sooner. Each kernel also passes
+<code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes&lt;T&gt;()</span></code> as <code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> so the parallel blocks align
+with its SIMD vectors. Because every block is disjoint the results are
+unchanged relative to the single-threaded kernels.</p>
+</section>
 <section id="onnx-light-kernel-class">
 <h3>onnx-light kernel class<a class="headerlink" href="#onnx-light-kernel-class" title="Link to this heading">#</a></h3>
 <p>When onnx-light-cpu is built with <code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON</span></code> (which
@@ -572,6 +626,7 @@ optimized kernel. Returns <code class="docutils literal notranslate"><span class
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#c-api">C++ API</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parallel-iteration-helper">Parallel iteration helper</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#onnx-light-kernel-class">onnx-light kernel class</a></li>
 </ul>
 </li>
