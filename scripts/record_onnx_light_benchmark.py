@@ -694,13 +694,24 @@ def _make_onnx_light_cpu_kernel(kernel: Callable[[Any], Any]) -> Callable[..., A
     bridges the two: it drops ``node``, flattens the input to the contiguous
     1-D array the SIMD kernel requires, and restores the original shape on the
     result.
+
+    onnx-light hands custom kernels a **read-only**, zero-copy view of the
+    runtime tensor (``numpy.from_dlpack`` of a tensor exported as
+    ``nb::ndarray<nb::ro>``). The nanobind ``onnx-light-cpu`` kernels are typed
+    as a writable ``nb::ndarray`` and reject a read-only array with
+    ``"<kernel>(): incompatible function arguments"``. ``np.ascontiguousarray``
+    does not copy an already-contiguous read-only array, so the flattened view
+    is copied when it is not writable to hand the kernel a writable buffer.
     """
 
     def _fn(node: Any, x: Any) -> Any:
         import numpy as np
 
         arr = np.ascontiguousarray(x)
-        out = np.asarray(kernel(arr.reshape(-1)))
+        flat = arr.reshape(-1)
+        if not flat.flags.writeable:
+            flat = flat.copy()
+        out = np.asarray(kernel(flat))
         return out.reshape(arr.shape)
 
     return _fn
