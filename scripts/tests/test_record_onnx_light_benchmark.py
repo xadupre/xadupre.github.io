@@ -197,6 +197,36 @@ class TestRowFromResults(unittest.TestCase):
         row = rlb._row_from_results("test_abs", results)
         self.assertNotIn("speedup_cpu", row)
 
+    def test_median_ms_surfaced_in_row(self):
+        results = self._make_results()
+        for backend in ("onnxruntime", "onnx_light", "onnx_light_cpu"):
+            results[backend]["median_ms"] = results[backend]["avg_ms"]
+        row = rlb._row_from_results("test_abs", results)
+        self.assertIn("onnxruntime_median_ms", row)
+        self.assertIn("onnx_light_median_ms", row)
+        self.assertIn("onnx_light_cpu_median_ms", row)
+
+    def test_speedup_uses_median_not_mean(self):
+        # The mean is skewed by an outlier iteration but the median is not, so
+        # the speedup must follow the (stable) median rather than the avg.
+        results = self._make_results(ort_avg=100.0, light_avg=100.0, cpu_avg=100.0)
+        results["onnxruntime"]["median_ms"] = 2.0
+        results["onnx_light"]["median_ms"] = 1.0
+        results["onnx_light_cpu"]["median_ms"] = 0.5
+        row = rlb._row_from_results("test_abs", results)
+        # speedup = ort_median / light_median = 2.0 / 1.0 = 2.0 (ignores avg 100)
+        self.assertAlmostEqual(row["speedup"], 2.0)
+        # speedup_cpu = ort_median / cpu_median = 2.0 / 0.5 = 4.0
+        self.assertAlmostEqual(row["speedup_cpu"], 4.0)
+
+    def test_speedup_falls_back_to_avg_when_median_absent(self):
+        # Older cached payloads have no median_ms; speedup must still be computed.
+        results = self._make_results(ort_avg=2.0, light_avg=1.0)
+        for backend in ("onnxruntime", "onnx_light", "onnx_light_cpu"):
+            results[backend].pop("median_ms", None)
+        row = rlb._row_from_results("test_abs", results)
+        self.assertAlmostEqual(row["speedup"], 2.0)
+
 
 class TestRunBenchmark(unittest.TestCase):
     def test_unknown_backend_returns_failure(self):
@@ -244,6 +274,7 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertEqual(result["n_warmup"], 2)
         self.assertEqual(result["n_measure"], 5)
         self.assertIn("avg_ms", result)
+        self.assertIn("median_ms", result)
         self.assertIn("min_ms", result)
         self.assertIn("max_ms", result)
         # warmup (2) + measure (5) = 7 calls
