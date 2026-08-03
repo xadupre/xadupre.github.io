@@ -679,8 +679,14 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
 
-    def test_make_onnx_light_cpu_runner_uses_reference_evaluator_with_register(self):
-        """The cpu runner reuses the reference runner, passing register_kernels."""
+    def test_make_onnx_light_cpu_runner_registers_wrapped_cpu_kernels(self):
+        """The cpu runner registers adapter-wrapped onnx-light-cpu kernels.
+
+        onnx-light invokes custom kernels as ``fn(node, *inputs)``. The raw
+        ``onnx-light-cpu`` bindings take a single array, so the runner must wrap
+        them; handing them ``(node, array)`` directly is exactly the
+        ``"<kernel>(): incompatible function arguments"`` failure this fixes.
+        """
         import types
 
         saved_reference = rlb._make_onnx_light_reference_runner
@@ -690,23 +696,72 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             captured["register"] = register
             return "runner"
 
-        register_sentinel = object()
+        # Fake onnx_light_cpu.onnx_py._cpukernels whose kernels only accept a
+        # single positional array (mirroring the real SIMD bindings).
+        calls = []
+
+        def _make_kernel(name):
+            def _kernel(x):  # single positional argument only
+                calls.append((name, np.asarray(x).shape))
+                return np.abs(x)
+
+            return _kernel
+
+        cpukernels = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
+        cpukernels.abs = _make_kernel("abs")
+        cpukernels.exp = _make_kernel("exp")
+        cpukernels.log = _make_kernel("log")
+        cpukernels.logical_not = _make_kernel("logical_not")
+        onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        onnx_py._cpukernels = cpukernels
         cpu_module = types.ModuleType("onnx_light_cpu")
-        cpu_module.register_kernels = register_sentinel
-        saved = sys.modules.get("onnx_light_cpu")
+        cpu_module.onnx_py = onnx_py
+
+        saved_modules = {
+            name: sys.modules.get(name)
+            for name in (
+                "onnx_light_cpu",
+                "onnx_light_cpu.onnx_py",
+                "onnx_light_cpu.onnx_py._cpukernels",
+            )
+        }
         try:
             rlb._make_onnx_light_reference_runner = _fake
             sys.modules["onnx_light_cpu"] = cpu_module
+            sys.modules["onnx_light_cpu.onnx_py"] = onnx_py
+            sys.modules["onnx_light_cpu.onnx_py._cpukernels"] = cpukernels
             result = rlb._make_onnx_light_cpu_runner(object())
+
+            # Register the kernels on a fake evaluator to capture the wrappers.
+            registered = {}
+
+            class _Evaluator:
+                def register_custom_kernel(self, domain, op_type, fn):
+                    registered[(domain, op_type)] = fn
+
+            evaluator = _Evaluator()
+            captured["register"](evaluator)
         finally:
             rlb._make_onnx_light_reference_runner = saved_reference
-            if saved is None:
-                sys.modules.pop("onnx_light_cpu", None)
-            else:
-                sys.modules["onnx_light_cpu"] = saved
+            for name, mod in saved_modules.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
 
         self.assertEqual(result, "runner")
-        self.assertIs(captured["register"], register_sentinel)
+        # Every accelerated op is registered on the default domain.
+        self.assertEqual(
+            set(registered),
+            {("", "Abs"), ("", "Exp"), ("", "Log"), ("", "Not")},
+        )
+        # Each wrapper drops ``node`` and calls the single-argument kernel,
+        # preserving the input shape on the result.
+        x = np.arange(6, dtype=np.float32).reshape(2, 3)
+        out = registered[("", "Abs")]("node", x)
+        self.assertEqual(out.shape, (2, 3))
+        # The underlying kernel was invoked with a flattened 1-D array.
+        self.assertIn(("abs", (6,)), calls)
 
     def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
         """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
@@ -725,7 +780,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
 class TestOnnxLightCpuRunner(unittest.TestCase):
     """The onnx-light-cpu backend evaluates the model via a ReferenceEvaluator
-    with the onnx-light-cpu kernels registered on it (``register_kernels``)."""
+    with the onnx-light-cpu SIMD kernels registered on it through an adapter
+    matching onnx-light's ``fn(node, *inputs)`` custom-kernel convention."""
 
     def _install_fakes(self):
         import types
@@ -745,25 +801,31 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                 events["last_feeds"] = dict(feeds)
                 return [np.abs(v) for v in feeds.values()]
 
-        def register_kernels(sess, domain=""):
-            for op in ("Abs", "Exp", "Log", "Not"):
-                sess.register_custom_kernel(domain, op, lambda *a, **k: None)
-            return sess
-
         reference = types.ModuleType("onnx_light.onnx.reference")
         reference.ReferenceEvaluator = _FakeEvaluator
         onnx_pkg = types.ModuleType("onnx_light.onnx")
         onnx_pkg.reference = reference
         onnx_light = types.ModuleType("onnx_light")
         onnx_light.onnx = onnx_pkg
+
+        # Fake onnx-light-cpu SIMD kernels: each accepts a single array only.
+        cpukernels = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
+        cpukernels.abs = lambda x: np.abs(x)
+        cpukernels.exp = lambda x: np.exp(x)
+        cpukernels.log = lambda x: np.log(x)
+        cpukernels.logical_not = lambda x: np.logical_not(x)
+        onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        onnx_py._cpukernels = cpukernels
         cpu = types.ModuleType("onnx_light_cpu")
-        cpu.register_kernels = register_kernels
+        cpu.onnx_py = onnx_py
 
         modules = {
             "onnx_light": onnx_light,
             "onnx_light.onnx": onnx_pkg,
             "onnx_light.onnx.reference": reference,
             "onnx_light_cpu": cpu,
+            "onnx_light_cpu.onnx_py": onnx_py,
+            "onnx_light_cpu.onnx_py._cpukernels": cpukernels,
         }
         return modules, events
 
