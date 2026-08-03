@@ -5,7 +5,9 @@ The script walks the backend tests bundled with the installed ``onnx-light``
 package (collected via ``onnx_light.onnx_lib.backend.test.case.collect_test_case``),
 keeps only the cases whose ``tag`` matches ``release_after`` by default, reruns the
 shape-inference-driven release-after analysis on each model, and compares the
-resulting node metadata against the metadata embedded in the test case.
+resulting node metadata against the metadata embedded in the test case. Both
+``onnx_light.release_after`` and ``onnx_light.not_used_after`` node annotations
+(the two keys emitted together by the release-after analysis) are compared.
 
 The resulting JSON summary is persisted to
 ``cache_data/onnx-light/release_after_coverage.json``. The dashboard at
@@ -31,10 +33,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 DEFAULT_TAGS: Tuple[str, ...] = ("release_after",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
-METADATA_KEYS: Tuple[str, ...] = ("onnx_light.release_after",)
+METADATA_KEYS: Tuple[str, ...] = (
+    "onnx_light.release_after",
+    "onnx_light.not_used_after",
+)
 VALUE_METADATA_KEYS: Tuple[str, ...] = (
     "onnx_light.value_tags",
     "onnx_light.release_after",
+    "onnx_light.not_used_after",
     "onnx_light.released",
     "onnx_light.unlocked",
 )
