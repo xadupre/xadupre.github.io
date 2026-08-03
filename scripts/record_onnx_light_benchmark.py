@@ -4,7 +4,12 @@ The script discovers every benchmark-sized backend node test bundled with
 the installed ``onnx-light`` package and measures the processing time of
 ``onnxruntime``, the ``onnx-light`` reference implementation backed by its
 C++ ``KernelDispatchTable``, and ``onnx-light`` running with the
-``onnx-light-cpu`` SIMD kernels layered on top.
+``onnx-light-cpu`` SIMD kernels registered on top. The ``onnx-light-cpu``
+backend runs the model exactly like ``onnxruntime`` and the plain
+``onnx-light`` reference backend -- through an ``onnx-light``
+``ReferenceEvaluator`` -- after calling
+:func:`onnx_light_cpu.register_kernels` on it so every ``Abs``/``Exp``/
+``Log``/``Not`` node dispatches to the SIMD-accelerated kernel.
 
 ``onnx-light`` runs a model through a reusable ``RuntimeSession`` that
 resolves every kernel once and then replays them on each subsequent run, so
@@ -54,9 +59,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 #: Backends exercised by the benchmark. ``onnxruntime``, ``onnx_light`` and
 #: ``onnx_light_cpu`` are timed; the reference implementation is intentionally
 #: omitted because it is Python-only and not representative of production
-#: performance. ``onnx_light_cpu`` runs onnx-light's own ``RuntimeSession``
+#: performance. ``onnx_light_cpu`` runs the model through an ``onnx-light``
+#: ``ReferenceEvaluator`` -- just like ``onnxruntime`` and ``onnx_light`` --
 #: with the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` registered
-#: on top, so it measures the effect of those kernels within the same engine.
+#: on it via :func:`onnx_light_cpu.register_kernels`, so it measures the effect
+#: of those kernels within the same engine.
 BENCHMARK_BACKENDS: Tuple[str, ...] = (
     "onnxruntime",
     "onnx_light",
@@ -543,9 +550,6 @@ def _runtime_tensor_to_numpy(runtime, numpy_helper, tensor):
 
 def _make_onnx_light_runtime_session_runner(
     model,
-    custom_kernels_provider: Optional[
-        Callable[[Any, Any], List[Tuple[str, str, Callable[..., Any]]]]
-    ] = None,
 ) -> Callable[[List[Any]], List[Any]]:
     """Run ``model`` through onnx-light's ``ExecutionPlan`` + ``RuntimeSession``.
 
@@ -560,22 +564,11 @@ def _make_onnx_light_runtime_session_runner(
     the one-off kernel initialisation. Only the numeric backend-test corpus is
     benchmarked, so positional inputs are wired to the graph's declared
     (non-initializer) inputs by name.
-
-    ``custom_kernels_provider`` is an optional callback invoked once with the
-    ``runtime`` and ``numpy_helper`` modules; it returns a list of
-    ``(domain, op_type, fn)`` registrations that are applied to every fresh
-    :class:`RuntimeContext` (via ``register_custom_kernel``) before the session
-    runs. This is how the ``onnx_light_cpu`` backend layers the
-    ``onnx-light-cpu`` SIMD kernels on top of onnx-light's own runtime.
     """
     import numpy as np
     from onnx_light.onnx_lib import ModelProto as _LModelProto
     from onnx_light.onnx_lib import numpy_helper as _lnh
     from onnx_light.onnx_py._onnxpykernels import runtime as _rt
-
-    custom_kernels: List[Tuple[str, str, Callable[..., Any]]] = []
-    if custom_kernels_provider is not None:
-        custom_kernels = list(custom_kernels_provider(_rt, _lnh))
 
     lmodel = model
     if not isinstance(model, _LModelProto):
@@ -608,10 +601,6 @@ def _make_onnx_light_runtime_session_runner(
 
     def _run(inputs: List[Any]) -> List[Any]:
         ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
-        # Layer any extra kernels (e.g. onnx-light-cpu SIMD kernels) on top of
-        # onnx-light's built-ins for this run before the session resolves them.
-        for domain, op_type, fn in custom_kernels:
-            ctx.register_custom_kernel(domain, op_type, fn)
         # Sequence and map inputs live in dedicated stores on the context, so
         # feed each graph input through the store matching its declared type.
         for name, kind, value in zip(input_names, input_kinds, inputs):
@@ -642,10 +631,14 @@ def _make_onnx_light_runtime_session_runner(
     return _run
 
 
-def _make_onnx_light_reference_runner(model) -> Callable[[List[Any]], List[Any]]:
+def _make_onnx_light_reference_runner(
+    model, register: Optional[Callable[[Any], Any]] = None
+) -> Callable[[List[Any]], List[Any]]:
     from onnx_light.onnx.reference import ReferenceEvaluator
 
     evaluator = ReferenceEvaluator(model.SerializeToString())
+    if register is not None:
+        register(evaluator)
     input_names = _model_input_names(model)
 
     def _run(inputs: List[Any]) -> List[Any]:
@@ -680,75 +673,26 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
         return _make_onnx_light_reference_runner(model)
 
 
-def _onnx_light_cpu_kernel_registrations(
-    runtime: Any, numpy_helper: Any
-) -> List[Tuple[str, str, Callable[..., Any]]]:
-    """Return ``onnx-light-cpu`` kernel overrides for onnx-light's runtime.
-
-    ``onnx-light-cpu`` ships SIMD-accelerated implementations of a small set of
-    ONNX operators (currently ``Abs`` for ``float32``/``float64``/``int32``/
-    ``int64``). Each is registered on the default domain so it takes precedence
-    over onnx-light's built-in kernel, letting the benchmark measure the effect
-    of the CPU kernels inside the very same execution engine.
-
-    Raises ``ImportError`` (via the import) when ``onnx-light-cpu`` is not
-    installed and ``RuntimeError`` when the compiled kernels are unavailable, so
-    the ``onnx_light_cpu`` backend records a clear load error in that case.
-    """
-    import numpy as np
-    from onnx_light_cpu.onnx_py._cpukernels import (
-        abs_float32,
-        abs_float64,
-        abs_int32,
-        abs_int64,
-        has_cpu_kernels,
-    )
-
-    if not has_cpu_kernels():
-        raise RuntimeError("onnx-light-cpu compiled kernels are not available")
-
-    abs_kernels: Dict[Any, Callable[..., Any]] = {
-        np.dtype(np.float32): abs_float32,
-        np.dtype(np.float64): abs_float64,
-        np.dtype(np.int32): abs_int32,
-        np.dtype(np.int64): abs_int64,
-    }
-
-    def _abs(node, ctx) -> None:
-        in_name = str(node.input[0])
-        out_name = str(node.output[0])
-        arr = _runtime_tensor_to_numpy(runtime, numpy_helper, ctx.get(in_name))
-        kernel = abs_kernels.get(arr.dtype)
-        if kernel is None:
-            # Data types without an onnx-light-cpu kernel fall back to numpy so
-            # the override stays correct for every ``Abs`` input.
-            out = np.abs(arr)
-        else:
-            flat = np.ascontiguousarray(arr).ravel()
-            out_flat = np.empty_like(flat)
-            kernel(flat, out_flat)
-            out = out_flat.reshape(arr.shape)
-        tensor = runtime.tensor_from_proto(
-            numpy_helper.from_array(np.ascontiguousarray(out), name=out_name)
-        )
-        ctx.put(out_name, tensor, "output")
-
-    return [("", "Abs", _abs)]
-
-
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
-    """Build the onnx-light runner with ``onnx-light-cpu`` kernels layered on.
+    """Build the onnx-light runner with ``onnx-light-cpu`` kernels registered.
 
-    Uses the same reusable ``RuntimeSession`` execution path as
-    :func:`_make_onnx_light_runner`, but registers the ``onnx-light-cpu`` SIMD
-    kernels on every runtime context so onnx-light dispatches those operators to
-    the CPU-accelerated implementations. No ``ReferenceEvaluator`` fallback is
-    provided: the point of this backend is to time the low-level runtime with
-    the CPU kernels, so an unavailable runtime is surfaced as a load error.
+    Runs the model exactly like ``onnxruntime`` and the plain ``onnx-light``
+    reference backend: an ``onnx-light`` :class:`ReferenceEvaluator` evaluates
+    the model and :func:`onnx_light_cpu.register_kernels` registers the
+    SIMD-accelerated ``onnx-light-cpu`` kernels (``Abs``, ``Exp``, ``Log`` and
+    ``Not``) on it, so every matching node dispatches to the CPU-accelerated
+    implementation instead of onnx-light's built-in kernel.
+
+    ``onnx_light_cpu.register_kernels`` raises ``ImportError`` (via the import)
+    when ``onnx-light-cpu`` is not installed, so the ``onnx_light_cpu`` backend
+    records a clear load error in that case. No fallback is provided: the point
+    of this backend is to measure the CPU kernels, so an unavailable
+    onnx-light-cpu is surfaced as a load error rather than silently running the
+    built-in kernels.
     """
-    return _make_onnx_light_runtime_session_runner(
-        model, custom_kernels_provider=_onnx_light_cpu_kernel_registrations
-    )
+    from onnx_light_cpu import register_kernels
+
+    return _make_onnx_light_reference_runner(model, register=register_kernels)
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
