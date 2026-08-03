@@ -22,15 +22,13 @@ For each test the measurement protocol is:
 1. Load / compile the model once (not timed).
 2. Run :data:`N_WARMUP` iterations to prime the JIT / kernel cache.
 3. Run :data:`N_MEASURE` iterations and record the wall-clock time of each.
-4. Report the per-backend **average**, **median**, **min** and **max**
-   execution time (in milliseconds) and the **speedup** defined as::
+4. Report the per-backend **average** execution time
+   (in milliseconds) and the **speedup** defined as::
 
-       speedup = onnxruntime_median_ms / onnx_light_median_ms
+       speedup = onnxruntime_avg_ms / onnx_light_avg_ms
 
-   The **median** is used rather than the mean because it is robust against
-   occasional slow iterations (GC pauses, scheduler hiccups), which keeps the
-   reported speedup stable across runs. A speedup > 1 indicates that
-   ``onnx-light`` is faster than ``onnxruntime`` on that test case.
+   A speedup > 1 indicates that ``onnx-light`` is faster than
+   ``onnxruntime`` on that test case.
 
 The resulting payload is persisted to
 ``cache_data/onnx-light/benchmark.json``. The dashboard at
@@ -49,7 +47,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import statistics
 import sys
 import time
 import traceback
@@ -725,11 +722,6 @@ def run_benchmark(
     * ``error`` – human-readable error string when ``success`` is ``False``.
     * ``error_step`` – ``"load"``, ``"warmup"`` or ``"measure"``.
     * ``avg_ms`` – average per-dataset execution time in milliseconds.
-    * ``median_ms`` – median per-dataset execution time in milliseconds. The
-      median is robust against occasional slow iterations (GC pauses, scheduler
-      hiccups), so it is the value used to derive the reported speedups.
-    * ``min_ms`` – minimum per-dataset execution time in milliseconds.
-    * ``max_ms`` – maximum per-dataset execution time in milliseconds.
     * ``n_warmup`` – number of warm-up iterations actually run.
     * ``n_measure`` – number of timed iterations actually run.
     """
@@ -805,9 +797,6 @@ def run_benchmark(
         "error": "",
         "error_step": "",
         "avg_ms": round(avg_ms, 6),
-        "median_ms": round(statistics.median(times_ms), 6),
-        "min_ms": round(min(times_ms), 6),
-        "max_ms": round(max(times_ms), 6),
         "n_warmup": n_warmup,
         "n_measure": n_measure,
     }
@@ -836,23 +825,16 @@ def _row_from_results(
         step = info.get("error_step") or ""
         if step:
             row[f"{backend}_error_step"] = step
-        for metric in ("avg_ms", "median_ms", "min_ms", "max_ms"):
+        for metric in ("avg_ms",):
             v = info.get(metric)
             if v is not None:
                 row[f"{backend}_{metric}"] = v
 
-    # Compute speedup = onnxruntime / onnx_light using the median execution time.
-    # The median is robust against occasional slow iterations, so the resulting
-    # speedup is far more stable than one derived from the noise-sensitive mean;
-    # fall back to ``avg_ms`` for payloads produced before ``median_ms`` existed.
+    # Compute speedup = onnxruntime_avg_ms / onnx_light_avg_ms.
     # A value > 1 means onnx-light is faster than onnxruntime.
-    def _central(info: Dict[str, Any]) -> Optional[float]:
-        v = info.get("median_ms")
-        return info.get("avg_ms") if v is None else v
-
-    ort_avg = _central(results.get("onnxruntime", {}))
-    light_avg = _central(results.get("onnx_light", {}))
-    cpu_avg = _central(results.get("onnx_light_cpu", {}))
+    ort_avg = results.get("onnxruntime", {}).get("avg_ms")
+    light_avg = results.get("onnx_light", {}).get("avg_ms")
+    cpu_avg = results.get("onnx_light_cpu", {}).get("avg_ms")
     ort_ok = results.get("onnxruntime", {}).get("success", False)
     light_ok = results.get("onnx_light", {}).get("success", False)
     cpu_ok = results.get("onnx_light_cpu", {}).get("success", False)
@@ -865,7 +847,7 @@ def _row_from_results(
     ):
         row["speedup"] = round(ort_avg / light_avg, 4)
 
-    # Compute speedup_cpu = onnxruntime / onnx_light_cpu median time, mirroring
+    # Compute speedup_cpu = onnxruntime_avg_ms / onnx_light_cpu_avg_ms, mirroring
     # ``speedup`` for the onnx-light runtime running onnx-light-cpu kernels.
     if (
         ort_ok
