@@ -22,8 +22,10 @@ For each test the measurement protocol is:
 1. Load / compile the model once (not timed).
 2. Run :data:`N_WARMUP` iterations to prime the JIT / kernel cache.
 3. Run :data:`N_MEASURE` iterations and record the wall-clock time of each.
-4. Report the per-backend **average**, **min** and **max** execution time
-   (in milliseconds) and the **speedup** defined as::
+4. Report the per-backend **average** execution time
+   (in milliseconds), computed as a trimmed mean that discards the fastest
+   and slowest timed iterations, along with the raw ``min``/``max`` samples,
+   and the **speedup** defined as::
 
        speedup = onnxruntime_avg_ms / onnx_light_avg_ms
 
@@ -770,9 +772,11 @@ def run_benchmark(
     * ``success`` – ``True`` when every iteration completed without error.
     * ``error`` – human-readable error string when ``success`` is ``False``.
     * ``error_step`` – ``"load"``, ``"warmup"`` or ``"measure"``.
-    * ``avg_ms`` – average per-dataset execution time in milliseconds.
-    * ``min_ms`` – minimum per-dataset execution time in milliseconds.
-    * ``max_ms`` – maximum per-dataset execution time in milliseconds.
+    * ``avg_ms`` – average per-dataset execution time in milliseconds,
+      computed as a trimmed mean that excludes the fastest and slowest
+      timed iterations when at least three samples are available.
+    * ``min_ms`` – fastest timed iteration in milliseconds.
+    * ``max_ms`` – slowest timed iteration in milliseconds.
     * ``n_warmup`` – number of warm-up iterations actually run.
     * ``n_measure`` – number of timed iterations actually run.
     """
@@ -842,14 +846,23 @@ def run_benchmark(
             "n_measure": 0,
         }
 
-    avg_ms = sum(times_ms) / len(times_ms)
+    # Sort the samples so the slowest and fastest iterations (typically caused
+    # by GC pauses or scheduler hiccups) can be discarded from the average. The
+    # min/max are still reported for reference, but ``avg_ms`` is a trimmed mean
+    # that excludes them when there are enough samples to do so.
+    sorted_ms = sorted(times_ms)
+    if len(sorted_ms) > 2:
+        trimmed = sorted_ms[1:-1]
+    else:
+        trimmed = sorted_ms
+    avg_ms = sum(trimmed) / len(trimmed)
     return {
         "success": True,
         "error": "",
         "error_step": "",
         "avg_ms": round(avg_ms, 6),
-        "min_ms": round(min(times_ms), 6),
-        "max_ms": round(max(times_ms), 6),
+        "min_ms": round(sorted_ms[0], 6),
+        "max_ms": round(sorted_ms[-1], 6),
         "n_warmup": n_warmup,
         "n_measure": n_measure,
     }
