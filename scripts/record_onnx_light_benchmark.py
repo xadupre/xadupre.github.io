@@ -7,9 +7,9 @@ C++ ``KernelDispatchTable``, and ``onnx-light`` running with the
 ``onnx-light-cpu`` SIMD kernels registered on top. The ``onnx-light-cpu``
 backend runs the model exactly like ``onnxruntime`` and the plain
 ``onnx-light`` reference backend -- through an ``onnx-light``
-``ReferenceEvaluator`` -- after calling
-:func:`onnx_light_cpu.register_kernels` on it so every ``Abs``/``Exp``/
-``Log``/``Not`` node dispatches to the SIMD-accelerated kernel.
+``ReferenceEvaluator`` -- after registering the ``onnx-light-cpu`` SIMD
+kernels on it so every ``Abs``/``Exp``/``Log``/``Not`` node dispatches to the
+SIMD-accelerated kernel.
 
 ``onnx-light`` runs a model through a reusable ``RuntimeSession`` that
 resolves every kernel once and then replays them on each subsequent run, so
@@ -673,26 +673,75 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
         return _make_onnx_light_reference_runner(model)
 
 
+#: Maps the ONNX ``op_type`` accelerated by ``onnx-light-cpu`` to the name of
+#: the SIMD kernel exported by ``onnx_light_cpu.onnx_py._cpukernels``.
+_ONNX_LIGHT_CPU_OPS: Dict[str, str] = {
+    "Abs": "abs",
+    "Exp": "exp",
+    "Log": "log",
+    "Not": "logical_not",
+}
+
+
+def _make_onnx_light_cpu_kernel(kernel: Callable[[Any], Any]) -> Callable[..., Any]:
+    """Adapt a 1-D SIMD ``onnx-light-cpu`` kernel to onnx-light's convention.
+
+    onnx-light invokes a registered custom kernel as ``fn(node, *inputs)`` (the
+    :class:`NodeProto` first, then the numpy inputs), whereas the
+    ``onnx-light-cpu`` bindings take a single contiguous 1-D array. This adapter
+    bridges the two: it drops ``node``, flattens the input to the contiguous
+    1-D array the SIMD kernel requires, and restores the original shape on the
+    result.
+    """
+
+    def _fn(node: Any, x: Any) -> Any:
+        import numpy as np
+
+        arr = np.ascontiguousarray(x)
+        out = np.asarray(kernel(arr.reshape(-1)))
+        return out.reshape(arr.shape)
+
+    return _fn
+
+
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner with ``onnx-light-cpu`` kernels registered.
 
     Runs the model exactly like ``onnxruntime`` and the plain ``onnx-light``
     reference backend: an ``onnx-light`` :class:`ReferenceEvaluator` evaluates
-    the model and :func:`onnx_light_cpu.register_kernels` registers the
-    SIMD-accelerated ``onnx-light-cpu`` kernels (``Abs``, ``Exp``, ``Log`` and
-    ``Not``) on it, so every matching node dispatches to the CPU-accelerated
-    implementation instead of onnx-light's built-in kernel.
+    the model with the SIMD-accelerated ``onnx-light-cpu`` kernels (``Abs``,
+    ``Exp``, ``Log`` and ``Not``) registered on it, so every matching node
+    dispatches to the CPU-accelerated implementation instead of onnx-light's
+    built-in kernel.
 
-    ``onnx_light_cpu.register_kernels`` raises ``ImportError`` (via the import)
-    when ``onnx-light-cpu`` is not installed, so the ``onnx_light_cpu`` backend
-    records a clear load error in that case. No fallback is provided: the point
-    of this backend is to measure the CPU kernels, so an unavailable
-    onnx-light-cpu is surfaced as a load error rather than silently running the
-    built-in kernels.
+    The kernels are registered through :func:`_make_onnx_light_cpu_kernel`
+    rather than :func:`onnx_light_cpu.register_kernels` because onnx-light
+    invokes a custom kernel as ``fn(node, *inputs)`` (the ``NodeProto`` first),
+    whereas the raw ``onnx-light-cpu`` bindings expect a single contiguous 1-D
+    array. Handing them the ``(node, array)`` pair directly fails with an
+    ``"<kernel>(): incompatible function arguments"`` error, so the adapter
+    drops ``node`` and reshapes the input to the layout the SIMD kernel needs.
+
+    Importing ``onnx_light_cpu`` raises ``ImportError`` when ``onnx-light-cpu``
+    is not installed, so the ``onnx_light_cpu`` backend records a clear load
+    error in that case. No fallback is provided: the point of this backend is
+    to measure the CPU kernels, so an unavailable onnx-light-cpu is surfaced as
+    a load error rather than silently running the built-in kernels.
     """
-    from onnx_light_cpu import register_kernels
+    from onnx_light_cpu.onnx_py import _cpukernels
 
-    return _make_onnx_light_reference_runner(model, register=register_kernels)
+    kernels = {
+        op_type: getattr(_cpukernels, kernel_name)
+        for op_type, kernel_name in _ONNX_LIGHT_CPU_OPS.items()
+    }
+
+    def _register(evaluator: Any) -> None:
+        for op_type, kernel in kernels.items():
+            evaluator.register_custom_kernel(
+                "", op_type, _make_onnx_light_cpu_kernel(kernel)
+            )
+
+    return _make_onnx_light_reference_runner(model, register=_register)
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
