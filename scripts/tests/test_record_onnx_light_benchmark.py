@@ -105,6 +105,16 @@ class TestRowFromResults(unittest.TestCase):
         self.assertAlmostEqual(row["onnxruntime_avg_ms"], 2.0)
         self.assertAlmostEqual(row["onnx_light_avg_ms"], 1.0)
 
+    def test_min_max_ms_surfaced_when_present(self):
+        results = self._make_results(
+            ort_ok=True, light_ok=True, ort_avg=2.0, light_avg=1.0
+        )
+        results["onnxruntime"]["min_ms"] = 1.5
+        results["onnxruntime"]["max_ms"] = 3.0
+        row = rlb._row_from_results("test_relu", results)
+        self.assertAlmostEqual(row["onnxruntime_min_ms"], 1.5)
+        self.assertAlmostEqual(row["onnxruntime_max_ms"], 3.0)
+
     def test_no_speedup_when_ort_fails(self):
         results = self._make_results(ort_ok=False, light_ok=True)
         row = rlb._row_from_results("test_relu", results)
@@ -238,8 +248,10 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertEqual(result["n_warmup"], 2)
         self.assertEqual(result["n_measure"], 5)
         self.assertIn("avg_ms", result)
-        self.assertNotIn("min_ms", result)
-        self.assertNotIn("max_ms", result)
+        self.assertIn("min_ms", result)
+        self.assertIn("max_ms", result)
+        self.assertLessEqual(result["min_ms"], result["avg_ms"])
+        self.assertLessEqual(result["avg_ms"], result["max_ms"])
         # warmup (2) + measure (5) = 7 calls
         self.assertEqual(len(call_log), 7)
 
@@ -292,6 +304,48 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_step"], "measure")
         self.assertIn("run error", result["error"])
+
+    def test_avg_ms_is_trimmed_mean_excluding_min_and_max(self):
+        """avg_ms averages the sorted samples with the fastest/slowest dropped."""
+        # Deterministic per-iteration durations (ms): one slow outlier that
+        # would skew a plain mean, and one very fast iteration.
+        durations_ms = [1.0, 1.0, 1.0, 0.0, 100.0]
+        ticks = []
+        for d in durations_ms:
+            start = len(ticks)
+            ticks.append(float(start))
+            ticks.append(float(start) + d / 1_000.0)
+
+        tick_iter = iter(ticks)
+
+        def _dummy_factory(model):
+            def _run(inputs):
+                return [np.zeros((1,))]
+
+            return _run
+
+        saved = rlb._RUNNER_FACTORIES.get("onnxruntime")
+        saved_pc = rlb.time.perf_counter
+        try:
+            rlb._RUNNER_FACTORIES["onnxruntime"] = _dummy_factory
+            rlb.time.perf_counter = lambda: next(tick_iter)
+            data_sets = [([np.ones((1,))], [np.zeros((1,))])]
+            result = rlb.run_benchmark(
+                object(), data_sets, "onnxruntime", n_warmup=0, n_measure=5
+            )
+        finally:
+            rlb.time.perf_counter = saved_pc
+            if saved is None:
+                del rlb._RUNNER_FACTORIES["onnxruntime"]
+            else:
+                rlb._RUNNER_FACTORIES["onnxruntime"] = saved
+
+        self.assertTrue(result["success"])
+        # min/max preserved as the raw extremes.
+        self.assertAlmostEqual(result["min_ms"], 0.0, places=6)
+        self.assertAlmostEqual(result["max_ms"], 100.0, places=6)
+        # avg drops 0.0 and 100.0, leaving [1.0, 1.0, 1.0] -> 1.0.
+        self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
 
 class TestBuildPayload(unittest.TestCase):
