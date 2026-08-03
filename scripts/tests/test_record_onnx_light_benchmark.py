@@ -809,6 +809,41 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         # The underlying kernel was invoked with a flattened 1-D array.
         self.assertIn(("abs", (6,)), calls)
 
+    def test_cpu_kernel_adapter_copies_readonly_input(self):
+        """The adapter hands the SIMD kernel a writable array.
+
+        onnx-light invokes custom kernels with a read-only, zero-copy
+        ``numpy.from_dlpack`` view of the runtime tensor. The nanobind
+        onnx-light-cpu kernels require a writable array and otherwise reject
+        the read-only view with ``"<kernel>(): incompatible function
+        arguments"`` (the failure that leaves ``test_cc_abs_benchmark`` with no
+        figure). The adapter must therefore copy a read-only input.
+        """
+        seen = {}
+
+        def _kernel(x):
+            # Mirror the real nanobind binding, which refuses read-only arrays.
+            seen["writeable"] = x.flags.writeable
+            if not x.flags.writeable:
+                raise TypeError(
+                    "abs(): incompatible function arguments. The following "
+                    "argument types are supported:"
+                )
+            return np.abs(x)
+
+        wrapped = rlb._make_onnx_light_cpu_kernel(_kernel)
+
+        readonly = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
+        readonly.flags.writeable = False
+        self.assertFalse(readonly.flags.writeable)
+
+        out = wrapped("node", readonly)
+        # The kernel received a writable buffer despite the read-only input.
+        self.assertTrue(seen["writeable"])
+        np.testing.assert_allclose(out, np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        # The original input is left untouched (read-only, unchanged values).
+        self.assertFalse(readonly.flags.writeable)
+
     def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
         """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
         saved = sys.modules.get("onnx_light_cpu")
