@@ -70,6 +70,7 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             {
                 "onnx_light.inplace_reuse": "0:0:equal",
                 "onnx_light.release_after": "A",
+                "onnx_light.not_used_after": "X;W",
                 "ignored": "x",
             },
         )
@@ -77,6 +78,7 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             rac._node_metadata(node),
             {
                 "onnx_light.release_after": "A",
+                "onnx_light.not_used_after": "X;W",
             },
         )
 
@@ -491,6 +493,69 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         names = [d["name"] for d in discovered]
         self.assertIn("test_tiny_llm", names)
         self.assertNotIn("test_no_meta", names)
+
+    def test_discover_includes_test_with_not_used_after_only(self):
+        """Cases whose only node metadata is ``not_used_after`` are kept.
+
+        The release-after algorithm annotates nodes with both
+        ``onnx_light.release_after`` and ``onnx_light.not_used_after``; a model
+        may carry only the latter (e.g. a single-node graph whose inputs reach
+        their last use but which produces no released intermediate). Such a
+        case must still appear on the release-after coverage page.
+        """
+        import sys
+        import types
+
+        node_with_meta = _FakeNode("Add", {"onnx_light.not_used_after": "X;W"})
+        tc_meta = _FakeTestCase(
+            "test_cc_release_initializer_add",
+            _FakeModel([node_with_meta]),
+            tag="release",
+        )
+        node_no_meta = _FakeNode("Relu")
+        tc_no_meta = _FakeTestCase(
+            "test_no_meta",
+            _FakeModel([node_no_meta]),
+            tag="model",
+        )
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: {
+            "test_cc_release_initializer_add": tc_meta,
+            "test_no_meta": tc_no_meta,
+        }
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            discovered = rac.discover_release_after_tests(tag="release_after")
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        by_name = {d["name"]: d for d in discovered}
+        self.assertIn("test_cc_release_initializer_add", by_name)
+        self.assertNotIn("test_no_meta", by_name)
+        self.assertEqual(
+            by_name["test_cc_release_initializer_add"]["expected_nodes"],
+            [{"onnx_light.not_used_after": "X;W"}],
+        )
 
     def test_discover_includes_test_with_value_metadata_despite_wrong_tag(self):
         """Tests with value-level metadata are kept even if their tag doesn't match."""
