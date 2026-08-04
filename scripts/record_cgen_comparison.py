@@ -51,9 +51,10 @@ CGEN_REPO_URL = "https://github.com/emmtrix/emx-onnx-cgen"
 # GitHub repository coordinates
 ONNX_LIGHT_OWNER = "xadupre"
 ONNX_LIGHT_REPO = "onnx-light"
-# Kernel sources live under this prefix in the onnx-light repo.
+# Kernel sources live under this prefix in the onnx-light repo, grouped into
+# per-category subdirectories (e.g. math/, nn/, ...).
 # Files are named  kernel_<opname_lower>.cc
-ONNX_LIGHT_KERNELS_PREFIX = "onnx_light/onnx_kernels/kernels/"
+ONNX_LIGHT_KERNELS_PREFIX = "onnx_light/onnx_extensions/kernels/kernels/"
 
 CGEN_OWNER = "emmtrix"
 CGEN_REPO = "emx-onnx-cgen"
