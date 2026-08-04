@@ -449,7 +449,7 @@ def discover_release_after_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
 
 def run_release_after_analysis(model) -> Dict[str, Any]:
     """Run onnx-light's release-after analysis on ``model``."""
-    from onnx_light.onnx_optim import shape_inference as si
+    from onnx_light.onnx_core import shape_inference as si
 
     work = _clone_model(model)
     for node in work.graph.node:
@@ -462,7 +462,7 @@ def run_release_after_analysis(model) -> Dict[str, Any]:
         del init.metadata_props[:]
 
     ctx = si.ShapesContext()
-    ctx.compute_shape_model(work)
+    si.compute_shape_model(ctx, work)
 
     inplace = si.ComputeContext()
     inplace.compute_inplace_reuse_graph(work.graph, ctx)
