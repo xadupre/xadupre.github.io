@@ -728,14 +728,14 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
     def test_make_onnx_light_cpu_runner_registers_wrapped_cpu_kernels(self):
         """The cpu runner registers adapter-wrapped onnx-light-cpu kernels.
 
-        onnx-light invokes custom kernels as ``fn(node, *inputs)``. The raw
-        ``onnx-light-cpu`` bindings take a single array, so the runner must wrap
-        them; handing them ``(node, array)`` directly is exactly the
-        ``"<kernel>(): incompatible function arguments"`` failure this fixes.
+        The kernels are layered onto the same ``RuntimeSession`` execution path
+        as the plain ``onnx-light`` backend: the runner passes a ``register``
+        callback that installs the wrapped kernels on the runtime context via
+        ``register_custom_kernel`` on the default (``""``) domain.
         """
         import types
 
-        saved_reference = rlb._make_onnx_light_reference_runner
+        saved_session = rlb._make_onnx_light_runtime_session_runner
         captured = {}
 
         def _fake(model, register=None):
@@ -772,23 +772,25 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             )
         }
         try:
-            rlb._make_onnx_light_reference_runner = _fake
+            rlb._make_onnx_light_runtime_session_runner = _fake
             sys.modules["onnx_light_cpu"] = cpu_module
             sys.modules["onnx_light_cpu.onnx_py"] = onnx_py
             sys.modules["onnx_light_cpu.onnx_py._cpukernels"] = cpukernels
             result = rlb._make_onnx_light_cpu_runner(object())
 
-            # Register the kernels on a fake evaluator to capture the wrappers.
+            # Register the kernels on a fake runtime context to capture the
+            # wrappers. The runner's ``register`` callback is invoked as
+            # ``register(rt, ctx)`` for every run.
             registered = {}
 
-            class _Evaluator:
+            class _Ctx:
                 def register_custom_kernel(self, domain, op_type, fn):
                     registered[(domain, op_type)] = fn
 
-            evaluator = _Evaluator()
-            captured["register"](evaluator)
+            ctx = _Ctx()
+            captured["register"](object(), ctx)
         finally:
-            rlb._make_onnx_light_reference_runner = saved_reference
+            rlb._make_onnx_light_runtime_session_runner = saved_session
             for name, mod in saved_modules.items():
                 if mod is None:
                     sys.modules.pop(name, None)
@@ -801,29 +803,27 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             set(registered),
             {("", "Abs"), ("", "Exp"), ("", "Log"), ("", "Not")},
         )
-        # Each wrapper drops ``node`` and calls the single-argument kernel,
-        # preserving the input shape on the result.
-        x = np.arange(6, dtype=np.float32).reshape(2, 3)
-        out = registered[("", "Abs")]("node", x)
-        self.assertEqual(out.shape, (2, 3))
-        # The underlying kernel was invoked with a flattened 1-D array.
-        self.assertIn(("abs", (6,)), calls)
 
     def test_cpu_kernel_adapter_copies_readonly_input(self):
-        """The adapter hands the SIMD kernel a writable array.
+        """The adapter reads from/writes to the context and hands the SIMD
+        kernel a writable array.
 
-        onnx-light invokes custom kernels with a read-only, zero-copy
-        ``numpy.from_dlpack`` view of the runtime tensor. The nanobind
-        onnx-light-cpu kernels require a writable array and otherwise reject
-        the read-only view with ``"<kernel>(): incompatible function
-        arguments"`` (the failure that leaves ``test_cc_abs_benchmark`` with no
-        figure). The adapter must therefore copy a read-only input.
+        The kernel is invoked on the low-level ``RuntimeContext`` binding as
+        ``fn(node, ctx)``: it reads the node's input tensor from the context,
+        computes the result, and writes it back to the node's output. onnx-light
+        exposes tensors as a read-only, zero-copy view; the nanobind
+        onnx-light-cpu kernels require a writable array and otherwise reject the
+        read-only view with ``"<kernel>(): incompatible function arguments"``,
+        so the adapter must copy a read-only input.
         """
+        import types
+
         seen = {}
 
         def _kernel(x):
             # Mirror the real nanobind binding, which refuses read-only arrays.
             seen["writeable"] = x.flags.writeable
+            seen["shape"] = x.shape
             if not x.flags.writeable:
                 raise TypeError(
                     "abs(): incompatible function arguments. The following "
@@ -831,16 +831,83 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
                 )
             return np.abs(x)
 
-        wrapped = rlb._make_onnx_light_cpu_kernel(_kernel)
-
-        readonly = np.array([-1.0, 2.0, -3.0, 4.0], dtype=np.float32)
+        readonly = np.array([[-1.0, 2.0, -3.0], [4.0, -5.0, 6.0]], dtype=np.float32)
         readonly.flags.writeable = False
-        self.assertFalse(readonly.flags.writeable)
 
-        out = wrapped("node", readonly)
-        # The kernel received a writable buffer despite the read-only input.
+        # Fake onnx-light runtime modules so the adapter can decode the input
+        # tensor and encode the output tensor. Tensors are represented as the
+        # numpy arrays themselves for simplicity.
+        runtime = types.ModuleType("onnx_light.onnx_py._onnxpykernels.runtime")
+        runtime.tensor_from_proto = lambda proto: proto["arr"]
+        runtime.tensor_to_numpy = lambda t: np.asarray(t, dtype=np.float32).view(np.uint8)
+        runtime.tensor_to_proto = lambda t: t
+
+        numpy_helper = types.ModuleType("onnx_light.onnx_lib.numpy_helper")
+        numpy_helper.from_array = lambda arr, name=None: {"name": name, "arr": arr}
+        numpy_helper.to_array = lambda proto: np.asarray(proto, dtype=np.float32)
+
+        onnx_lib = types.ModuleType("onnx_light.onnx_lib")
+        onnx_lib.numpy_helper = numpy_helper
+        onnx_light = types.ModuleType("onnx_light")
+        onnx_py = types.ModuleType("onnx_light.onnx_py")
+        pyk = types.ModuleType("onnx_light.onnx_py._onnxpykernels")
+        pyk.runtime = runtime
+        onnx_py._onnxpykernels = pyk
+
+        # Provide a data_type/shape carrier so ``_runtime_tensor_to_numpy``
+        # reinterprets the byte view correctly.
+        class _Tensor:
+            def __init__(self, arr):
+                self._arr = np.asarray(arr, dtype=np.float32)
+                self.data_type = int(__import__("onnx").TensorProto.FLOAT)
+                self.shape = self._arr.shape
+
+        runtime.tensor_to_numpy = lambda t: t._arr.view(np.uint8)
+
+        class _Ctx:
+            def __init__(self):
+                self.store = {"X": _Tensor(readonly)}
+
+            def get(self, name):
+                return self.store[name]
+
+            def put(self, name, tensor, kind=None):
+                self.store[name] = tensor
+
+        node = types.SimpleNamespace(input=["X"], output=["Y"])
+        ctx = _Ctx()
+
+        modules = {
+            "onnx_light": onnx_light,
+            "onnx_light.onnx_lib": onnx_lib,
+            "onnx_light.onnx_lib.numpy_helper": numpy_helper,
+            "onnx_light.onnx_py": onnx_py,
+            "onnx_light.onnx_py._onnxpykernels": pyk,
+            "onnx_light.onnx_py._onnxpykernels.runtime": runtime,
+        }
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            wrapped = rlb._make_onnx_light_cpu_kernel(_kernel)
+            wrapped(node, ctx)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        # The kernel received a writable, flattened buffer despite the
+        # read-only input.
         self.assertTrue(seen["writeable"])
-        np.testing.assert_allclose(out, np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        self.assertEqual(seen["shape"], (6,))
+        # The output was written back to the node's output name, reshaped to
+        # the original 2-D shape.
+        out = numpy_helper.to_array(ctx.store["Y"])
+        np.testing.assert_allclose(
+            out,
+            np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32),
+        )
         # The original input is left untouched (read-only, unchanged values).
         self.assertFalse(readonly.flags.writeable)
 
@@ -860,34 +927,108 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
 
 class TestOnnxLightCpuRunner(unittest.TestCase):
-    """The onnx-light-cpu backend evaluates the model via a ReferenceEvaluator
-    with the onnx-light-cpu SIMD kernels registered on it through an adapter
-    matching onnx-light's ``fn(node, *inputs)`` custom-kernel convention."""
+    """The onnx-light-cpu backend evaluates the model via the same
+    ``RuntimeSession`` execution path as the plain onnx-light backend, with the
+    onnx-light-cpu SIMD kernels registered on the runtime context through an
+    adapter matching onnx-light's low-level ``fn(node, ctx)`` custom-kernel
+    convention."""
 
     def _install_fakes(self):
         import types
 
-        events = {"evaluators": 0, "registered": [], "runs": 0}
+        events = {"sessions": 0, "runs": 0, "registered": []}
 
-        class _FakeEvaluator:
-            def __init__(self, model_bytes):
-                events["evaluators"] += 1
-                self.model_bytes = model_bytes
+        class _FakeModelProto:
+            def ParseFromString(self, data):
+                pass
+
+        class _Named:
+            def __init__(self, name):
+                self.name = name
+                self.type = None
+
+        class _Opset:
+            def __init__(self, domain, version):
+                self.domain = domain
+                self.version = version
+
+        class _Graph:
+            def __init__(self):
+                self.input = [_Named("x")]
+                self.output = [_Named("y")]
+                self.initializer = []
+
+        model = _FakeModelProto()
+        model.opset_import = [_Opset("", 18)]
+        model.graph = _Graph()
+
+        class _RuntimeContext:
+            def __init__(self, kctx):
+                self._store = {}
+
+            def set(self, name, tensor, kind=None):
+                self._store[name] = tensor
+
+            def has(self, name):
+                return name in self._store
+
+            def get(self, name):
+                return self._store[name]
+
+            def put(self, name, tensor, kind=None):
+                self._store[name] = tensor
 
             def register_custom_kernel(self, domain, op_type, fn):
                 events["registered"].append((domain, op_type))
 
-            def run(self, output_names, feeds):
-                events["runs"] += 1
-                events["last_feeds"] = dict(feeds)
-                return [np.abs(v) for v in feeds.values()]
+        class _RuntimeSession:
+            def __init__(self, plan):
+                events["sessions"] += 1
 
-        reference = types.ModuleType("onnx_light.onnx.reference")
-        reference.ReferenceEvaluator = _FakeEvaluator
-        onnx_pkg = types.ModuleType("onnx_light.onnx")
-        onnx_pkg.reference = reference
+            def run(self, ctx):
+                events["runs"] += 1
+                # Mirror the real engine feeding the graph output as a tensor
+                # carrying data_type/shape used by _runtime_tensor_to_numpy.
+                ctx.set("y", _OutTensor(np.abs(ctx.get("x"))))
+
+        class _ExecutionPlan:
+            def __init__(self, graph):
+                self.graph = graph
+
+        runtime = types.ModuleType("onnx_light.onnx_py._onnxpykernels.runtime")
+        runtime.RuntimeContext = _RuntimeContext
+        runtime.KernelContext = lambda opset: ("kctx", opset)
+        runtime.default_opset = lambda v: v
+        runtime.ExecutionPlan = _ExecutionPlan
+        runtime.RuntimeSession = _RuntimeSession
+        runtime.tensor_from_proto = lambda tp: tp["arr"] if isinstance(tp, dict) else tp
+        runtime.register_model_functions = lambda m, ctx: None
+        runtime.tensor_to_numpy = lambda t: np.asarray(t, dtype=np.float32).view(np.uint8)
+        runtime.tensor_to_proto = lambda t: t
+
+        import onnx as _onnx
+
+        class _OutTensor:
+            def __init__(self, arr):
+                self._arr = np.asarray(arr, dtype=np.float32)
+                self.data_type = int(_onnx.TensorProto.FLOAT)
+                self.shape = self._arr.shape
+
+        runtime.tensor_to_numpy = lambda t: t._arr.view(np.uint8)
+
+        numpy_helper = types.ModuleType("onnx_light.onnx_lib.numpy_helper")
+        numpy_helper.from_array = lambda arr, name=None: {"name": name, "arr": arr}
+        numpy_helper.to_array = lambda tp: np.asarray(tp, dtype=np.float32)
+
+        onnx_lib = types.ModuleType("onnx_light.onnx_lib")
+        onnx_lib.ModelProto = _FakeModelProto
+        onnx_lib.numpy_helper = numpy_helper
+
         onnx_light = types.ModuleType("onnx_light")
-        onnx_light.onnx = onnx_pkg
+        onnx_py = types.ModuleType("onnx_light.onnx_py")
+        pyk = types.ModuleType("onnx_light.onnx_py._onnxpykernels")
+        pyk.runtime = runtime
+        onnx_py._onnxpykernels = pyk
 
         # Fake onnx-light-cpu SIMD kernels: each accepts a single array only.
         cpukernels = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
@@ -895,35 +1036,26 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         cpukernels.exp = lambda x: np.exp(x)
         cpukernels.log = lambda x: np.log(x)
         cpukernels.logical_not = lambda x: np.logical_not(x)
-        onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
-        onnx_py._cpukernels = cpukernels
+        cpu_onnx_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        cpu_onnx_py._cpukernels = cpukernels
         cpu = types.ModuleType("onnx_light_cpu")
-        cpu.onnx_py = onnx_py
+        cpu.onnx_py = cpu_onnx_py
 
         modules = {
             "onnx_light": onnx_light,
-            "onnx_light.onnx": onnx_pkg,
-            "onnx_light.onnx.reference": reference,
+            "onnx_light.onnx_lib": onnx_lib,
+            "onnx_light.onnx_lib.numpy_helper": numpy_helper,
+            "onnx_light.onnx_py": onnx_py,
+            "onnx_light.onnx_py._onnxpykernels": pyk,
+            "onnx_light.onnx_py._onnxpykernels.runtime": runtime,
             "onnx_light_cpu": cpu,
-            "onnx_light_cpu.onnx_py": onnx_py,
+            "onnx_light_cpu.onnx_py": cpu_onnx_py,
             "onnx_light_cpu.onnx_py._cpukernels": cpukernels,
         }
-        return modules, events
-
-    @staticmethod
-    def _fake_model():
-        import types
-
-        graph = types.SimpleNamespace(
-            input=[types.SimpleNamespace(name="x")], initializer=[]
-        )
-        return types.SimpleNamespace(
-            graph=graph, SerializeToString=lambda: b"model"
-        )
+        return model, modules, events
 
     def test_cpu_runner_registers_kernels_and_runs(self):
-        modules, events = self._install_fakes()
-        model = self._fake_model()
+        model, modules, events = self._install_fakes()
         saved = {name: sys.modules.get(name) for name in modules}
         try:
             sys.modules.update(modules)
@@ -936,16 +1068,16 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                 else:
                     sys.modules[name] = mod
 
-        # A single evaluator is built and the onnx-light-cpu kernels are
-        # registered on it before running (Abs/Exp/Log/Not).
-        self.assertEqual(events["evaluators"], 1)
+        # The model ran through a single RuntimeSession (the same execution
+        # path as the plain onnx-light backend), and the onnx-light-cpu kernels
+        # were registered on the runtime context (Abs/Exp/Log/Not).
+        self.assertEqual(events["sessions"], 1)
+        self.assertEqual(events["runs"], 1)
         self.assertIn(("", "Abs"), events["registered"])
         self.assertEqual(
             {op for _, op in events["registered"]},
             {"Abs", "Exp", "Log", "Not"},
         )
-        self.assertEqual(events["runs"], 1)
-        self.assertEqual(events["last_feeds"]["x"].tolist(), [-1.0, 2.0])
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
 
