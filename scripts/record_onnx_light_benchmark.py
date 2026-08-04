@@ -61,11 +61,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 #: Backends exercised by the benchmark. ``onnxruntime``, ``onnx_light`` and
 #: ``onnx_light_cpu`` are timed; the reference implementation is intentionally
 #: omitted because it is Python-only and not representative of production
-#: performance. ``onnx_light_cpu`` runs the model through an ``onnx-light``
-#: ``ReferenceEvaluator`` -- just like ``onnxruntime`` and ``onnx_light`` --
-#: with the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` registered
-#: on it via :func:`onnx_light_cpu.register_kernels`, so it measures the effect
-#: of those kernels within the same engine.
+#: performance. ``onnx_light_cpu`` runs the model through the *same*
+#: ``onnx-light`` ``RuntimeSession`` execution path as ``onnx_light``, but with
+#: the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` registered on the
+#: runtime context via ``register_custom_kernel``, so it isolates the effect of
+#: those kernels within the same engine.
 BENCHMARK_BACKENDS: Tuple[str, ...] = (
     "onnxruntime",
     "onnx_light",
@@ -552,6 +552,7 @@ def _runtime_tensor_to_numpy(runtime, numpy_helper, tensor):
 
 def _make_onnx_light_runtime_session_runner(
     model,
+    register: Optional[Callable[..., None]] = None,
 ) -> Callable[[List[Any]], List[Any]]:
     """Run ``model`` through onnx-light's ``ExecutionPlan`` + ``RuntimeSession``.
 
@@ -566,6 +567,12 @@ def _make_onnx_light_runtime_session_runner(
     the one-off kernel initialisation. Only the numeric backend-test corpus is
     benchmarked, so positional inputs are wired to the graph's declared
     (non-initializer) inputs by name.
+
+    When ``register`` is supplied it is invoked as ``register(rt, ctx)`` on the
+    fresh :class:`RuntimeContext` built for every ``run`` (custom kernels are
+    registered per-context), so callers can layer additional kernels — such as
+    the SIMD-accelerated ``onnx-light-cpu`` kernels — onto the same execution
+    path without changing how the model is run.
     """
     import numpy as np
     from onnx_light.onnx_lib import ModelProto as _LModelProto
@@ -603,6 +610,8 @@ def _make_onnx_light_runtime_session_runner(
 
     def _run(inputs: List[Any]) -> List[Any]:
         ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
+        if register is not None:
+            register(_rt, ctx)
         # Sequence and map inputs live in dedicated stores on the context, so
         # feed each graph input through the store matching its declared type.
         for name, kind, value in zip(input_names, input_kinds, inputs):
@@ -685,34 +694,49 @@ _ONNX_LIGHT_CPU_OPS: Dict[str, str] = {
 }
 
 
-def _make_onnx_light_cpu_kernel(kernel: Callable[[Any], Any]) -> Callable[..., Any]:
-    """Adapt a 1-D SIMD ``onnx-light-cpu`` kernel to onnx-light's convention.
+def _make_onnx_light_cpu_kernel(
+    kernel: Callable[[Any], Any]
+) -> Callable[[Any, Any], None]:
+    """Adapt a 1-D SIMD ``onnx-light-cpu`` kernel to onnx-light's runtime.
 
-    onnx-light invokes a registered custom kernel as ``fn(node, *inputs)`` (the
-    :class:`NodeProto` first, then the numpy inputs), whereas the
-    ``onnx-light-cpu`` bindings take a single contiguous 1-D array. This adapter
-    bridges the two: it drops ``node``, flattens the input to the contiguous
-    1-D array the SIMD kernel requires, and restores the original shape on the
-    result.
+    The kernel is registered on a :class:`RuntimeContext` (the low-level
+    binding used by the ``RuntimeSession`` execution path), so onnx-light
+    invokes it as ``fn(node, ctx)``: the callback is responsible for reading
+    its inputs from and writing its outputs back to the context. This mirrors
+    the exact same execution path used by the plain ``onnx-light`` backend, so
+    the only difference measured by the ``onnx-light + cpu`` column is the SIMD
+    kernel itself.
+
+    The ``onnx-light-cpu`` bindings take a single contiguous 1-D array, so the
+    adapter reads the node's input tensor as a numpy array, flattens it to the
+    contiguous 1-D layout the SIMD kernel requires, and writes the reshaped
+    result back to the node's output.
 
     onnx-light hands custom kernels a **read-only**, zero-copy view of the
-    runtime tensor (``numpy.from_dlpack`` of a tensor exported as
-    ``nb::ndarray<nb::ro>``). The nanobind ``onnx-light-cpu`` kernels are typed
-    as a writable ``nb::ndarray`` and reject a read-only array with
-    ``"<kernel>(): incompatible function arguments"``. ``np.ascontiguousarray``
-    does not copy an already-contiguous read-only array, so the flattened view
-    is copied when it is not writable to hand the kernel a writable buffer.
+    runtime tensor. The nanobind ``onnx-light-cpu`` kernels are typed as a
+    writable ``nb::ndarray`` and reject a read-only array, so the flattened
+    view is copied when it is not writable to hand the kernel a writable
+    buffer.
     """
 
-    def _fn(node: Any, x: Any) -> Any:
+    def _fn(node: Any, ctx: Any) -> None:
         import numpy as np
 
+        from onnx_light.onnx_lib import numpy_helper as _lnh
+        from onnx_light.onnx_py._onnxpykernels import runtime as _rt
+
+        x = _runtime_tensor_to_numpy(_rt, _lnh, ctx.get(str(node.input[0])))
         arr = np.ascontiguousarray(x)
         flat = arr.reshape(-1)
         if not flat.flags.writeable:
             flat = flat.copy()
-        out = np.asarray(kernel(flat))
-        return out.reshape(arr.shape)
+        out = np.asarray(kernel(flat)).reshape(arr.shape)
+        name = str(node.output[0])
+        ctx.put(
+            name,
+            _rt.tensor_from_proto(_lnh.from_array(np.ascontiguousarray(out), name=name)),
+            "output",
+        )
 
     return _fn
 
@@ -720,20 +744,19 @@ def _make_onnx_light_cpu_kernel(kernel: Callable[[Any], Any]) -> Callable[..., A
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner with ``onnx-light-cpu`` kernels registered.
 
-    Runs the model exactly like ``onnxruntime`` and the plain ``onnx-light``
-    reference backend: an ``onnx-light`` :class:`ReferenceEvaluator` evaluates
-    the model with the SIMD-accelerated ``onnx-light-cpu`` kernels (``Abs``,
-    ``Exp``, ``Log`` and ``Not``) registered on it, so every matching node
-    dispatches to the CPU-accelerated implementation instead of onnx-light's
-    built-in kernel.
+    Runs the model through the exact same onnx-light ``RuntimeSession``
+    execution path as the plain ``onnx-light`` backend, but registers the
+    SIMD-accelerated ``onnx-light-cpu`` kernels (``Abs``, ``Exp``, ``Log`` and
+    ``Not``) on the runtime context so every matching node dispatches to the
+    CPU-accelerated implementation instead of onnx-light's built-in kernel.
+    Because both backends use the identical execution engine, the difference in
+    timing isolates the effect of the SIMD kernels.
 
-    The kernels are registered through :func:`_make_onnx_light_cpu_kernel`
-    rather than :func:`onnx_light_cpu.register_kernels` because onnx-light
-    invokes a custom kernel as ``fn(node, *inputs)`` (the ``NodeProto`` first),
-    whereas the raw ``onnx-light-cpu`` bindings expect a single contiguous 1-D
-    array. Handing them the ``(node, array)`` pair directly fails with an
-    ``"<kernel>(): incompatible function arguments"`` error, so the adapter
-    drops ``node`` and reshapes the input to the layout the SIMD kernel needs.
+    The kernels are registered through :func:`_make_onnx_light_cpu_kernel` on
+    the :class:`RuntimeContext` via ``register_custom_kernel`` (the default
+    ``""`` domain overrides the built-in op), so the raw ``onnx-light-cpu``
+    1-D array bindings are adapted to onnx-light's ``fn(node, ctx)`` calling
+    convention.
 
     Importing ``onnx_light_cpu`` raises ``ImportError`` when ``onnx-light-cpu``
     is not installed, so the ``onnx_light_cpu`` backend records a clear load
@@ -748,13 +771,13 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
         for op_type, kernel_name in _ONNX_LIGHT_CPU_OPS.items()
     }
 
-    def _register(evaluator: Any) -> None:
+    def _register(rt: Any, ctx: Any) -> None:
         for op_type, kernel in kernels.items():
-            evaluator.register_custom_kernel(
+            ctx.register_custom_kernel(
                 "", op_type, _make_onnx_light_cpu_kernel(kernel)
             )
 
-    return _make_onnx_light_reference_runner(model, register=_register)
+    return _make_onnx_light_runtime_session_runner(model, register=_register)
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
