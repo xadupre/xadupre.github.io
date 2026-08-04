@@ -128,6 +128,12 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
 
     Returns a list of ``{"name", "kind", "metadata"}`` dicts where ``kind``
     is ``"input"``, ``"output"``, or ``"initializer"``.
+
+    Release-after metadata is only read from ``ValueInfoProto`` objects
+    (graph inputs, outputs, and ``value_info``). Initializers are
+    ``TensorProto`` objects, so their own ``metadata_props`` are ignored;
+    an initializer only carries metadata when a matching ``value_info``
+    entry provides it.
     """
     if not hasattr(model, "graph"):
         return []
@@ -148,12 +154,13 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
         row = {
             "name": init.name,
             "kind": "initializer",
-            "metadata": _value_metadata(init),
+            "metadata": {},
         }
         result.append(row)
         by_name[init.name] = row
-    # Some onnx-light pipelines store value tags for graph outputs in ``value_info``
-    # only; merge those tags into the matching output/input entries.
+    # Release-after metadata lives only on ``ValueInfoProto`` objects. Merge the
+    # ``value_info`` (ValueInfoProto) tags into the matching input/output/
+    # initializer entries.
     for vi in graph.value_info:
         row = by_name.get(vi.name)
         if row is None:
