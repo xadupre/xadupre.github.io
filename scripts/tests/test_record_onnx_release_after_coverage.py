@@ -118,7 +118,7 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["kind"], "initializer")
 
-    def test_graph_value_snapshot_keeps_release_metadata_on_inputs_and_initializers(self):
+    def test_graph_value_snapshot_ignores_initializer_metadata(self):
         inp = _FakeValueInfo("X", {"onnx_light.unlocked": "A"})
         init = _FakeTensorProto("W", {"onnx_light.release_after": "B"})
         model = _FakeModel([], inputs=[inp], initializers=[init])
@@ -126,6 +126,18 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         x_entry = next(s for s in snapshot if s["name"] == "X")
         w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(x_entry["metadata"], {"onnx_light.unlocked": "A"})
+        # Initializers are TensorProto, not ValueInfoProto: their own
+        # metadata_props must be ignored.
+        self.assertEqual(w_entry["metadata"], {})
+
+    def test_graph_value_snapshot_merges_initializer_metadata_from_value_info(self):
+        init = _FakeTensorProto("W", {"onnx_light.release_after": "ignored"})
+        model = _FakeModel([], initializers=[init])
+        model.graph.value_info = [
+            _FakeValueInfo("W", {"onnx_light.release_after": "B"})
+        ]
+        snapshot = rac._graph_value_snapshot(model)
+        w_entry = next(s for s in snapshot if s["name"] == "W")
         self.assertEqual(w_entry["metadata"], {"onnx_light.release_after": "B"})
 
     def test_graph_value_snapshot_merges_output_metadata_from_value_info(self):
