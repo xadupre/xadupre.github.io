@@ -127,9 +127,15 @@ class TestBuildOnnxLightSourceMap(unittest.TestCase):
 
     def test_extracts_kernel_files(self):
         tree = [
-            self._entry("onnx_light/onnx_kernels/kernels/math/kernel_abs.cc"),
-            self._entry("onnx_light/onnx_kernels/kernels/nn/kernel_conv.cc"),
-            self._entry("onnx_light/onnx_kernels/kernels/math/include_math_kernels.h"),
+            self._entry(
+                "onnx_light/onnx_extensions/kernels/kernels/math/kernel_abs.cc"
+            ),
+            self._entry(
+                "onnx_light/onnx_extensions/kernels/kernels/nn/kernel_conv.cc"
+            ),
+            self._entry(
+                "onnx_light/onnx_extensions/kernels/kernels/math/include_math_kernels.h"
+            ),
             self._entry("some/other/file.cc"),
         ]
         result = rcc.build_onnx_light_source_map(tree)
@@ -143,7 +149,12 @@ class TestBuildOnnxLightSourceMap(unittest.TestCase):
         )
 
     def test_ignores_non_blob_entries(self):
-        tree = [{"type": "tree", "path": "onnx_light/onnx_kernels/kernels/math"}]
+        tree = [
+            {
+                "type": "tree",
+                "path": "onnx_light/onnx_extensions/kernels/kernels/math",
+            }
+        ]
         result = rcc.build_onnx_light_source_map(tree)
         self.assertEqual(result, {})
 
