@@ -14,11 +14,14 @@ The script:
 4. Fetches the GitHub repository trees for both projects and adds
    ``onnx_light_source_url`` / ``cgen_source_url`` fields so the dashboard
    can offer an inline C++ code view per operator.
-5. When ``emx-onnx-cgen`` is installed, compiles a representative ONNX
-   backend test model for each supported operator (using
+5. When ``emx-onnx-cgen`` is installed, compiles a representative single-node
+   ONNX backend test model for each supported operator (using
    ``emx-onnx-cgen compile``) and stores the generated C source inline in
    the ``cgen_source_code`` field so the dashboard can display it without
-   a network request.
+   a network request. The test models come from the on-disk
+   ``onnx.backend.test.data`` directory when present, or from the
+   ``onnx-light`` backend test catalog otherwise (``onnx-weekly`` no longer
+   bundles the ONNX test data).
 
 The resulting JSON is consumed by
 ``dashboard/onnx-light/cgen-comparison.html``.
@@ -269,6 +272,9 @@ def _materialize_onnx_light_node_dir(dest_dir: str) -> Optional[str]:
         onnx.save(model, os.path.join(case_dir, "model.onnx"))
         written += 1
     return dest_dir if written else None
+
+
+def build_op_to_test_model_map(
     test_data_dir: str,
 ) -> Dict[Tuple[str, str], str]:
     """Scan *test_data_dir* and return a ``(domain, op_name) → model_path`` map.
