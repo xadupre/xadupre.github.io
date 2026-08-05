@@ -21,7 +21,7 @@
 Benchmark Abs: onnxruntime vs onnx-light + onnx-light-cpu
 =========================================================
 
-This example compares three ways of computing the elementwise absolute value
+This example compares up to three ways of computing the elementwise absolute value
 of a ``float32`` array across a range of input sizes:
 
 * **onnxruntime** - running a single-node ``Abs`` ONNX model.
@@ -33,42 +33,36 @@ of a ``float32`` array across a range of input sizes:
   AVX-512/AVX2/AVX/SSE2 dispatch.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
-The three back-ends compute the same result; the goal here is to see how their
+The back-ends compute the same result; the goal here is to see how their
 timings evolve as the array grows from a few hundred to a hundred million
 elements.
 
-.. GENERATED FROM PYTHON SOURCE LINES 23-31
+.. GENERATED FROM PYTHON SOURCE LINES 23-28
 
 Setup
 -----
 
-Import the ``onnx-light-cpu`` registration helper and report which SIMD level
-the current CPU provides. The mapping is ``0=None``, ``1=SSE2``, ``2=AVX``,
-``3=AVX2`` and ``4=AVX512``. ``onnx-light`` is not published on PyPI, so when
-it is not importable the example falls back to calling the compiled kernel
-directly; this keeps the documentation build working everywhere.
+Report which SIMD level the current CPU provides. The mapping is ``0=None``,
+``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 31-56
+.. GENERATED FROM PYTHON SOURCE LINES 28-50
 
 .. code-block:: Python
 
 
-    import importlib.util
     import time
 
     import numpy as np
-    import onnx
     import onnxruntime
-    from onnx import TensorProto, helper
+
+    # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
+    # ``onnx`` package; use it to build the model so the example depends on
+    # onnx-light rather than onnx.
+    from onnx_light.onnx import TensorProto, checker, helper
+    from onnx_light.onnx.reference import ReferenceEvaluator
 
     from onnx_light_cpu import register_kernels
-    from onnx_light_cpu.onnx_py._cpukernels import (
-        abs as cpu_abs,
-        detect_simd_level,
-        has_cpu_kernels,
-    )
-
-    _HAS_ONNX_LIGHT = importlib.util.find_spec("onnx_light") is not None
+    from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
     _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -90,7 +84,7 @@ directly; this keeps the documentation build working everywhere.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 57-63
+.. GENERATED FROM PYTHON SOURCE LINES 51-57
 
 Build the shared ONNX model
 ---------------------------
@@ -99,7 +93,7 @@ A single ``Abs`` node operating on a 1-D ``float32`` tensor of dynamic length
 is enough to benchmark the runtimes. The exact same model is fed to
 onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
-.. GENERATED FROM PYTHON SOURCE LINES 63-81
+.. GENERATED FROM PYTHON SOURCE LINES 57-75
 
 .. code-block:: Python
 
@@ -111,7 +105,7 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.
         [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-    onnx.checker.check_model(model)
+    checker.check_model(model)
 
     # Serialize once (outside the timed region) so the setup timing below measures
     # only the session construction and not the protobuf serialization.
@@ -128,41 +122,36 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 82-90
+.. GENERATED FROM PYTHON SOURCE LINES 76-82
 
 Build the onnx-light evaluator
 ------------------------------
 
 ``onnx-light`` evaluates the same model with its C++ runtime. Registering the
 onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
-the model dispatches to the SIMD-accelerated kernel. When ``onnx-light`` is
-not installed the same kernel is invoked directly through the compiled
-extension so the benchmark still runs.
+the model dispatches to the SIMD-accelerated kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 90-111
+.. GENERATED FROM PYTHON SOURCE LINES 82-101
 
 .. code-block:: Python
 
 
-    if _HAS_ONNX_LIGHT:
-        from onnx_light.onnx.reference import ReferenceEvaluator
-
-        _light_setup_start = time.perf_counter()
+    _light_setup_start = time.perf_counter()
+    light_label = "onnx-light + onnx-light-cpu"
+    # ``register_kernels()`` needs the ``_cpuregister`` extension, which is only
+    # built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
+    # the documentation build) the onnx-light-cpu curve is simply omitted; the
+    # import above stays unconditional.
+    try:
+        register_kernels()
         light_session = ReferenceEvaluator(model)
-        register_kernels(light_session)
-        light_setup_time = time.perf_counter() - _light_setup_start
+    except ImportError:
+        light_session = None
+    light_setup_time = time.perf_counter() - _light_setup_start
 
-        def run_light(inp):
-            return light_session.run(None, {"X": inp})[0]
 
-        light_label = "onnx-light + onnx-light-cpu"
-    else:
-        light_setup_time = None
-
-        def run_light(inp):
-            return cpu_abs(inp)
-
-        light_label = "onnx-light-cpu"
+    def run_light(inp):
+        return light_session.run(None, {"X": inp})[0]
 
 
 
@@ -171,7 +160,8 @@ extension so the benchmark still runs.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-131
+
+.. GENERATED FROM PYTHON SOURCE LINES 102-121
 
 Setup cost: why the evaluator is as slow to build as onnxruntime
 ----------------------------------------------------------------
@@ -193,16 +183,13 @@ The payoff is that the amortized per-call ``run`` time (measured below) stays
 low, because the expensive analysis happens exactly once at setup rather than
 on every invocation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 131-138
+.. GENERATED FROM PYTHON SOURCE LINES 121-125
 
 .. code-block:: Python
 
 
     print(f"setup: onnxruntime InferenceSession = {ort_setup_time * 1e3:.2f} ms")
-    if light_setup_time is not None:
-        print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
-    else:
-        print("setup: onnx-light not installed, skipping ReferenceEvaluator setup timing")
+    print(f"setup: onnx-light ReferenceEvaluator = {light_setup_time * 1e3:.2f} ms")
 
 
 
@@ -212,13 +199,13 @@ on every invocation.
 
  .. code-block:: none
 
-    setup: onnxruntime InferenceSession = 0.75 ms
-    setup: onnx-light not installed, skipping ReferenceEvaluator setup timing
+    setup: onnxruntime InferenceSession = 0.73 ms
+    setup: onnx-light ReferenceEvaluator = 0.15 ms
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 139-145
+.. GENERATED FROM PYTHON SOURCE LINES 126-132
 
 Timing helper
 -------------
@@ -227,7 +214,7 @@ Each candidate is called ``repeat`` times and the best (minimum) wall-clock
 time is kept to reduce the impact of scheduling noise. The number of repeats
 shrinks as the arrays grow so the whole benchmark stays fast.
 
-.. GENERATED FROM PYTHON SOURCE LINES 145-156
+.. GENERATED FROM PYTHON SOURCE LINES 132-143
 
 .. code-block:: Python
 
@@ -249,7 +236,7 @@ shrinks as the arrays grow so the whole benchmark stays fast.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 157-162
+.. GENERATED FROM PYTHON SOURCE LINES 144-149
 
 Run the benchmark
 -----------------
@@ -257,7 +244,7 @@ Run the benchmark
 For every size the same input is fed to the three back-ends. The results are
 checked against :func:`numpy.abs` to make sure every implementation agrees.
 
-.. GENERATED FROM PYTHON SOURCE LINES 162-193
+.. GENERATED FROM PYTHON SOURCE LINES 149-183
 
 .. code-block:: Python
 
@@ -274,8 +261,11 @@ checked against :func:`numpy.abs` to make sure every implementation agrees.
 
         numpy_time = measure(lambda inp=inp: np.abs(inp), repeat)
 
-        cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
-        assert np.array_equal(run_light(inp), expected), size
+        if light_session is not None:
+            cpu_time = measure(lambda inp=inp: run_light(inp), repeat)
+            assert np.array_equal(run_light(inp), expected), size
+        else:
+            cpu_time = float("nan")
 
         ort_time = measure(lambda inp=inp: session.run(None, {"X": inp}), repeat)
         assert np.array_equal(session.run(None, {"X": inp})[0], expected), size
@@ -300,18 +290,18 @@ checked against :func:`numpy.abs` to make sure every implementation agrees.
 
  .. code-block:: none
 
-    size=      100 | numpy=      1.04 us | onnx-light-cpu=     10.87 us | onnxruntime=      7.17 us
-    size=     1000 | numpy=      1.43 us | onnx-light-cpu=     11.09 us | onnxruntime=      7.39 us
-    size=    10000 | numpy=      2.57 us | onnx-light-cpu=     11.81 us | onnxruntime=      8.76 us
-    size=   100000 | numpy=     14.83 us | onnx-light-cpu=     36.36 us | onnxruntime=     13.83 us
-    size=  1000000 | numpy=    133.67 us | onnx-light-cpu=    141.72 us | onnxruntime=     75.73 us
-    size= 10000000 | numpy=   4466.54 us | onnx-light-cpu=   3282.75 us | onnxruntime=   1528.02 us
-    size=100000000 | numpy=  38416.97 us | onnx-light-cpu=  24094.81 us | onnxruntime=  20543.62 us
+    size=      100 | numpy=      1.05 us | onnx-light-cpu=       nan us | onnxruntime=      7.15 us
+    size=     1000 | numpy=      1.43 us | onnx-light-cpu=       nan us | onnxruntime=      7.28 us
+    size=    10000 | numpy=      2.57 us | onnx-light-cpu=       nan us | onnxruntime=      8.68 us
+    size=   100000 | numpy=     13.70 us | onnx-light-cpu=       nan us | onnxruntime=     13.38 us
+    size=  1000000 | numpy=    132.23 us | onnx-light-cpu=       nan us | onnxruntime=     75.31 us
+    size= 10000000 | numpy=   3267.68 us | onnx-light-cpu=       nan us | onnxruntime=   1509.55 us
+    size=100000000 | numpy=  35094.87 us | onnx-light-cpu=       nan us | onnxruntime=  20286.55 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 194-203
+.. GENERATED FROM PYTHON SOURCE LINES 184-193
 
 Plot the timings
 ----------------
@@ -323,7 +313,7 @@ divided by the back-end time, so values above ``1`` are faster than
 onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
 flat line at ``1`` by construction.
 
-.. GENERATED FROM PYTHON SOURCE LINES 203-243
+.. GENERATED FROM PYTHON SOURCE LINES 193-235
 
 .. code-block:: Python
 
@@ -333,13 +323,14 @@ flat line at ``1`` by construction.
     fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(11, 4.5))
 
     ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-    ax_time.plot(
-        sizes,
-        cpu_times * 1e6,
-        "o-",
-        label=light_label,
-        color="#4a9eff",
-    )
+    if light_session is not None:
+        ax_time.plot(
+            sizes,
+            cpu_times * 1e6,
+            "o-",
+            label=light_label,
+            color="#4a9eff",
+        )
     ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
     ax_time.set_xscale("log")
     ax_time.set_yscale("log")
@@ -349,13 +340,14 @@ flat line at ``1`` by construction.
     ax_time.legend()
 
     ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-    ax_speedup.plot(
-        sizes,
-        ort_times / cpu_times,
-        "o-",
-        label=light_label,
-        color="#4a9eff",
-    )
+    if light_session is not None:
+        ax_speedup.plot(
+            sizes,
+            ort_times / cpu_times,
+            "o-",
+            label=light_label,
+            color="#4a9eff",
+        )
     ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
     ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
     ax_speedup.set_xscale("log")
@@ -382,7 +374,7 @@ flat line at ``1`` by construction.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.599 seconds)
+   **Total running time of the script:** (0 minutes 1.368 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_abs_benchmark.py:
