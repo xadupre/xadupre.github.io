@@ -1,8 +1,9 @@
 """Record the backend node test coverage of four ONNX runtimes.
 
 The script walks every backend node test bundled with the installed
-``onnx`` package (collected via
-``onnx.backend.test.loader.load_model_tests``), runs each one against:
+``onnx-light`` package (collected via
+``onnx_light.onnx_lib.backend.test.case.collect_test_case``), runs each one
+against:
 
 * ``onnxruntime`` (CPU execution provider),
 * the ONNX Python reference implementation (``onnx.reference``),
@@ -17,11 +18,10 @@ to ``cache_data/onnx/backend_node_coverage.json``. The dashboard at
 render the table and pass ratios.
 
 This is the counterpart of
-:mod:`scripts.record_onnx_backend_test_coverage`, which uses the
+:mod:`scripts.record_onnx_backend_test_coverage`, which uses the same
 ``onnx-light`` test discovery (``onnx_light.onnx_lib.backend.test.case``) and
 only compares three runtimes. The two scripts share most of their
-implementation; the differences are the discovery source and the list
-of backends.
+implementation; the difference is the list of backends.
 
 Usage::
 
@@ -56,6 +56,10 @@ _stringify_error = _base._stringify_error
 _compare_outputs = _base._compare_outputs
 _model_input_names = _base._model_input_names
 _load_test_data_sets = _base._load_test_data_sets
+_normalize_kinds = _base._normalize_kinds
+_onnx_light_model_to_onnx = _base._onnx_light_model_to_onnx
+_onnx_light_tensor_to_numpy = _base._onnx_light_tensor_to_numpy
+DEFAULT_KIND = _base.DEFAULT_KIND
 build_graph = _base.build_graph
 _run_with_onnxruntime = _base._run_with_onnxruntime
 _run_with_reference = _base._run_with_reference
@@ -92,44 +96,58 @@ def collect_versions() -> Dict[str, str]:
 def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     """Return ``[{"name", "model", "data_sets", "tag"}, ...]`` for every test.
 
-    The tests are loaded from ``onnx.backend.test.loader.load_model_tests``
-    which ships with the installed ``onnx`` package. ``kind`` selects the
-    test group (``node``, ``simple``, ``pytorch-converted``,
-    ``pytorch-operator`` or ``real``); the default ``node`` matches the
-    tests exercised by ``onnx``'s reference implementation.
-    """
-    import onnx
-    from onnx.backend.test.loader import load_model_tests
+    The tests are loaded from ``onnx_light.onnx_lib.backend.test.case`` which
+    ships with the installed ``onnx-light`` package via
+    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`. This is the
+    same discovery source used by
+    :func:`record_onnx_backend_test_coverage.discover_node_tests`; ``onnx-weekly``
+    no longer bundles ``onnx.backend.test`` data, so the onnx-light catalog is
+    the source of truth for backend test cases.
 
-    tests = load_model_tests(kind=kind)
+    ``kind`` selects the test groups; it can be a single kind name (``"node"``,
+    ``"simple"``, ``"pytorch-converted"``, ``"pytorch-operator"``, ``"real"``,
+    ``"model"``...), a comma-separated list of kind names or any iterable of
+    kind names. A test case is retained when its ``kind`` attribute matches any
+    of the requested kinds. Passing an empty value disables kind filtering and
+    keeps every collected test. The default ``node`` matches the single operator
+    tests exercised by the reference implementations.
+    """
+    from onnx_light.onnx_lib.backend.test.case import collect_test_case
+
+    kinds = _normalize_kinds(kind)
+    cases = collect_test_case(include_big=True)
     discovered: List[Dict[str, Any]] = []
-    for tc in tests:
-        name = getattr(tc, "name", None)
+    for name, tc in cases.items():
         if not name:
             continue
-        model_dir = getattr(tc, "model_dir", None)
-        model = getattr(tc, "model", None)
-        data_sets = getattr(tc, "data_sets", None)
-        if model is None and model_dir:
-            try:
-                model = onnx.load(os.path.join(str(model_dir), "model.onnx"))
-            except Exception:  # noqa: BLE001 - skip unreadable models
-                continue
-        if data_sets is None and model_dir:
-            try:
-                data_sets = _load_test_data_sets(str(model_dir), model)
-            except Exception:  # noqa: BLE001 - skip unreadable data sets
-                data_sets = []
-        if model is None:
+        case_kind = getattr(tc, "kind", None)
+        if kinds and case_kind not in kinds:
             continue
+        model = getattr(tc, "model", None)
+        data_sets = getattr(tc, "data_sets", None) or []
+        existing_dir = getattr(tc, "model_dir", None)
+        if existing_dir and (model is None or not data_sets):
+            import onnx
+
+            if model is None:
+                model = onnx.load(os.path.join(str(existing_dir), "model.onnx"))
+            if not data_sets:
+                data_sets = _load_test_data_sets(str(existing_dir), model)
+        if model is None or not data_sets:
+            continue
+        onnx_model = _onnx_light_model_to_onnx(model)
         converted_data_sets: List[Tuple[List[Any], List[Any]]] = [
-            (list(inputs), list(outputs)) for inputs, outputs in (data_sets or [])
+            (
+                [_onnx_light_tensor_to_numpy(a) for a in inputs],
+                [_onnx_light_tensor_to_numpy(a) for a in outputs],
+            )
+            for inputs, outputs in data_sets
         ]
-        tag = getattr(tc, "kind", None) or kind or ""
+        tag = getattr(tc, "tag", None) or ""
         discovered.append(
             {
                 "name": str(name),
-                "model": model,
+                "model": onnx_model,
                 "data_sets": converted_data_sets,
                 "tag": str(tag),
             }
