@@ -91,16 +91,17 @@ fires once per tensor.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 46-52
+.. GENERATED FROM PYTHON SOURCE LINES 46-53
 
 Define the parsing callback
 ---------------------------
 
-``raw_data_callback`` receives the freshly parsed tensor.  Here we record the
-name and byte size of every tensor and return a deleter that notes when the
-underlying buffer is released.
+``raw_data_callback`` receives the freshly parsed tensor together with its
+parent :class:`onnx_light.onnx.GraphProto` (``None`` for a standalone tensor).
+Here we record the name, the parent graph name, and the byte size of every
+tensor and return a deleter that notes when the underlying buffer is released.
 
-.. GENERATED FROM PYTHON SOURCE LINES 52-67
+.. GENERATED FROM PYTHON SOURCE LINES 53-69
 
 .. code-block:: Python
 
@@ -109,9 +110,10 @@ underlying buffer is released.
     released_tensors = []
 
 
-    def on_raw_data(tensor: onnxl.TensorProto):
+    def on_raw_data(tensor: onnxl.TensorProto, graph: onnxl.GraphProto | None):
         """Records the tensor and returns a deleter run when its raw_data is freed."""
-        parsed_tensors.append((tensor.name, len(tensor.raw_data)))
+        graph_name = None if graph is None else graph.name
+        parsed_tensors.append((tensor.name, graph_name, len(tensor.raw_data)))
 
         def deleter():
             released_tensors.append(tensor.name)
@@ -126,7 +128,7 @@ underlying buffer is released.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 68-74
+.. GENERATED FROM PYTHON SOURCE LINES 70-76
 
 Parse the model with the callback enabled
 -----------------------------------------
@@ -135,7 +137,7 @@ The callback is set on :class:`onnx_light.onnx.ParseOptions` and passed to
 ``ParseFromString``.  Because nested protos share the same options, it fires
 for every tensor in the whole model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 74-84
+.. GENERATED FROM PYTHON SOURCE LINES 76-86
 
 .. code-block:: Python
 
@@ -146,8 +148,8 @@ for every tensor in the whole model.
     parsed_model = onnxl.ModelProto()
     parsed_model.ParseFromString(serialized, options)
 
-    for name, size in parsed_tensors:
-        print(f"parsed tensor {name!r}: {size} bytes of raw_data")
+    for name, graph_name, size in parsed_tensors:
+        print(f"parsed tensor {name!r} in graph {graph_name!r}: {size} bytes of raw_data")
 
 
 
@@ -157,17 +159,17 @@ for every tensor in the whole model.
 
  .. code-block:: none
 
-    parsed tensor 'W0': 256 bytes of raw_data
-    parsed tensor 'W1': 32 bytes of raw_data
+    parsed tensor 'W0' in graph 'demo_graph': 256 bytes of raw_data
+    parsed tensor 'W1' in graph 'demo_graph': 32 bytes of raw_data
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 85-86
+.. GENERATED FROM PYTHON SOURCE LINES 87-88
 
 The tensor data is fully usable: attaching a deleter does not move the bytes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-91
+.. GENERATED FROM PYTHON SOURCE LINES 88-93
 
 .. code-block:: Python
 
@@ -189,7 +191,7 @@ The tensor data is fully usable: attaching a deleter does not move the bytes.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 92-97
+.. GENERATED FROM PYTHON SOURCE LINES 94-99
 
 Releasing the model triggers the registered deleters
 ----------------------------------------------------
@@ -197,7 +199,7 @@ Releasing the model triggers the registered deleters
 When the parsed model (and every tensor sharing the same buffer) is released,
 each deleter runs exactly once.
 
-.. GENERATED FROM PYTHON SOURCE LINES 97-106
+.. GENERATED FROM PYTHON SOURCE LINES 99-108
 
 .. code-block:: Python
 
@@ -223,7 +225,7 @@ each deleter runs exactly once.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 107-112
+.. GENERATED FROM PYTHON SOURCE LINES 109-114
 
 Read-only inspection
 --------------------
@@ -231,7 +233,7 @@ Read-only inspection
 Returning ``None`` from the callback leaves ownership untouched, so it can be
 used purely to inspect tensors as they are parsed.
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-130
+.. GENERATED FROM PYTHON SOURCE LINES 114-132
 
 .. code-block:: Python
 
@@ -241,7 +243,7 @@ used purely to inspect tensors as they are parsed.
     inspect_options = onnxl.ParseOptions()
 
 
-    def record_name(tensor: onnxl.TensorProto):
+    def record_name(tensor: onnxl.TensorProto, graph: onnxl.GraphProto | None):
         """Records the tensor name and returns None to keep ownership unchanged."""
         names.append(tensor.name)
         return None
@@ -266,7 +268,7 @@ used purely to inspect tensors as they are parsed.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 131-139
+.. GENERATED FROM PYTHON SOURCE LINES 133-141
 
 Reporting progress with ``RawDataCallback``
 -------------------------------------------
@@ -277,7 +279,7 @@ to an ``on_tensor`` callable and always returns ``None``, so the default C++
 allocation is left untouched.  Assign an instance to ``raw_data_callback`` to
 print progress without changing how tensor data is owned.
 
-.. GENERATED FROM PYTHON SOURCE LINES 139-151
+.. GENERATED FROM PYTHON SOURCE LINES 141-153
 
 .. code-block:: Python
 
@@ -307,7 +309,7 @@ print progress without changing how tensor data is owned.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 152-164
+.. GENERATED FROM PYTHON SOURCE LINES 154-166
 
 Encrypting weights with a serialization callback (ChaCha20) and restoring them on parse
 -----------------------------------------------------------------------------------------
@@ -322,7 +324,7 @@ parsing with :attr:`ParseOptions.raw_data_callback`.
     This requires an onnx-light build with OpenSSL support (the same
     requirement as :func:`onnx_light.onnx.save_encrypted_string`).
 
-.. GENERATED FROM PYTHON SOURCE LINES 164-232
+.. GENERATED FROM PYTHON SOURCE LINES 166-236
 
 .. code-block:: Python
 
@@ -344,7 +346,9 @@ parsing with :attr:`ParseOptions.raw_data_callback`.
         encrypted_by_name = {}
         meta_by_name = {}
 
-        def encrypt_weights(tensor: onnxl.TensorProto, buffer, size_only: bool) -> int:
+        def encrypt_weights(
+            tensor: onnxl.TensorProto, graph: onnxl.GraphProto | None, buffer, size_only: bool
+        ) -> int:
             """Encrypts tensor bytes during callback serialization.
 
             Returns:
@@ -369,7 +373,7 @@ parsing with :attr:`ParseOptions.raw_data_callback`.
         serialize_options.raw_data_callback = encrypt_weights
         encrypted_serialized = onnx_model.SerializeToString(serialize_options)
 
-        def decrypt_weights(tensor: onnxl.TensorProto) -> None:
+        def decrypt_weights(tensor: onnxl.TensorProto, graph: onnxl.GraphProto | None) -> None:
             """Restores original tensor metadata and raw_data during parsing.
 
             Returns:
@@ -410,7 +414,7 @@ parsing with :attr:`ParseOptions.raw_data_callback`.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.198 seconds)
+   **Total running time of the script:** (0 minutes 0.183 seconds)
 
 
 .. _sphx_glr_download_auto_examples_proto_plot_raw_data_callback.py:
