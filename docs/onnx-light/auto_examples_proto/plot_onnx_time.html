@@ -424,6 +424,7 @@
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Proto Examples</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="plot_align_external_data_streaming.html">Benchmark streaming vs in-memory alignment of external data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="plot_node_callback.html">Inspect and edit nodes while parsing or serializing with a node callback</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_load_save_external.html">Load and save ONNX models with external data</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">Measures loading and saving time for an ONNX model</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_threads_load_save.html">Number of threads used to load and save ONNX models</a></li>
@@ -438,6 +439,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_shape_inference.html">Optimized Shape inference</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_qwen3_compute_context_memory.html">Qwen3-like ComputeContext memory profile</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_shape_inference_custom_op.html">Shape inference with a custom operator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_initializer_statistics.html">Statistics on the weights of an ONNX model</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_expressions.html">Symbolic expressions for dimensions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_core/plot_pretty_onnx.html">pretty_onnx: shape info, shape tags, inplace and release annotations</a></li>
 </ul>
@@ -589,6 +591,7 @@ disabled (<code class="docutils literal notranslate"><span class="pre">ORT_DISAB
 model loading overhead rather than compilation or fusion costs.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">onnx</span></code>, <code class="docutils literal notranslate"><span class="pre">onnxlight</span></code>, <code class="docutils literal notranslate"><span class="pre">ort</span></code>: use <code class="docutils literal notranslate"><span class="pre">onnx</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, or <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">reference</span></code>: builds an <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx.reference.ReferenceEvaluator</span></code> from the model</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">1filex1</span></code>: saves in a single file with 1 thread</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">1filex4</span></code>: saves in a single file with 4 threads</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">2filex1</span></code>: saves in a file and another for external data with 1 thread</p></li>
@@ -615,6 +618,9 @@ file to download inside the repository can be selected with
 fails (for example due to a connectivity issue) the script prints a
 warning and falls back to the default synthetic model so the example
 can still run in offline environments.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">--external</span></code> flag makes the default synthetic model store its weights
+in a companion external data file, which is useful to exercise the
+external-weights loading path.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">importlib</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
@@ -647,6 +653,7 @@ can still run in offline environments.</p>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">onnxl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx.helper</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">onnxlh</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.doc</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">find_standalone_executable</span><span class="p">,</span>
     <span class="n">get_cpu_topology</span><span class="p">,</span>
@@ -666,8 +673,19 @@ default synthetic model built from make_model().</p>
 <a href="https://docs.python.org/3/library/stdtypes.html#tuple" title="builtins.tuple" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">BENCHMARK_SCENARIOS</span></a> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;load&quot;</span><span class="p">,</span> <span class="s2">&quot;save&quot;</span><span class="p">,</span> <span class="s2">&quot;serialize&quot;</span><span class="p">,</span> <span class="s2">&quot;parse&quot;</span><span class="p">,</span> <span class="s2">&quot;cpp&quot;</span><span class="p">)</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">_parse_benchmark_scenarios</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Parses command-line arguments and returns the selected benchmark scenarios.&quot;&quot;&quot;</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_parse_args</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.Namespace" title="argparse.Namespace" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class"><span class="n">argparse</span><span class="o">.</span><span class="n">Namespace</span></a><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Parses all command-line arguments for plot_onnx_time.py.</span>
+
+<span class="sd">    Builds a single :class:`argparse.ArgumentParser` covering the</span>
+<span class="sd">    benchmark scenarios (``--scenario``), the local model path</span>
+<span class="sd">    (``--model``) and the Hugging Face download options (``--model-id``,</span>
+<span class="sd">    ``--model-file``).</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        The parsed :class:`argparse.Namespace`. ``scenarios`` is a set of</span>
+<span class="sd">        the selected benchmark scenarios (all of them when ``all`` is</span>
+<span class="sd">        requested or nothing is specified).</span>
+<span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">parser</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser" title="argparse.ArgumentParser" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class"><span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span></a><span class="p">(</span>
         <span class="n">description</span><span class="o">=</span><span class="s2">&quot;Runs one or several benchmark scenarios for plot_onnx_time.py.&quot;</span>
     <span class="p">)</span>
@@ -681,20 +699,6 @@ default synthetic model built from make_model().</p>
             <span class="s2">&quot;Supported values: load, save, serialize, parse, cpp, all.&quot;</span>
         <span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">parsed</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="n">args</span><span class="p">)</span>
-    <span class="n">values</span> <span class="o">=</span> <span class="n">parsed</span><span class="o">.</span><span class="n">scenarios</span> <span class="ow">or</span> <span class="p">[</span><span class="s2">&quot;all&quot;</span><span class="p">]</span>
-    <span class="k">if</span> <span class="s2">&quot;all&quot;</span> <span class="ow">in</span> <span class="n">values</span><span class="p">:</span>
-        <span class="k">return</span> <span class="nb">set</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#tuple" title="builtins.tuple" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">BENCHMARK_SCENARIOS</span></a><span class="p">)</span>
-    <span class="k">return</span> <span class="nb">set</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_parse_model_path</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Parses the ``--model`` command-line argument and returns the path.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        Path to an existing ONNX model file, or ``None`` if not provided.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">parser</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser" title="argparse.ArgumentParser" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class"><span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span></a><span class="p">(</span><span class="n">add_help</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
         <span class="s2">&quot;--model&quot;</span><span class="p">,</span>
         <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;model_path&quot;</span><span class="p">,</span>
@@ -704,20 +708,6 @@ default synthetic model built from make_model().</p>
             <span class="s2">&quot;instead of the default synthetic model.&quot;</span>
         <span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">parsed</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="n">args</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">parsed</span><span class="o">.</span><span class="n">model_path</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_parse_model_id</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Parses the ``--model-id`` and ``--model-file`` command-line arguments.</span>
-
-<span class="sd">    Returns:</span>
-<span class="sd">        A tuple ``(model_id, model_file)`` where ``model_id`` is the</span>
-<span class="sd">        Hugging Face repository identifier (or ``None`` when not given)</span>
-<span class="sd">        and ``model_file`` is the path within the repository of the ONNX</span>
-<span class="sd">        file to download (defaults to ``onnx/model.onnx``).</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">parser</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.ArgumentParser" title="argparse.ArgumentParser" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class"><span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span></a><span class="p">(</span><span class="n">add_help</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
     <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
         <span class="s2">&quot;--model-id&quot;</span><span class="p">,</span>
         <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;model_id&quot;</span><span class="p">,</span>
@@ -736,8 +726,22 @@ default synthetic model built from make_model().</p>
             <span class="s2">&quot;download when --model-id is provided. Defaults to onnx/model.onnx.&quot;</span>
         <span class="p">),</span>
     <span class="p">)</span>
+    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+        <span class="s2">&quot;--external&quot;</span><span class="p">,</span>
+        <span class="n">dest</span><span class="o">=</span><span class="s2">&quot;external&quot;</span><span class="p">,</span>
+        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;store_true&quot;</span><span class="p">,</span>
+        <span class="n">help</span><span class="o">=</span><span class="p">(</span>
+            <span class="s2">&quot;When building the default synthetic model, store its weights in an &quot;</span>
+            <span class="s2">&quot;external data file (produces a model with external weights).&quot;</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
     <span class="n">parsed</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">(</span><span class="n">args</span><span class="o">=</span><span class="n">args</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">parsed</span><span class="o">.</span><span class="n">model_id</span><span class="p">,</span> <span class="n">parsed</span><span class="o">.</span><span class="n">model_file</span>
+    <span class="n">values</span> <span class="o">=</span> <span class="n">parsed</span><span class="o">.</span><span class="n">scenarios</span> <span class="ow">or</span> <span class="p">[</span><span class="s2">&quot;all&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="s2">&quot;all&quot;</span> <span class="ow">in</span> <span class="n">values</span><span class="p">:</span>
+        <span class="n">parsed</span><span class="o">.</span><span class="n">scenarios</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#tuple" title="builtins.tuple" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">BENCHMARK_SCENARIOS</span></a><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">parsed</span><span class="o">.</span><span class="n">scenarios</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">parsed</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_download_hf_model</span><span class="p">(</span><span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">model_file</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">dest_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
@@ -779,9 +783,12 @@ default synthetic model built from make_model().</p>
     <span class="k">return</span> <span class="n">local_path</span>
 
 
-<a href="https://docs.python.org/3/library/stdtypes.html#set" title="builtins.set" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">SELECTED_SCENARIOS</span></a> <span class="o">=</span> <span class="n">_parse_benchmark_scenarios</span><span class="p">()</span>
-<span class="n">_CLI_MODEL_PATH</span> <span class="o">=</span> <span class="n">_parse_model_path</span><span class="p">()</span>
-<span class="n">_CLI_MODEL_ID</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_MODEL_FILE</span></a> <span class="o">=</span> <span class="n">_parse_model_id</span><span class="p">()</span>
+<a href="https://docs.python.org/3/library/argparse.html#argparse.Namespace" title="argparse.Namespace" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span></a> <span class="o">=</span> <span class="n">_parse_args</span><span class="p">()</span>
+<a href="https://docs.python.org/3/library/stdtypes.html#set" title="builtins.set" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">SELECTED_SCENARIOS</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/stdtypes.html#set" title="builtins.set" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span><span class="o">.</span><span class="n">scenarios</span></a>
+<span class="n">_CLI_MODEL_PATH</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.Namespace" title="argparse.Namespace" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span></a><span class="o">.</span><span class="n">model_path</span>
+<span class="n">_CLI_MODEL_ID</span> <span class="o">=</span> <a href="https://docs.python.org/3/library/argparse.html#argparse.Namespace" title="argparse.Namespace" class="sphx-glr-backref-module-argparse sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span></a><span class="o">.</span><span class="n">model_id</span>
+<a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_MODEL_FILE</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span><span class="o">.</span><span class="n">model_file</span></a>
+<a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_EXTERNAL</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_ARGS</span><span class="o">.</span><span class="n">external</span></a>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_run_scenario</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
@@ -874,6 +881,36 @@ synthetic one and write it to a temporary directory.</p>
     <span class="k">return</span> <span class="n">onnx</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
 
 
+<span class="k">def</span><span class="w"> </span><span class="nf">_model_has_external_data</span><span class="p">(</span><span class="n">model</span><span class="p">:</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">ModelProto</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns True when any initializer of *model* stores its data externally.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="nb">any</span><span class="p">(</span>
+        <span class="n">init</span><span class="o">.</span><span class="n">data_location</span> <span class="o">==</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">TensorProto</span><span class="o">.</span><span class="n">EXTERNAL</span> <span class="k">for</span> <span class="n">init</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">initializer</span>
+    <span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_save_default_model</span><span class="p">(</span><span class="n">model</span><span class="p">:</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">ModelProto</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">external</span><span class="p">:</span> <span class="nb">bool</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Saves the synthetic *model* to *tmp_dir* and returns its file path.</span>
+
+<span class="sd">    When *external* is True the weights are written to a companion external</span>
+<span class="sd">    data file so the produced model has external weights.</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">        The path of the saved ONNX model file.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/os.path.html#os.path.join" title="os.path.join" class="sphx-glr-backref-module-os-path sphx-glr-backref-type-py-function"><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <span class="s2">&quot;bench.onnx&quot;</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">external</span><span class="p">:</span>
+        <span class="n">onnxl</span><span class="o">.</span><span class="n">save</span><span class="p">(</span>
+            <span class="n">model</span><span class="p">,</span>
+            <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">,</span>
+            <span class="n">save_as_external_data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+            <span class="n">location</span><span class="o">=</span><span class="s2">&quot;bench.onnx.data&quot;</span><span class="p">,</span>
+            <span class="n">size_threshold</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
+        <span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">onnxl</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
+    <span class="k">return</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">onnx_save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">):</span>
     <span class="kn">import</span><span class="w"> </span><span class="nn">onnx</span>
 
@@ -901,22 +938,28 @@ synthetic one and write it to a temporary directory.</p>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Using model from Hugging Face id </span><span class="si">{</span><span class="n">_CLI_MODEL_ID</span><span class="si">!r}</span><span class="s2">: </span><span class="si">{</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="k">else</span><span class="p">:</span>
         <span class="n">model</span> <span class="o">=</span> <span class="n">make_model</span><span class="p">()</span>
-        <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/os.path.html#os.path.join" title="os.path.join" class="sphx-glr-backref-module-os-path sphx-glr-backref-type-py-function"><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <span class="s2">&quot;bench.onnx&quot;</span><span class="p">)</span>
-        <span class="n">onnxl</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
+        <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a> <span class="o">=</span> <span class="n">_save_default_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_EXTERNAL</span></a><span class="p">)</span>
 <span class="k">else</span><span class="p">:</span>
     <span class="n">model</span> <span class="o">=</span> <span class="n">make_model</span><span class="p">()</span>
-    <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/os.path.html#os.path.join" title="os.path.join" class="sphx-glr-backref-module-os-path sphx-glr-backref-type-py-function"><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <span class="s2">&quot;bench.onnx&quot;</span><span class="p">)</span>
-    <span class="n">onnxl</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
+    <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a> <span class="o">=</span> <span class="n">_save_default_model</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_CLI_EXTERNAL</span></a><span class="p">)</span>
 
-<a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">size_bytes</span></a> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">ByteSize</span><span class="p">()</span>
+<span class="n">onx</span> <span class="o">=</span> <span class="n">onnx_load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
+<a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_has_external_data</span></a> <span class="o">=</span> <span class="n">_model_has_external_data</span><span class="p">(</span><span class="n">onx</span><span class="p">)</span>
+<span class="n">onxl</span> <span class="o">=</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">,</span> <span class="n">load_external_data</span><span class="o">=</span><a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_has_external_data</span></a><span class="p">)</span>
+<span class="n">onxl_x4</span> <span class="o">=</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">,</span> <span class="n">num_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">load_external_data</span><span class="o">=</span><a href="https://docs.python.org/3/library/functions.html#bool" title="builtins.bool" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_has_external_data</span></a><span class="p">)</span>
+
+<span class="c1"># ``onnx.ModelProto.ByteSize`` does not account for external weights, so the</span>
+<span class="c1"># in-memory model size is measured on the ``onnx_light`` model ``onxl``. When</span>
+<span class="c1"># the model stores its weights externally, ``onxl`` is loaded with</span>
+<span class="c1"># ``load_external_data=True`` (see above), which pulls the external tensors into</span>
+<span class="c1"># memory so ``ByteSize`` reflects the real size; single-file models already have</span>
+<span class="c1"># their weights inline.</span>
+<a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">size_bytes</span></a> <span class="o">=</span> <span class="n">onxl</span><span class="o">.</span><span class="n">ByteSize</span><span class="p">()</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Model size: </span><span class="si">{</span><a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">size_bytes</span></a><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">**</span><span class="w"> </span><span class="mi">20</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> MB&quot;</span><span class="p">)</span>
 
 <a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">file_size</span></a> <span class="o">=</span> <a href="https://docs.python.org/3/library/os.path.html#os.path.getsize" title="os.path.getsize" class="sphx-glr-backref-module-os-path sphx-glr-backref-type-py-function"><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getsize</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;File size : </span><span class="si">{</span><a href="https://docs.python.org/3/library/functions.html#int" title="builtins.int" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">file_size</span></a><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="o">**</span><span class="w"> </span><span class="mi">20</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> MB&quot;</span><span class="p">)</span>
 
-<span class="n">onx</span> <span class="o">=</span> <span class="n">onnx_load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
-<span class="n">onxl</span> <span class="o">=</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
-<span class="n">onxl_x4</span> <span class="o">=</span> <span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">,</span> <span class="n">num_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
 <span class="n">onnx_ir_module</span> <span class="o">=</span> <span class="n">_maybe_import_onnx_ir</span><span class="p">()</span>
 <span class="n">onx_ir</span> <span class="o">=</span> <span class="p">(</span>
     <span class="n">onnx_ir_module</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
@@ -938,7 +981,7 @@ File size : 640.002 MB
 <h2>Model statistics<a class="headerlink" href="#model-statistics" title="Link to this heading">#</a></h2>
 <p>Print a summary of the model: number of nodes, initializers (tensors),
 total weight size, file size, and serialized size.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">print_model_stats</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">print_model_stats</span><span class="p">(</span><span class="n">onxl</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)</span>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Model statistics
@@ -1226,6 +1269,29 @@ total weight size, file size, and serialized size.</p>
         <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;onnx_ir is not installed, skipping ir-py single-file load benchmark.&quot;</span><span class="p">)</span>
 
     <span class="c1"># %%</span>
+    <span class="c1"># Load with ``onnx_light.onnx.reference.ReferenceEvaluator``.  This measures</span>
+    <span class="c1"># the time to build a Python reference runtime from the model, which</span>
+    <span class="c1"># includes loading the model and preparing the operators for evaluation.</span>
+
+    <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">measure</span><span class="p">(</span><span class="s2">&quot;load/1filex1/reference&quot;</span><span class="p">,</span> <span class="k">lambda</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">)))</span>
+    <span class="p">)</span>
+    <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/1filex1/reference&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="c1"># %%</span>
+    <span class="c1"># Load with ``onnx_light.onnx.reference.ReferenceEvaluator`` using parallel</span>
+    <span class="c1"># tensor loading.  The model is loaded with ``num_threads &gt; 1`` before</span>
+    <span class="c1"># building the reference runtime.</span>
+
+    <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">measure</span><span class="p">(</span>
+            <span class="s2">&quot;load/1filex4/reference&quot;</span><span class="p">,</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">onnx_path</span></a><span class="p">,</span> <span class="n">num_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">)),</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/1filex4/reference&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="c1"># %%</span>
     <span class="c1"># Load with ``onnxruntime`` (all optimizations disabled).</span>
     <span class="c1"># ``InferenceSession`` is created with ``ORT_DISABLE_ALL`` so the</span>
     <span class="c1"># measurement captures only model loading overhead, not graph optimization.</span>
@@ -1240,13 +1306,15 @@ total weight size, file size, and serialized size.</p>
         <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/1filex1/ort&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/1filex1/onnx                   avg=183.6 ms median=178.1 ms max=204.8 ms std=10.9 ms
-load/1filex1/onnxlight              avg=102.5 ms median=102.3 ms max=103.4 ms std=0.7 ms
-load/1filex4/onnxlight              avg=58.0 ms median=58.2 ms max=60.3 ms std=1.8 ms
-load/1filex1/onnxlight-mmap         avg=103.6 ms median=103.0 ms max=107.7 ms std=2.1 ms
-load/1filex1/onnxlight-ifstream     avg=113.5 ms median=112.8 ms max=116.2 ms std=1.4 ms
-load/1filex1/ir-py                  avg=183.4 ms median=171.6 ms max=231.1 ms std=24.0 ms
-load/1filex1/ort                    avg=433.0 ms median=437.8 ms max=450.4 ms std=14.5 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/1filex1/onnx                   avg=169.0 ms median=169.3 ms max=170.2 ms std=0.9 ms
+load/1filex1/onnxlight              avg=98.4 ms median=98.5 ms max=98.7 ms std=0.3 ms
+load/1filex4/onnxlight              avg=51.7 ms median=52.0 ms max=53.4 ms std=1.6 ms
+load/1filex1/onnxlight-mmap         avg=98.1 ms median=98.2 ms max=98.5 ms std=0.4 ms
+load/1filex1/onnxlight-ifstream     avg=109.0 ms median=109.0 ms max=109.3 ms std=0.2 ms
+load/1filex1/ir-py                  avg=218.4 ms median=171.0 ms max=304.1 ms std=63.4 ms
+load/1filex1/reference              avg=54.1 ms median=52.8 ms max=60.9 ms std=3.5 ms
+load/1filex4/reference              avg=54.0 ms median=52.2 ms max=61.5 ms std=3.8 ms
+load/1filex1/ort                    avg=384.5 ms median=377.0 ms max=419.1 ms std=19.7 ms
 </pre></div>
 </div>
 </section>
@@ -1283,9 +1351,9 @@ load/1filex1/ort                    avg=433.0 ms median=437.8 ms max=450.4 ms st
     <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;serialize/x4/onnxlight&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>serialize/x1/onnx                   avg=726.1 ms median=713.1 ms max=779.2 ms std=26.7 ms
-serialize/x1/onnxlight              avg=418.1 ms median=418.0 ms max=423.9 ms std=3.7 ms
-serialize/x4/onnxlight              avg=409.8 ms median=409.5 ms max=413.6 ms std=2.1 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>serialize/x1/onnx                   avg=560.3 ms median=550.4 ms max=601.3 ms std=26.8 ms
+serialize/x1/onnxlight              avg=389.8 ms median=389.0 ms max=392.5 ms std=1.5 ms
+serialize/x4/onnxlight              avg=384.1 ms median=384.2 ms max=385.3 ms std=0.8 ms
 </pre></div>
 </div>
 <p>ParseFromString comparison between <code class="docutils literal notranslate"><span class="pre">onnx</span></code> and <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx</span></code>.</p>
@@ -1376,9 +1444,9 @@ serialize/x4/onnxlight              avg=409.8 ms median=409.5 ms max=413.6 ms st
     <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;parse/ncx4/onnxlight&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>parse/x1/onnx                       avg=252.6 ms median=250.0 ms max=257.9 ms std=3.5 ms
-parse/x1/onnxlight                  avg=222.1 ms median=211.6 ms max=241.3 ms std=15.5 ms
-parse/x4/onnxlight                  avg=100.3 ms median=102.1 ms max=103.3 ms std=4.5 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>parse/x1/onnx                       avg=327.0 ms median=334.9 ms max=338.9 ms std=18.1 ms
+parse/x1/onnxlight                  avg=260.7 ms median=260.2 ms max=264.1 ms std=1.7 ms
+parse/x4/onnxlight                  avg=118.9 ms median=119.1 ms max=120.5 ms std=1.4 ms
 parse/nc/onnxlight                  avg=0.0 ms median=0.0 ms max=0.0 ms std=0.0 ms
 parse/ncx4/onnxlight                avg=0.2 ms median=0.2 ms max=0.2 ms std=0.0 ms
 </pre></div>
@@ -1509,14 +1577,14 @@ file automatically.</p>
     <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;save/2filex4/onnxlight&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>save/1filex1/onnx                   avg=1970.0 ms median=2008.3 ms max=2192.1 ms std=151.7 ms
-save/2filex1/onnx                   avg=2210.6 ms median=2210.6 ms max=2210.6 ms std=0.0 ms
-save/1filex1/ir-py                  avg=1978.1 ms median=1801.3 ms max=2285.3 ms std=242.0 ms
-save/2filex1/ir-py                  avg=2048.5 ms median=2048.5 ms max=2048.5 ms std=0.0 ms
-save/1filex1/onnxlight              avg=1647.9 ms median=1691.6 ms max=2253.0 ms std=380.5 ms
-save/1filex4/onnxlight              avg=666.9 ms median=551.8 ms max=1241.0 ms std=288.7 ms
-save/2filex1/onnxlight              avg=1640.6 ms median=1646.4 ms max=1657.9 ms std=18.8 ms
-save/2filex4/onnxlight              avg=890.5 ms median=675.5 ms max=1835.6 ms std=550.3 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>save/1filex1/onnx                   avg=1650.6 ms median=1649.9 ms max=1807.2 ms std=101.8 ms
+save/2filex1/onnx                   avg=2146.5 ms median=2146.5 ms max=2146.5 ms std=0.0 ms
+save/1filex1/ir-py                  avg=1657.5 ms median=1649.6 ms max=1911.7 ms std=141.5 ms
+save/2filex1/ir-py                  avg=2045.7 ms median=2045.7 ms max=2045.7 ms std=0.0 ms
+save/1filex1/onnxlight              avg=1618.5 ms median=1543.3 ms max=2154.9 ms std=361.9 ms
+save/1filex4/onnxlight              avg=509.7 ms median=550.4 ms max=735.7 ms std=172.7 ms
+save/2filex1/onnxlight              avg=1658.1 ms median=1645.8 ms max=1745.3 ms std=47.1 ms
+save/2filex4/onnxlight              avg=546.8 ms median=546.4 ms max=591.4 ms std=29.5 ms
 </pre></div>
 </div>
 </section>
@@ -1608,12 +1676,12 @@ Python interpreter overhead entirely.</p>
         <span class="n">print_stats</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#dict" title="builtins.dict" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">cpp_save_x4</span></a><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">],</span> <a href="https://docs.python.org/3/library/stdtypes.html#dict" title="builtins.dict" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">cpp_save_x4</span></a><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/1filex1/onnxlight-cpp          avg=95.3 ms median=94.7 ms max=98.9 ms std=1.4 ms
-load/1filex4/onnxlight-cpp          avg=46.5 ms median=46.4 ms max=49.5 ms std=1.2 ms
-load/2filex1/onnxlight-cpp-nocopy   avg=1.7 ms median=1.7 ms max=1.8 ms std=0.0 ms
-load/1filex1/onnx-cpp               avg=164.5 ms median=164.1 ms max=168.9 ms std=2.2 ms
-save/1filex1/onnxlight-cpp          avg=1634.4 ms median=1649.0 ms max=1895.1 ms std=153.1 ms
-save/1filex4/onnxlight-cpp          avg=561.2 ms median=542.6 ms max=1021.8 ms std=137.6 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/1filex1/onnxlight-cpp          avg=57.0 ms median=56.7 ms max=62.8 ms std=1.4 ms
+load/1filex4/onnxlight-cpp          avg=37.8 ms median=37.6 ms max=42.7 ms std=1.2 ms
+load/2filex1/onnxlight-cpp-nocopy   avg=1.7 ms median=1.7 ms max=1.7 ms std=0.0 ms
+load/1filex1/onnx-cpp               avg=137.7 ms median=137.4 ms max=142.2 ms std=1.1 ms
+save/1filex1/onnxlight-cpp          avg=1632.7 ms median=1633.0 ms max=1903.8 ms std=102.0 ms
+save/1filex4/onnxlight-cpp          avg=772.0 ms median=790.5 ms max=1085.5 ms std=215.2 ms
 </pre></div>
 </div>
 </section>
@@ -1691,14 +1759,44 @@ save/1filex4/onnxlight-cpp          avg=561.2 ms median=542.6 ms max=1021.8 ms s
             <span class="p">)</span>
         <span class="p">)</span>
         <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/2filex1/ort&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="c1"># %%</span>
+    <span class="c1"># Load with ``onnx_light.onnx.reference.ReferenceEvaluator`` using external</span>
+    <span class="c1"># data.  The model (with its external weights) is loaded and turned into a</span>
+    <span class="c1"># reference runtime.</span>
+
+    <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">measure</span><span class="p">(</span>
+            <span class="s2">&quot;load/2filex1/reference&quot;</span><span class="p">,</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">ext_load_onnx</span></a><span class="p">,</span> <span class="n">location</span><span class="o">=</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">ext_load_data</span></a><span class="p">)),</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/2filex1/reference&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="c1"># %%</span>
+    <span class="c1"># Load with ``onnx_light.onnx.reference.ReferenceEvaluator`` using external</span>
+    <span class="c1"># data and parallel tensor loading.  Combine external-data loading with</span>
+    <span class="c1"># ``num_threads &gt; 1`` before building the reference runtime.</span>
+
+    <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+        <span class="n">measure</span><span class="p">(</span>
+            <span class="s2">&quot;load/2filex4/reference&quot;</span><span class="p">,</span>
+            <span class="k">lambda</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span>
+                <span class="n">onnxl</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">ext_load_onnx</span></a><span class="p">,</span> <span class="n">location</span><span class="o">=</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">ext_load_data</span></a><span class="p">,</span> <span class="n">num_threads</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+            <span class="p">),</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
+    <span class="n">print_stats</span><span class="p">(</span><span class="s2">&quot;load/2filex4/reference&quot;</span><span class="p">,</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">data</span></a><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/2filex1/onnx                   avg=43.9 ms median=43.6 ms max=44.9 ms std=0.6 ms
-load/2filex1/onnxlight              avg=59.6 ms median=59.5 ms max=61.0 ms std=0.8 ms
-load/2filex1/onnxlight-nocopy       avg=17.1 ms median=16.9 ms max=17.6 ms std=0.3 ms
-load/2filex4/onnxlight              avg=42.4 ms median=42.2 ms max=42.9 ms std=0.4 ms
-load/2filex1/ir-py                  avg=1.9 ms median=1.6 ms max=2.6 ms std=0.5 ms
-load/2filex1/ort                    avg=283.0 ms median=274.1 ms max=319.0 ms std=18.0 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>load/2filex1/onnx                   avg=41.1 ms median=41.2 ms max=41.7 ms std=0.5 ms
+load/2filex1/onnxlight              avg=57.6 ms median=57.5 ms max=57.9 ms std=0.2 ms
+load/2filex1/onnxlight-nocopy       avg=18.0 ms median=17.6 ms max=18.8 ms std=0.6 ms
+load/2filex4/onnxlight              avg=39.8 ms median=40.3 ms max=40.4 ms std=0.7 ms
+load/2filex1/ir-py                  avg=1.6 ms median=1.5 ms max=1.7 ms std=0.1 ms
+load/2filex1/ort                    avg=267.2 ms median=266.8 ms max=268.1 ms std=0.6 ms
+load/2filex1/reference              avg=38.9 ms median=38.8 ms max=39.5 ms std=0.4 ms
+load/2filex4/reference              avg=38.5 ms median=38.3 ms max=39.2 ms std=0.4 ms
 </pre></div>
 </div>
 </section>
@@ -1711,43 +1809,47 @@ load/2filex1/ort                    avg=283.0 ms median=274.1 ms max=319.0 ms st
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>                                     median       avg  ...       max       std
 name                                                   ...
-load/1filex1/ir-py                 0.171589  0.183421  ...  0.231105  0.023976
-load/1filex1/onnx                  0.178130  0.183649  ...  0.204783  0.010884
-load/1filex1/onnx-cpp              0.164065  0.164481  ...  0.168923  0.002162
-load/1filex1/onnxlight             0.102306  0.102536  ...  0.103439  0.000685
-load/1filex1/onnxlight-cpp         0.094659  0.095333  ...  0.098905  0.001397
-load/1filex1/onnxlight-ifstream    0.112750  0.113469  ...  0.116163  0.001414
-load/1filex1/onnxlight-mmap        0.102980  0.103649  ...  0.107710  0.002147
-load/1filex1/ort                   0.437799  0.432998  ...  0.450372  0.014463
-load/1filex4/onnxlight             0.058243  0.058030  ...  0.060343  0.001766
-load/1filex4/onnxlight-cpp         0.046357  0.046488  ...  0.049475  0.001190
-load/2filex1/ir-py                 0.001582  0.001927  ...  0.002608  0.000472
-load/2filex1/onnx                  0.043588  0.043854  ...  0.044892  0.000592
-load/2filex1/onnxlight             0.059466  0.059630  ...  0.060998  0.000787
-load/2filex1/onnxlight-cpp-nocopy  0.001734  0.001736  ...  0.001757  0.000012
-load/2filex1/onnxlight-nocopy      0.016911  0.017116  ...  0.017607  0.000312
-load/2filex1/ort                   0.274093  0.283016  ...  0.319025  0.018017
-load/2filex4/onnxlight             0.042235  0.042426  ...  0.042949  0.000384
-parse/nc/onnxlight                 0.000029  0.000029  ...  0.000033  0.000002
-parse/ncx4/onnxlight               0.000217  0.000219  ...  0.000240  0.000012
-parse/x1/onnx                      0.250007  0.252626  ...  0.257892  0.003545
-parse/x1/onnxlight                 0.211588  0.222135  ...  0.241331  0.015471
-parse/x4/onnxlight                 0.102104  0.100295  ...  0.103317  0.004507
-save/1filex1/ir-py                 1.801297  1.978082  ...  2.285256  0.241962
-save/1filex1/onnx                  2.008271  1.970042  ...  2.192062  0.151735
-save/1filex1/onnxlight             1.691573  1.647915  ...  2.253048  0.380507
-save/1filex1/onnxlight-cpp         1.649012  1.634374  ...  1.895130  0.153084
-save/1filex4/onnxlight             0.551823  0.666879  ...  1.241040  0.288661
-save/1filex4/onnxlight-cpp         0.542572  0.561173  ...  1.021810  0.137638
-save/2filex1/ir-py                 2.048550  2.048550  ...  2.048550  0.000000
-save/2filex1/onnx                  2.210603  2.210603  ...  2.210603  0.000000
-save/2filex1/onnxlight             1.646411  1.640555  ...  1.657909  0.018842
-save/2filex4/onnxlight             0.675462  0.890493  ...  1.835603  0.550272
-serialize/x1/onnx                  0.713147  0.726128  ...  0.779191  0.026730
-serialize/x1/onnxlight             0.418019  0.418105  ...  0.423855  0.003657
-serialize/x4/onnxlight             0.409519  0.409823  ...  0.413582  0.002124
+load/1filex1/ir-py                 0.170968  0.218379  ...  0.304068  0.063393
+load/1filex1/onnx                  0.169341  0.168969  ...  0.170152  0.000856
+load/1filex1/onnx-cpp              0.137375  0.137744  ...  0.142250  0.001111
+load/1filex1/onnxlight             0.098524  0.098436  ...  0.098701  0.000251
+load/1filex1/onnxlight-cpp         0.056734  0.057005  ...  0.062757  0.001392
+load/1filex1/onnxlight-ifstream    0.108991  0.109011  ...  0.109289  0.000229
+load/1filex1/onnxlight-mmap        0.098152  0.098129  ...  0.098475  0.000353
+load/1filex1/ort                   0.377027  0.384483  ...  0.419057  0.019690
+load/1filex1/reference             0.052828  0.054116  ...  0.060855  0.003464
+load/1filex4/onnxlight             0.052013  0.051676  ...  0.053413  0.001617
+load/1filex4/onnxlight-cpp         0.037611  0.037821  ...  0.042703  0.001216
+load/1filex4/reference             0.052230  0.054047  ...  0.061550  0.003831
+load/2filex1/ir-py                 0.001544  0.001556  ...  0.001652  0.000055
+load/2filex1/onnx                  0.041201  0.041091  ...  0.041733  0.000530
+load/2filex1/onnxlight             0.057491  0.057609  ...  0.057945  0.000211
+load/2filex1/onnxlight-cpp-nocopy  0.001712  0.001714  ...  0.001747  0.000012
+load/2filex1/onnxlight-nocopy      0.017616  0.018043  ...  0.018843  0.000643
+load/2filex1/ort                   0.266838  0.267173  ...  0.268147  0.000553
+load/2filex1/reference             0.038772  0.038895  ...  0.039534  0.000357
+load/2filex4/onnxlight             0.040277  0.039803  ...  0.040360  0.000672
+load/2filex4/reference             0.038311  0.038488  ...  0.039156  0.000386
+parse/nc/onnxlight                 0.000029  0.000030  ...  0.000034  0.000002
+parse/ncx4/onnxlight               0.000207  0.000214  ...  0.000246  0.000018
+parse/x1/onnx                      0.334890  0.326951  ...  0.338858  0.018102
+parse/x1/onnxlight                 0.260165  0.260737  ...  0.264144  0.001743
+parse/x4/onnxlight                 0.119142  0.118902  ...  0.120509  0.001441
+save/1filex1/ir-py                 1.649650  1.657548  ...  1.911663  0.141519
+save/1filex1/onnx                  1.649876  1.650649  ...  1.807211  0.101837
+save/1filex1/onnxlight             1.543295  1.618511  ...  2.154887  0.361853
+save/1filex1/onnxlight-cpp         1.632982  1.632655  ...  1.903761  0.102013
+save/1filex4/onnxlight             0.550386  0.509664  ...  0.735683  0.172676
+save/1filex4/onnxlight-cpp         0.790509  0.772026  ...  1.085490  0.215232
+save/2filex1/ir-py                 2.045651  2.045651  ...  2.045651  0.000000
+save/2filex1/onnx                  2.146467  2.146467  ...  2.146467  0.000000
+save/2filex1/onnxlight             1.645769  1.658057  ...  1.745286  0.047093
+save/2filex4/onnxlight             0.546413  0.546822  ...  0.591355  0.029516
+serialize/x1/onnx                  0.550376  0.560294  ...  0.601279  0.026761
+serialize/x1/onnxlight             0.388958  0.389793  ...  0.392462  0.001511
+serialize/x4/onnxlight             0.384191  0.384055  ...  0.385307  0.000814
 
-[35 rows x 5 columns]
+[39 rows x 5 columns]
 </pre></div>
 </div>
 <p>Plot the results.
@@ -1757,12 +1859,9 @@ annotated alongside the average bar.
 Bars are colored by library: blue family for <code class="docutils literal notranslate"><span class="pre">onnx</span></code>, orange family for
 <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code>, green family for <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code>.  Solid shades represent
 the average; lighter shades the median.</p>
-<p>Three graphs are produced, one per tool family so the benchmarks are not
-grouped together: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> (<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_onnx.png</span></code>), <code class="docutils literal notranslate"><span class="pre">onnx_light</span></code>
-(<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_onnx_light.png</span></code>) and <code class="docutils literal notranslate"><span class="pre">ort</span></code> (<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_ort.png</span></code>,
-which also includes the <code class="docutils literal notranslate"><span class="pre">ir-py</span></code> rows).
-In addition, two API-focused graphs are produced: one restricted to the
-Python API (<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_python.png</span></code>) and one restricted to the C++ API
+<p>Three graphs are produced: one with everything
+(<code class="docutils literal notranslate"><span class="pre">plot_onnx_time.png</span></code>), one restricted to the Python API
+(<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_python.png</span></code>) and one restricted to the C++ API
 (<code class="docutils literal notranslate"><span class="pre">plot_onnx_time_cpp.png</span></code>). C++ API rows are those whose library part ends
 with <code class="docutils literal notranslate"><span class="pre">-cpp</span></code> (for example <code class="docutils literal notranslate"><span class="pre">onnxlight-cpp</span></code> or <code class="docutils literal notranslate"><span class="pre">onnxlight-cpp-nocopy</span></code>).</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.patches</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">mpatches</span>
@@ -1801,20 +1900,6 @@ with <code class="docutils literal notranslate"><span class="pre">-cpp</span></c
 <span class="sd">    &quot;&quot;&quot;</span>
     <span class="n">lib</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">&quot;/&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
     <span class="k">return</span> <span class="n">lib</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">&quot;-cpp&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;-cpp-&quot;</span> <span class="ow">in</span> <span class="n">lib</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_tool_family</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns the tool family a benchmark row belongs to.</span>
-
-<span class="sd">    The family is one of ``onnx_light`` (any ``onnxlight`` variant),</span>
-<span class="sd">    ``ort`` (``onnxruntime`` and ``ir-py`` rows) or ``onnx`` (everything else).</span>
-<span class="sd">    This mirrors the per-bar coloring used in :func:`plot_results`.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">if</span> <span class="s2">&quot;onnxlight&quot;</span> <span class="ow">in</span> <span class="n">name</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;onnx_light&quot;</span>
-    <span class="k">if</span> <span class="s2">&quot;/ir-py&quot;</span> <span class="ow">in</span> <span class="n">name</span> <span class="ow">or</span> <span class="s2">&quot;/ort&quot;</span> <span class="ow">in</span> <span class="n">name</span><span class="p">:</span>
-        <span class="k">return</span> <span class="s2">&quot;ort&quot;</span>
-    <span class="k">return</span> <span class="s2">&quot;onnx&quot;</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">plot_results</span><span class="p">(</span><span class="n">frame</span><span class="p">,</span> <span class="n">title</span><span class="p">,</span> <span class="n">png_path</span><span class="p">):</span>
@@ -1903,24 +1988,17 @@ with <code class="docutils literal notranslate"><span class="pre">-cpp</span></c
     <span class="sa">f</span><span class="s2">&quot;benchmark key: &lt;op&gt;/&lt;files&gt;x&lt;threads&gt;/&lt;lib&gt;</span><span class="se">\n</span><span class="s2">&quot;</span>
     <span class="sa">f</span><span class="s2">&quot;op=load|save|parse|serialize, files=1|2, threads=1|4, &quot;</span>
     <span class="sa">f</span><span class="s2">&quot;lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|&quot;</span>
-    <span class="sa">f</span><span class="s2">&quot;onnxlight-nocopy|ir-py|ort&quot;</span>
+    <span class="sa">f</span><span class="s2">&quot;onnxlight-nocopy|ir-py|ort|reference&quot;</span>
 <span class="p">)</span>
 
-<span class="c1"># Split the final graph into three separate graphs, one per tool family, so the</span>
-<span class="c1"># benchmarks are not grouped together in a single chart.</span>
-<span class="n">df_onnx</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="n">_tool_family</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;onnx&quot;</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">]]</span>
-<span class="n">df_onnx_light</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="n">_tool_family</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;onnx_light&quot;</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">]]</span>
-<span class="n">df_ort</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="n">_tool_family</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;ort&quot;</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">]]</span>
-
-<span class="n">plot_results</span><span class="p">(</span><span class="n">df_onnx</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;onnx load/save (s), </span><span class="si">{</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_common_title</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_onnx_time_onnx.png&quot;</span><span class="p">)</span>
-
+<span class="c1"># Produce one graph with everything, then split the results into a</span>
+<span class="c1"># Python-API-only plot and a C++-API-only plot.</span>
 <span class="n">plot_results</span><span class="p">(</span>
-    <span class="n">df_onnx_light</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;onnx_light load/save (s), </span><span class="si">{</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_common_title</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_onnx_time_onnx_light.png&quot;</span>
+    <span class="n">df</span><span class="p">,</span>
+    <span class="sa">f</span><span class="s2">&quot;onnx vs onnx_light vs ort load/save (s) - all APIs, </span><span class="si">{</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_common_title</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;plot_onnx_time.png&quot;</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="n">plot_results</span><span class="p">(</span><span class="n">df_ort</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;ort load/save (s), </span><span class="si">{</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">_common_title</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;plot_onnx_time_ort.png&quot;</span><span class="p">)</span>
-
-<span class="c1"># Split the results into a Python-API-only plot and a C++-API-only plot.</span>
 <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">cpp_mask</span></a> <span class="o">=</span> <span class="p">[</span><span class="n">_is_cpp_api</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">index</span><span class="p">]</span>
 <span class="n">df_cpp</span> <span class="o">=</span> <span class="n">df</span><span class="p">[</span><a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">cpp_mask</span></a><span class="p">]</span>
 <span class="n">df_python</span> <span class="o">=</span> <span class="n">df</span><span class="p">[[</span><span class="ow">not</span> <span class="n">is_cpp</span> <span class="k">for</span> <span class="n">is_cpp</span> <span class="ow">in</span> <a href="https://docs.python.org/3/library/stdtypes.html#list" title="builtins.list" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">cpp_mask</span></a><span class="p">]]</span>
@@ -1939,11 +2017,9 @@ with <code class="docutils literal notranslate"><span class="pre">-cpp</span></c
 </pre></div>
 </div>
 <ul class="sphx-glr-horizontal">
-<li><img src="../_images/sphx_glr_plot_onnx_time_001.png" srcset="../_images/sphx_glr_plot_onnx_time_001.png" alt="onnx load/save (s), size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort" class = "sphx-glr-multi-img"/></li>
-<li><img src="../_images/sphx_glr_plot_onnx_time_002.png" srcset="../_images/sphx_glr_plot_onnx_time_002.png" alt="onnx_light load/save (s), size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort" class = "sphx-glr-multi-img"/></li>
-<li><img src="../_images/sphx_glr_plot_onnx_time_003.png" srcset="../_images/sphx_glr_plot_onnx_time_003.png" alt="ort load/save (s), size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort" class = "sphx-glr-multi-img"/></li>
-<li><img src="../_images/sphx_glr_plot_onnx_time_004.png" srcset="../_images/sphx_glr_plot_onnx_time_004.png" alt="onnx vs onnx_light vs ort load/save (s) - Python API, size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort" class = "sphx-glr-multi-img"/></li>
-<li><img src="../_images/sphx_glr_plot_onnx_time_005.png" srcset="../_images/sphx_glr_plot_onnx_time_005.png" alt="onnx vs onnx_light load/save (s) - C++ API, size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort" class = "sphx-glr-multi-img"/></li>
+<li><img src="../_images/sphx_glr_plot_onnx_time_001.png" srcset="../_images/sphx_glr_plot_onnx_time_001.png" alt="onnx vs onnx_light vs ort load/save (s) - all APIs, size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort|reference" class = "sphx-glr-multi-img"/></li>
+<li><img src="../_images/sphx_glr_plot_onnx_time_002.png" srcset="../_images/sphx_glr_plot_onnx_time_002.png" alt="onnx vs onnx_light vs ort load/save (s) - Python API, size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort|reference" class = "sphx-glr-multi-img"/></li>
+<li><img src="../_images/sphx_glr_plot_onnx_time_003.png" srcset="../_images/sphx_glr_plot_onnx_time_003.png" alt="onnx vs onnx_light load/save (s) - C++ API, size=640.00 MB (lower is better) CPU: AMD EPYC 7763 64-Core Processor (1 processor, 2 physical cores, 4 logical processors), RAM: 15.6 GB benchmark key: <op>/<files>x<threads>/<lib> op=load|save|parse|serialize, files=1|2, threads=1|4, lib=onnx|onnx-cpp|onnxlight|onnxlight-cpp|onnxlight-cpp-nocopy|onnxlight-nocopy|ir-py|ort|reference" class = "sphx-glr-multi-img"/></li>
 </ul>
 </section>
 <section id="cleanup">
@@ -1952,7 +2028,7 @@ with <code class="docutils literal notranslate"><span class="pre">-cpp</span></c
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><a href="https://docs.python.org/3/library/shutil.html#shutil.rmtree" title="shutil.rmtree" class="sphx-glr-backref-module-shutil sphx-glr-backref-type-py-function"><span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span></a><span class="p">(</span><a href="https://docs.python.org/3/library/stdtypes.html#str" title="builtins.str" class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">tmp_dir</span></a><span class="p">,</span> <span class="n">ignore_errors</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 56.468 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (2 minutes 18.428 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-proto-plot-onnx-time-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/bb7215d76ca6aa76cbf6698e78d9542c/plot_onnx_time.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_onnx_time.ipynb</span></code></a></p>
@@ -1971,9 +2047,9 @@ with <code class="docutils literal notranslate"><span class="pre">-cpp</span></c
 </div><div class="sphx-glr-thumbcontainer" tooltip="This example benchmarks onnx_light.onnx.load and onnx_light.onnx.save while varying the num_threads parameter across three on-disk layouts:"><img alt="" src="../_images/sphx_glr_plot_threads_load_save_thumb.png" />
 <p><a class="reference internal" href="plot_threads_load_save.html"><span class="doc">Number of threads used to load and save ONNX models</span></a></p>
   <div class="sphx-glr-thumbnail-title">Number of threads used to load and save ONNX models</div>
-</div><div class="sphx-glr-thumbcontainer" tooltip="This example benchmarks two ways to re-align tensor offsets in an ONNX model that stores its weights as external data:"><img alt="" src="../_images/sphx_glr_plot_align_external_data_streaming_thumb.png" />
-<p><a class="reference internal" href="plot_align_external_data_streaming.html"><span class="doc">Benchmark streaming vs in-memory alignment of external data</span></a></p>
-  <div class="sphx-glr-thumbnail-title">Benchmark streaming vs in-memory alignment of external data</div>
+</div><div class="sphx-glr-thumbcontainer" tooltip="onnxruntime defines a flatbuffer serialization (``.ort``) of an ONNX model. It is typically used in size-constrained deployments because it can be memory-mapped directly into the runtime and avoids a protobuf parsing step."><img alt="" src="../_images/sphx_glr_plot_save_ort_flatbuffers_thumb.png" />
+<p><a class="reference internal" href="plot_save_ort_flatbuffers.html"><span class="doc">Save an ONNX model in the ORT flatbuffer format and compare sizes</span></a></p>
+  <div class="sphx-glr-thumbnail-title">Save an ONNX model in the ORT flatbuffer format and compare sizes</div>
 </div></div><p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
 </section>
 </section>
