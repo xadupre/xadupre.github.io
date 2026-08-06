@@ -322,20 +322,19 @@ jobs:
               return "_expanded" in name
 
           def _count_expanded_onnx_backend_tests(op_keys):
+              # ``onnx-weekly`` no longer bundles ``onnx.backend.test`` data, so
+              # the expanded ONNX node tests are taken from the onnx-light backend
+              # test catalog (which vendors the upstream ONNX Python-registered
+              # cases) via ``collect_test_case`` instead of the removed
+              # ``onnx.backend.test.loader.load_model_tests``.
               try:
-                  import onnx
-                  from onnx.backend.test.loader import load_model_tests
+                  from onnx_light.onnx_lib.backend.test.case.base import collect_test_case
               except ImportError:
-                  return Counter()
-
-              try:
-                  tests = load_model_tests(kind="node")
-              except Exception:
                   return Counter()
 
               sorted_forms = _build_op_form_index(op_keys)
               counts = Counter()
-              for test in tests:
+              for _name, test in collect_test_case().items():
                   # Expanded tests are counted in ``*_expanded`` columns.
                   # Non-expanded tests are intentionally skipped here and stay
                   # in the main backend totals from ``compute_schema_comparison``.
@@ -343,18 +342,13 @@ jobs:
                       continue
                   key = _attribute_test_name(test.name, sorted_forms)
                   if key is None:
-                      model_path = (
-                          os.path.join(test.model_dir, "model.onnx") if test.model_dir else None
-                      )
-                      if not model_path or not os.path.exists(model_path):
+                      model = test.model
+                      if model is None:
                           continue
-                      try:
-                          model = onnx.load(model_path, load_external_data=False)
-                      except Exception:
+                      nodes = list(model.graph.node)
+                      if not nodes:
                           continue
-                      if not model.graph.node:
-                          continue
-                      node = model.graph.node[0]
+                      node = nodes[0]
                       key = (node.domain or "ai.onnx", node.op_type)
                   counts[key] += 1
               return counts

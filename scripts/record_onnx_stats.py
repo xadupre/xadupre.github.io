@@ -143,11 +143,29 @@ def count_supported_types() -> int:
 
 
 def count_node_test_cases() -> int:
-    """Return the number of node test cases shipped with ``onnx``.
+    """Return the number of node test cases available for ``onnx``.
 
-    Each subdirectory of ``onnx/backend/test/data/node`` whose name starts
-    with ``test_`` corresponds to one node test case.
+    ``onnx-weekly`` no longer bundles the ``onnx/backend/test/data/node``
+    directory, so the count is taken from the ``onnx-light`` backend test
+    catalog (collected via
+    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`), keeping
+    only the cases whose ``kind`` is ``node``. When the on-disk directory is
+    still present (older ``onnx`` wheels) it is used as a fallback.
     """
+    try:
+        from onnx_light.onnx_lib.backend.test.case import collect_test_case
+
+        cases = collect_test_case(include_big=True)
+        count = sum(
+            1
+            for name, tc in cases.items()
+            if name and getattr(tc, "kind", None) == "node"
+        )
+        if count:
+            return count
+    except Exception:  # noqa: BLE001 - onnx-light not importable
+        pass
+
     import onnx
 
     root = os.path.join(
