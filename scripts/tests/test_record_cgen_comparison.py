@@ -306,6 +306,101 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
             self.assertEqual(result, {})
 
 
+@unittest.skipUnless(_HAS_ONNX, "onnx is required for these tests")
+class TestMaterializeOnnxLightNodeDir(unittest.TestCase):
+    def _make_model(self, op_type: str):
+        node = helper.make_node(op_type, ["x"], ["y"])
+        graph = helper.make_graph(
+            [node],
+            "g",
+            [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
+            [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
+        )
+        return helper.make_model(
+            graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
+        )
+
+    def test_writes_single_node_models_from_catalog(self):
+        import sys
+        import types
+
+        abs_model = self._make_model("Abs")
+        multi_node = helper.make_node("Relu", ["x"], ["t"])
+        multi_node2 = helper.make_node("Abs", ["t"], ["y"])
+        multi_graph = helper.make_graph(
+            [multi_node, multi_node2],
+            "g",
+            [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
+            [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
+        )
+        multi_model = helper.make_model(
+            multi_graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
+        )
+
+        cases = {
+            "test_abs": types.SimpleNamespace(model=abs_model),
+            "test_multi": types.SimpleNamespace(model=multi_model),
+            "test_no_model": types.SimpleNamespace(model=None),
+        }
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: cases
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = rcc._materialize_onnx_light_node_dir(tmpdir)
+                self.assertEqual(result, tmpdir)
+                # Only the single-node case is materialized.
+                self.assertTrue(
+                    os.path.exists(os.path.join(tmpdir, "test_abs", "model.onnx"))
+                )
+                self.assertFalse(os.path.isdir(os.path.join(tmpdir, "test_multi")))
+                self.assertFalse(os.path.isdir(os.path.join(tmpdir, "test_no_model")))
+                # The layout is understood by build_op_to_test_model_map.
+                op_map = rcc.build_op_to_test_model_map(tmpdir)
+                self.assertIn(("ai.onnx", "Abs"), op_map)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+    def test_returns_none_when_onnx_light_missing(self):
+        import sys
+
+        saved = sys.modules.get("onnx_light")
+        # Insert a sentinel that has no backend.test.case submodule so the
+        # import inside _materialize_onnx_light_node_dir fails cleanly.
+        import types
+
+        sys.modules["onnx_light"] = types.ModuleType("onnx_light")
+        sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                self.assertIsNone(rcc._materialize_onnx_light_node_dir(tmpdir))
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light", None)
+            else:
+                sys.modules["onnx_light"] = saved
+
+
 class TestGenerateCgenSourceForOp(unittest.TestCase):
     def test_returns_none_when_tool_missing(self):
         with mock.patch("shutil.which", return_value=None):

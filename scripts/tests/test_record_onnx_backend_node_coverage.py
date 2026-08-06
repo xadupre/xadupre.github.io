@@ -234,6 +234,68 @@ class TestRecordOnnxBackendNodeCoverage(unittest.TestCase):
         for entry in slowest:
             self.assertIn("elapsed_s", entry)
 
+    def test_discover_node_tests_uses_onnx_light_catalog(self):
+        # ``onnx-weekly`` no longer bundles ``onnx.backend.test`` data, so node
+        # discovery must come from the onnx-light backend test catalog
+        # (``onnx_light.onnx_lib.backend.test.case.collect_test_case``).
+        import types
+
+        class Case:
+            def __init__(self, name, kind, tag=""):
+                self.name = name
+                self.kind = kind
+                self.tag = tag
+                self.model = "model_proto"
+                self.data_sets = [([1], [1])]
+                self.model_dir = None
+
+        cases = {
+            "test_node": Case("test_node", "node"),
+            "test_simple": Case("test_simple", "simple"),
+        }
+
+        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
+        fake_module.collect_test_case = lambda include_big=False: cases
+        parents = [
+            ("onnx_light", types.ModuleType("onnx_light")),
+            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            (
+                "onnx_light.onnx_lib.backend",
+                types.ModuleType("onnx_light.onnx_lib.backend"),
+            ),
+            (
+                "onnx_light.onnx_lib.backend.test",
+                types.ModuleType("onnx_light.onnx_lib.backend.test"),
+            ),
+            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+        ]
+        saved = {name: sys.modules.get(name) for name, _ in parents}
+        original_model_to_onnx = rbn._onnx_light_model_to_onnx
+        original_tensor_to_numpy = rbn._onnx_light_tensor_to_numpy
+        rbn._onnx_light_model_to_onnx = lambda m: m
+        rbn._onnx_light_tensor_to_numpy = lambda a: a
+        try:
+            for name, mod in parents:
+                sys.modules[name] = mod
+
+            # Default kind keeps only the ``node`` cases.
+            discovered = rbn.discover_node_tests()
+            self.assertEqual([d["name"] for d in discovered], ["test_node"])
+
+            # An explicit kind filter still works.
+            discovered_simple = rbn.discover_node_tests(kind="simple")
+            self.assertEqual(
+                [d["name"] for d in discovered_simple], ["test_simple"]
+            )
+        finally:
+            rbn._onnx_light_model_to_onnx = original_model_to_onnx
+            rbn._onnx_light_tensor_to_numpy = original_tensor_to_numpy
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
