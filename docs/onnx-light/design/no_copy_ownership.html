@@ -605,24 +605,28 @@ is released.  Return an empty <code class="docutils literal notranslate"><span c
 <p>The callback works regardless of where the bytes live — on disk (a <code class="docutils literal notranslate"><span class="pre">no_copy</span></code> borrowed
 view of an mmap or external weights file) or in CPU memory (an owned buffer) — because the
 deleter is layered on top of the existing storage without moving the bytes:</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">ParseOptions</span> <span class="n">options</span><span class="p">;</span>
-<span class="n">options</span><span class="o">.</span><span class="n">raw_data_callback</span> <span class="o">=</span> <span class="p">[](</span><span class="n">TensorProto</span> <span class="o">&amp;</span><span class="n">tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">std</span><span class="p">::</span><span class="n">function</span><span class="o">&lt;</span><span class="n">void</span><span class="p">()</span><span class="o">&gt;</span> <span class="p">{</span>
-  <span class="o">//</span> <span class="n">Inspect</span> <span class="n">tensor</span><span class="o">.</span><span class="n">ref_raw_data</span><span class="p">();</span> <span class="n">optionally</span> <span class="n">relocate</span> <span class="n">it</span> <span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">g</span><span class="o">.</span> <span class="n">to</span> <span class="n">a</span> <span class="n">device</span><span class="p">)</span> <span class="ow">and</span>
-  <span class="o">//</span> <span class="k">return</span> <span class="n">the</span> <span class="n">matching</span> <span class="n">cleanup</span><span class="o">.</span> <span class="n">Returning</span> <span class="p">{}</span> <span class="n">keeps</span> <span class="n">the</span> <span class="n">default</span> <span class="n">ownership</span><span class="o">.</span>
-  <span class="k">return</span> <span class="p">[</span><span class="n">name</span> <span class="o">=</span> <span class="n">tensor</span><span class="o">.</span><span class="n">ref_name</span><span class="p">()]()</span> <span class="p">{</span> <span class="o">/*</span> <span class="n">release</span> <span class="n">resources</span> <span class="o">*/</span> <span class="p">};</span>
-<span class="p">};</span>
-<span class="n">model</span><span class="o">.</span><span class="n">ParseFromString</span><span class="p">(</span><span class="nb">bytes</span><span class="p">,</span> <span class="n">options</span><span class="p">);</span>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>ParseOptions options;
+options.raw_data_callback = [](TensorProto &amp;tensor,
+                               GraphProto *graph) -&gt; std::function&lt;void()&gt; {
+  // Inspect tensor.ref_raw_data() and the parent graph (``graph`` is nullptr for a
+  // standalone tensor); optionally relocate it (e.g. to a device) and return the matching
+  // cleanup. Returning {} keeps the default ownership.
+  return [name = tensor.ref_name()]() { /* release resources */ };
+};
+model.ParseFromString(bytes, options);
 </pre></div>
 </div>
 <p>By default <code class="docutils literal notranslate"><span class="pre">raw_data_callback</span></code> is empty and parsing behaves exactly as before.</p>
 <p>The same hook is available from Python as
 <code class="xref py py-attr docutils literal notranslate"><span class="pre">onnx_light.onnx.ParseOptions.raw_data_callback</span></code>.  The callback is called as
-<code class="docutils literal notranslate"><span class="pre">fn(tensor)</span></code> with the freshly parsed <a class="reference internal" href="../api/protos/tensor_proto.html#onnx_light.onnx.TensorProto" title="onnx_light.onnx.TensorProto"><code class="xref py py-class docutils literal notranslate"><span class="pre">TensorProto</span></code></a> and must return
+<code class="xref py py-attr docutils literal notranslate"><span class="pre">onnx_light.onnx.ParseOptions.raw_data_callback</span></code>.  The callback is called as
+<code class="docutils literal notranslate"><span class="pre">fn(tensor,</span> <span class="pre">graph)</span></code> with the freshly parsed <a class="reference internal" href="../api/protos/tensor_proto.html#onnx_light.onnx.TensorProto" title="onnx_light.onnx.TensorProto"><code class="xref py py-class docutils literal notranslate"><span class="pre">TensorProto</span></code></a> and its
+parent <a class="reference internal" href="../api/protos/graph_proto.html#onnx_light.onnx.GraphProto" title="onnx_light.onnx.GraphProto"><code class="xref py py-class docutils literal notranslate"><span class="pre">GraphProto</span></code></a> (or <code class="docutils literal notranslate"><span class="pre">None</span></code> for a standalone tensor) and must return
 either <code class="docutils literal notranslate"><span class="pre">None</span></code> (ownership unchanged) or a zero-argument callable used as the deleter:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">onnx</span>
 
 <span class="n">options</span> <span class="o">=</span> <span class="n">onnx</span><span class="o">.</span><span class="n">ParseOptions</span><span class="p">()</span>
-<span class="n">options</span><span class="o">.</span><span class="n">raw_data_callback</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">tensor</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">raw_data</span><span class="p">))</span>
+<span class="n">options</span><span class="o">.</span><span class="n">raw_data_callback</span> <span class="o">=</span> <span class="k">lambda</span> <span class="n">tensor</span><span class="p">,</span> <span class="n">graph</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">name</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">raw_data</span><span class="p">))</span>
 
 <span class="n">model</span> <span class="o">=</span> <span class="n">onnx</span><span class="o">.</span><span class="n">ModelProto</span><span class="p">()</span>
 <span class="n">model</span><span class="o">.</span><span class="n">ParseFromString</span><span class="p">(</span><span class="n">serialized</span><span class="p">,</span> <span class="n">options</span><span class="p">)</span>
