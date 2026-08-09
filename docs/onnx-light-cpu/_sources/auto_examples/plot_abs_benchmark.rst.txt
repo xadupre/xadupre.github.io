@@ -21,7 +21,7 @@
 Benchmark Abs: onnxruntime vs onnx-light + onnx-light-cpu
 =========================================================
 
-This example compares up to three ways of computing the elementwise absolute value
+This example compares up to four ways of computing the elementwise absolute value
 of a ``float32`` array across a range of input sizes:
 
 * **onnxruntime** - running a single-node ``Abs`` ONNX model.
@@ -31,13 +31,19 @@ of a ``float32`` array across a range of input sizes:
   ``onnx-light-cpu`` ``Abs`` kernel has been registered
   (:func:`onnx_light_cpu.register_kernels`); the kernel provides runtime
   AVX-512/AVX2/AVX/SSE2 dispatch.
+* **onnx-light (built-in)** - ``onnx-light``'s own un-accelerated (pure
+  reference) ``Abs`` kernel, as a baseline for what ``onnx-light-cpu`` buys on
+  top of it. It is only measured for the smaller sizes in the grid: this
+  baseline is not meaningfully more expensive than the accelerated kernel at
+  the very largest sizes (both become bandwidth-bound), so it is dropped for
+  the last two sizes to keep the comparison focused on where it matters.
 * **numpy** - :func:`numpy.abs`, used as a reference baseline.
 
 The back-ends compute the same result; the goal here is to see how their
 timings evolve as the array grows from a few hundred to a hundred million
 elements.
 
-.. GENERATED FROM PYTHON SOURCE LINES 23-28
+.. GENERATED FROM PYTHON SOURCE LINES 29-34
 
 Setup
 -----
@@ -45,7 +51,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 28-50
+.. GENERATED FROM PYTHON SOURCE LINES 34-56
 
 .. code-block:: Python
 
@@ -79,12 +85,12 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
  .. code-block:: none
 
-    CPU kernels available, SIMD level: 3 (AVX2)
+    CPU kernels available, SIMD level: 4 (AVX-512)
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 51-57
+.. GENERATED FROM PYTHON SOURCE LINES 57-63
 
 Build the shared ONNX model
 ---------------------------
@@ -93,19 +99,25 @@ A single ``Abs`` node operating on a 1-D ``float32`` tensor of dynamic length
 is enough to benchmark the runtimes. The exact same model is fed to
 onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
-.. GENERATED FROM PYTHON SOURCE LINES 57-75
+.. GENERATED FROM PYTHON SOURCE LINES 63-87
 
 .. code-block:: Python
 
 
-    graph = helper.make_graph(
-        [helper.make_node("Abs", ["X"], ["Y"])],
-        "abs_bench",
-        [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
-        [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
-    )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
-    checker.check_model(model)
+
+    def make_abs_model():
+        graph = helper.make_graph(
+            [helper.make_node("Abs", ["X"], ["Y"])],
+            "abs_bench",
+            [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
+            [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
+        )
+        model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+        checker.check_model(model)
+        return model
+
+
+    model = make_abs_model()
 
     # Serialize once (outside the timed region) so the setup timing below measures
     # only the session construction and not the protobuf serialization.
@@ -122,7 +134,79 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 76-82
+.. GENERATED FROM PYTHON SOURCE LINES 88-90
+
+Sizes benchmarked
+-----------------
+
+.. GENERATED FROM PYTHON SOURCE LINES 90-96
+
+.. code-block:: Python
+
+
+    size_grid = [10**k for k in range(2, 9)]
+    # The built-in baseline is dropped for the two largest sizes (see module
+    # docstring): keep it where the accelerated kernel's advantage is visible.
+    alone_sizes = size_grid[:-2]
+
+
+
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 97-106
+
+Time the built-in (un-accelerated) onnx-light Abs kernel
+----------------------------------------------------------
+
+``onnx_light_cpu.register_kernels()`` permanently overrides the process-wide
+``Abs`` kernel entry, and a session only resolves/caches which kernel it
+uses on its *first* run. So this baseline uses its own model/session, run
+once per size here, **before** ``register_kernels()`` is called below;
+``light_session`` (built after registration) instead resolves to the
+SIMD-accelerated kernel.
+
+.. GENERATED FROM PYTHON SOURCE LINES 106-123
+
+.. code-block:: Python
+
+
+    alone_model = make_abs_model()
+    alone_session = ReferenceEvaluator(alone_model)
+    alone_label = "onnx-light (built-in)"
+    alone_rng = np.random.default_rng(0)
+    alone_times_by_size = {}
+    for size in alone_sizes:
+        inp = alone_rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
+        repeat = max(3, min(200, 2_000_000 // size))
+        best = float("inf")
+        for _ in range(repeat):
+            start = time.perf_counter()
+            alone_session.run(None, {"X": inp})
+            best = min(best, time.perf_counter() - start)
+        alone_times_by_size[size] = best
+        print(f"size={size:>9} | {alone_label}={best * 1e6:10.2f} us")
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    size=      100 | onnx-light (built-in)=     15.71 us
+    size=     1000 | onnx-light (built-in)=     16.00 us
+    size=    10000 | onnx-light (built-in)=     17.26 us
+    size=   100000 | onnx-light (built-in)=     56.62 us
+    size=  1000000 | onnx-light (built-in)=    182.19 us
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 124-130
 
 Build the onnx-light evaluator
 ------------------------------
@@ -131,7 +215,7 @@ Build the onnx-light evaluator
 onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
 the model dispatches to the SIMD-accelerated kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 82-101
+.. GENERATED FROM PYTHON SOURCE LINES 130-146
 
 .. code-block:: Python
 
@@ -142,11 +226,8 @@ the model dispatches to the SIMD-accelerated kernel.
     # built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in
     # the documentation build) the onnx-light-cpu curve is simply omitted; the
     # import above stays unconditional.
-    try:
-        register_kernels()
-        light_session = ReferenceEvaluator(model)
-    except ImportError:
-        light_session = None
+    register_kernels()
+    light_session = ReferenceEvaluator(model)
     light_setup_time = time.perf_counter() - _light_setup_start
 
 
@@ -161,7 +242,7 @@ the model dispatches to the SIMD-accelerated kernel.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 102-121
+.. GENERATED FROM PYTHON SOURCE LINES 147-166
 
 Setup cost: why the evaluator is as slow to build as onnxruntime
 ----------------------------------------------------------------
@@ -183,7 +264,7 @@ The payoff is that the amortized per-call ``run`` time (measured below) stays
 low, because the expensive analysis happens exactly once at setup rather than
 on every invocation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 121-125
+.. GENERATED FROM PYTHON SOURCE LINES 166-170
 
 .. code-block:: Python
 
@@ -199,13 +280,13 @@ on every invocation.
 
  .. code-block:: none
 
-    setup: onnxruntime InferenceSession = 0.92 ms
-    setup: onnx-light ReferenceEvaluator = 0.15 ms
+    setup: onnxruntime InferenceSession = 2.58 ms
+    setup: onnx-light ReferenceEvaluator = 0.04 ms
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 126-132
+.. GENERATED FROM PYTHON SOURCE LINES 171-177
 
 Timing helper
 -------------
@@ -214,7 +295,7 @@ Each candidate is called ``repeat`` times and the best (minimum) wall-clock
 time is kept to reduce the impact of scheduling noise. The number of repeats
 shrinks as the arrays grow so the whole benchmark stays fast.
 
-.. GENERATED FROM PYTHON SOURCE LINES 132-143
+.. GENERATED FROM PYTHON SOURCE LINES 177-188
 
 .. code-block:: Python
 
@@ -236,7 +317,7 @@ shrinks as the arrays grow so the whole benchmark stays fast.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 144-149
+.. GENERATED FROM PYTHON SOURCE LINES 189-194
 
 Run the benchmark
 -----------------
@@ -244,16 +325,15 @@ Run the benchmark
 For every size the same input is fed to the three back-ends. The results are
 checked against :func:`numpy.abs` to make sure every implementation agrees.
 
-.. GENERATED FROM PYTHON SOURCE LINES 149-183
+.. GENERATED FROM PYTHON SOURCE LINES 194-230
 
 .. code-block:: Python
 
 
-    sizes = [10**k for k in range(2, 9)]
     rng = np.random.default_rng(0)
 
     rows = []
-    for size in sizes:
+    for size in size_grid:
         inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
         expected = np.abs(inp)
 
@@ -282,6 +362,9 @@ checked against :func:`numpy.abs` to make sure every implementation agrees.
     cpu_times = np.array([r[2] for r in rows])
     ort_times = np.array([r[3] for r in rows])
 
+    alone_grid = np.array(alone_sizes)
+    alone_times = np.array([alone_times_by_size[size] for size in alone_sizes])
+
 
 
 
@@ -290,18 +373,18 @@ checked against :func:`numpy.abs` to make sure every implementation agrees.
 
  .. code-block:: none
 
-    size=      100 | numpy=      1.04 us | onnx-light-cpu=       nan us | onnxruntime=      7.20 us
-    size=     1000 | numpy=      1.41 us | onnx-light-cpu=       nan us | onnxruntime=      7.31 us
-    size=    10000 | numpy=      2.57 us | onnx-light-cpu=       nan us | onnxruntime=      8.72 us
-    size=   100000 | numpy=     13.93 us | onnx-light-cpu=       nan us | onnxruntime=     13.43 us
-    size=  1000000 | numpy=    132.06 us | onnx-light-cpu=       nan us | onnxruntime=     74.93 us
-    size= 10000000 | numpy=   3653.78 us | onnx-light-cpu=       nan us | onnxruntime=   1594.96 us
-    size=100000000 | numpy=  39129.86 us | onnx-light-cpu=       nan us | onnxruntime=  20576.50 us
+    size=      100 | numpy=      0.82 us | onnx-light-cpu=     15.57 us | onnxruntime=      5.57 us
+    size=     1000 | numpy=      1.12 us | onnx-light-cpu=     15.97 us | onnxruntime=      5.66 us
+    size=    10000 | numpy=      2.00 us | onnx-light-cpu=     17.21 us | onnxruntime=      6.75 us
+    size=   100000 | numpy=     11.51 us | onnx-light-cpu=     56.24 us | onnxruntime=     10.58 us
+    size=  1000000 | numpy=    102.19 us | onnx-light-cpu=    180.02 us | onnxruntime=     58.73 us
+    size= 10000000 | numpy=   3800.93 us | onnx-light-cpu=   4543.06 us | onnxruntime=   1428.71 us
+    size=100000000 | numpy=  31386.19 us | onnx-light-cpu=  44167.55 us | onnxruntime=  20301.77 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 184-193
+.. GENERATED FROM PYTHON SOURCE LINES 231-240
 
 Plot the timings
 ----------------
@@ -313,7 +396,7 @@ divided by the back-end time, so values above ``1`` are faster than
 onnxruntime and values below ``1`` are slower. The onnxruntime curve is a
 flat line at ``1`` by construction.
 
-.. GENERATED FROM PYTHON SOURCE LINES 193-235
+.. GENERATED FROM PYTHON SOURCE LINES 240-300
 
 .. code-block:: Python
 
@@ -331,6 +414,13 @@ flat line at ``1`` by construction.
             label=light_label,
             color="#4a9eff",
         )
+    ax_time.plot(
+        alone_grid,
+        alone_times * 1e6,
+        "o--",
+        label=alone_label,
+        color="#5cb85c",
+    )
     ax_time.plot(sizes, ort_times * 1e6, "o-", label="onnxruntime", color="#f4a259")
     ax_time.set_xscale("log")
     ax_time.set_yscale("log")
@@ -338,6 +428,9 @@ flat line at ``1`` by construction.
     ax_time.set_ylabel("time (microseconds)")
     ax_time.set_title(f"Abs execution time (SIMD: {simd_name})")
     ax_time.legend()
+
+    ort_times_by_size = dict(zip(sizes.tolist(), ort_times.tolist(), strict=True))
+    alone_ort_times = np.array([ort_times_by_size[size] for size in alone_sizes])
 
     ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
     if light_session is not None:
@@ -348,6 +441,13 @@ flat line at ``1`` by construction.
             label=light_label,
             color="#4a9eff",
         )
+    ax_speedup.plot(
+        alone_grid,
+        alone_ort_times / alone_times,
+        "o--",
+        label=alone_label,
+        color="#5cb85c",
+    )
     ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
     ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
     ax_speedup.set_xscale("log")
@@ -358,12 +458,13 @@ flat line at ``1`` by construction.
     ax_speedup.legend()
 
     fig.tight_layout()
+    fig.savefig("plot_abs_benchmark.png")
     plt.show()
 
 
 
 .. image-sg:: /auto_examples/images/sphx_glr_plot_abs_benchmark_001.png
-   :alt: Abs execution time (SIMD: AVX2), Abs speed-up (onnxruntime = 1)
+   :alt: Abs execution time (SIMD: AVX-512), Abs speed-up (onnxruntime = 1)
    :srcset: /auto_examples/images/sphx_glr_plot_abs_benchmark_001.png
    :class: sphx-glr-single-img
 
@@ -374,7 +475,7 @@ flat line at ``1`` by construction.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.417 seconds)
+   **Total running time of the script:** (0 minutes 1.664 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_abs_benchmark.py:
