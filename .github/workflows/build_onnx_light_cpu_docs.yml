@@ -9,6 +9,10 @@ on:
         description: "Git ref (branch, tag or SHA) of xadupre/onnx-light-cpu to build"
         required: false
         default: "main"
+      onnx_light_ref:
+        description: "Git ref (branch or tag) of xadupre/onnx-light to build and link against"
+        required: false
+        default: "0.1.15"
   schedule:
     # Rebuild documentation biweekly (1st and 3rd Monday of each month) so it stays in sync with the source repository.
     - cron: "57 7 1-7,15-21 * 1"
@@ -52,6 +56,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Detect CPU cores
         run: |
           # Expose the number of available CPU cores as
@@ -62,64 +69,69 @@ jobs:
           echo "Detected ${cores} CPU cores."
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
 
-      - name: Install onnx-light from the latest full release wheel
+      - name: Build and install onnx-light from source
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SCCACHE_GHA_ENABLED: "true"
         run: |
           # The onnx-light-cpu package and its gallery example depend on the
-          # onnx-light Python package (``onnx_light``), which is not published on
-          # PyPI. Building onnx-light from source is expensive, so install a
-          # prebuilt CPython 3.12 manylinux wheel instead. The onnx-light GitHub
-          # *releases* page only publishes the size-reduced wheels (built with
-          # ``ONNX_LIGHT_BUILD_KERNELS=OFF``): their file names carry a
-          # ``0reduced`` build tag and they omit the operator kernels the CPU
-          # kernels layer on top of. The full, kernels-enabled wheels are
-          # published as artifacts of the ``build_release.yml`` workflow, so
-          # download the wheel from the most recent successful run of that
-          # workflow rather than from the releases page.
+          # onnx-light Python package (``onnx_light``) *and*, now that the
+          # gallery example registers the accelerated kernels through
+          # ``onnx_light_cpu.register_kernels()``, on onnx-light's C++
+          # development tree: building onnx-light-cpu with
+          # ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` compiles the ``_cpuregister``
+          # extension, which links onnx-light's ``lib_onnx_core`` located via
+          # ``find_package(onnx_light)``. A prebuilt wheel does not ship the
+          # CMake package config needed for that, so build onnx-light from
+          # source (with sccache to keep repeat runs fast), install its CMake
+          # package and expose it on ``CMAKE_PREFIX_PATH``, then ``pip install``
+          # it for the Python runtime. This mirrors onnx-light-cpu's own
+          # ``docs.yml`` workflow.
           python -m pip install --upgrade pip
-          run_id="$(gh run list \
-            --repo xadupre/onnx-light \
-            --workflow build_release.yml \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId')"
-          if [ -z "${run_id}" ]; then
-            echo "No successful build_release.yml run found for xadupre/onnx-light." >&2
-            exit 1
-          fi
-          echo "Using build_release.yml run ${run_id}"
-          wheel_dir="$(mktemp -d)"
-          # The ``wheels-linux-x86_64`` artifact bundles the full manylinux
-          # wheels for every packaged CPython version.
-          gh run download "${run_id}" \
-            --repo xadupre/onnx-light \
-            --name wheels-linux-x86_64 \
-            --dir "${wheel_dir}"
-          # Keep the glibc (manylinux) CPython 3.12 wheel and, defensively,
-          # skip any size-reduced wheel that carries the ``0reduced`` build tag.
-          wheel="$(find "${wheel_dir}" -name 'onnx_light-*cp312-cp312*manylinux*x86_64*.whl' \
-            ! -name '*reduced*' | sort -V | tail -n1)"
-          if [ -z "${wheel}" ]; then
-            echo "No full onnx_light cp312 manylinux wheel found in the latest build_release.yml artifacts." >&2
-            exit 1
-          fi
-          echo "Installing ${wheel}"
-          pip install "${wheel}"
+          # onnx-light's CMake calls find_package(nanobind) via "python -m
+          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
+          # importable before configuring it.
+          pip install nanobind scikit-build-core
+          git clone --depth 1 --branch "${{ inputs.onnx_light_ref || '0.1.15' }}" \
+            https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build /tmp/onnx-light/build --config Release --parallel
+          cmake --install /tmp/onnx-light/build --config Release
+          pip install /tmp/onnx-light
+          echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          # The onnx-light-cpu ``_cpuregister`` extension links onnx-light's
+          # shared libraries and is imported by the gallery example at
+          # documentation build time, so the install lib dir must be on
+          # LD_LIBRARY_PATH or the import fails with "cannot open shared object
+          # file: liblib_onnx_core.so".
+          onnx_light_libdir="$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_core.so' | head -1)")"
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and install onnx-light-cpu with doc dependencies
         working-directory: onnx-light-cpu
+        env:
+          SCCACHE_GHA_ENABLED: "true"
         run: |
           # Build the compiled CPU kernel extension: the gallery example
           # imports ``onnx_light_cpu.onnx_py._cpukernels`` (a nanobind
-          # extension) and executes it at documentation build time, so the
-          # package itself must be built and installed, not just its
-          # documentation dependencies. The ``docs`` extra pulls in the Sphinx
+          # extension) and calls ``onnx_light_cpu.register_kernels()`` at
+          # documentation build time, so the package itself must be built and
+          # installed with the onnx-light integration enabled
+          # (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``), not just its documentation
+          # dependencies. The ``docs`` extra pulls in the Sphinx
           # theme/extensions plus matplotlib needed to render the gallery.
           pip install --upgrade pip
           pip install scikit-build-core nanobind
-          pip install -e ".[docs]" -v
+          pip install \
+            -C build-dir=build \
+            -C cmake.build-type=Release \
+            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -e ".[docs]" -v
 
       - name: pip freeze
         run: pip freeze
