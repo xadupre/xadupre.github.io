@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Extend ReferenceEvaluator with a custom kernel &#8212; onnx-light 0.1.13 documentation</title>
+    <title>Extend ReferenceEvaluator with a custom kernel &#8212; onnx-light 0.1.16 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=8d02545a"></script>
+    <script src="../_static/documentation_options.js?v=d50bcae4"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -65,7 +65,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Profile the runtime memory of a model with the event log" href="plot_runtime_memory.html" />
-    <link rel="prev" title="Backend Test and Kernels Examples" href="index.html" />
+    <link rel="prev" title="Benchmark the initialization steps: onnxruntime vs onnx-light" href="plot_qwen3_init_benchmark.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.13 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.13 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.16 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.16 documentation - Home"/>
   
   
 </a></div>
@@ -194,6 +194,13 @@
 <li class="nav-item current active">
   <a class="nav-link nav-internal" href="../examples.html">
     How-To
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../next_steps/index.html">
+    Next Steps
   </a>
 </li>
 
@@ -342,6 +349,13 @@
 
 
 <li class="nav-item ">
+  <a class="nav-link nav-internal" href="../next_steps/index.html">
+    Next Steps
+  </a>
+</li>
+
+
+<li class="nav-item ">
   <a class="nav-link nav-internal" href="../misc/index.html">
     Miscellaneous
   </a>
@@ -449,8 +463,10 @@
 </ul>
 </details></li>
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Backend Test and Kernels Examples</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="plot_qwen3_init_benchmark.html">Benchmark the initialization steps: onnxruntime vs onnx-light</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">Extend ReferenceEvaluator with a custom kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_runtime_memory.html">Profile the runtime memory of a model with the event log</a></li>
+<li class="toctree-l2"><a class="reference internal" href="plot_register_custom_kernel.html">Replace a built-in kernel with a Python one and prove it ran</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_backend_test_case.html">Retrieve a backend test case and display its model and data</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_runtime_events.html">Run a model with the runtime and inspect intermediate results</a></li>
 <li class="toctree-l2"><a class="reference internal" href="plot_run_cast_to_int2.html">Run an ONNX model casting a float tensor into an int2 tensor</a></li>
@@ -465,6 +481,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../examples_cc/load_onnx_light_time_example.html">Standalone C++ example: load an ONNX file with onnx_light</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../examples_cc/load_onnx_time_example.html">Standalone C++ example: measure ONNX loading time</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../examples_cc/print_proto_debug_example.html">Standalone C++ example: print a proto for debugging</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../examples_cc/register_custom_kernel_example.html">Standalone C++ example: register a new kernel for an existing operator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../examples_cc/run_backend_test_ort_example.html">Standalone C++ example: run every backend test through onnxruntime</a></li>
 </ul>
 </details></li>
@@ -646,6 +663,27 @@ to demonstrate the override mechanism.</p>
 </pre></div>
 </div>
 </section>
+<section id="registering-globally-instead-of-per-session">
+<h2>Registering globally instead of per session<a class="headerlink" href="#registering-globally-instead-of-per-session" title="Link to this heading">#</a></h2>
+<p>The registrations above only affect the evaluator they are called on. A
+kernel can instead be registered <em>globally</em> so that every evaluator created
+afterwards picks it up, without registering it on each one. A per-session
+registration still overrides a global one for the same <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">op_type)</span></code>.
+Register the global kernel before running the evaluators that should use it,
+since an evaluator caches its runtime sessions on first <code class="docutils literal notranslate"><span class="pre">run</span></code>.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">ReferenceEvaluator</span><span class="o">.</span><span class="n">register_custom_kernel_global</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;Scale&quot;</span><span class="p">,</span> <span class="n">scale</span><span class="p">)</span>
+<span class="n">sess3</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>  <span class="c1"># no per-session registration needed</span>
+<span class="p">(</span><a href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray" class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">y3</span></a><span class="p">,)</span> <span class="o">=</span> <span class="n">sess3</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <a href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray" class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">x</span></a><span class="p">})</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;y (global kernel) = </span><span class="si">{</span><a href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray" class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance"><span class="n">y3</span></a><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="n">ReferenceEvaluator</span><span class="o">.</span><span class="n">unregister_custom_kernel_global</span><span class="p">(</span><span class="s2">&quot;my.domain&quot;</span><span class="p">,</span> <span class="s2">&quot;Scale&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>y (global kernel) = [3. 6. 9.]
+
+True
+</pre></div>
+</div>
+</section>
 <section id="see-also">
 <h2>See also<a class="headerlink" href="#see-also" title="Link to this heading">#</a></h2>
 <ul class="simple">
@@ -654,7 +692,7 @@ including the matching low-level Python
 (<code class="docutils literal notranslate"><span class="pre">RuntimeContext.register_custom_kernel</span></code>) and C++
 (<code class="docutils literal notranslate"><span class="pre">RuntimeContext::RegisterCustomKernel</span></code>) entry points.</p></li>
 </ul>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.005 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.004 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-backend-plot-custom-kernel-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/f9b262e170ee44c3bf520af5d423b0dd/plot_custom_kernel.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_custom_kernel.ipynb</span></code></a></p>
@@ -667,15 +705,15 @@ including the matching low-level Python
 </div>
 </div>
 <p class="rubric">Related examples</p>
-<div class="sphx-glr-thumbnails"><div class="sphx-glr-thumbcontainer" tooltip="When a RuntimeContext runs a model with event logging enabled, it records a RuntimeEvent for every tensor map mutation and every node dispatch. Attaching a SimpleRawBufferAllocator to the context makes each event additionally carry the allocator&#x27;s live footprint (``allocated_bytes``, the total size of every buffer alive at that moment) and its peak footprint (``peak_bytes``, the maximum ever reached). Together with the wall-clock duration_ns of each node this turns the event log into a per-node time-and-memory profile."><img alt="" src="../_images/sphx_glr_plot_runtime_memory_thumb.png" />
-<p><a class="reference internal" href="plot_runtime_memory.html"><span class="doc">Profile the runtime memory of a model with the event log</span></a></p>
-  <div class="sphx-glr-thumbnail-title">Profile the runtime memory of a model with the event log</div>
+<div class="sphx-glr-thumbnails"><div class="sphx-glr-thumbcontainer" tooltip="This is the Python counterpart of the standalone C++ example examples/register_custom_kernel (see l-cpp-register-custom-kernel-example). The C++ example writes a brand-new :cpp~onnx_light::core::runtime::KernelBase subclass for the existing Abs operator, installs it into the shared dispatch table and checks — via a run counter — that the custom kernel, not the built-in one, executed the node."><img alt="" src="../_images/sphx_glr_plot_register_custom_kernel_thumb.png" />
+<p><a class="reference internal" href="plot_register_custom_kernel.html"><span class="doc">Replace a built-in kernel with a Python one and prove it ran</span></a></p>
+  <div class="sphx-glr-thumbnail-title">Replace a built-in kernel with a Python one and prove it ran</div>
 </div><div class="sphx-glr-thumbcontainer" tooltip="The ONNX backend test suite shipped with onnx-light is exposed as a small C++ data model bound to Python under onnx_light.onnx.backend. Each entry is a TestCase made of a ModelProto plus one or more DataSet (lists of reference input / output Tensor instances)."><img alt="" src="../_images/sphx_glr_plot_backend_test_case_thumb.png" />
 <p><a class="reference internal" href="plot_backend_test_case.html"><span class="doc">Retrieve a backend test case and display its model and data</span></a></p>
   <div class="sphx-glr-thumbnail-title">Retrieve a backend test case and display its model and data</div>
-</div><div class="sphx-glr-thumbcontainer" tooltip="This example shows how to take one backend test case from the suite shipped with onnx-light (onnx_light.onnx.backend), run its ONNX model with the reference runtime, and then re-run the same case as a backend test."><img alt="" src="../_images/sphx_glr_plot_run_cast_to_int2_thumb.png" />
-<p><a class="reference internal" href="plot_run_cast_to_int2.html"><span class="doc">Run an ONNX model casting a float tensor into an int2 tensor</span></a></p>
-  <div class="sphx-glr-thumbnail-title">Run an ONNX model casting a float tensor into an int2 tensor</div>
+</div><div class="sphx-glr-thumbcontainer" tooltip="When a RuntimeContext runs a model with event logging enabled, it records a RuntimeEvent for every tensor map mutation and every node dispatch. Attaching a SimpleRawBufferAllocator to the context makes each event additionally carry the allocator&#x27;s live footprint (``allocated_bytes``, the total size of every buffer alive at that moment) and its peak footprint (``peak_bytes``, the maximum ever reached). Together with the wall-clock duration_ns of each node this turns the event log into a per-node time-and-memory profile."><img alt="" src="../_images/sphx_glr_plot_runtime_memory_thumb.png" />
+<p><a class="reference internal" href="plot_runtime_memory.html"><span class="doc">Profile the runtime memory of a model with the event log</span></a></p>
+  <div class="sphx-glr-thumbnail-title">Profile the runtime memory of a model with the event log</div>
 </div></div><p class="sphx-glr-signature"><a class="reference external" href="https://sphinx-gallery.github.io">Gallery generated by Sphinx-Gallery</a></p>
 </section>
 </section>
@@ -691,12 +729,12 @@ including the matching low-level Python
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="index.html"
+       href="plot_qwen3_init_benchmark.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Backend Test and Kernels Examples</p>
+        <p class="prev-next-title">Benchmark the initialization steps: onnxruntime vs onnx-light</p>
       </div>
     </a>
     <a class="right-next"
@@ -731,6 +769,7 @@ including the matching low-level Python
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implement-the-custom-kernel">Implement the custom kernel</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#register-and-run">Register and run</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overriding-a-built-in-kernel">Overriding a built-in kernel</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#registering-globally-instead-of-per-session">Registering globally instead of per session</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#see-also">See also</a></li>
 </ul>
   </nav></div>
