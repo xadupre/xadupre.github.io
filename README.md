@@ -1,5 +1,7 @@
 # xadupre.github.io
 
+![Repo size](https://img.shields.io/github/repo-size/xadupre/xadupre.github.io)
+
 A kind of dashboard.
 
 ## Branch protection and the auto-updating workflows
