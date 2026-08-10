@@ -17,7 +17,6 @@
   var CDNS = [
     "https://cdn.jsdelivr.net/npm/",
     "https://unpkg.com/",
-    "https://cdn.skypack.dev/",
   ];
 
   function loadOne(path) {
