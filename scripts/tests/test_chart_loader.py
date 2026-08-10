@@ -1,10 +1,9 @@
-"""Tests that Chart.js is loaded through the resilient chart-loader helper.
+"""Tests that Chart.js is loaded through the local chart-loader helper.
 
 The package-size dashboards create charts as soon as their CSV data loads. If
-Chart.js is fetched from a single CDN and that CDN is unreachable, the pages
-fail with "Chart is not defined". These tests ensure the pages rely on
-assets/chart-loader.js (which tries several CDNs) and defer chart creation until
-the loader resolves.
+Chart.js is fetched from a CDN that is unreachable, the pages fail with "Chart
+is not defined". These tests ensure the pages rely on local vendored assets and
+defer chart creation until the loader resolves.
 """
 
 from __future__ import annotations
@@ -36,6 +35,12 @@ CHART_LOADER_PAGES = [
 LOADER_SCRIPT_RE = re.compile(r'<script\s+src="((?:\.\./)*)assets/chart-loader\.js"')
 # A direct <script src> that pulls chart.js straight from a CDN.
 DIRECT_CHART_CDN_RE = re.compile(r'<script\s+src="https?://[^"]*/chart\.js@')
+VENDORED_LIBS = [
+    "chart.umd.min.js",
+    "chartjs-adapter-date-fns.bundle.min.js",
+    "hammer.min.js",
+    "chartjs-plugin-zoom.min.js",
+]
 
 
 class TestChartLoader(unittest.TestCase):
@@ -44,10 +49,15 @@ class TestChartLoader(unittest.TestCase):
         self.assertTrue(os.path.isfile(path), f"missing helper: {path}")
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        # The helper must expose loadChartJs and try more than one CDN.
         self.assertIn("window.loadChartJs", text)
-        self.assertIn("cdn.jsdelivr.net", text)
-        self.assertIn("unpkg.com", text)
+        self.assertNotIn("cdn.jsdelivr.net", text)
+        self.assertNotIn("unpkg.com", text)
+        for filename in VENDORED_LIBS:
+            with self.subTest(library=filename):
+                self.assertIn(filename, text)
+                vendor_path = os.path.join(REPO_ROOT, "assets", "vendor", filename)
+                self.assertTrue(os.path.isfile(vendor_path), f"missing {vendor_path}")
+                self.assertGreater(os.path.getsize(vendor_path), 1000)
 
     def test_pages_use_loader(self):
         for rel, depth in CHART_LOADER_PAGES:
