@@ -18,8 +18,19 @@ REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 
 # (page path relative to repo root, depth from repo root to the page's dir)
 CHART_LOADER_PAGES = [
+    ("dashboard/pypi-downloads.html", 1),
+    ("dashboard/onnx/stats.html", 2),
+    ("dashboard/onnx/build-durations.html", 2),
+    ("dashboard/onnx/lost-compute.html", 2),
     ("dashboard/onnx-light/package-size.html", 2),
+    ("dashboard/onnx-light/pr-stats.html", 2),
+    ("dashboard/onnx-light/build-durations.html", 2),
+    ("dashboard/onnx-light/lost-compute.html", 2),
     ("dashboard/yet-another-onnx-builder/package-size.html", 2),
+    ("dashboard/yet-another-onnx-builder/pr-stats.html", 2),
+    ("dashboard/yet-another-onnx-builder/sklearn-coverage.html", 2),
+    ("dashboard/yet-another-onnx-builder/build-durations.html", 2),
+    ("dashboard/yet-another-onnxruntime-extensions/pr-stats.html", 2),
 ]
 
 LOADER_SCRIPT_RE = re.compile(r'<script\s+src="((?:\.\./)*)assets/chart-loader\.js"')
