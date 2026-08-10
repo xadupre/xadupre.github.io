@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Reducing the lib_onnx_proto binary size &#8212; onnx-light 0.1.16 documentation</title>
+    <title>Reducing the lib_onnx_proto binary size &#8212; onnx-light 0.1.17 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=d50bcae4"></script>
+    <script src="../_static/documentation_options.js?v=71734efd"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.16 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.16 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.17 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.17 documentation - Home"/>
   
   
 </a></div>
@@ -424,7 +424,10 @@
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_optimization.html">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_prepared_execution.html">Parallel model initialization</a></li>
 </ul>
 </div>
 </nav></div>
@@ -492,6 +495,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
+<p><strong>complete</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>The CMake target <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> produces <code class="docutils literal notranslate"><span class="pre">liblib_onnx_proto.so</span></code> (the shared
@@ -690,6 +694,18 @@ need protobuf-compatible debug output.</p>
 <p>This refactoring is an ABI change and must be measured separately from
 feature splitting. Wire compatibility does not require preserving every
 out-of-line convenience symbol.</p>
+<p>This step is now implemented with <code class="docutils literal notranslate"><span class="pre">ProtoMessageAdapter&lt;T&gt;</span></code>. Generated
+messages inherit its inline compatibility API, while only
+<code class="docutils literal notranslate"><span class="pre">ParseFromStream</span></code>, <code class="docutils literal notranslate"><span class="pre">SerializeToStream</span></code>, <code class="docutils literal notranslate"><span class="pre">SerializeSize</span></code>, and text
+printing remain substantial type-specific out-of-line methods. <code class="docutils literal notranslate"><span class="pre">CopyFrom</span></code>
+keeps a 30-byte type-specific entry point for ABI compatibility, but delegates
+its serialization/deserialization pipeline to one type-erased shared
+implementation. The Release build no longer exports one copy of each string,
+array, iostream, zero-copy, and file-descriptor adapter for every message.</p>
+<p>On the same local Linux Release configuration used for step 2, the defined
+dynamic symbol count decreased from 1,191 to 652. The stripped library
+decreased from 1,625,024 to 1,001,208 bytes, a reduction of 623,816 bytes
+(about 609 KiB).</p>
 </section>
 <section id="visibility-and-linking">
 <h2>Visibility and linking<a class="headerlink" href="#visibility-and-linking" title="Link to this heading">#</a></h2>
@@ -721,7 +737,8 @@ may be enabled when supported by the selected linker.</p>
 <p>Release wheels should strip unneeded static symbols. This is an immediate
 reduction of approximately 368 KB in the measured build and does not change
 the runtime ABI.</p>
-<p>The following build variants should also be compared:</p>
+<p>The following build variants may optionally be compared if additional size
+headroom becomes necessary:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">Release</span></code> versus <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>;</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">-O2</span></code> versus <code class="docutils literal notranslate"><span class="pre">-Os</span></code>;</p></li>
@@ -797,10 +814,14 @@ section, text, dynamic-symbol, and dependency sizes in CI. See
 <li><p><strong>Implemented:</strong> introduce hidden visibility and an explicit
 <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_PROTO_API</span></code> cross-library export boundary. See
 <a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4344">PR #4344</a>.</p></li>
-<li><p>Replace per-message convenience implementations with shared or inline
-adapters.</p></li>
-<li><p>Compare <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, and linker folding after the structural work.</p></li>
-<li><p>Enforce the selected size budget in CI with a platform-specific baseline.</p></li>
+<li><p><strong>Implemented:</strong> replace per-message convenience implementations with the
+inline <code class="docutils literal notranslate"><span class="pre">ProtoMessageAdapter&lt;T&gt;</span></code> CRTP adapter. See
+<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4349">PR #4349</a>.</p></li>
+<li><p><strong>Optional:</strong> compare <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, and linker folding if additional
+size headroom becomes necessary.</p></li>
+<li><p><strong>Implemented:</strong> enforce a 1.2 MiB installed-size budget in CI for the Linux
+x86-64 Release build. See
+<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4355">PR #4355</a>.</p></li>
 </ol>
 </section>
 <section id="expected-gain-by-step">
@@ -839,12 +860,12 @@ may eliminate some of the same code.</p>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>Share or inline per-message convenience wrappers</p></td>
-<td><p>300–550 KiB</p></td>
-<td><p>0.95–1.25 MiB</p></td>
-<td><p>Medium</p></td>
+<td><p>609 KiB measured</p></td>
+<td><p>0.95 MiB</p></td>
+<td><p>High</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, and identical-code folding</p></td>
+<td><p>Optional: <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, and identical-code folding</p></td>
 <td><p>50–150 KiB</p></td>
 <td><p>0.85–1.15 MiB</p></td>
 <td><p>Low until benchmarked</p></td>
@@ -862,9 +883,10 @@ may eliminate some of the same code.</p>
 dependencies such as OpenSSL from parser-only deployments. It is deliberately
 excluded from the cumulative figures because it changes library composition
 rather than optimizing the same target.</p>
-<p>The most defensible near-term expectation is therefore approximately
-1.45–1.60 MiB after stripping and visibility work. Reaching
-0.95–1.25 MiB depends mainly on consolidating the generated message API.</p>
+<p>The measured stripped library is now approximately 0.95 MiB after wrapper
+consolidation, meeting the stretch target without the optional compiler and
+linker experiments in step 4. CI enforces the 1.2 MiB installed-size budget on
+the matching Linux x86-64 Release build.</p>
 </section>
 </section>
 

@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Structured views over byte buffers &#8212; onnx-light 0.1.16 documentation</title>
+    <title>Structured views over byte buffers &#8212; onnx-light 0.1.17 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=d50bcae4"></script>
+    <script src="../_static/documentation_options.js?v=71734efd"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.16 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.16 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.17 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.17 documentation - Home"/>
   
   
 </a></div>
@@ -424,7 +424,10 @@
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_optimization.html">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_prepared_execution.html">Parallel model initialization</a></li>
 </ul>
 </div>
 </nav></div>
@@ -492,6 +495,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
+<p><strong>in progress</strong></p>
 <section id="motivation">
 <h2>Motivation<a class="headerlink" href="#motivation" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">TypeProto.Opaque</span></code> identifies a runtime-owned value by domain and name,
@@ -511,24 +515,16 @@ exact byte size is computed:</p>
     repeated StringStringEntryProto external_data = 4;
     string name = 5;
     string doc_string = 6;
-    repeated uint64 dims = 7;  // values of the declared dimension parameters
 }
 </pre></div>
 </div>
 <p>The container itself is outside the scope of this page. The purpose of the
 specification is to define <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>: a portable structure
 that can be overlaid on the bytes of a <code class="docutils literal notranslate"><span class="pre">StructProto</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">dims</span></code> is not a logical tensor shape. It holds the value of every dimension
-parameter declared by the selected type, in declaration order. A type whose
-repetition counts are all constants declares no parameter and leaves <code class="docutils literal notranslate"><span class="pre">dims</span></code>
-empty. A type describing a variable number of elements, such as a tensor of a
-custom element type, declares one parameter per variable repetition, and the
-exact payload size is then a function of the type and of <code class="docutils literal notranslate"><span class="pre">dims</span></code> only. It is
-never inferred from the payload length.</p>
 <p>The type system adds three serialized structural kinds and constant fields:</p>
 <ul class="simple">
 <li><p>an array of a statically sized <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>;</p></li>
-<li><p>a packed array of repeated named bit components;</p></li>
+<li><p>a bit packing of repeated named components;</p></li>
 <li><p>a structure containing named, statically sized <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> fields;</p></li>
 <li><p>a tensor constant consuming no payload bytes.</p></li>
 </ul>
@@ -546,10 +542,9 @@ length.</p></li>
 <li><p>Bits and multi-byte values use one canonical ordering convention.</p></li>
 <li><p>A structure may be nested and repeated without introducing a new proto
 for each format.</p></li>
-<li><p>Every array and packed-array length is either a concrete non-negative
-integer or one dimension parameter supplied by the value.</p></li>
-<li><p>The number of payload bytes of a value is computable from its type and its
-<code class="docutils literal notranslate"><span class="pre">dims</span></code>, without reading the payload.</p></li>
+<li><p>Every array and bit-packing length is a concrete non-negative integer.</p></li>
+<li><p>The number of payload bytes of a value is computable from its type without
+reading the payload.</p></li>
 <li><p>The physical structure is inspectable without loading a vendor plugin.</p></li>
 <li><p>An optional standard ONNX decoder defines logical semantics such as
 dequantization.</p></li>
@@ -559,10 +554,9 @@ dequantization.</p></li>
 <h2>Stable contract<a class="headerlink" href="#stable-contract" title="Link to this heading">#</a></h2>
 <p>The proposal has three valid uses of <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>:</p>
 <dl class="simple">
-<dt><code class="docutils literal notranslate"><span class="pre">concrete</span> <span class="pre">declaration</span></code></dt><dd><p>Selects <code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">packed_array</span></code>, or <code class="docutils literal notranslate"><span class="pre">structure</span></code>. It appears in
+<dt><code class="docutils literal notranslate"><span class="pre">concrete</span> <span class="pre">declaration</span></code></dt><dd><p>Selects <code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">bit_packing</span></code>, or <code class="docutils literal notranslate"><span class="pre">structure</span></code>. It appears in
 <code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code> or in
-<code class="docutils literal notranslate"><span class="pre">StructProto.struct_type</span></code>. Together with <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code> it
-completely determines the payload size.</p>
+<code class="docutils literal notranslate"><span class="pre">StructProto.struct_type</span></code>. It completely determines the payload size.</p>
 </dd>
 <dt><code class="docutils literal notranslate"><span class="pre">exact</span> <span class="pre">static</span> <span class="pre">reference</span></code></dt><dd><p>Selects <code class="docutils literal notranslate"><span class="pre">type_index</span></code> and appears inside <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>. It accepts only
 the referenced model-level declaration.</p>
@@ -573,66 +567,25 @@ sequences and maps.</p>
 </dd>
 </dl>
 <p><code class="docutils literal notranslate"><span class="pre">type_index</span></code> may also occur below a concrete root through
-<code class="docutils literal notranslate"><span class="pre">Array.element_type</span></code> or <code class="docutils literal notranslate"><span class="pre">Structure.Field.type</span></code>; such a reference must
-select a declaration without dimension parameters. A constant tensor value is
+<code class="docutils literal notranslate"><span class="pre">Array.element_type</span></code> or <code class="docutils literal notranslate"><span class="pre">Structure.Field.type</span></code>. A constant tensor value is
 attached directly to a <code class="docutils literal notranslate"><span class="pre">Structure.Field</span></code>. A concrete root may not
 be a <code class="docutils literal notranslate"><span class="pre">type_index</span></code> or an unset <code class="docutils literal notranslate"><span class="pre">kind</span></code>. Static forms may not carry
-<code class="docutils literal notranslate"><span class="pre">decoder</span></code>, <code class="docutils literal notranslate"><span class="pre">encoder</span></code>, <code class="docutils literal notranslate"><span class="pre">name</span></code>, <code class="docutils literal notranslate"><span class="pre">dims_param</span></code>, or metadata.</p>
+<code class="docutils literal notranslate"><span class="pre">decoder</span></code>, <code class="docutils literal notranslate"><span class="pre">encoder</span></code>, <code class="docutils literal notranslate"><span class="pre">name</span></code>, or metadata.</p>
 <p>Only the <code class="docutils literal notranslate"><span class="pre">decoder</span></code> and <code class="docutils literal notranslate"><span class="pre">encoder</span></code> attached to the selected concrete root
 are invoked. A declaration reached through a nested <code class="docutils literal notranslate"><span class="pre">type_index</span></code> contributes
 only its physical structure and constants; its decoder and encoder are not
 composed implicitly.</p>
 <p>No other interpretation of an absent field is permitted. In particular,
-counts are either constants or parameters bound by <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>,
-and there are no inferred lengths, implicit alignment, hidden padding,
-semantic traits, or alternate byte orders.</p>
-</section>
-<section id="dimension-parameters">
-<h2>Dimension parameters<a class="headerlink" href="#dimension-parameters" title="Link to this heading">#</a></h2>
-<p>A repetition count is either a constant declared by the type or a parameter
-supplied by the value. The concrete root declaration lists its parameter names
-in <code class="docutils literal notranslate"><span class="pre">dims_param</span></code>, in declaration order. Inside that declaration, an <code class="docutils literal notranslate"><span class="pre">Array</span></code>
-or a <code class="docutils literal notranslate"><span class="pre">PackedArray</span></code> selects <code class="docutils literal notranslate"><span class="pre">dimension</span></code> for a constant count or
-<code class="docutils literal notranslate"><span class="pre">dims_index</span></code> for a parametric one; <code class="docutils literal notranslate"><span class="pre">dims_index</span></code> is a position in
-<code class="docutils literal notranslate"><span class="pre">dims_param</span></code> and in <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>.</p>
-<p>The rules are:</p>
-<ul class="simple">
-<li><p>a declaration with an empty <code class="docutils literal notranslate"><span class="pre">dims_param</span></code> is <em>static</em>: its byte size
-depends on the type alone and every <code class="docutils literal notranslate"><span class="pre">count</span></code> selects <code class="docutils literal notranslate"><span class="pre">dimension</span></code>;</p></li>
-<li><p>only a concrete root declares parameters; an inline nested declaration
-leaves <code class="docutils literal notranslate"><span class="pre">dims_param</span></code> empty and its <code class="docutils literal notranslate"><span class="pre">dims_index</span></code> values are resolved
-against the enclosing root;</p></li>
-<li><p>a declaration with a non-empty <code class="docutils literal notranslate"><span class="pre">dims_param</span></code> is <em>parametric</em>: it may be
-selected by a value or by an exact static reference inside <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>,
-but never nested through <code class="docutils literal notranslate"><span class="pre">Array.element_type</span></code> or <code class="docutils literal notranslate"><span class="pre">Structure.Field.type</span></code>,
-so parameters are never rebound and size computation stays local;</p></li>
-<li><p>every <code class="docutils literal notranslate"><span class="pre">dims_index</span></code> is smaller than the number of declared parameters and
-every declared parameter is used at least once;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code> has exactly one entry per declared parameter;</p></li>
-<li><p>a static declaration requires an empty <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>;</p></li>
-<li><p>the same parameter may be used by several arrays, which forces their counts
-to be equal;</p></li>
-<li><p>dimension names are documentation and binding keys only; no expression,
-arithmetic, or constraint language is introduced.</p></li>
-</ul>
-<p>Consequently the payload size of a value is a pure function of its type and
-its <code class="docutils literal notranslate"><span class="pre">dims</span></code>, and it is still an error when it differs from the declared
-payload length. The value never determines a count from the buffer size.</p>
-<p>A decoder output shape may use <code class="docutils literal notranslate"><span class="pre">dim_param</span></code> names taken from <code class="docutils literal notranslate"><span class="pre">dims_param</span></code>.
-A runtime binds each such name to the corresponding <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>
-entry. Any other <code class="docutils literal notranslate"><span class="pre">dim_param</span></code> stays symbolic and never participates in the
-size computation.</p>
+counts are concrete, and there are no inferred lengths, implicit alignment,
+hidden padding, semantic traits, or alternate byte orders.</p>
 </section>
 <section id="physical-size-function">
 <h2>Physical size function<a class="headerlink" href="#physical-size-function" title="Link to this heading">#</a></h2>
-<p>The serialized size is computed recursively in bits. It takes the concrete
-root declaration and the dimension values <code class="docutils literal notranslate"><span class="pre">d</span> <span class="pre">=</span> <span class="pre">StructProto.dims</span></code>:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>count(dimension=n)          = n
-count(dims_index=k)         = d[k]
-size(scalar(T))             = bit_width(T)
-size(Array(T, cnt))         = count(cnt) * size(T)
-size(PackedArray(c..., cnt))
-                            = count(cnt) * sum(c.bit_width)
+<p>The serialized size is computed recursively in bits from the concrete root
+declaration:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>size(scalar(T))             = bit_width(T)
+size(Array(T, n))           = n * size(T)
+size(BitPacking(c..., n))   = n * sum(c.bit_width)
 size(Field(constant))       = 0
 size(Field(T))              = size(T)
 size(Structure(f...))       = sum(size(f))
@@ -641,83 +594,63 @@ size(type_index=i)          = size(ModelProto.struct_types[i])
 </div>
 <p>All arithmetic is checked in <code class="docutils literal notranslate"><span class="pre">uint64</span></code>. References must be acyclic. The
 concrete root size must be divisible by eight and equal the inline
-<code class="docutils literal notranslate"><span class="pre">raw_data</span></code> length or the external-data <code class="docutils literal notranslate"><span class="pre">length</span></code>. Only <code class="docutils literal notranslate"><span class="pre">dims</span></code> enters the
-computation besides the type, so the physical schema and payload remain
-independently checkable.</p>
+<code class="docutils literal notranslate"><span class="pre">raw_data</span></code> length or the external-data <code class="docutils literal notranslate"><span class="pre">length</span></code>, so the physical schema
+and payload remain independently checkable.</p>
 </section>
 <section id="structtypeproto">
 <h2>StructTypeProto<a class="headerlink" href="#structtypeproto" title="Link to this heading">#</a></h2>
 <p>The complete proposal adds one top-level structured type message.</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message StructTypeProto {
-    // Repeats one physical element a fixed or parametric number of times.
-    message Array {
-        TypeProto element_type = 1;  // repeated physical element
-        oneof count {
-            uint64 dimension = 2;    // exact element count
-            uint32 dims_index = 3;   // index into dims_param
-        }
-    }
-
-    // Repeats one explicitly decomposed bit pattern.
-    message PackedArray {
+    message BitPacking {
         message Component {
-            string name = 1;       // unique component name
-            uint32 bit_width = 2;  // bits per element
+            string name = 1;
+            uint32 bit_width = 2;
         }
-
-        repeated Component component = 1;  // bit order within each element
-        oneof count {
-            uint64 dimension = 2;   // exact element count
-            uint32 dims_index = 3;  // index into dims_param
-        }
+        repeated Component component = 1;
+        uint64 dimension = 2;
     }
 
-    // Names one component of a structure.
+    message Array {
+        TypeProto element_type = 1;
+        uint64 dimension = 2;
+    }
+
     message Field {
-        string name = 1;        // unique within the structure
+        string name = 1;
         oneof content {
-            TypeProto type = 2;               // schema read from payload
-            TensorProto constant = 4;         // tensor; reads no payload
+            TypeProto type = 2;
+            TensorProto constant = 4;
         }
-        string doc_string = 3;  // field documentation
+        string doc_string = 3;
     }
 
-    // Concatenates fields in declaration order.
     message Structure {
-        repeated Field field = 1;  // serialized in declaration order
+        repeated Field field = 1;
     }
 
-    // Defines, references, or constrains the structured type.
     oneof kind {
-        Array array = 1;                // repeated typed elements
-        Structure structure = 2;        // ordered named fields
-        PackedArray packed_array = 3;   // repeated packed bit patterns
-        int32 type_index = 5;           // ModelProto.struct_types index
+        Array array = 1;
+        Structure structure = 2;
+        BitPacking bit_packing = 3;
+        int32 type_index = 5;
     }
 
-    optional FunctionProto decoder = 6;  // structured leaves to ONNX value
-    optional FunctionProto encoder = 7;  // ONNX value to canonical bytes
-    string name = 8;                     // reusable type name
-    string doc_string = 9;               // type documentation
-    repeated StringStringEntryProto metadata_props = 10;  // type metadata
-    repeated string dims_param = 11;     // names of the dimension parameters
+    optional FunctionProto decoder = 6;
+    optional FunctionProto encoder = 7;
+    string name = 8;
+    string doc_string = 9;
+    repeated StringStringEntryProto metadata_props = 10;
 }
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> is itself the new <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> branch; there is no
-intermediate <code class="docutils literal notranslate"><span class="pre">Layout</span></code> message. A concrete model-level or inline physical
-type selects exactly one of <code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">packed_array</span></code>, and <code class="docutils literal notranslate"><span class="pre">structure</span></code>.
-A nested or static exact type may select one model-level
-declaration with <code class="docutils literal notranslate"><span class="pre">type_index</span></code>. A static type may leave <code class="docutils literal notranslate"><span class="pre">kind</span></code> unset only
-for the unconstrained category defined above.</p>
-<p><code class="docutils literal notranslate"><span class="pre">StructProto.type</span></code> and <code class="docutils literal notranslate"><span class="pre">StructTypeProto.type_index</span></code> are both
-model-level indices. The former selects the type of one value; the latter
-references a type from another physical declaration.</p>
-<p>The corresponding <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> values may appear in graph values,
-sequences, maps, optionals, and attributes. <code class="docutils literal notranslate"><span class="pre">AttributeProto</span></code> adds
-<code class="docutils literal notranslate"><span class="pre">STRUCT</span></code> and <code class="docutils literal notranslate"><span class="pre">STRUCTS</span></code> categories for the singular and
-repeated attribute forms described below.</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message TypeProto {
+</section>
+<section id="integration">
+<h2>Integration<a class="headerlink" href="#integration" title="Link to this heading">#</a></h2>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message ModelProto {
+    repeated StructTypeProto struct_types = &lt;N&gt;;
+}
+
+message TypeProto {
     oneof value {
         ...
         StructTypeProto struct_type = &lt;N&gt;;
@@ -725,971 +658,67 @@ repeated attribute forms described below.</p>
 }
 </pre></div>
 </div>
+<p>A reusable value selects an entry in <code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code> with
+<code class="docutils literal notranslate"><span class="pre">StructProto.type</span></code>. An inline value sets <code class="docutils literal notranslate"><span class="pre">type</span></code> to -1 and provides
+<code class="docutils literal notranslate"><span class="pre">StructProto.struct_type</span></code>. Nested structures use <code class="docutils literal notranslate"><span class="pre">type_index</span></code> to reference
+another model-level declaration.</p>
 </section>
-<section id="type-storage-and-references">
-<h2>Type storage and references<a class="headerlink" href="#type-storage-and-references" title="Link to this heading">#</a></h2>
-<p>Reusable types are stored once at model level:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message ModelProto {
-    ...
-    repeated StructTypeProto struct_types = &lt;N&gt;;
-}
-</pre></div>
-</div>
-<p>Shared types use a non-negative <code class="docutils literal notranslate"><span class="pre">type</span></code> index. The integer is local to the
-model and is remapped by model composition tools. A value whose type is unique
-sets <code class="docutils literal notranslate"><span class="pre">type</span></code> to -1 and stores it in <code class="docutils literal notranslate"><span class="pre">struct_type</span></code> instead, avoiding a
-single-use entry in the model list.</p>
-<p>The two forms are mutually exclusive:</p>
+<section id="physical-rules">
+<h2>Physical rules<a class="headerlink" href="#physical-rules" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">&gt;=</span> <span class="pre">0</span></code> requires an in-range model index and forbids
-<code class="docutils literal notranslate"><span class="pre">struct_type</span></code>;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">type</span> <span class="pre">==</span> <span class="pre">-1</span></code> requires <code class="docutils literal notranslate"><span class="pre">struct_type</span></code>;</p></li>
-<li><p>every other negative value is invalid.</p></li>
+<li><p>Arrays and bit packings are tightly packed.</p></li>
+<li><p>Structure fields are serialized in declaration order.</p></li>
+<li><p>Constants consume no payload bytes.</p></li>
+<li><p>Padding must be represented explicitly.</p></li>
+<li><p>Bits are ordered from least to most significant within each byte.</p></li>
+<li><p>Multi-byte values are little-endian.</p></li>
+<li><p>Only fixed-width ONNX scalar types are valid physical leaves.</p></li>
+<li><p>The decoder maps physical fields to one logical ONNX value.</p></li>
 </ul>
-<p>As with <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>, <code class="docutils literal notranslate"><span class="pre">StructProto.name</span></code> identifies the concrete
-value and its <code class="docutils literal notranslate"><span class="pre">doc_string</span></code> documents that value.
-<code class="docutils literal notranslate"><span class="pre">StructTypeProto.name</span></code> identifies the type declaration instead. It
-must be non-empty and unique among <code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code> entries;
-it is optional for an inline type. <code class="docutils literal notranslate"><span class="pre">StructTypeProto.doc_string</span></code>
-documents that type.</p>
 </section>
-<section id="standard-onnx-leaves">
-<h2>Standard ONNX leaves<a class="headerlink" href="#standard-onnx-leaves" title="Link to this heading">#</a></h2>
-<p>There is no custom scalar kind. Primitive leaves use a scalar
-<code class="docutils literal notranslate"><span class="pre">TypeProto.Tensor</span></code> with an empty shape. Every repetition, including a
-multidimensional one, uses <code class="docutils literal notranslate"><span class="pre">Array</span></code> rather than a shaped tensor leaf.
-Physical leaves require a fixed-width element type. This includes
-<code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>, the float8 formats,
-<code class="docutils literal notranslate"><span class="pre">FLOAT4E2M1</span></code>, <code class="docutils literal notranslate"><span class="pre">INT4</span></code>, <code class="docutils literal notranslate"><span class="pre">UINT4</span></code>, <code class="docutils literal notranslate"><span class="pre">INT2</span></code>, <code class="docutils literal notranslate"><span class="pre">UINT2</span></code>, and <code class="docutils literal notranslate"><span class="pre">BOOL</span></code>.
-<code class="docutils literal notranslate"><span class="pre">STRING</span></code> is not a valid physical leaf. <code class="docutils literal notranslate"><span class="pre">BOOL</span></code> occupies one byte; it is
-not a one-bit storage type.</p>
-<p>A non-standard bit field is decomposed into standard ONNX fields and
-interpreted by the decoder rather than introducing another scalar taxonomy.
-A name such as <code class="docutils literal notranslate"><span class="pre">FLOAT6_E3M2</span></code> identifies a concrete structured physical
-declaration; it is not a <code class="docutils literal notranslate"><span class="pre">TypeProto.Tensor.elem_type</span></code>. In particular, a
-generic <code class="docutils literal notranslate"><span class="pre">IEEE_FLOAT</span></code> tensor element type is prohibited: it fixes neither
-the physical width nor the logical standard ONNX element type. The decoder of
-every custom numeric encoding must declare its output using a standard ONNX
-<code class="docutils literal notranslate"><span class="pre">elem_type</span></code>.</p>
-<p>Storage uses one canonical convention:</p>
-<ul class="simple">
-<li><p>bytes are addressed in increasing buffer order;</p></li>
-<li><p>bit zero is the least significant bit of <code class="docutils literal notranslate"><span class="pre">raw_data[0]</span></code>;</p></li>
-<li><p>consecutive bits increase from least to most significant within a byte;</p></li>
-<li><p>multi-byte integers and IEEE values are little-endian.</p></li>
-</ul>
-<p>This matches ONNX <code class="docutils literal notranslate"><span class="pre">TensorProto.raw_data</span></code>. A format with a different ordering
-can declare raw byte fields and normalize them in its decoder.</p>
-<p>The structured reader exposes every leaf using its declared <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>.
-An uninterpreted region is represented as an array of scalar <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> leaves.</p>
-</section>
-<section id="array-type">
-<h2>Array type<a class="headerlink" href="#array-type" title="Link to this heading">#</a></h2>
-<p>An array repeats an existing ONNX <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>. A scalar element is a
-scalar-shaped <code class="docutils literal notranslate"><span class="pre">tensor_type</span></code>. A structured element is an
-<code class="docutils literal notranslate"><span class="pre">struct_type</span></code> referencing an entry in
-<code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code>. For a physical array element, that
-<code class="docutils literal notranslate"><span class="pre">struct_type</span></code> contains either one <code class="docutils literal notranslate"><span class="pre">type_index</span></code> or one inline
-physical kind so its byte representation is unambiguous. Other <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>
-branches are invalid here unless ONNX defines a canonical fixed-width byte
-representation for them.</p>
-<p><code class="docutils literal notranslate"><span class="pre">Array.dimension</span></code> is a concrete non-negative integer. Its Protobuf default
-is zero; it is never symbolic or inferred from the enclosing buffer. When the
-array instead selects <code class="docutils literal notranslate"><span class="pre">dims_index</span></code>, the count comes from
-<code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code> at that position. Consequently, the physical size of
-every array is known from its type and from the <code class="docutils literal notranslate"><span class="pre">dims</span></code> of the value, and
-from nothing else.</p>
-<p>For readability, a fixed-width ONNX data type such as <code class="docutils literal notranslate"><span class="pre">INT4</span></code> denotes its
-scalar <code class="docutils literal notranslate"><span class="pre">TypeProto.Tensor</span></code> leaf directly. <code class="docutils literal notranslate"><span class="pre">array(T,</span> <span class="pre">dimension=d)</span></code> denotes
-one <code class="docutils literal notranslate"><span class="pre">Array</span></code> and <code class="docutils literal notranslate"><span class="pre">array(T,</span> <span class="pre">dimensions=[d0,</span> <span class="pre">d1,</span> <span class="pre">...])</span></code> denotes nested
-arrays. The outermost array has dimension <code class="docutils literal notranslate"><span class="pre">d0</span></code> and the innermost element is
-<code class="docutils literal notranslate"><span class="pre">T</span></code>.</p>
-<p>Array elements are tightly packed. An array requiring padding between values
-uses a structure element with an explicit final padding field.</p>
-<p>No physical dimension is derived from a decoder output.
-<code class="docutils literal notranslate"><span class="pre">Array.dimension</span></code> describes physical storage only.</p>
-</section>
-<section id="packed-array-type">
-<h2>Packed array type<a class="headerlink" href="#packed-array-type" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">PackedArray</span></code> repeats a bit pattern whose components are declared in order.
-For each element, the first component occupies the least-significant bits,
-followed immediately by the remaining components. Elements are consecutive
-with no padding. Its size is the element count multiplied by the sum of the
-component widths.</p>
-<p>Every component name is unique and every <code class="docutils literal notranslate"><span class="pre">bit_width</span></code> is positive. A parser
-exposes one unsigned integer leaf per component, grouped over
-<code class="docutils literal notranslate"><span class="pre">PackedArray.dimension</span></code>. For readability,
-<code class="docutils literal notranslate"><span class="pre">packed_array(4,</span> <span class="pre">[sign:1,</span> <span class="pre">exponent:3,</span> <span class="pre">mantissa:2])</span></code> denotes four consecutive
-six-bit patterns.</p>
-<p>This is a physical packing construct, not a new <code class="docutils literal notranslate"><span class="pre">TensorProto.DataType</span></code>.
-Logical interpretation remains the responsibility of the enclosing type’s
-decoder.</p>
-</section>
-<section id="structure-type">
-<h2>Structure type<a class="headerlink" href="#structure-type" title="Link to this heading">#</a></h2>
-<p>Physical fields are serialized consecutively in declaration order. The first
-physical field starts at bit zero and every following physical field starts
-immediately after the previous one. A constant field occupies no range and
-does not change the offset of following fields. The structure size is
-therefore the sum of its non-constant field sizes. Alignment and padding are
-represented by ordinary named padding fields, so every serialized bit remains
-explicit.</p>
-</section>
-<section id="constant-fields">
-<h2>Constant fields<a class="headerlink" href="#constant-fields" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">Structure.Field</span></code> selects exactly one of <code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">constant</span></code>. A
-physical field uses <code class="docutils literal notranslate"><span class="pre">type</span></code> and consumes payload bits. A tensor constant uses
-an inline <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code> and consumes zero payload bits.
-A scalar tensor constant has rank zero, represented by an empty <code class="docutils literal notranslate"><span class="pre">dims</span></code> list.
-The tensor must not use <code class="docutils literal notranslate"><span class="pre">external_data</span></code>.</p>
-<p>Only structure fields may be constants; roots and array elements remain
-physical types. For readability, examples write
-<code class="docutils literal notranslate"><span class="pre">tensor(INT32,</span> <span class="pre">[],</span> <span class="pre">value)</span></code> for a scalar and
-<code class="docutils literal notranslate"><span class="pre">tensor(FLOAT,</span> <span class="pre">shape,</span> <span class="pre">values)</span></code> for a non-scalar constant.</p>
-</section>
-<section id="applying-a-type-to-a-buffer">
-<h2>Applying a type to a buffer<a class="headerlink" href="#applying-a-type-to-a-buffer" title="Link to this heading">#</a></h2>
-<p>Parsing starts with the selected <code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">packed_array</span></code>, or <code class="docutils literal notranslate"><span class="pre">structure</span></code>
-kind at bit offset zero. A successful parse produces a tree
-of typed views into the original buffer plus the constants embedded in the
-type. Implementations should avoid copying byte-aligned fields and may lazily
-unpack bit fields.</p>
-<p>When <code class="docutils literal notranslate"><span class="pre">external_data</span></code> is empty, <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> is the payload and may itself be
-empty for a zero-sized physical type. When <code class="docutils literal notranslate"><span class="pre">external_data</span></code> is non-empty,
-<code class="docutils literal notranslate"><span class="pre">raw_data</span></code> must be empty and the external metadata must provide an exact
-<code class="docutils literal notranslate"><span class="pre">length</span></code> entry. The parse succeeds only if:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">raw_data.size()</span></code> or external-data <code class="docutils literal notranslate"><span class="pre">length</span></code> equals the size computed
-from the physical type and <code class="docutils literal notranslate"><span class="pre">dims</span></code>;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">dims</span></code> has one entry per declared dimension parameter;</p></li>
-<li><p>the computed physical size is a whole number of bytes;</p></li>
-<li><p>arithmetic on dimensions and element sizes does not overflow <code class="docutils literal notranslate"><span class="pre">uint64</span></code>;</p></li>
-<li><p>the root physical kind consumes the whole buffer, including explicit
-padding.</p></li>
-</ul>
-<p>The last rule prevents untyped trailing bytes. A format that intentionally
-contains an uninterpreted suffix must declare it as a <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> array.</p>
-</section>
-<section id="logical-leaf-view">
-<h2>Logical leaf view<a class="headerlink" href="#logical-leaf-view" title="Link to this heading">#</a></h2>
-<p>Every physical scalar ONNX <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> field and constant field is a leaf.
-Unstructured arrays and structures only organize leaves. The canonical
-leaf order is depth-first declaration order. A constant field contributes one
-scalar or tensor leaf at its declaration position, does not advance the
-current buffer position, and is not replicated by an enclosing array. It is
-shared by every instance of the declaring type.</p>
-<p>When a repeated structure contains an array field, corresponding scalar
-leaves are grouped into one decoder input. For example, an array of ten
-blocks containing <code class="docutils literal notranslate"><span class="pre">values[32]</span></code> and one scalar <code class="docutils literal notranslate"><span class="pre">scale</span></code> produces:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>values: tensor(...)[10, 32]
-scale:  tensor(...)[10]
-</pre></div>
-</div>
-<p>This canonical view gives portable decoders stable inputs without exposing
-the in-memory representation of a parser implementation.</p>
-</section>
-<section id="decoder-contract">
-<h2>Decoder contract<a class="headerlink" href="#decoder-contract" title="Link to this heading">#</a></h2>
-<p>The optional decoder maps the physical leaf view to the represented ONNX
-value:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Decode(
-    leaf_0,
-    ...,
-    leaf_N
-) -&gt; value
-</pre></div>
-</div>
-<p>Leaf inputs follow canonical depth-first order and have mandatory
-<code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code> type information. The decoder:</p>
-<ul class="simple">
-<li><p>has no captures;</p></li>
-<li><p>calls only deterministic standard-domain ONNX operators;</p></li>
-<li><p>does not call custom or model-local functions;</p></li>
-<li><p>receives shared tensor constants through declared fields with <code class="docutils literal notranslate"><span class="pre">constant</span></code>
-rather than hidden initializers;</p></li>
-<li><p>does not use external data or graph-valued attributes;</p></li>
-<li><p>has exactly one output whose type is declared by a corresponding
-<code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code> in the function.</p></li>
-</ul>
-<p>The decoder is the semantic oracle. A runtime plugin may replace it with an
-optimized decoder or fused kernel, but a plugin is not required for
-correctness.</p>
-<p>If no decoder is present, the type defines only a physical structured view.
-This is useful for inspection and for custom operators that consume the
-fields directly.</p>
-</section>
-<section id="encoder-contract">
-<h2>Encoder contract<a class="headerlink" href="#encoder-contract" title="Link to this heading">#</a></h2>
-<p>An optional encoder defines one canonical serialization:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Encode(
-    value
-) -&gt; buffer: tensor(UINT8)[serialized_size]
-</pre></div>
-</div>
-<p>The result must parse successfully with the same
-<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>. An encoder does not define calibration,
-training policy, or parameter selection. Formats with several valid
-encodings may omit it.
-The encoder input type is declared by its <code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code> and must equal
-the decoder output type when both functions are present.
-Fields with <code class="docutils literal notranslate"><span class="pre">constant</span></code> are type information and are not written to the
-result buffer.</p>
-</section>
-<section id="static-type-and-static-data">
-<h2>Static type and static data<a class="headerlink" href="#static-type-and-static-data" title="Link to this heading">#</a></h2>
-<p>The type and the data are both static:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> fixes field order, widths, interpretation, and every
-count that is not a declared parameter.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code> fixes the remaining counts.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">raw_data</span></code> or external-data length fixes the concrete payload size, which
-must equal the size computed from the two previous items.</p></li>
-</ul>
-<p>There is no symbolic relation to solve between logical and physical
-dimensions. A dimension parameter is bound by a value, not inferred. The
-checker validates the concrete overlay and the decoder validates the logical
-interpretation.</p>
-</section>
-<section id="typeproto-integration">
-<h2>TypeProto integration<a class="headerlink" href="#typeproto-integration" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">StructProto</span></code> is a value category, not merely an initializer
-encoding. <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> therefore contains <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> directly,
-as shown above. This makes recursion uniform: <code class="docutils literal notranslate"><span class="pre">Array.element_type</span></code> and
-<code class="docutils literal notranslate"><span class="pre">Field.type</span></code> reuse <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> rather than an intermediate layout
-language. A physical element or field must nevertheless have a canonical
-fixed size; currently this permits standard tensor types and exact structured
-array, packed-array, and structure types, but not sequences, maps, or
-optionals.</p>
-<p>The concrete <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> selects exactly one
-<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> declaration. The static type is a constraint:</p>
-<ul class="simple">
-<li><p>when <code class="docutils literal notranslate"><span class="pre">StructTypeProto.type_index</span></code> is present, the value must
-reference that exact model-level declaration;</p></li>
-<li><p>when <code class="docutils literal notranslate"><span class="pre">kind</span></code> is unset, the explicitly unconstrained static category accepts
-any concrete structured type.</p></li>
-</ul>
-<p>Model-level and <code class="docutils literal notranslate"><span class="pre">StructProto.struct_type</span></code> definitions must
-select <code class="docutils literal notranslate"><span class="pre">array</span></code>, <code class="docutils literal notranslate"><span class="pre">packed_array</span></code>, or <code class="docutils literal notranslate"><span class="pre">structure</span></code>. A
-<code class="docutils literal notranslate"><span class="pre">TypeProto.struct_type</span></code> may instead:</p>
-<ul class="simple">
-<li><p>select a physical kind to define one exact inline type;</p></li>
-<li><p>select one model-level declaration with <code class="docutils literal notranslate"><span class="pre">type_index</span></code>;</p></li>
-<li><p>leave <code class="docutils literal notranslate"><span class="pre">kind</span></code> unset as the unconstrained category.</p></li>
-</ul>
-<p>These forms are mutually exclusive. This distinction permits both exact and
-heterogeneous types. A graph input may require one exact type, while a
-container using the unconstrained category may contain different physical
-types.</p>
-<p>Because <code class="docutils literal notranslate"><span class="pre">Sequence</span></code>, <code class="docutils literal notranslate"><span class="pre">Map</span></code>, and <code class="docutils literal notranslate"><span class="pre">Optional</span></code> already refer recursively to
-<code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>, no special container type grammar is needed:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>sequence(struct(...))
-map(int64, struct(...))
-optional(struct(...))
-sequence(map(int64, struct(...)))
-</pre></div>
-</div>
-<p>The usual ONNX map-key restrictions remain unchanged.</p>
-</section>
-<section id="container-values">
-<h2>Container values<a class="headerlink" href="#container-values" title="Link to this heading">#</a></h2>
-<p>The value protos must also transport the new category. <code class="docutils literal notranslate"><span class="pre">MapProto</span></code> already
-stores its values in a <code class="docutils literal notranslate"><span class="pre">SequenceProto</span></code>, so extending sequences also extends
-maps:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message SequenceProto {
-    enum DataType {
-        ...
-        STRUCT = &lt;N&gt;;
-    }
-    ...
-    repeated StructProto struct_values = &lt;N&gt;;
-    optional TypeProto value_type = &lt;N+1&gt;;
-}
-
-message OptionalProto {
-    enum DataType {
-        ...
-        STRUCT = &lt;N&gt;;
-    }
-    ...
-    optional StructProto struct_value = &lt;N&gt;;
-    optional TypeProto value_type = &lt;N+1&gt;;
-}
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">elem_type</span></code> continues to identify the broad value category for compatibility.
-<code class="docutils literal notranslate"><span class="pre">value_type</span></code> carries the complete recursive static constraint and must agree
-with it. It is required for <code class="docutils literal notranslate"><span class="pre">STRUCT</span></code> values. For graph values, it must
-also agree with the corresponding <code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code>. This makes standalone
-sequence/map attributes self-describing rather than relying on surrounding
-graph type information.</p>
-<p>All values in a sequence remain homogeneous with respect to their static
-<code class="docutils literal notranslate"><span class="pre">TypeProto.Struct</span></code> category. With the unconstrained static form, they
-need not have the same concrete declaration: each value still carries its
-exact physical type.</p>
-</section>
-<section id="attributeproto-integration">
-<h2>AttributeProto integration<a class="headerlink" href="#attributeproto-integration" title="Link to this heading">#</a></h2>
-<p>Operators and functions may also need an structured value as an attribute.
-<code class="docutils literal notranslate"><span class="pre">TYPE_PROTO</span></code> transports only its type and cannot carry the serialized
-payload. <code class="docutils literal notranslate"><span class="pre">AttributeProto</span></code> therefore gains singular and repeated value
-categories, following the existing tensor and sparse-tensor pattern:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>message AttributeProto {
-    enum AttributeType {
-        ...
-        STRUCT = 15;
-        STRUCTS = 16;
-    }
-
-    ...
-    optional StructProto struct = 24;
-    repeated StructProto structs = 25;
-}
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">AttributeProto.type</span></code> must match the populated field. Exactly one attribute
-content field is allowed, as for every other attribute category. A
-<code class="docutils literal notranslate"><span class="pre">ref_attr_name</span></code> may refer to either new category from a function body; its
-resolved parent attribute must have the same category.</p>
-</section>
-<section id="float6-e3m2-example">
-<h2>FLOAT6_E3M2 example<a class="headerlink" href="#float6-e3m2-example" title="Link to this heading">#</a></h2>
-<p>The following concrete type stores four six-bit floating-point values in
-three bytes. Each value has one sign bit, three exponent bits, and two
-mantissa bits. Format parameters are rank-zero <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code> constants and
-therefore consume no payload bytes.</p>
+<section id="example">
+<h2>Example<a class="headerlink" href="#example" title="Link to this heading">#</a></h2>
+<p>The following type stores 128 <code class="docutils literal notranslate"><span class="pre">INT4</span></code> values plus format constants:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructTypeProto {
-    name: &quot;FLOAT6_E3M2&quot;
+    name: &quot;LINEAR_INT4_128&quot;
     structure: Structure {
         field: {
-            name: &quot;packed&quot;
-            type: packed_array(
-                dimension=4,
-                components=[sign:1, exponent:3, mantissa:2]
-            )
+            name: &quot;values&quot;
+            type: array(INT4, dimension=128)
         }
-        field: { name: &quot;exponent_bias&quot;, constant: tensor(INT32, [], 3) }
-        field: { name: &quot;has_inf&quot;, constant: tensor(BOOL, [], true) }
-        field: { name: &quot;has_nan&quot;, constant: tensor(BOOL, [], true) }
-    }
-    decoder: FunctionProto {
-        output: &quot;Y&quot;
-        value_info: {
-            name: &quot;Y&quot;
-            type: TypeProto {
-                tensor_type: Tensor {
-                    elem_type: FLOAT
-                    shape: TensorShapeProto {
-                        dim: { dim_value: 4 }
-                    }
-                }
-            }
+        field: {
+            name: &quot;scale&quot;
+            constant: tensor(FLOAT, [], 0.125)
         }
-        // Unpacks four 6-bit values and decodes E3M2 with bias 3.
-    }
-}
-</pre></div>
-</div>
-<p>The physical size is determined without executing the decoder:
-<code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">(1</span> <span class="pre">+</span> <span class="pre">3</span> <span class="pre">+</span> <span class="pre">2)</span> <span class="pre">=</span> <span class="pre">24</span> <span class="pre">bits</span></code>. The three constant fields contribute zero
-bits. A <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> selecting this declaration must therefore contain
-exactly three payload bytes:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructProto {
-    type: &lt;FLOAT6_E3M2 type index&gt;
-    raw_data: &lt;3 bytes&gt;
-}
-</pre></div>
-</div>
-</section>
-<section id="tensor-of-float6-e3m2">
-<h2>Tensor of FLOAT6_E3M2<a class="headerlink" href="#tensor-of-float6-e3m2" title="Link to this heading">#</a></h2>
-<p>The previous declaration has a constant count, so it describes exactly four
-values. A tensor of <code class="docutils literal notranslate"><span class="pre">FLOAT6_E3M2</span></code> needs a count that belongs to the value,
-which is what a dimension parameter provides:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructTypeProto {
-    name: &quot;FLOAT6_E3M2_TENSOR&quot;
-    dims_param: [&quot;n_values&quot;]
-    packed_array: PackedArray {
-        component: { name: &quot;sign&quot;,     bit_width: 1 }
-        component: { name: &quot;exponent&quot;, bit_width: 3 }
-        component: { name: &quot;mantissa&quot;, bit_width: 2 }
-        dims_index: 0
-    }
-    decoder: FunctionProto {
-        output: &quot;Y&quot;
-        value_info: {
-            name: &quot;Y&quot;
-            type: TypeProto {
-                tensor_type: Tensor {
-                    elem_type: FLOAT
-                    shape: TensorShapeProto {
-                        dim: { dim_param: &quot;n_values&quot; }
-                    }
-                }
-            }
+        field: {
+            name: &quot;zero_point&quot;
+            constant: tensor(INT64, [], 0)
         }
-        // Decodes E3M2 with bias 3.
     }
 }
 
 StructProto {
-    type: &lt;FLOAT6_E3M2_TENSOR type index&gt;
-    dims: [1000]
-    raw_data: &lt;750 bytes&gt;
+    type: &lt;LINEAR_INT4_128 type index&gt;
+    raw_data: &lt;64 bytes&gt;
+    name: &quot;weight&quot;
 }
 </pre></div>
 </div>
-<p>The size is <code class="docutils literal notranslate"><span class="pre">1000</span> <span class="pre">*</span> <span class="pre">6</span> <span class="pre">=</span> <span class="pre">6000</span></code> bits, that is <code class="docutils literal notranslate"><span class="pre">750</span></code> bytes, and four values
-occupy three bytes as before. It is computed from the type and <code class="docutils literal notranslate"><span class="pre">dims</span></code>
-without reading the payload and without executing the decoder.</p>
-<p>Six bits do not tile a byte, so a value is rejected when
-<code class="docutils literal notranslate"><span class="pre">n_values</span> <span class="pre">*</span> <span class="pre">6</span></code> is not a multiple of eight. Two portable options exist:</p>
+<p>The payload size is <code class="docutils literal notranslate"><span class="pre">128</span> <span class="pre">*</span> <span class="pre">4</span> <span class="pre">/</span> <span class="pre">8</span> <span class="pre">=</span> <span class="pre">64</span></code> bytes. Constants are stored in the
+type and do not contribute to that size.</p>
+</section>
+<section id="validation">
+<h2>Validation<a class="headerlink" href="#validation" title="Link to this heading">#</a></h2>
+<p>A checker rejects:</p>
 <ul class="simple">
-<li><p>restrict the parameter to a byte-aligned unit by counting groups instead of
-values, for instance an array of the four-value <code class="docutils literal notranslate"><span class="pre">FLOAT6_E3M2</span></code> declaration
-with <code class="docutils literal notranslate"><span class="pre">dims_index:</span> <span class="pre">0</span></code>, where <code class="docutils literal notranslate"><span class="pre">dims:</span> <span class="pre">[250]</span></code> also gives <code class="docutils literal notranslate"><span class="pre">750</span></code> bytes;</p></li>
-<li><p>declare the padding explicitly as an additional structure field, which is
-possible only when its width is a constant.</p></li>
+<li><p>an invalid or cyclic type reference;</p></li>
+<li><p>a field without exactly one of <code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">constant</span></code>;</p></li>
+<li><p>duplicate field or component names;</p></li>
+<li><p>zero component widths or unsupported physical leaf types;</p></li>
+<li><p>a physical size that is not byte-aligned;</p></li>
+<li><p>a payload whose length differs from the computed size;</p></li>
+<li><p>implicit padding or untyped trailing bytes.</p></li>
 </ul>
-<p>The first option is the recommended profile for sub-byte element types,
-because every count then addresses a whole number of bytes.</p>
-</section>
-<section id="tensor-of-2d-points">
-<h2>Tensor of 2D points<a class="headerlink" href="#tensor-of-2d-points" title="Link to this heading">#</a></h2>
-<p>A record element follows the same pattern. The point layout is static and
-therefore shareable, while the number of points belongs to the value:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto {
-    struct_types: [
-        StructTypeProto {             // index 0: one point, 8 bytes
-            name: &quot;POINT2D&quot;
-            structure: Structure {
-                field: { name: &quot;x&quot;, type: FLOAT }
-                field: { name: &quot;y&quot;, type: FLOAT }
-            }
-        },
-        StructTypeProto {             // index 1: n points
-            name: &quot;POINT2D_TENSOR&quot;
-            dims_param: [&quot;n_points&quot;]
-            array: Array {
-                dims_index: 0
-                element_type: TypeProto {
-                    struct_type: StructTypeProto {
-                        type_index: 0
-                    }
-                }
-            }
-        }
-    ]
-}
-
-StructProto {
-    type: 1
-    dims: [1000]
-    raw_data: &lt;8000 bytes&gt;
-}
-</pre></div>
-</div>
-<p>The canonical leaf view contains <code class="docutils literal notranslate"><span class="pre">x[1000]</span></code> and <code class="docutils literal notranslate"><span class="pre">y[1000]</span></code>. No decoder is
-required when an operator consumes those leaves directly; a decoder producing
-<code class="docutils literal notranslate"><span class="pre">FLOAT[n_points,</span> <span class="pre">2]</span></code> may be added when a single tensor is preferred.</p>
-<p>A two-dimensional grid of points uses one parameter per axis:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructTypeProto {
-    name: &quot;POINT2D_GRID&quot;
-    dims_param: [&quot;height&quot;, &quot;width&quot;]
-    array: Array {
-        dims_index: 0
-        element_type: TypeProto {
-            struct_type: StructTypeProto {
-                array: Array {
-                    dims_index: 1
-                    element_type: TypeProto {
-                        struct_type: StructTypeProto { type_index: 0 }
-                    }
-                }
-            }
-        }
-    }
-}
-
-StructProto {
-    type: &lt;POINT2D_GRID type index&gt;
-    dims: [4, 5]
-    raw_data: &lt;160 bytes&gt;
-}
-</pre></div>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">POINT2D</span></code> stays static and is shared by both declarations. The parametric
-declarations are roots, so <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">5</span> <span class="pre">*</span> <span class="pre">8</span> <span class="pre">=</span> <span class="pre">160</span></code> bytes is obtained without any
-parameter substitution across declarations.</p>
-</section>
-<section id="quantization-profile">
-<h2>Quantization profile<a class="headerlink" href="#quantization-profile" title="Link to this heading">#</a></h2>
-<p>A quantized buffer provides a physical type plus a decoder. The former
-quantization families become layout compositions:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 24.0%" />
-<col style="width: 38.0%" />
-<col style="width: 38.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Family</p></th>
-<th class="head"><p>Physical layout</p></th>
-<th class="head"><p>Decoder</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Linear</p></td>
-<td><p>values, scales, zero-points</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">(q</span> <span class="pre">-</span> <span class="pre">zero_point)</span> <span class="pre">*</span> <span class="pre">scale</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>Codebook</p></td>
-<td><p>packed indices and codebook fields</p></td>
-<td><p>scalar or vector lookup</p></td>
-</tr>
-<tr class="row-even"><td><p>Floating point</p></td>
-<td><p>sign, exponent, and mantissa bit fields</p></td>
-<td><p>floating-point reconstruction</p></td>
-</tr>
-<tr class="row-odd"><td><p>Sparse</p></td>
-<td><p>dense section plus counted outlier fields</p></td>
-<td><p>dense decode followed by replacement</p></td>
-</tr>
-<tr class="row-even"><td><p>Logarithmic</p></td>
-<td><p>sign and exponent fields</p></td>
-<td><p>exponential reconstruction</p></td>
-</tr>
-<tr class="row-odd"><td><p>Tiled or blocked</p></td>
-<td><p>nested arrays and structures</p></td>
-<td><p>reshape and tile placement</p></td>
-</tr>
-<tr class="row-even"><td><p>Cast or identity</p></td>
-<td><p>tensor or structured array</p></td>
-<td><p>cast or reshape</p></td>
-</tr>
-<tr class="row-odd"><td><p>Structured block</p></td>
-<td><p>explicit block structure</p></td>
-<td><p>lookup, scaling, and scatter</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>These names are profiles and documentation conventions, not variants in a
-protobuf <code class="docutils literal notranslate"><span class="pre">oneof</span></code>.</p>
-</section>
-<section id="paged-kv-cache">
-<h2>Paged KV-cache<a class="headerlink" href="#paged-kv-cache" title="Link to this heading">#</a></h2>
-<p>A paged KV-cache is naturally a sequence or map of structured pages. Each
-page may use a different quantization type while satisfying one common static
-constraint:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>TypeProto {
-    sequence_type: Sequence {
-        elem_type: TypeProto {
-            struct_type: StructTypeProto {}
-        }
-    }
-}
-</pre></div>
-</div>
-<p>The first logical dimension contains K and V. Equivalent separate K and V
-sequences are also valid.</p>
-<p>A concrete sequence may mix page encodings:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto {
-    struct_types: [
-        StructTypeProto {
-            name: &quot;INT4_KV_PAGE&quot;
-            structure: Structure {
-                field: {
-                    name: &quot;values&quot;
-                    type: array(INT4, dimensions=[2, 32, 128, 128])
-                }
-                field: {
-                    name: &quot;scale&quot;
-                    type: array(FLOAT16, dimensions=[2, 32, 128, 1])
-                }
-            }
-            decoder: FunctionProto {
-                output: &quot;Y&quot;
-                value_info: {
-                    name: &quot;Y&quot;
-                    type: TypeProto {
-                        tensor_type: Tensor {
-                            elem_type: FLOAT16
-                            shape: TensorShapeProto {
-                                dim: { dim_value: 2 }
-                                dim: { dim_value: 32 }
-                                dim: { dim_value: 128 }
-                                dim: { dim_value: 128 }
-                            }
-                        }
-                    }
-                }
-                // Y = Cast(values, FLOAT16) * scale
-            }
-        },
-        StructTypeProto {
-            name: &quot;FP8_E4M3_KV_PAGE&quot;
-            structure: Structure {
-                field: {
-                    name: &quot;values&quot;
-                    type: array(FLOAT8E4M3FN, dimensions=[2, 32, 128, 128])
-                }
-            }
-            decoder: FunctionProto {
-                output: &quot;Y&quot;
-                value_info: {
-                    name: &quot;Y&quot;
-                    type: TypeProto {
-                        tensor_type: Tensor {
-                            elem_type: FLOAT16
-                            shape: TensorShapeProto {
-                                dim: { dim_value: 2 }
-                                dim: { dim_value: 32 }
-                                dim: { dim_value: 128 }
-                                dim: { dim_value: 128 }
-                            }
-                        }
-                    }
-                }
-                // Y = Cast(values, FLOAT16)
-            }
-        }
-    ]
-}
-
-SequenceProto {
-    elem_type: STRUCT
-    value_type: TypeProto {
-        struct_type: StructTypeProto {}
-    }
-    struct_values: [
-        StructProto {
-            type: 0
-            raw_data: ...
-        },
-        StructProto {
-            type: 1
-            raw_data: ...
-        }
-    ]
-}
-</pre></div>
-</div>
-<p>Both decoder signatures produce <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code> with the same logical page shape.
-Their physical layouts and byte sizes may differ.</p>
-<p>The INT4 page contains <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">32</span> <span class="pre">*</span> <span class="pre">128</span> <span class="pre">*</span> <span class="pre">128</span></code> four-bit values
-(<code class="docutils literal notranslate"><span class="pre">524288</span></code> bytes) and <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">32</span> <span class="pre">*</span> <span class="pre">128</span></code> FLOAT16 scales (<code class="docutils literal notranslate"><span class="pre">16384</span></code> bytes), for
-an exact payload of <code class="docutils literal notranslate"><span class="pre">540672</span></code> bytes. The FP8 page contains
-<code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">32</span> <span class="pre">*</span> <span class="pre">128</span> <span class="pre">*</span> <span class="pre">128</span></code> one-byte values, for <code class="docutils literal notranslate"><span class="pre">1048576</span></code> bytes. The sequence
-accepts both because its static element category is unconstrained, while each
-<code class="docutils literal notranslate"><span class="pre">StructProto.type</span></code> still selects one exact physical declaration.</p>
-<p>For page lookup by identifier, <code class="docutils literal notranslate"><span class="pre">MapProto</span></code> uses integer keys and this
-sequence as its values:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>map(int64, struct)
-</pre></div>
-</div>
-<p>An attention runtime may dispatch each page by its resolved model type and
-fuse decoding with attention. A generic runtime can invoke each declaration’s
-decoder. Page eviction, allocation, and mutation policy remain runtime concerns
-rather than properties of the serialized type.</p>
-</section>
-<section id="stq1-0-example">
-<h2>STQ1_0 example<a class="headerlink" href="#stq1-0-example" title="Link to this heading">#</a></h2>
-<p>STQ1_0 stores 256 logical values in each 42-byte block:</p>
-<ul class="simple">
-<li><p>64 four-bit codes;</p></li>
-<li><p>16 four-bit words packing 64 sign bits;</p></li>
-<li><p>one FLOAT16 scale.</p></li>
-</ul>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto {
-    struct_types: [
-        StructTypeProto {             // index 0: one physical block
-            name: &quot;STQ1_0_BLOCK&quot;
-            structure: Structure {
-                field: {
-                    name: &quot;code&quot;
-                    type: array(UINT4, dimension=64)
-                }
-                field: {
-                    name: &quot;packed_sign&quot;
-                    type: array(UINT4, dimension=16)
-                }
-                field: {
-                    name: &quot;scale&quot;
-                    type: FLOAT16
-                }
-            }
-        },
-        StructTypeProto {             // index 1: complete value
-            name: &quot;STQ1_0&quot;
-            array: Array {
-                dimension: 10
-                element_type: TypeProto {
-                    struct_type: StructTypeProto {
-                        type_index: 0
-                    }
-                }
-            }
-            decoder: FunctionProto {
-                output: &quot;Y&quot;
-                value_info: {
-                    name: &quot;Y&quot;
-                    type: TypeProto {
-                        tensor_type: Tensor {
-                            elem_type: FLOAT
-                            shape: TensorShapeProto {
-                                dim: { dim_value: 2560 }
-                            }
-                        }
-                    }
-                }
-                // sign = unpack four bits from each packed_sign value
-                // index = code + 16 * sign
-                // vector = ternary_codebook[index]
-                // scatter four values with stride 16
-                // Y = vector * scale
-            }
-        }
-    ]
-}
-</pre></div>
-</div>
-<p>For a 420-byte buffer, the root array contains exactly ten blocks and
-describes 2560 logical values. Its complete structure and expected byte size
-are derived exclusively from the static type:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>block = 64 * 4 bits + 16 * 4 bits + 16 bits = 336 bits = 42 bytes
-value = 10 * 42 bytes = 420 bytes
-</pre></div>
-</div>
-</section>
-<section id="linear-block-example">
-<h2>Linear block example<a class="headerlink" href="#linear-block-example" title="Link to this heading">#</a></h2>
-<p>An INT4 format with 32 values followed by one FLOAT16 scale per block is:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto {
-    struct_types: [
-        StructTypeProto {             // index 0: one block
-            name: &quot;INT4_BLOCK_32&quot;
-            structure: Structure {
-                field: {
-                    name: &quot;values&quot;
-                    type: array(INT4, dimension=32)
-                }
-                field: {
-                    name: &quot;scale&quot;
-                    type: FLOAT16
-                }
-            }
-        },
-        StructTypeProto {             // index 1: all blocks
-            name: &quot;INT4_BLOCKWISE&quot;
-            array: Array {
-                dimension: 10
-                element_type: TypeProto {
-                    struct_type: StructTypeProto {
-                        type_index: 0
-                    }
-                }
-            }
-            decoder: FunctionProto {
-                output: &quot;Y&quot;
-                value_info: {
-                    name: &quot;Y&quot;
-                    type: TypeProto {
-                        tensor_type: Tensor {
-                            elem_type: FLOAT16
-                            shape: TensorShapeProto {
-                                dim: { dim_value: 320 }
-                            }
-                        }
-                    }
-                }
-                // Y = values * scale
-            }
-        }
-    ]
-}
-</pre></div>
-</div>
-<p>The canonical leaf view contains <code class="docutils literal notranslate"><span class="pre">values[10,</span> <span class="pre">32]</span></code> and <code class="docutils literal notranslate"><span class="pre">scale[10]</span></code>. A
-linear decoder reconstructs <code class="docutils literal notranslate"><span class="pre">values</span> <span class="pre">*</span> <span class="pre">scale</span></code>.</p>
-</section>
-<section id="decision-tree-example">
-<h2>Decision-tree example<a class="headerlink" href="#decision-tree-example" title="Link to this heading">#</a></h2>
-<p>A finite decision tree does not require a recursive physical type. Child
-relations are stored as node indices. The following three-class tree has
-seven fixed-size nodes:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto {
-    struct_types: [
-        StructTypeProto {             // index 0: one node
-            name: &quot;DECISION_NODE_3_CLASSES&quot;
-            structure: Structure {
-                field: { name: &quot;kind&quot;,       type: UINT8 }
-                field: { name: &quot;feature_id&quot;, type: INT64 }
-                field: { name: &quot;threshold&quot;,  type: FLOAT }
-                field: { name: &quot;left&quot;,       type: INT32 }
-                field: { name: &quot;right&quot;,      type: INT32 }
-                field: {
-                    name: &quot;value&quot;
-                    type: array(FLOAT, dimension=3)
-                }
-            }
-        },
-        StructTypeProto {             // index 1: complete tree
-            name: &quot;DECISION_TREE_7_NODES_3_CLASSES&quot;
-            structure: Structure {
-                field: {
-                    name: &quot;nodes&quot;
-                    type: array(
-                        struct(type_index=0),
-                        dimension=7
-                    )
-                }
-                field: {
-                    name: &quot;class_ids&quot;
-                    constant: tensor(INT64, [3], [0, 1, 2])
-                }
-            }
-        }
-    ]
-}
-
-StructProto {
-    type: 1
-    raw_data: ...                 // exactly 231 bytes
-}
-</pre></div>
-</div>
-<p>One node occupies <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">+</span> <span class="pre">8</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">+</span> <span class="pre">3</span> <span class="pre">*</span> <span class="pre">4</span> <span class="pre">=</span> <span class="pre">33</span></code> bytes, so the seven
-serialized nodes occupy <code class="docutils literal notranslate"><span class="pre">231</span></code> bytes. <code class="docutils literal notranslate"><span class="pre">class_ids</span></code> is embedded in the type
-and consumes no payload bytes. <code class="docutils literal notranslate"><span class="pre">left</span></code> and <code class="docutils literal notranslate"><span class="pre">right</span></code> use node indices or a
-profile-defined sentinel for leaves. No decoder is required when a tree
-operator consumes the canonical leaf view directly.</p>
-</section>
-<section id="reference-case-validation">
-<h2>Reference-case validation<a class="headerlink" href="#reference-case-validation" title="Link to this heading">#</a></h2>
-<p>The three reference cases exercise distinct requirements:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 24.0%" />
-<col style="width: 28.0%" />
-<col style="width: 24.0%" />
-<col style="width: 24.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Case</p></th>
-<th class="head"><p>Physical composition</p></th>
-<th class="head"><p>Exact payload</p></th>
-<th class="head"><p>Additional rule</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>STQ1_0</p></td>
-<td><p>Array of structured sub-byte blocks</p></td>
-<td><p>420 bytes</p></td>
-<td><p>Decoder output is <code class="docutils literal notranslate"><span class="pre">FLOAT[2560]</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p>Paged KV-cache</p></td>
-<td><p>Heterogeneous sequence of structures</p></td>
-<td><p>540672 or 1048576 bytes per page</p></td>
-<td><p>Both decoders output the same page type</p></td>
-</tr>
-<tr class="row-even"><td><p>Decision tree</p></td>
-<td><p>Array of indexed nodes plus a constant field</p></td>
-<td><p>231 bytes</p></td>
-<td><p>Child indices are in <code class="docutils literal notranslate"><span class="pre">[-1,</span> <span class="pre">6]</span></code></p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>A conforming checker must accept these sizes without inspecting decoder
-implementation details. It must reject any truncated or oversized payload,
-cyclic <code class="docutils literal notranslate"><span class="pre">type_index</span></code>, out-of-range tree child, or mismatched decoder
-signature. The tree child-index rule and equal KV decoder signatures are
-profile validation layered on top of the generic structural checker.</p>
-</section>
-<section id="validation-and-security">
-<h2>Validation and security<a class="headerlink" href="#validation-and-security" title="Link to this heading">#</a></h2>
-<p>A checker validates:</p>
-<ul class="simple">
-<li><p>non-negative type indices are in range;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">struct_type</span></code> satisfy the -1 sentinel rules;</p></li>
-<li><p>the computed physical size equals the inline or external payload length;</p></li>
-<li><p>every <code class="docutils literal notranslate"><span class="pre">dims_index</span></code> is in range and every declared parameter is used;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code> has one entry per declared parameter of its type;</p></li>
-<li><p>a parametric declaration is never nested inside another physical type;</p></li>
-<li><p>model-level and inline concrete types select exactly one <code class="docutils literal notranslate"><span class="pre">array</span></code>,
-<code class="docutils literal notranslate"><span class="pre">packed_array</span></code>, or <code class="docutils literal notranslate"><span class="pre">structure</span></code> kind;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">type_index</span></code> references are in range and do not form cycles;</p></li>
-<li><p>every structure field selects exactly one of <code class="docutils literal notranslate"><span class="pre">type</span></code> and <code class="docutils literal notranslate"><span class="pre">constant</span></code>;</p></li>
-<li><p>valid standard ONNX leaf types;</p></li>
-<li><p>constant tensors are inline, concretely shaped, and have no external data;</p></li>
-<li><p>unique field names within each structure;</p></li>
-<li><p>unique packed-component names and positive component widths;</p></li>
-<li><p>valid concrete physical dimensions;</p></li>
-<li><p>every physical field and array element has a canonical fixed size;</p></li>
-<li><p>the total physical size is divisible by eight bits;</p></li>
-<li><p>exact consumption of the concrete buffer;</p></li>
-<li><p>decoder and encoder signatures;</p></li>
-<li><p>decoder restrictions and represented output type;</p></li>
-<li><p>every structured value satisfies its exact or unconstrained static
-category inside graph inputs, outputs, sequences, maps, and optionals.</p></li>
-</ul>
-<p>Implementations must impose configurable limits on nesting depth, field
-count, array count, constant bytes, and total extracted leaves. Validation
-must use checked integer arithmetic before creating views or allocating
-represented values.</p>
-</section>
-<section id="comparison-with-opaque">
-<h2>Comparison with Opaque<a class="headerlink" href="#comparison-with-opaque" title="Link to this heading">#</a></h2>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 41.0%" />
-<col style="width: 23.1%" />
-<col style="width: 35.9%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Property</p></th>
-<th class="head"><p><code class="docutils literal notranslate"><span class="pre">Opaque</span></code></p></th>
-<th class="head"><p>Structured buffer type</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Explicit type identity</p></td>
-<td><p>Yes</p></td>
-<td><p>Model index or inline type</p></td>
-</tr>
-<tr class="row-odd"><td><p>Exact buffer size</p></td>
-<td><p>No</p></td>
-<td><p>Payload length checked against the physical type</p></td>
-</tr>
-<tr class="row-even"><td><p>Explicit ordered fields</p></td>
-<td><p>No</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd"><td><p>Bit widths and canonical numbering</p></td>
-<td><p>No</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-even"><td><p>Nested and repeated structures</p></td>
-<td><p>No</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd"><td><p>Portable logical semantics</p></td>
-<td><p>No</p></td>
-<td><p>Optional decoder</p></td>
-</tr>
-<tr class="row-even"><td><p>Generic bounds validation</p></td>
-<td><p>No</p></td>
-<td><p>Yes</p></td>
-</tr>
-<tr class="row-odd"><td><p>Plugin required for correctness</p></td>
-<td><p>Yes</p></td>
-<td><p>No, when a decoder is present</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> is therefore a schema for bytes, not an opaque
-escape hatch and not a closed list of application-specific formats.</p>
 </section>
 </section>
 
@@ -1743,34 +772,12 @@ escape hatch and not a closed list of application-specific formats.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#motivation">Motivation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#requirements">Requirements</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stable-contract">Stable contract</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dimension-parameters">Dimension parameters</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-size-function">Physical size function</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#structtypeproto">StructTypeProto</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#type-storage-and-references">Type storage and references</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#standard-onnx-leaves">Standard ONNX leaves</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#array-type">Array type</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#packed-array-type">Packed array type</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#structure-type">Structure type</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#constant-fields">Constant fields</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#applying-a-type-to-a-buffer">Applying a type to a buffer</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#logical-leaf-view">Logical leaf view</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decoder-contract">Decoder contract</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoder-contract">Encoder contract</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#static-type-and-static-data">Static type and static data</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#typeproto-integration">TypeProto integration</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#container-values">Container values</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#attributeproto-integration">AttributeProto integration</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#float6-e3m2-example">FLOAT6_E3M2 example</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tensor-of-float6-e3m2">Tensor of FLOAT6_E3M2</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tensor-of-2d-points">Tensor of 2D points</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quantization-profile">Quantization profile</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#paged-kv-cache">Paged KV-cache</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#stq1-0-example">STQ1_0 example</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#linear-block-example">Linear block example</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#decision-tree-example">Decision-tree example</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-case-validation">Reference-case validation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation-and-security">Validation and security</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#comparison-with-opaque">Comparison with Opaque</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#integration">Integration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-rules">Physical rules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example">Example</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation">Validation</a></li>
 </ul>
   </nav></div>
 

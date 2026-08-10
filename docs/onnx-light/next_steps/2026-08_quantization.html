@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Quantization &#8212; onnx-light 0.1.16 documentation</title>
+    <title>Quantization &#8212; onnx-light 0.1.17 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=d50bcae4"></script>
+    <script src="../_static/documentation_options.js?v=71734efd"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.16 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.16 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.17 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.17 documentation - Home"/>
   
   
 </a></div>
@@ -424,7 +424,10 @@
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_optimization.html">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_prepared_execution.html">Parallel model initialization</a></li>
 </ul>
 </div>
 </nav></div>
@@ -492,6 +495,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
+<p><strong>complete</strong></p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>The structures on this page are descriptive quantization profiles. They
@@ -732,7 +736,6 @@ Specialized proto</label><div class="sd-tab-content docutils">
 Custom types</label><div class="sd-tab-content docutils">
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructProto {
     type: &lt;quantization-profile type index&gt;
-    dims: ...  // one value per declared dimension parameter
     raw_data: ...
     name: ...
     doc_string: ...
@@ -745,11 +748,10 @@ Custom types</label><div class="sd-tab-content docutils">
 <code class="docutils literal notranslate"><span class="pre">external_data</span></code>, <code class="docutils literal notranslate"><span class="pre">name</span></code>, and <code class="docutils literal notranslate"><span class="pre">doc_string</span></code> are carried by that generic
 value. Its exact model-level or inline <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> replaces
 <code class="docutils literal notranslate"><span class="pre">quantized_type</span></code> and <code class="docutils literal notranslate"><span class="pre">quantization</span></code>. Counts such as a block or tile
-number are either constants of that type or dimension parameters bound by
-<code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>, so one declaration serves every tensor size. The size
-computed from the physical type and <code class="docutils literal notranslate"><span class="pre">dims</span></code> must equal <code class="docutils literal notranslate"><span class="pre">raw_data.size()</span></code> or
-external-data <code class="docutils literal notranslate"><span class="pre">length</span></code>. Logical
-dimensions and element type belong to the decoder output <code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code>.</p>
+number are concrete dimensions of that type. The size computed from the
+physical type must equal <code class="docutils literal notranslate"><span class="pre">raw_data.size()</span></code> or external-data <code class="docutils literal notranslate"><span class="pre">length</span></code>.
+Logical dimensions and element type belong to the decoder output
+<code class="docutils literal notranslate"><span class="pre">ValueInfoProto</span></code>.</p>
 <p>In both forms, <code class="docutils literal notranslate"><span class="pre">name</span></code> identifies the concrete value and <code class="docutils literal notranslate"><span class="pre">doc_string</span></code>
 documents it.</p>
 <section id="typeproto-and-containers">
@@ -1111,7 +1113,7 @@ Custom types</label><div class="sd-tab-content docutils">
         // Serialized payload.
         field: {
             name: &quot;packed&quot;
-            type: packed_array(
+            type: bit_packing(
                 dimension=packed_count,
                 components=[
                     sign:sign_bits,
@@ -1147,7 +1149,7 @@ StructTypeProto {
     structure: Structure {
         field: {
             name: &quot;packed&quot;
-            type: packed_array(
+            type: bit_packing(
                 dimension=4,
                 components=[sign:1, exponent:3, mantissa:2]
             )
@@ -1177,7 +1179,7 @@ StructTypeProto {
 </div>
 </div>
 <p>A standard ONNX low-precision type such as <code class="docutils literal notranslate"><span class="pre">FLOAT4E2M1</span></code> or a float8 type is
-an ordinary physical <code class="docutils literal notranslate"><span class="pre">Array</span></code>. A non-standard width uses <code class="docutils literal notranslate"><span class="pre">PackedArray</span></code> so
+an ordinary physical <code class="docutils literal notranslate"><span class="pre">Array</span></code>. A non-standard width uses <code class="docutils literal notranslate"><span class="pre">BitPacking</span></code> so
 the component widths and packed element count remain explicit. Split storage
 is a <code class="docutils literal notranslate"><span class="pre">Structure</span></code> with one field per bit plane or component. Parameters not
 already expressed by the physical structure remain named constant fields.
@@ -2647,7 +2649,7 @@ Custom types</label><div class="sd-tab-content docutils">
             structure: Structure {
                 field: {
                     name: &quot;sign_exponent&quot;
-                    type: packed_array(
+                    type: bit_packing(
                         dimension=4,
                         components=[sign:1, exponent:3]
                     )
