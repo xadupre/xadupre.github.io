@@ -1,0 +1,102 @@
+name: Run all DATA and DOC
+
+# Convenience workflow that fans out to every other workflow whose name starts
+# with ``DATA`` or ``DOC``. Instead of triggering each recording and
+# documentation workflow by hand from the Actions tab, the repository owner can
+# run this single workflow and it will dispatch all of them in one go.
+#
+# Only the repository owner is allowed to run it manually; the scheduled run is
+# initiated by GitHub itself. Each dispatched workflow still enforces its own
+# owner-only guard, so this workflow simply saves clicks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      which:
+        description: "Which groups of workflows to launch."
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - data
+          - doc
+  schedule:
+    # Launch everything once a month, on the 2nd Monday at 05:07 UTC. The odd
+    # minute avoids the load spikes that happen exactly on the hour.
+    - cron: "7 5 8-14 * 1"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Dispatch all DATA and DOC workflows
+        env:
+          GH_TOKEN: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          # Default to "all" for scheduled runs which have no inputs.
+          WHICH: ${{ inputs.which || 'all' }}
+          REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          case "$WHICH" in
+            all) prefix_regex='^(DATA|DOC) ' ;;
+            data) prefix_regex='^DATA ' ;;
+            doc) prefix_regex='^DOC ' ;;
+            *) echo "Unknown selection: $WHICH" >&2; exit 1 ;;
+          esac
+
+          echo "Selecting workflows whose name matches: $prefix_regex"
+
+          # List all active workflows in this repository and keep only the ones
+          # whose display name starts with DATA or DOC. ``self`` is excluded so
+          # the dispatcher never triggers itself.
+          mapfile -t workflows < <(
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows" \
+              --jq '.workflows[] | select(.state == "active") | [.id, .name, .path] | @tsv'
+          )
+
+          failures=0
+          launched=0
+          for line in "${workflows[@]}"; do
+            id="$(cut -f1 <<<"$line")"
+            name="$(cut -f2 <<<"$line")"
+            path="$(cut -f3 <<<"$line")"
+
+            # Never dispatch this very workflow (its name does not start with
+            # DATA/DOC, but guard against it explicitly just in case).
+            if [[ "$name" == "${GITHUB_WORKFLOW}" ]]; then
+              continue
+            fi
+            if [[ ! "$name" =~ $prefix_regex ]]; then
+              continue
+            fi
+
+            echo "Dispatching: $name ($path)"
+            if gh workflow run "$id" --ref "$REF"; then
+              launched=$((launched + 1))
+            else
+              echo "::warning::Failed to dispatch '$name' ($path)."
+              failures=$((failures + 1))
+            fi
+          done
+
+          echo "Dispatched ${launched} workflow(s); ${failures} failure(s)."
+          if [[ "$launched" -eq 0 ]]; then
+            echo "::error::No matching workflow was dispatched." >&2
+            exit 1
+          fi
+          if [[ "$failures" -gt 0 ]]; then
+            exit 1
+          fi
