@@ -120,6 +120,12 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
 </div>
+<div class="chart-wrap" style="margin-top:1em;">
+  <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time (excluding lib, backend and kernel)</h2>
+  <div id="messageExcl" class="message info"></div>
+  <div id="chartExclContainer" class="chart-container"><canvas id="chartExcl"></canvas></div>
+  <div class="hint">Same data as above but the largest <code>lib</code>, <code>backend</code> and <code>kernel</code> binaries are excluded so the smaller ones are readable. Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
 <div id="lastObservations" class="last-observations" style="display:none;">
   <h2>Last 25 observations</h2>
   <table>
@@ -143,6 +149,20 @@ const SOURCES = [
       "The CSV file will appear once the build pipeline publishes its first measurements.",
   },
   {
+    kind: "shared library",
+    chartId: "chartExcl",
+    containerId: "chartExclContainer",
+    messageId: "messageExcl",
+    url: "../../cache_data/onnx-light/so_sizes.csv",
+    dashed: true,
+    filter: (r) => !isExcludedBinary(r.name),
+    skipObservations: true,
+    emptyMessage:
+      "No shared library size data (excluding the lib, backend and kernel " +
+      "binaries) is available yet. The CSV file will appear once the build " +
+      "pipeline publishes its first measurements.",
+  },
+  {
     kind: "wheel",
     chartId: "wheelChart",
     containerId: "wheelChartContainer",
@@ -163,6 +183,31 @@ const SOURCES = [
       "(ONNX_LIGHT_BUILD_KERNELS=OFF) is shown as a separate '(reduced)' line.",
   },
 ];
+
+// Shared-library binaries whose stripped component name starts with one of
+// these keywords are excluded from the "excluding lib, backend and kernel"
+// chart. They are the largest binaries and otherwise flatten the smaller
+// series. Names such as "protolib" are kept because the component does not
+// *start* with "lib".
+const EXCLUDED_BINARY_KEYWORDS = ["lib", "backend", "kernel"];
+
+function binaryComponent(name) {
+  // Drop the extension chain (".so", ".abi3.so", ".cpython-…-….so", …).
+  let base = name
+    .replace(/\.(abi3|cpython-[^.]*)\.(so|pyd|dylib)$/, "")
+    .replace(/\.(so|pyd|dylib)$/, "");
+  // Drop the known library prefixes to expose the meaningful component name.
+  base = base
+    .replace(/^liblib_onnx_/, "")
+    .replace(/^lib_onnx_/, "")
+    .replace(/^_onnxpy/, "");
+  return base;
+}
+
+function isExcludedBinary(name) {
+  const comp = binaryComponent(name);
+  return EXCLUDED_BINARY_KEYWORDS.some((k) => comp === k || comp.startsWith(k));
+}
 
 function showMessage(text, kind, src) {
   const msg = document.getElementById(src.messageId);
@@ -237,7 +282,11 @@ function fetchSource(src) {
         });
       })
     )
-  ).then(lists => ({ src, rows: lists.flat(), missing: false }));
+  ).then(lists => {
+    let rows = lists.flat();
+    if (src.filter) rows = rows.filter(src.filter);
+    return { src, rows, missing: false };
+  });
 }
 
 function renderSizeChart(src, rows) {
@@ -328,6 +377,7 @@ loadChartJs()
         renderSizeChart(res.src, res.rows);
       }
       for (const r of res.rows) {
+        if (res.src.skipObservations) continue;
         allRows.push({ ...r, kind: res.src.kind });
       }
     }
