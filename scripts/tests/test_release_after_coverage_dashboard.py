@@ -49,6 +49,14 @@ class TestReleaseAfterCoverageDashboard(unittest.TestCase):
         )
         self.assertIn("Outputs", text)
 
+    def test_summary_is_bounded(self):
+        with open(PAGE, encoding="utf-8") as f:
+            text = f.read()
+
+        self.assertIn("const MAX_SUMMARY_MISMATCHES = 3;", text)
+        self.assertIn("mismatches.length >= MAX_SUMMARY_MISMATCHES", text)
+        self.assertIn("expand for details", text)
+
 
 if __name__ == "__main__":
     unittest.main()
