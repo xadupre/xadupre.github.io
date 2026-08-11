@@ -143,7 +143,9 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
     def test_graph_value_snapshot_merges_output_metadata_from_value_info(self):
         out = _FakeValueInfo("Y", {})
         model = _FakeModel([], outputs=[out])
-        model.graph.value_info = [_FakeValueInfo("Y", {"onnx_light.value_tags": "axes"})]
+        model.graph.value_info = [
+            _FakeValueInfo("Y", {"onnx_light.value_tags": "axes"})
+        ]
 
         snapshot = rac._graph_value_snapshot(model)
         y_entry = next(s for s in snapshot if s["name"] == "Y")
@@ -454,8 +456,8 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         finally:
             rac.build_payload = original_build
 
-    def test_discover_includes_test_with_metadata_despite_wrong_tag(self):
-        """Tests with METADATA_KEYS metadata are kept even if their tag doesn't match."""
+    def test_discover_excludes_test_with_metadata_and_wrong_tag(self):
+        """Metadata must not bypass the requested backend-case tag."""
         import sys
         import types
 
@@ -503,7 +505,7 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
                     sys.modules[name] = mod
 
         names = [d["name"] for d in discovered]
-        self.assertIn("test_tiny_llm", names)
+        self.assertNotIn("test_tiny_llm", names)
         self.assertNotIn("test_no_meta", names)
 
     def test_discover_includes_test_with_not_used_after_only(self):
@@ -569,8 +571,8 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             [{"onnx_light.not_used_after": "X;W"}],
         )
 
-    def test_discover_includes_test_with_value_metadata_despite_wrong_tag(self):
-        """Tests with value-level metadata are kept even if their tag doesn't match."""
+    def test_discover_excludes_test_with_value_metadata_and_wrong_tag(self):
+        """Value metadata must not bypass the requested backend-case tag."""
         import sys
         import types
 
@@ -622,13 +624,14 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
                     sys.modules[name] = mod
 
         names = [d["name"] for d in discovered]
-        self.assertIn("test_cc_shape_inference_big_qwen3", names)
+        self.assertNotIn("test_cc_shape_inference_big_qwen3", names)
         self.assertNotIn("test_plain_no_meta", names)
-        # Also verify the expected_values are captured correctly
-        matches = [d for d in discovered if d["name"] == "test_cc_shape_inference_big_qwen3"]
-        self.assertEqual(len(matches), 1)
-        qwen_entry = matches[0]
-        self.assertTrue(any(v.get("metadata") for v in qwen_entry["expected_values"]))
+
+    def test_release_after_tag_accepts_release_case_alias(self):
+        self.assertTrue(rac._matches_requested_tags(("release_after",), ("release",)))
+        self.assertFalse(
+            rac._matches_requested_tags(("release_after",), ("inference",))
+        )
 
     def test_run_release_after_analysis_uses_onnx_core_module(self):
         """``run_release_after_analysis`` imports
