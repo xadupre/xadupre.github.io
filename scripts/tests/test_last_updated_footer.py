@@ -26,6 +26,7 @@ PAGES = [
     ("dashboard/onnx-light/shape-inference-coverage.html", 2),
     ("dashboard/onnx-light/inplace-reuse-coverage.html", 2),
     ("dashboard/onnx-light/release-after-coverage.html", 2),
+    ("dashboard/onnx-light/constant-info-coverage.html", 2),
     ("dashboard/onnx-light/cgen-comparison.html", 2),
     ("dashboard/onnx-light/lost-compute.html", 2),
     ("dashboard/yet-another-onnx-builder/build-durations.html", 2),

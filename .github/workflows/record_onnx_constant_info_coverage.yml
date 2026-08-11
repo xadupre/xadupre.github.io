@@ -1,0 +1,107 @@
+name: DATA onnx-light constant information coverage
+
+# Weekly job that runs the backend tests tagged ``constant`` bundled with
+# ``onnx-light`` and compares the metadata produced by the current
+# constant-information analysis against the metadata embedded in those tests.
+# The resulting JSON cache is written to
+# ``cache_data/onnx-light/constant_info_coverage.json`` and consumed by
+# ``dashboard/onnx-light/constant-info-coverage.html``.
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Checkout onnx-light
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light
+          path: onnx-light
+
+      - name: Detect CPU cores
+        run: |
+          cores="$(nproc)"
+          echo "Detected ${cores} CPU cores."
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
+
+      - name: Install onnx and onnx-light
+        run: |
+          python -m pip install --upgrade pip
+          pip install onnx numpy scikit-build-core nanobind
+          pip install -e ./onnx-light -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Record constant information coverage snapshot
+        run: |
+          python -u scripts/record_onnx_constant_info_coverage.py
+
+      - name: Commit and push cache data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/onnx-light/constant_info_coverage.json
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update onnx-light constant information coverage cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+              echo "Push succeeded on attempt ${i}."
+              rm -f "$push_err"
+              exit 0
+            fi
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "" >&2
+              echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+              echo "Retrying will not help: the authenticated user shown above is" >&2
+              echo "not allowed to push to ${branch}." >&2
+              echo "" >&2
+              echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+              echo "setting to change:" >&2
+              echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+              exit 1
+            fi
+            rm -f "$push_err"
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
