@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light &mdash; constant-information coverage</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; max-width: 1100px; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
+.intro code { background: rgba(110, 118, 129, 0.4); padding: 0 0.3em; border-radius: 4px; }
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.meta { font-size: 0.85em; color: #8b949e; }
+.meta strong { color: #c9d1d9; }
+.ratios {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1em;
+  margin: 0.5em 0 0.75em;
+  font-size: 0.9em;
+}
+.ratio-card {
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+.ratio-card .ratio-label {
+  color: #8b949e;
+  font-size: 0.8em;
+}
+.ratio-card .ratio-value {
+  font-size: 1.4em;
+  margin-top: 0.15em;
+  font-weight: bold;
+}
+.ratio-card .ratio-detail {
+  font-size: 0.8em;
+  color: #8b949e;
+  margin-top: 0.1em;
+}
+.ratio-card.tests .ratio-value { color: #79c0ff; }
+.ratio-card.nodes .ratio-value { color: #d2a8ff; }
+.ratio-card.metadata .ratio-value { color: #ffa657; }
+.ratio-card.values .ratio-value { color: #7ee787; }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.75em;
+}
+.controls input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 200px;
+  padding: 0.4em 0.6em;
+  background: #0d1117;
+  color: #c9d1d9;
+  border: 1px solid rgba(139, 148, 158, 0.4);
+  border-radius: 6px;
+  font: inherit;
+}
+.controls input[type="search"].invalid {
+  border-color: #f85149;
+}
+.controls .filter-status {
+  font-size: 0.8em;
+  color: #8b949e;
+}
+.controls .filter-status.error { color: #f85149; }
+.table-wrap { overflow-x: auto; }
+table.comparison {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+table.comparison th, table.comparison td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  vertical-align: top;
+}
+table.comparison th {
+  color: #8b949e;
+  font-weight: normal;
+  cursor: pointer;
+  user-select: none;
+  position: sticky;
+  top: 0;
+  background: rgba(22, 27, 34, 0.95);
+  white-space: nowrap;
+}
+table.comparison td.center, table.comparison th.center { text-align: center; }
+table.comparison td.status.pass { color: #3fb950; font-weight: bold; }
+table.comparison td.status.fail { color: #f85149; font-weight: bold; }
+table.comparison td.score { font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.comparison td.details { font-size: 0.82em; color: #8b949e; max-width: 420px; }
+table.comparison th .arrow {
+  display: inline-block;
+  width: 0.8em;
+  color: #58a6ff;
+}
+table.comparison tbody tr:hover { background: rgba(88, 166, 255, 0.06); }
+.message {
+  display: none;
+  text-align: center;
+  padding: 2em 1em;
+  font-size: 1em;
+  border-radius: 8px;
+  margin: 1em 0;
+}
+.message.visible { display: block; }
+.message.info { color: #c9d1d9; background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.3); }
+.message.error { color: #f85149; background: rgba(248, 81, 73, 0.08); border: 1px solid rgba(248, 81, 73, 0.3); }
+.empty-row td { text-align: center; color: #8b949e; font-style: italic; }
+table.comparison tbody tr.test-row { cursor: pointer; }
+table.comparison tbody tr.detail-row td {
+  background: rgba(13, 17, 23, 0.75);
+  padding: 0;
+}
+table.comparison tbody tr.detail-row .detail-wrap { padding: 0.75em 1em; }
+.toggle-arrow { color: #8b949e; margin-right: 0.4em; display: inline-block; width: 0.8em; }
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+  margin-top: 0.4em;
+}
+.detail-table th, .detail-table td {
+  text-align: left;
+  padding: 0.3em 0.5em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.18);
+  vertical-align: top;
+}
+.detail-table th { color: #8b949e; font-weight: normal; }
+.detail-table td.ok { color: #3fb950; }
+.detail-table td.ko { color: #f85149; }
+.detail-table td.muted { color: #8b949e; font-size: 0.85em; }
+.detail-error {
+  color: #f85149;
+  font-size: 0.85em;
+  margin-bottom: 0.4em;
+}
+.detail-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  color: #8b949e;
+  font-size: 0.82em;
+  margin-bottom: 0.5em;
+  cursor: pointer;
+  user-select: none;
+}
+.detail-filter input { cursor: pointer; }
+.detail-graph {
+  margin-top: 0.8em;
+  padding: 0.6em 0.8em;
+  background: #0d1117;
+  border-radius: 8px;
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  overflow-x: auto;
+}
+.detail-graph-title {
+  color: #8b949e;
+  font-size: 0.8em;
+  margin-bottom: 0.4em;
+}
+.detail-graph .mermaid {
+  text-align: center;
+  font-size: 0.75em;
+}
+.detail-graph .mermaid svg {
+  max-width: 100%;
+  height: auto;
+  width: auto;
+}
+.detail-graph .onnx-svg {
+  text-align: center;
+  overflow: auto;
+  max-height: 600px;
+}
+.detail-graph .onnx-svg svg {
+  max-width: 100%;
+  height: auto;
+  width: auto;
+}
+.detail-graph-error {
+  color: #f85149;
+  font-size: 0.8em;
+  font-family: monospace;
+  white-space: pre-wrap;
+}
+.notice-banner {
+  max-width: 1100px;
+  width: 100%;
+  margin: 0 auto 1em;
+  padding: 0.5em 1em;
+  border-radius: 8px;
+  background: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.5);
+  color: #d29922;
+  font-size: 0.85em;
+  text-align: center;
+  box-sizing: border-box;
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; constant-information coverage</h1>
+  <p class="intro">
+    Exact-match score of the <code>onnx_light</code> constant-information
+    analysis on backend test cases tagged <code>constant</code>.
+    The analysis flags every node and tensor whose value is known before
+    inference starts &mdash; graph initializers, <code>Constant</code> node
+    outputs and, more generally, any deterministic node all of whose inputs are
+    constant &mdash; via the <code>onnx_light.constant</code> metadata key.
+    The <em>details</em> column summarises why a test fails &mdash; how many
+    node and value flags were labelled differently from the expected annotations.
+    Click a row to see the per-node metadata detail and the model graph.
+  </p>
+</header>
+<div class="notice-banner">⚠ The results displayed on this page are indicative and experimental.</div>
+<div id="message" class="message info"></div>
+<div id="metaPanel" class="panel" style="display:none;">
+  <div class="meta">
+    Snapshot recorded on <strong id="metaDate"></strong>.
+    <span id="metaTag"></span>
+    <span id="metaVersions"></span>
+  </div>
+</div>
+<div id="mainPanel" class="panel" style="display:none;">
+  <div class="controls">
+    <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_cc_constant_)…" autocomplete="off" />
+    <div id="filterStatus" class="filter-status"></div>
+  </div>
+  <div class="ratios" id="ratiosContainer"></div>
+  <div class="table-wrap">
+    <table class="comparison">
+      <thead>
+        <tr>
+          <th data-key="name">Test <span class="arrow"></span></th>
+          <th data-key="success" class="center">status <span class="arrow"></span></th>
+          <th data-key="nodes" class="center">nodes <span class="arrow"></span></th>
+          <th data-key="metadata" class="center">metadata <span class="arrow"></span></th>
+          <th data-key="values" class="center">values <span class="arrow"></span></th>
+          <th data-key="details" title="Summary of why a test fails: how many node/value flags differ from the expected annotations. Expand a row for the full per-node and per-value breakdown.">details <span class="arrow"></span></th>
+        </tr>
+      </thead>
+      <tbody id="rowsBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const JSON_URL = "../../cache_data/onnx-light/constant_info_coverage.json";
+
+const state = {
+  rows: [],
+  search: "",
+  sort: { key: "name", dir: "asc" },
+  expanded: new Set(),
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function clearMessage() {
+  const msg = document.getElementById("message");
+  msg.textContent = "";
+  msg.className = "message info";
+}
+
+function pct(pass, fail) {
+  const total = pass + fail;
+  if (!total) return "0.0%";
+  return ((100 * pass) / total).toFixed(1) + "%";
+}
+
+function formatTestName(name) {
+  const prefix = "test_cc_constant_";
+  if (typeof name === "string" && name.startsWith(prefix)) {
+    return "test_cc_constant " + name.slice(prefix.length);
+  }
+  return String(name || "");
+}
+
+function describeTagDiff(expected, actual) {
+  // Human-readable "key expected=… actual=…" list for the metadata keys that
+  // differ between the expected and computed metadata of a single node/value.
+  const parts = [];
+  const exp = expected || {};
+  const act = actual || {};
+  const keys = Array.from(new Set([...Object.keys(exp), ...Object.keys(act)])).sort();
+  for (const key of keys) {
+    const a = exp[key];
+    const b = act[key];
+    if (a === b) continue;
+    const shortKey = key.replace("onnx_light.", "");
+    parts.push(shortKey + " expected=" + JSON.stringify(a ?? "") + " actual=" + JSON.stringify(b ?? ""));
+  }
+  return parts.join("; ");
+}
+
+// The "details" column summarises why a test fails: how many node flags and
+// value flags the onnx_light algorithm labelled differently from the expected
+// annotations. A test such as the qwen graph has hundreds of mismatches, so we
+// report grouped counts plus one concrete example instead of dumping every
+// mismatch into the cell. The full per-node/per-value list is available by
+// expanding the row.
+function summarizeRow(row) {
+  if (row.error) return row.error;
+  if (row.missing_metadata) return "No constant metadata found: expected annotations are missing from the test case.";
+
+  const nodeMismatches = (row.nodes || []).filter(node => node && node.success === false);
+  const valueMismatches = (row.values || []).filter(val => val && val.success === false);
+  const total = nodeMismatches.length + valueMismatches.length;
+  if (!total) return "all metadata matched";
+
+  const groups = [];
+  if (nodeMismatches.length) {
+    groups.push(nodeMismatches.length + " node flag" + (nodeMismatches.length === 1 ? "" : "s"));
+  }
+  if (valueMismatches.length) {
+    const byKind = {};
+    for (const val of valueMismatches) {
+      const kind = val.kind || "value";
+      byKind[kind] = (byKind[kind] || 0) + 1;
+    }
+    const kindParts = Object.keys(byKind).sort()
+      .map(kind => byKind[kind] + " " + kind + (byKind[kind] === 1 ? "" : "s"));
+    groups.push(valueMismatches.length + " value flag" + (valueMismatches.length === 1 ? "" : "s") +
+      " (" + kindParts.join(", ") + ")");
+  }
+
+  // One concrete example keeps the summary informative without flooding the
+  // cell with hundreds of rows.
+  let example = "";
+  const node = nodeMismatches[0];
+  const val = valueMismatches[0];
+  if (node) {
+    const diff = describeTagDiff(node.expected, node.actual);
+    example = "node " + node.index + (node.op_type ? " (" + node.op_type + ")" : "") + (diff ? ": " + diff : "");
+  } else if (val) {
+    const diff = describeTagDiff(val.expected, val.actual);
+    example = (val.kind || "value") + " " + (val.name || "?") + (diff ? ": " + diff : "");
+  }
+
+  let summary = total + " mismatch" + (total === 1 ? "" : "es") + " — " + groups.join(", ");
+  if (example) summary += ". e.g. " + example;
+  summary += ". Expand the row for the full list.";
+  return summary;
+}
+
+function escapeRegex(text) {
+  return String(text || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function renderRatios(totals) {
+  const container = document.getElementById("ratiosContainer");
+  container.innerHTML = "";
+  const cards = [
+    {
+      cls: "tests",
+      label: "tests matched exactly",
+      value: pct(totals.tests.pass, totals.tests.fail),
+      detail: totals.tests.pass + " / " + (totals.tests.pass + totals.tests.fail) + " tests",
+    },
+    {
+      cls: "nodes",
+      label: "nodes matched exactly",
+      value: pct(totals.nodes.pass, totals.nodes.fail),
+      detail: totals.nodes.pass + " / " + (totals.nodes.pass + totals.nodes.fail) + " nodes",
+    },
+    {
+      cls: "metadata",
+      label: "node metadata entries matched",
+      value: pct(totals.metadata.pass, totals.metadata.fail),
+      detail: totals.metadata.pass + " / " + (totals.metadata.pass + totals.metadata.fail) + " entries",
+    },
+    {
+      cls: "values",
+      label: "values matched (inputs/outputs/initializers/results)",
+      value: (() => { const v = totals.values || {pass: 0, fail: 0}; return pct(v.pass, v.fail); })(),
+      detail: (() => { const v = totals.values || {pass: 0, fail: 0}; return v.pass + " / " + (v.pass + v.fail) + " values"; })(),
+    },
+  ];
+  for (const card of cards) {
+    const div = document.createElement("div");
+    div.className = "ratio-card " + card.cls;
+    div.innerHTML =
+      '<div class="ratio-label">' + card.label + '</div>' +
+      '<div class="ratio-value">' + card.value + '</div>' +
+      '<div class="ratio-detail">' + card.detail + '</div>';
+    container.appendChild(div);
+  }
+}
+
+function compareRows(a, b) {
+  const key = state.sort.key;
+  const dir = state.sort.dir === "desc" ? -1 : 1;
+  const valueOf = (row) => {
+    if (key === "success") return row.success ? 1 : 0;
+    if (key === "nodes") return row.total_nodes ? row.matched_nodes / row.total_nodes : 0;
+    if (key === "metadata") return row.total_metadata ? row.matched_metadata / row.total_metadata : 0;
+    if (key === "values") return row.total_values ? row.matched_values / row.total_values : 0;
+    if (key === "details") return summarizeRow(row);
+    return row.name || "";
+  };
+  const va = valueOf(a);
+  const vb = valueOf(b);
+  if (typeof va === "number" && typeof vb === "number") return dir * (va - vb);
+  return dir * String(va).localeCompare(String(vb));
+}
+
+function formatNodeIo(node) {
+  const inputs = (node && Array.isArray(node.inputs) ? node.inputs : []).filter(Boolean);
+  const outputs = (node && Array.isArray(node.outputs) ? node.outputs : []).filter(Boolean);
+  return { inputs, outputs };
+}
+
+function formatNodeOp(node) {
+  const opType = (node && node.op_type) ? String(node.op_type) : "—";
+  const io = formatNodeIo(node);
+  if (!io.inputs.length && !io.outputs.length) {
+    return opType;
+  }
+  const inputSig = opType + "(" + io.inputs.join(", ") + ")";
+  const outputText = io.outputs.join(", ");
+  return outputText ? (inputSig + " -> " + outputText) : inputSig;
+}
+
+function buildNodeTable(nodes) {
+  const table = document.createElement("table");
+  table.className = "detail-table";
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["node", "op type", "key", "expected", "actual", "match"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const node of nodes) {
+    const expected = node.expected || {};
+    const actual = node.actual || {};
+    const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+    if (!keys.length) {
+      // Node with no metadata: show a single placeholder row
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = String(node.index);
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      const opText = formatNodeOp(node);
+      tdOp.className = opText === "—" ? "muted" : "";
+      tdOp.textContent = opText;
+      tr.appendChild(tdOp);
+      for (let i = 0; i < 4; i++) {
+        const td = document.createElement("td");
+        td.className = "muted";
+        td.textContent = "—";
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+      continue;
+    }
+    keys.forEach((key, keyIndex) => {
+      const tr = document.createElement("tr");
+      const tdIdx = document.createElement("td");
+      tdIdx.textContent = keyIndex === 0 ? String(node.index) : "";
+      tr.appendChild(tdIdx);
+      const tdOp = document.createElement("td");
+      if (keyIndex === 0) {
+        const opText = formatNodeOp(node);
+        tdOp.className = opText === "—" ? "muted" : "";
+        tdOp.textContent = opText;
+      } else {
+        tdOp.textContent = "";
+      }
+      tr.appendChild(tdOp);
+      const tdKey = document.createElement("td");
+      tdKey.textContent = key.replace("onnx_light.", "");
+      tdKey.title = key;
+      tr.appendChild(tdKey);
+      const expVal = expected[key] !== undefined ? String(expected[key]) : "—";
+      const actVal = actual[key] !== undefined ? String(actual[key]) : "—";
+      const match = expected[key] === actual[key];
+      const tdExp = document.createElement("td");
+      tdExp.textContent = expVal;
+      tr.appendChild(tdExp);
+      const tdAct = document.createElement("td");
+      tdAct.textContent = actVal;
+      tr.appendChild(tdAct);
+      const tdMatch = document.createElement("td");
+      tdMatch.className = match ? "ok" : "ko";
+      tdMatch.textContent = match ? "✓" : "✗";
+      tr.appendChild(tdMatch);
+      tbody.appendChild(tr);
+    });
+  }
+  table.appendChild(tbody);
+  return table;
+}
+
+function buildValueTable(values) {
+  const valTable = document.createElement("table");
+  valTable.className = "detail-table";
+  const vHead = document.createElement("thead");
+  const vHeadRow = document.createElement("tr");
+  for (const label of ["name", "kind", "key", "expected", "actual", "match"]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    vHeadRow.appendChild(th);
+  }
+  vHead.appendChild(vHeadRow);
+  valTable.appendChild(vHead);
+  const vBody = document.createElement("tbody");
+  for (const val of values) {
+      const expected = val.expected || {};
+      const actual = val.actual || {};
+      const keys = Array.from(new Set([...Object.keys(expected), ...Object.keys(actual)])).sort();
+      if (!keys.length) {
+        const tr = document.createElement("tr");
+        const tdName = document.createElement("td");
+        tdName.textContent = val.name || "—";
+        tr.appendChild(tdName);
+        const tdKind = document.createElement("td");
+        tdKind.className = "muted";
+        tdKind.textContent = val.kind || "—";
+        tr.appendChild(tdKind);
+        for (let i = 0; i < 4; i++) {
+          const td = document.createElement("td");
+          td.className = "muted";
+          td.textContent = "—";
+          tr.appendChild(td);
+        }
+        vBody.appendChild(tr);
+        continue;
+      }
+      keys.forEach((key, keyIndex) => {
+        const tr = document.createElement("tr");
+        const tdName = document.createElement("td");
+        tdName.textContent = keyIndex === 0 ? (val.name || "—") : "";
+        tr.appendChild(tdName);
+        const tdKind = document.createElement("td");
+        tdKind.className = "muted";
+        tdKind.textContent = keyIndex === 0 ? (val.kind || "—") : "";
+        tr.appendChild(tdKind);
+        const tdKey = document.createElement("td");
+        tdKey.textContent = key.replace("onnx_light.", "");
+        tdKey.title = key;
+        tr.appendChild(tdKey);
+        const expVal = expected[key] !== undefined ? String(expected[key]) : "—";
+        const actVal = actual[key] !== undefined ? String(actual[key]) : "—";
+        const match = expected[key] === actual[key];
+        const tdExp = document.createElement("td");
+        tdExp.textContent = expVal;
+        tr.appendChild(tdExp);
+        const tdAct = document.createElement("td");
+        tdAct.textContent = actVal;
+        tr.appendChild(tdAct);
+        const tdMatch = document.createElement("td");
+        tdMatch.className = match ? "ok" : "ko";
+        tdMatch.textContent = match ? "✓" : "✗";
+        tr.appendChild(tdMatch);
+        vBody.appendChild(tr);
+      });
+    }
+    valTable.appendChild(vBody);
+  return valTable;
+}
+
+function renderDetailFor(row) {
+  const wrap = document.createElement("div");
+  wrap.className = "detail-wrap";
+
+  if (row.error) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "Error: " + row.error;
+    wrap.appendChild(div);
+  }
+
+  if (row.missing_metadata) {
+    const div = document.createElement("div");
+    div.className = "detail-error";
+    div.textContent = "No constant metadata found: expected annotations are missing from the test case.";
+    wrap.appendChild(div);
+  }
+
+  const allNodes = row.nodes || [];
+  const allValues = row.values || [];
+  const failingNodes = allNodes.filter(n => n && n.success === false);
+  const failingValues = allValues.filter(v => v && v.success === false);
+  const hasMismatch = failingNodes.length > 0 || failingValues.length > 0;
+
+  // When a test fails, the full per-node/per-value tables can hold hundreds
+  // of matching rows that bury the handful of mismatches. Default to showing
+  // only the mismatching rows so the failure is readable, while still keeping
+  // the table visible and letting the user reveal everything on demand.
+  const state = { onlyMismatches: hasMismatch };
+
+  const tablesWrap = document.createElement("div");
+
+  if (hasMismatch) {
+    const controls = document.createElement("label");
+    controls.className = "detail-filter";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = state.onlyMismatches;
+    checkbox.addEventListener("change", (event) => {
+      event.stopPropagation();
+      state.onlyMismatches = checkbox.checked;
+      renderTables();
+    });
+    controls.appendChild(checkbox);
+    controls.appendChild(document.createTextNode(" Show only mismatches"));
+    controls.addEventListener("click", (event) => event.stopPropagation());
+    wrap.appendChild(controls);
+  }
+
+  function renderTables() {
+    tablesWrap.innerHTML = "";
+    const nodes = state.onlyMismatches ? failingNodes : allNodes;
+    const values = state.onlyMismatches ? failingValues : allValues;
+
+    // Always keep a table on screen: render the node table unless we are
+    // filtering to mismatches and only the value table has rows to show.
+    if (nodes.length || !values.length) {
+      tablesWrap.appendChild(buildNodeTable(nodes));
+    }
+
+    if (values.length) {
+      const valTitle = document.createElement("div");
+      valTitle.className = "detail-graph-title";
+      valTitle.style.marginTop = "0.8em";
+      valTitle.textContent = "Inputs / outputs / initializers / results";
+      tablesWrap.appendChild(valTitle);
+      tablesWrap.appendChild(buildValueTable(values));
+    }
+  }
+
+  renderTables();
+  wrap.appendChild(tablesWrap);
+
+  if (hasValidSvgGraph(row) || row.mermaid) {
+    const graphWrap = document.createElement("div");
+    graphWrap.className = "detail-graph";
+    const title = document.createElement("div");
+    title.className = "detail-graph-title";
+    title.textContent = "Model graph";
+    graphWrap.appendChild(title);
+    const graphDiv = document.createElement("div");
+    graphWrap.appendChild(graphDiv);
+    wrap.appendChild(graphWrap);
+    renderGraph(graphDiv, row);
+  }
+
+  return wrap;
+}
+
+let _mermaidLoader = null;
+function loadMermaid() {
+  if (_mermaidLoader) return _mermaidLoader;
+  _mermaidLoader = import("https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs")
+    .then((mod) => {
+      const mermaid = mod.default;
+      mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
+      return mermaid;
+    });
+  return _mermaidLoader;
+}
+
+let _mermaidUid = 0;
+function renderMermaid(targetDiv) {
+  const source = targetDiv.textContent;
+  loadMermaid()
+    .then((mermaid) => mermaid.render("constantInfoMermaid_" + (++_mermaidUid), source))
+    .then(({ svg, bindFunctions }) => {
+      targetDiv.innerHTML = svg;
+      if (bindFunctions) bindFunctions(targetDiv);
+    })
+    .catch((err) => {
+      const errDiv = document.createElement("div");
+      errDiv.className = "detail-graph-error";
+      errDiv.textContent = "Failed to render Mermaid graph: " + (err && err.message ? err.message : err);
+      targetDiv.innerHTML = "";
+      targetDiv.appendChild(errDiv);
+    });
+}
+
+function renderGraph(targetDiv, row) {
+  if (hasValidSvgGraph(row)) {
+    const doc = new DOMParser().parseFromString(row.graph.svg, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === "svg") {
+      targetDiv.className = "onnx-svg";
+      targetDiv.appendChild(document.importNode(svg, true));
+      return;
+    }
+  }
+  if (row.mermaid) {
+    targetDiv.className = "mermaid";
+    targetDiv.textContent = row.mermaid;
+    renderMermaid(targetDiv);
+  }
+}
+
+function hasValidSvgGraph(row) {
+  return !!(row && row.graph && typeof row.graph.svg === "string" && row.graph.svg);
+}
+
+function renderRows() {
+  const tbody = document.getElementById("rowsBody");
+  tbody.innerHTML = "";
+  let rows = state.rows.slice();
+  const filterStatus = document.getElementById("filterStatus");
+  filterStatus.textContent = "";
+  filterStatus.className = "filter-status";
+  if (state.search) {
+    try {
+      const rx = new RegExp(state.search, "i");
+      rows = rows.filter(row => rx.test(row.name || "") || rx.test(summarizeRow(row)));
+      filterStatus.textContent = rows.length + " test(s)";
+    } catch (err) {
+      filterStatus.textContent = String(err);
+      filterStatus.className = "filter-status error";
+    }
+  }
+  rows.sort(compareRows);
+  if (!rows.length) {
+    const tr = document.createElement("tr");
+    tr.className = "empty-row";
+    const td = document.createElement("td");
+    td.colSpan = 6;
+    td.textContent = state.search ? "No test matches the current filter." : "No constant backend test result is available.";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+    return;
+  }
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    tr.className = "test-row";
+
+    const tdName = document.createElement("td");
+    const arrow = document.createElement("span");
+    arrow.className = "toggle-arrow";
+    arrow.textContent = state.expanded.has(row.name) ? "▼" : "▶";
+    tdName.appendChild(arrow);
+    tdName.appendChild(document.createTextNode(formatTestName(row.name)));
+    tr.appendChild(tdName);
+
+    const tdStatus = document.createElement("td");
+    tdStatus.className = "center status " + (row.success ? "pass" : "fail");
+    tdStatus.textContent = row.success ? "pass" : "fail";
+    tr.appendChild(tdStatus);
+
+    const tdNodes = document.createElement("td");
+    tdNodes.className = "center score";
+    tdNodes.textContent = row.matched_nodes + " / " + row.total_nodes;
+    tr.appendChild(tdNodes);
+
+    const tdMeta = document.createElement("td");
+    tdMeta.className = "center score";
+    tdMeta.textContent = row.matched_metadata + " / " + row.total_metadata;
+    tr.appendChild(tdMeta);
+
+    const tdValues = document.createElement("td");
+    tdValues.className = "center score";
+    tdValues.textContent = (row.matched_values ?? 0) + " / " + (row.total_values ?? 0);
+    tr.appendChild(tdValues);
+
+    const tdDetails = document.createElement("td");
+    tdDetails.className = "details";
+    tdDetails.textContent = summarizeRow(row);
+    tr.appendChild(tdDetails);
+
+    tr.addEventListener("click", () => {
+      if (state.expanded.has(row.name)) state.expanded.delete(row.name);
+      else state.expanded.add(row.name);
+      renderRows();
+    });
+
+    tbody.appendChild(tr);
+
+    if (state.expanded.has(row.name)) {
+      const detailTr = document.createElement("tr");
+      detailTr.className = "detail-row";
+      const detailTd = document.createElement("td");
+      detailTd.colSpan = 6;
+      detailTd.appendChild(renderDetailFor(row));
+      detailTr.appendChild(detailTd);
+      tbody.appendChild(detailTr);
+    }
+  }
+}
+
+function renderMeta(payload) {
+  document.getElementById("metaDate").textContent = payload.date || "";
+  document.getElementById("metaTag").textContent = payload.tag ? " tag: " + payload.tag + "." : "";
+  const versions = payload.versions || {};
+  const parts = Object.keys(versions).sort().map(name => name + " " + versions[name]);
+  document.getElementById("metaVersions").textContent = parts.length ? " versions: " + parts.join(", ") + "." : "";
+  document.getElementById("metaPanel").style.display = "block";
+}
+
+async function loadData() {
+  try {
+    const response = await fetch(JSON_URL, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("HTTP " + response.status + " while loading " + JSON_URL);
+    }
+    const payload = await response.json();
+    const tests = Array.isArray(payload.tests) ? payload.tests : [];
+    const totals = payload.totals || {
+      tests: { pass: 0, fail: 0 },
+      nodes: { pass: 0, fail: 0 },
+      metadata: { pass: 0, fail: 0 },
+    };
+    state.rows = tests;
+    renderMeta(payload);
+    renderRatios(totals);
+    document.getElementById("mainPanel").style.display = "block";
+    clearMessage();
+    if (!tests.length) {
+      showMessage("No constant backend test result is available yet. The JSON cache will appear after the first successful data-recording workflow run.", "info");
+    }
+    renderRows();
+  } catch (err) {
+    showMessage(String(err), "error");
+  }
+}
+
+document.getElementById("search").addEventListener("input", ev => {
+  state.search = ev.target.value.trim();
+  ev.target.classList.remove("invalid");
+  try {
+    if (state.search) new RegExp(state.search, "i");
+  } catch (err) {
+    ev.target.classList.add("invalid");
+  }
+  renderRows();
+});
+
+for (const th of document.querySelectorAll("thead th[data-key]")) {
+  th.addEventListener("click", () => {
+    const key = th.getAttribute("data-key");
+    if (state.sort.key === key) {
+      state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+    } else {
+      state.sort.key = key;
+      state.sort.dir = key === "name" ? "asc" : "desc";
+    }
+    for (const cell of document.querySelectorAll("thead th[data-key] .arrow")) {
+      cell.textContent = "";
+    }
+    th.querySelector(".arrow").textContent = state.sort.dir === "asc" ? "▲" : "▼";
+    renderRows();
+  });
+}
+document.querySelector('thead th[data-key="name"] .arrow').textContent = "▲";
+loadData();
+</script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/constant_info_coverage.json" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+</body>
+</html>
