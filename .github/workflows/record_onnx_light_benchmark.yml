@@ -53,18 +53,75 @@ jobs:
           repository: xadupre/onnx-light-cpu
           path: onnx-light-cpu
 
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Detect CPU cores
         run: |
           cores="$(nproc)"
           echo "Detected ${cores} CPU cores."
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
 
-      - name: Install onnx, onnxruntime, onnx-light and onnx-light-cpu
+      - name: Install onnx, onnxruntime and build onnx-light from source
+        env:
+          SCCACHE_GHA_ENABLED: "true"
         run: |
+          # The ``onnx_light_cpu`` benchmark backend calls
+          # ``onnx_light_cpu.register_kernels()``, which lives in the compiled
+          # ``_cpuregister`` extension. That extension is only built when
+          # onnx-light-cpu is compiled with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``,
+          # and that build links onnx-light's ``lib_onnx_core`` located via
+          # ``find_package(onnx_light)``. A prebuilt wheel / plain editable
+          # install does not ship the CMake package config needed for that, so
+          # build onnx-light from source (with sccache to keep repeat runs
+          # fast), install its CMake package and expose it on
+          # ``CMAKE_PREFIX_PATH``, then ``pip install`` it for the Python
+          # runtime. This mirrors ``build_onnx_light_cpu_docs.yml``. Without it
+          # ``register_kernels()`` raises ``No module named
+          # 'onnx_light_cpu.onnx_py._cpuregister'`` and every onnx-light-cpu test
+          # is recorded as a load failure.
           python -m pip install --upgrade pip
           pip install onnx onnxruntime numpy scikit-build-core nanobind
-          pip install -e ./onnx-light -v
-          pip install -e ./onnx-light-cpu -v
+          cmake -S ./onnx-light -B ./onnx-light/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=./onnx-light/install \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build ./onnx-light/build --config Release --parallel
+          cmake --install ./onnx-light/build --config Release
+          pip install ./onnx-light
+          onnx_light_install="$(cd ./onnx-light/install && pwd)"
+          echo "CMAKE_PREFIX_PATH=${onnx_light_install}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          # The onnx-light-cpu ``_cpuregister`` extension links onnx-light's
+          # shared libraries, so the install lib dir must be on
+          # ``LD_LIBRARY_PATH`` or the import fails with "cannot open shared
+          # object file: liblib_onnx_core.so".
+          onnx_light_lib="$(find "${onnx_light_install}" -name 'liblib_onnx_core.so' | head -1)"
+          if [ -z "${onnx_light_lib}" ]; then
+            echo "liblib_onnx_core.so not found under ${onnx_light_install};" >&2
+            echo "the onnx-light C++ install is incomplete, so onnx-light-cpu's" >&2
+            echo "_cpuregister extension cannot link against it." >&2
+            exit 1
+          fi
+          onnx_light_libdir="$(dirname "${onnx_light_lib}")"
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install onnx-light-cpu with the onnx-light integration
+        working-directory: onnx-light-cpu
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # Enable the onnx-light integration so the ``_cpuregister`` extension —
+          # and therefore ``onnx_light_cpu.register_kernels()`` used by the
+          # benchmark — is compiled and links the same shared ``lib_onnx_core``
+          # that the running ``onnx_light`` uses.
+          pip install \
+            -C build-dir=build \
+            -C cmake.build-type=Release \
+            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -e . -v
 
       - name: pip freeze
         run: pip freeze
