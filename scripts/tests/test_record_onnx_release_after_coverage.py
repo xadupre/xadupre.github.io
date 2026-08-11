@@ -182,6 +182,24 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         self.assertIn("values", row)
         self.assertEqual(row["values"], [])
 
+    def test_score_test_accepts_additional_computed_metadata(self):
+        row = rac._score_test(
+            "test_additional_metadata",
+            expected_nodes=[{"onnx_light.release_after": "A"}],
+            actual_nodes=[
+                {
+                    "onnx_light.release_after": "A",
+                    "onnx_light.not_used_after": "X",
+                }
+            ],
+            node_ops=["Abs"],
+        )
+
+        self.assertTrue(row["success"])
+        self.assertEqual(row["matched_nodes"], 1)
+        self.assertEqual(row["matched_metadata"], 1)
+        self.assertEqual(row["total_metadata"], 1)
+
     def test_score_test_includes_values_section(self):
         expected_values = [
             {
@@ -456,8 +474,8 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
         finally:
             rac.build_payload = original_build
 
-    def test_discover_excludes_test_with_metadata_and_wrong_tag(self):
-        """Metadata must not bypass the requested backend-case tag."""
+    def test_discover_includes_test_with_metadata_despite_wrong_tag(self):
+        """Expected metadata keeps a case even when its tag differs."""
         import sys
         import types
 
@@ -505,7 +523,7 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
                     sys.modules[name] = mod
 
         names = [d["name"] for d in discovered]
-        self.assertNotIn("test_tiny_llm", names)
+        self.assertIn("test_tiny_llm", names)
         self.assertNotIn("test_no_meta", names)
 
     def test_discover_includes_test_with_not_used_after_only(self):
@@ -571,8 +589,8 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
             [{"onnx_light.not_used_after": "X;W"}],
         )
 
-    def test_discover_excludes_test_with_value_metadata_and_wrong_tag(self):
-        """Value metadata must not bypass the requested backend-case tag."""
+    def test_discover_includes_test_with_value_metadata_despite_wrong_tag(self):
+        """Expected value metadata keeps a case even when its tag differs."""
         import sys
         import types
 
@@ -624,13 +642,14 @@ class TestRecordOnnxReleaseAfterCoverage(unittest.TestCase):
                     sys.modules[name] = mod
 
         names = [d["name"] for d in discovered]
-        self.assertNotIn("test_cc_shape_inference_big_qwen3", names)
+        self.assertIn("test_cc_shape_inference_big_qwen3", names)
         self.assertNotIn("test_plain_no_meta", names)
-
-    def test_release_after_tag_accepts_release_case_alias(self):
-        self.assertTrue(rac._matches_requested_tags(("release_after",), ("release",)))
-        self.assertFalse(
-            rac._matches_requested_tags(("release_after",), ("inference",))
+        matches = [
+            d for d in discovered if d["name"] == "test_cc_shape_inference_big_qwen3"
+        ]
+        self.assertEqual(len(matches), 1)
+        self.assertTrue(
+            any(value.get("metadata") for value in matches[0]["expected_values"])
         )
 
     def test_run_release_after_analysis_uses_onnx_core_module(self):

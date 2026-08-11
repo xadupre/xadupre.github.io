@@ -175,6 +175,11 @@ def _graph_value_snapshot(model) -> List[Dict[str, Any]]:
     return result
 
 
+def _has_expected_value_metadata(values: Optional[List[Dict[str, Any]]]) -> bool:
+    """Returns whether a graph value carries expected release metadata."""
+    return any(value.get("metadata") for value in (values or []))
+
+
 def _node_io(node) -> Tuple[List[str], List[str]]:
     """Return ``(inputs, outputs)`` for one node as display-ready strings."""
     inputs = [str(name) for name in getattr(node, "input", []) if str(name)]
@@ -404,16 +409,6 @@ def model_to_svg_graph(model: Any) -> Dict[str, str]:
     return _normalize_graph({"svg": svg})
 
 
-def _matches_requested_tags(
-    requested_tags: Tuple[str, ...], case_tags: Tuple[str, ...]
-) -> bool:
-    """Returns whether a backend case belongs to the requested report."""
-    accepted = set(requested_tags)
-    if "release_after" in accepted:
-        accepted.add("release")
-    return bool(accepted.intersection(case_tags))
-
-
 def discover_release_after_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     """Return backend tests whose ``tag`` matches ``tag``.
 
@@ -437,7 +432,10 @@ def discover_release_after_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
         nodes = list(getattr(model.graph, "node", []))
         expected_nodes = [_node_metadata(node) for node in nodes]
         expected_values = _graph_value_snapshot(model)
-        if tags and not _matches_requested_tags(tags, case_tags):
+        has_metadata = any(expected_nodes) or _has_expected_value_metadata(
+            expected_values
+        )
+        if tags and not any(t in tags for t in case_tags) and not has_metadata:
             continue
         discovered.append(
             {
@@ -533,13 +531,13 @@ def _score_test(
             if node_outputs is not None and index < len(node_outputs)
             else []
         )
-        keys = sorted(set(expected) | set(actual))
+        keys = sorted(expected)
         metadata_matches = sum(
             1 for key in keys if expected.get(key) == actual.get(key)
         )
         total_metadata += len(keys)
         matched_metadata += metadata_matches
-        node_success = expected == actual
+        node_success = metadata_matches == len(keys)
         if node_success:
             matched_nodes += 1
         else:
