@@ -511,6 +511,7 @@ measured for the smaller sizes in <code class="docutils literal notranslate"><sp
     <span class="n">used_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_simd_level</span><span class="p">,</span> <span class="n">has_cpu_kernels</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpuregister</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_kernel_usage_recording</span>
 
 <span class="n">_SIMD_NAMES</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;scalar&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span> <span class="s2">&quot;SSE2&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">&quot;AVX&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="s2">&quot;AVX2&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span> <span class="s2">&quot;AVX-512&quot;</span><span class="p">}</span>
 
@@ -556,18 +557,20 @@ accelerated onnx-light-cpu curve, so each gets its own model/graph object
 <span class="c1"># Timing helper</span>
 <span class="c1"># ---------------------------------------------------------------------------</span>
 <span class="c1">#</span>
-<span class="c1"># Each candidate is called ``repeat`` times and the best (minimum) wall-clock</span>
-<span class="c1"># time is kept to reduce the impact of scheduling noise. The number of repeats</span>
-<span class="c1"># shrinks as the matrices grow so the whole benchmark stays fast.</span>
+<span class="c1"># Each candidate gets three untimed warm-up calls, then is called ``repeat``</span>
+<span class="c1"># times and the median wall-clock time is retained. The number of repeats</span>
+<span class="c1"># shrinks as the matrices grow but never below seven.</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">):</span>
-    <span class="n">best</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup</span><span class="p">):</span>
+        <span class="n">func</span><span class="p">()</span>
+    <span class="n">timings</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
         <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
         <span class="n">func</span><span class="p">()</span>
-        <span class="n">best</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">best</span><span class="p">,</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">best</span>
+        <span class="n">timings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">timings</span><span class="p">))</span>
 </pre></div>
 </div>
 </section>
@@ -589,7 +592,7 @@ faster than the other back-ends.</p>
     <span class="n">a</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">expected</span> <span class="o">=</span> <span class="n">a</span> <span class="o">@</span> <span class="n">b</span>
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">20_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">size</span> <span class="o">*</span> <span class="n">size</span> <span class="o">*</span> <span class="n">size</span><span class="p">)))</span>
+    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">20_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">size</span> <span class="o">*</span> <span class="n">size</span> <span class="o">*</span> <span class="n">size</span><span class="p">)))</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">run_alone</span><span class="p">(</span><span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;A&quot;</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">&quot;B&quot;</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
@@ -619,12 +622,15 @@ faster than the other back-ends.</p>
 <span class="n">clear_used_kernel_names</span><span class="p">()</span>
 <span class="n">run_light</span><span class="p">(</span><span class="n">_probe</span><span class="p">,</span> <span class="n">_probe</span><span class="p">)</span>
 <span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;onnx_light_cpu::Gemm&quot;</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
+<span class="c1"># The usage log is diagnostic instrumentation and takes a mutex on every</span>
+<span class="c1"># invocation. Disable it after checking dispatch so it does not enter timings.</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=  16x16   | onnx-light (built-in)=     19.46 us
-size=  32x32   | onnx-light (built-in)=     41.80 us
-size=  64x64   | onnx-light (built-in)=    179.01 us
-size= 128x128  | onnx-light (built-in)=   2917.56 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=  16x16   | onnx-light (built-in)=     20.25 us
+size=  32x32   | onnx-light (built-in)=     42.65 us
+size=  64x64   | onnx-light (built-in)=    230.09 us
+size= 128x128  | onnx-light (built-in)=   3118.31 us
 </pre></div>
 </div>
 </section>
@@ -641,7 +647,7 @@ implementation agrees.</p>
     <span class="n">b</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="n">size</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">expected</span> <span class="o">=</span> <span class="n">a</span> <span class="o">@</span> <span class="n">b</span>
 
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">20_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">size</span> <span class="o">*</span> <span class="n">size</span> <span class="o">*</span> <span class="n">size</span><span class="p">)))</span>
+    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">100</span><span class="p">,</span> <span class="mi">20_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">size</span> <span class="o">*</span> <span class="n">size</span> <span class="o">*</span> <span class="n">size</span><span class="p">)))</span>
 
     <span class="n">numpy_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">:</span> <span class="n">a</span> <span class="o">@</span> <span class="n">b</span><span class="p">,</span> <span class="n">repeat</span><span class="p">)</span>
 
@@ -663,6 +669,8 @@ implementation agrees.</p>
         <span class="sa">f</span><span class="s2">&quot;onnxruntime=</span><span class="si">{</span><span class="n">ort_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us&quot;</span>
     <span class="p">)</span>
 
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+
 <span class="n">sizes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 <span class="n">numpy_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 <span class="n">cpu_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
@@ -671,12 +679,12 @@ implementation agrees.</p>
 <span class="n">alone_grid_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">alone_times</span><span class="p">[</span><span class="n">size</span><span class="p">]</span> <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">alone_sizes</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=  16x16   | numpy=      2.79 us | onnx-light-cpu=     32.22 us | onnxruntime=     10.26 us
-size=  32x32   | numpy=      4.22 us | onnx-light-cpu=     35.85 us | onnxruntime=     11.19 us
-size=  64x64   | numpy=     10.98 us | onnx-light-cpu=     56.77 us | onnxruntime=     16.12 us
-size= 128x128  | numpy=     31.01 us | onnx-light-cpu=    242.53 us | onnxruntime=     41.67 us
-size= 256x256  | numpy=    203.19 us | onnx-light-cpu=   1466.86 us | onnxruntime=    468.02 us
-size= 512x512  | numpy=   4982.97 us | onnx-light-cpu=   6998.06 us | onnxruntime=   3962.50 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=  16x16   | numpy=      2.91 us | onnx-light-cpu=     32.78 us | onnxruntime=     10.74 us
+size=  32x32   | numpy=      4.35 us | onnx-light-cpu=     36.78 us | onnxruntime=     11.71 us
+size=  64x64   | numpy=     11.14 us | onnx-light-cpu=     57.22 us | onnxruntime=     18.61 us
+size= 128x128  | numpy=     31.84 us | onnx-light-cpu=    213.33 us | onnxruntime=     65.38 us
+size= 256x256  | numpy=    205.57 us | onnx-light-cpu=   1452.45 us | onnxruntime=    460.36 us
+size= 512x512  | numpy=   5867.00 us | onnx-light-cpu=  11485.69 us | onnxruntime=   1491.91 us
 </pre></div>
 </div>
 </section>
@@ -734,7 +742,7 @@ curve stops early” above).</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_gemm_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_benchmark_001.png" alt="Gemm execution time (SIMD: AVX2), Gemm speed-up (onnxruntime = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.146 seconds)</p>
+<img src="../_images/sphx_glr_plot_gemm_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_benchmark_001.png" alt="Gemm execution time (SIMD: AVX2), Gemm speed-up (onnxruntime = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.288 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-gemm-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/0b73cec4062adc412688fdc2fdaba21a/plot_gemm_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_gemm_benchmark.ipynb</span></code></a></p>

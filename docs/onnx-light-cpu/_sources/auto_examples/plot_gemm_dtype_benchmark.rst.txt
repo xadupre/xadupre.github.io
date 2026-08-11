@@ -54,7 +54,7 @@ gets more compute-heavy.
 ``bfloat16``, so no onnxruntime ``bfloat16`` result is shown.
 
 An additional baseline, ``onnx-light (built-in)``, shows ``onnx-light``'s own
-un-accelerated (pure Python/reference) ``Gemm`` kernel for ``float32``, as a
+un-accelerated C++ reference ``Gemm`` kernel for ``float32``, as a
 baseline. It only supports ``float32`` (the reference kernel has no
 ``float16``/``bfloat16`` Gemm implementation) and is only measured for the
 **single-tile** and **K-chunked** shapes: it is dramatically slower on the
@@ -77,7 +77,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 60-87
+.. GENERATED FROM PYTHON SOURCE LINES 60-88
 
 .. code-block:: Python
 
@@ -100,6 +100,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
         used_kernel_names,
     )
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -121,7 +122,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 88-93
+.. GENERATED FROM PYTHON SOURCE LINES 89-94
 
 Element types under test
 -------------------------
@@ -129,7 +130,7 @@ Element types under test
 Each entry maps a label to the ``TensorProto`` element type and the numpy /
 ``ml_dtypes`` dtype used to encode the random inputs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 93-121
+.. GENERATED FROM PYTHON SOURCE LINES 94-122
 
 .. code-block:: Python
 
@@ -168,27 +169,29 @@ Each entry maps a label to the ``TensorProto`` element type and the numpy /
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 122-127
+.. GENERATED FROM PYTHON SOURCE LINES 123-128
 
 Timing helper
 -------------
 
-Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-time is kept to reduce the impact of scheduling noise.
+Each candidate gets three untimed warm-up calls, then is called ``repeat``
+times (at least seven) and the median wall-clock time is retained.
 
-.. GENERATED FROM PYTHON SOURCE LINES 127-138
+.. GENERATED FROM PYTHON SOURCE LINES 128-141
 
 .. code-block:: Python
 
 
 
-    def measure(func, repeat):
-        best = float("inf")
+    def measure(func, repeat, warmup=3):
+        for _ in range(warmup):
+            func()
+        timings = []
         for _ in range(repeat):
             start = time.perf_counter()
             func()
-            best = min(best, time.perf_counter() - start)
-        return best
+            timings.append(time.perf_counter() - start)
+        return float(np.median(timings))
 
 
 
@@ -198,7 +201,7 @@ time is kept to reduce the impact of scheduling noise.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 139-145
+.. GENERATED FROM PYTHON SOURCE LINES 142-148
 
 Shapes chosen to activate each Gemm code path
 -----------------------------------------------
@@ -207,7 +210,7 @@ Shapes chosen to activate each Gemm code path
 ``onnx_light_cpu/impl/math/gemm_kernel.cc``); every shape below is picked to
 sit clearly on one side of those thresholds.
 
-.. GENERATED FROM PYTHON SOURCE LINES 145-158
+.. GENERATED FROM PYTHON SOURCE LINES 148-161
 
 .. code-block:: Python
 
@@ -231,7 +234,7 @@ sit clearly on one side of those thresholds.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 159-166
+.. GENERATED FROM PYTHON SOURCE LINES 162-169
 
 Prime the built-in baseline before registering the accelerated kernels
 ------------------------------------------------------------------------
@@ -241,7 +244,7 @@ kernel; a session only picks up whichever kernel is registered at the time
 of its *first* ``run()`` call. So a dedicated ``float32`` session is built
 and run here, once per included shape, before ``register_kernels()`` runs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 166-207
+.. GENERATED FROM PYTHON SOURCE LINES 169-213
 
 .. code-block:: Python
 
@@ -254,7 +257,7 @@ and run here, once per included shape, before ``register_kernels()`` runs.
             continue
         a = alone_rng.standard_normal((M, K)).astype(np.float32)
         b = alone_rng.standard_normal((K, N)).astype(np.float32)
-        repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
+        repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
         def run(session=alone_session, a=a, b=b):
             return session.run(None, {"A": a, "B": b})[0]
@@ -284,6 +287,9 @@ and run here, once per included shape, before ``register_kernels()`` runs.
     clear_used_kernel_names()
     sessions["float32"].run(None, {"A": _probe, "B": _probe})
     assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+    # The usage log is diagnostic instrumentation and takes a mutex on every
+    # invocation. Disable it after checking dispatch so it does not enter timings.
+    set_kernel_usage_recording(False)
 
 
 
@@ -294,13 +300,13 @@ and run here, once per included shape, before ``register_kernels()`` runs.
 
  .. code-block:: none
 
-    onnx-light (built-in) | shape=single-tile              |      44.17 us
-    onnx-light (built-in) | shape=K-chunked                |     176.96 us
+    onnx-light (built-in) | shape=single-tile              |      45.41 us
+    onnx-light (built-in) | shape=K-chunked                |     179.25 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 208-215
+.. GENERATED FROM PYTHON SOURCE LINES 214-221
 
 Run the benchmark
 -----------------
@@ -310,7 +316,7 @@ target dtype and fed through the matching session. Results are checked
 against ``float32`` numpy matmul (with a wider tolerance for the lower
 precision dtypes) so every combination agrees on the answer.
 
-.. GENERATED FROM PYTHON SOURCE LINES 215-255
+.. GENERATED FROM PYTHON SOURCE LINES 221-263
 
 .. code-block:: Python
 
@@ -323,7 +329,7 @@ precision dtypes) so every combination agrees on the answer.
         a32 = rng.standard_normal((M, K)).astype(np.float32)
         b32 = rng.standard_normal((K, N)).astype(np.float32)
         expected = a32 @ b32
-        repeat = max(3, min(50, 200_000_000 // (M * N * K + 1)))
+        repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
 
         print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
         for label, (_, np_dtype) in DTYPES.items():
@@ -354,6 +360,8 @@ precision dtypes) so every combination agrees on the answer.
                 ort_text = "not supported"
             print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us | onnxruntime={ort_text}")
 
+    set_kernel_usage_recording(True)
+
 
 
 
@@ -364,29 +372,29 @@ precision dtypes) so every combination agrees on the answer.
 
 
     shape=single-tile              M=64 N=64 K=64 repeat=50
-      float32   | onnx-light-cpu=     55.38 us | onnxruntime=     19.97 us
-      float16   | onnx-light-cpu=    139.24 us | onnxruntime=     23.51 us
-      bfloat16  | onnx-light-cpu=    131.96 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=     57.55 us | onnxruntime=     20.29 us
+      float16   | onnx-light-cpu=    117.35 us | onnxruntime=     24.60 us
+      bfloat16  | onnx-light-cpu=    106.73 us | onnxruntime=not supported
 
     shape=K-chunked                M=32 N=32 K=2048 repeat=50
-      float32   | onnx-light-cpu=    215.42 us | onnxruntime=     54.16 us
-      float16   | onnx-light-cpu=    642.83 us | onnxruntime=     99.70 us
-      bfloat16  | onnx-light-cpu=    696.50 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=    220.86 us | onnxruntime=    109.56 us
+      float16   | onnx-light-cpu=    534.69 us | onnxruntime=    101.58 us
+      bfloat16  | onnx-light-cpu=    667.73 us | onnxruntime=not supported
 
-    shape=multi-panel              M=512 N=512 K=128 repeat=5
-      float32   | onnx-light-cpu=   2733.00 us | onnxruntime=    441.47 us
-      float16   | onnx-light-cpu=   6745.31 us | onnxruntime=    422.26 us
-      bfloat16  | onnx-light-cpu=   3168.97 us | onnxruntime=not supported
+    shape=multi-panel              M=512 N=512 K=128 repeat=7
+      float32   | onnx-light-cpu=   1736.70 us | onnxruntime=    390.15 us
+      float16   | onnx-light-cpu=   6618.75 us | onnxruntime=    424.23 us
+      bfloat16  | onnx-light-cpu=   3363.46 us | onnxruntime=not supported
 
     shape=skinny-M/wide-N          M=4 N=4096 K=128 repeat=50
-      float32   | onnx-light-cpu=    264.28 us | onnxruntime=     94.26 us
-      float16   | onnx-light-cpu=   1104.03 us | onnxruntime=    171.97 us
-      bfloat16  | onnx-light-cpu=   1027.80 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=    290.52 us | onnxruntime=    191.02 us
+      float16   | onnx-light-cpu=   1699.78 us | onnxruntime=    180.73 us
+      bfloat16  | onnx-light-cpu=   1505.76 us | onnxruntime=not supported
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 256-263
+.. GENERATED FROM PYTHON SOURCE LINES 264-271
 
 Plot the timings
 ----------------
@@ -396,7 +404,7 @@ solid bars are onnx-light-cpu and hatched bars are onnxruntime. The right
 panel shows the float16/bfloat16 overhead relative to float32 for the same
 backend and shape (values above 1 mean slower than float32).
 
-.. GENERATED FROM PYTHON SOURCE LINES 263-345
+.. GENERATED FROM PYTHON SOURCE LINES 271-353
 
 .. code-block:: Python
 
@@ -497,7 +505,7 @@ backend and shape (values above 1 mean slower than float32).
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.177 seconds)
+   **Total running time of the script:** (0 minutes 1.271 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_gemm_dtype_benchmark.py:

@@ -498,6 +498,7 @@ elements.</p>
     <span class="n">used_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_simd_level</span><span class="p">,</span> <span class="n">has_cpu_kernels</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpuregister</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_kernel_usage_recording</span>
 
 <span class="n">_SIMD_NAMES</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;scalar&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span> <span class="s2">&quot;SSE2&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">&quot;AVX&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="s2">&quot;AVX2&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span> <span class="s2">&quot;AVX-512&quot;</span><span class="p">}</span>
 
@@ -595,13 +596,16 @@ same inputs and with alternating measurement order.</p>
 <p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> evaluates the same model with its C++ runtime. Registering the
 onnx-light-cpu kernels overrides the built-in <code class="docutils literal notranslate"><span class="pre">Abs</span></code> so every <code class="docutils literal notranslate"><span class="pre">Abs</span></code> node in
 the model dispatches to the SIMD-accelerated kernel.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">_light_setup_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-<span class="n">light_label</span> <span class="o">=</span> <span class="s2">&quot;onnx-light + onnx-light-cpu&quot;</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">light_label</span> <span class="o">=</span> <span class="s2">&quot;onnx-light + onnx-light-cpu&quot;</span>
 <span class="c1"># ``register_kernels()`` needs the ``_cpuregister`` extension, which is only</span>
 <span class="c1"># built with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``. When it is missing (as in</span>
 <span class="c1"># the documentation build) the onnx-light-cpu curve is simply omitted; the</span>
 <span class="c1"># import above stays unconditional.</span>
+<span class="n">_registration_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
 <span class="n">register_kernels</span><span class="p">()</span>
+<span class="n">registration_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">_registration_start</span>
+
+<span class="n">_light_setup_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
 <span class="n">light_session</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
 <span class="n">light_setup_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">_light_setup_start</span>
 
@@ -611,6 +615,10 @@ the model dispatches to the SIMD-accelerated kernel.</p>
 <span class="n">clear_used_kernel_names</span><span class="p">()</span>
 <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;X&quot;</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)})</span>
 <span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;onnx_light_cpu::Abs&quot;</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
+<span class="c1"># Usage recording is diagnostic instrumentation, not part of inference. It</span>
+<span class="c1"># takes a mutex and appends to a process-wide log on every invocation, so leave</span>
+<span class="c1"># it out of the timed region after confirming the expected kernel was selected.</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">):</span>
@@ -618,30 +626,28 @@ the model dispatches to the SIMD-accelerated kernel.</p>
 </pre></div>
 </div>
 </section>
-<section id="setup-cost-why-the-evaluator-is-as-slow-to-build-as-onnxruntime">
-<h2>Setup cost: why the evaluator is as slow to build as onnxruntime<a class="headerlink" href="#setup-cost-why-the-evaluator-is-as-slow-to-build-as-onnxruntime" title="Link to this heading">#</a></h2>
-<p>Constructing an <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> <code class="xref py py-class docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> now costs about as
-much as constructing an <code class="xref py py-class docutils literal notranslate"><span class="pre">onnxruntime.InferenceSession</span></code>. This is expected
-and is a <em>one-time</em> cost paid before any <code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code>:</p>
+<section id="setup-cost-referenceevaluator-stays-lightweight">
+<h2>Setup cost: ReferenceEvaluator stays lightweight<a class="headerlink" href="#setup-cost-referenceevaluator-stays-lightweight" title="Link to this heading">#</a></h2>
+<p>Constructing an <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> <code class="xref py py-class docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> is much faster than
+constructing an <code class="xref py py-class docutils literal notranslate"><span class="pre">onnxruntime.InferenceSession</span></code>:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code> parses the model and builds an optimized execution plan at
 construction time.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> deliberately front-loads the same kind of work into
-<code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator.__init__</span></code>: it eagerly builds the opset <code class="docutils literal notranslate"><span class="pre">KernelContext</span></code>
-and the persistent <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> once (instead of rebuilding them on
-every <code class="docutils literal notranslate"><span class="pre">run</span></code> call), and <a class="reference internal" href="../api/index.html#onnx_light_cpu.register_kernels" title="onnx_light_cpu.register_kernels"><code class="xref py py-func docutils literal notranslate"><span class="pre">onnx_light_cpu.register_kernels()</span></code></a> installs the
-custom kernels. Earlier onnx-light versions did this lazily, so construction
-looked instantaneous but the first <code class="docutils literal notranslate"><span class="pre">run</span></code> absorbed the cost.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> only creates lightweight persistent contexts in
+<code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator.__init__</span></code>. Execution-plan construction and kernel
+resolution remain lazy and are cached by the first <code class="xref py py-meth docutils literal notranslate"><span class="pre">run()</span></code>.</p></li>
 </ul>
-<p>The payoff is that the amortized per-call <code class="docutils literal notranslate"><span class="pre">run</span></code> time (measured below) stays
-low, because the expensive analysis happens exactly once at setup rather than
-on every invocation.</p>
+<p>Kernel registration is process-wide and independent of evaluator construction,
+so it is timed separately rather than incorrectly attributing its first-import
+cost to <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code>.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;setup: onnxruntime InferenceSession = </span><span class="si">{</span><span class="n">ort_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;setup: onnx-light ReferenceEvaluator = </span><span class="si">{</span><span class="n">light_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;setup: onnx-light-cpu kernel registration = </span><span class="si">{</span><span class="n">registration_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>setup: onnxruntime InferenceSession = 0.66 ms
-setup: onnx-light ReferenceEvaluator = 0.04 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>setup: onnxruntime InferenceSession = 0.69 ms
+setup: onnx-light ReferenceEvaluator = 0.02 ms
+setup: onnx-light-cpu kernel registration = 0.04 ms
 </pre></div>
 </div>
 <p>%%
@@ -689,6 +695,8 @@ against <code class="xref py py-func docutils literal notranslate"><span class="
         <span class="sa">f</span><span class="s2">&quot;onnxruntime=</span><span class="si">{</span><span class="n">ort_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us&quot;</span>
     <span class="p">)</span>
 
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+
 <span class="n">sizes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 <span class="n">numpy_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 <span class="n">alone_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
@@ -696,13 +704,13 @@ against <code class="xref py py-func docutils literal notranslate"><span class="
 <span class="n">ort_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=      100 | numpy=      1.17 us | onnx-light=     25.88 us | onnx-light-cpu=     25.62 us | cpu speed-up= 1.01x | onnxruntime=      8.64 us
-size=     1000 | numpy=      1.58 us | onnx-light=     26.69 us | onnx-light-cpu=     26.98 us | cpu speed-up= 0.99x | onnxruntime=      8.64 us
-size=    10000 | numpy=      2.60 us | onnx-light=     30.52 us | onnx-light-cpu=     30.82 us | cpu speed-up= 0.99x | onnxruntime=     10.53 us
-size=   100000 | numpy=     17.42 us | onnx-light=     88.51 us | onnx-light-cpu=     88.81 us | cpu speed-up= 1.00x | onnxruntime=     21.08 us
-size=  1000000 | numpy=    153.00 us | onnx-light=    292.13 us | onnx-light-cpu=    303.76 us | cpu speed-up= 0.96x | onnxruntime=    163.19 us
-size= 10000000 | numpy=   4228.41 us | onnx-light=   4909.68 us | onnx-light-cpu=   5654.24 us | cpu speed-up= 0.87x | onnxruntime=   1685.51 us
-size=100000000 | numpy=  42825.34 us | onnx-light=  58169.07 us | onnx-light-cpu=  59148.25 us | cpu speed-up= 0.98x | onnxruntime=  22725.67 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=      100 | numpy=      1.19 us | onnx-light=     25.39 us | onnx-light-cpu=     25.71 us | cpu speed-up= 0.99x | onnxruntime=      8.58 us
+size=     1000 | numpy=      1.58 us | onnx-light=     26.42 us | onnx-light-cpu=     26.41 us | cpu speed-up= 1.00x | onnxruntime=      8.51 us
+size=    10000 | numpy=      2.63 us | onnx-light=     29.00 us | onnx-light-cpu=     29.22 us | cpu speed-up= 0.99x | onnxruntime=     10.08 us
+size=   100000 | numpy=     16.82 us | onnx-light=     54.93 us | onnx-light-cpu=     53.84 us | cpu speed-up= 1.02x | onnxruntime=     19.68 us
+size=  1000000 | numpy=    153.75 us | onnx-light=    265.37 us | onnx-light-cpu=    260.26 us | cpu speed-up= 1.02x | onnxruntime=    136.14 us
+size= 10000000 | numpy=   4423.20 us | onnx-light=   5838.35 us | onnx-light-cpu=   5801.02 us | cpu speed-up= 1.01x | onnxruntime=   1633.90 us
+size=100000000 | numpy=  39251.48 us | onnx-light=  58003.49 us | onnx-light-cpu=  58832.47 us | cpu speed-up= 0.99x | onnxruntime=  22502.41 us
 </pre></div>
 </div>
 </section>
@@ -792,7 +800,7 @@ of interest: <code class="docutils literal notranslate"><span class="pre">onnx-l
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX2), Abs speed-up (onnxruntime = 1), onnx-light-cpu gain (built-in = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 4.589 seconds)</p>
+<img src="../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX2), Abs speed-up (onnxruntime = 1), onnx-light-cpu gain (built-in = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 4.244 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-abs-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/29dcac8d7cec0c33ff7a15f3411d6f61/plot_abs_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_abs_benchmark.ipynb</span></code></a></p>
@@ -860,7 +868,7 @@ of interest: <code class="docutils literal notranslate"><span class="pre">onnx-l
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sizes-benchmarked">Sizes benchmarked</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-the-built-in-un-accelerated-onnx-light-abs-kernel">Prepare the built-in (un-accelerated) onnx-light Abs kernel</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-the-onnx-light-evaluator">Build the onnx-light evaluator</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-cost-why-the-evaluator-is-as-slow-to-build-as-onnxruntime">Setup cost: why the evaluator is as slow to build as onnxruntime</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-cost-referenceevaluator-stays-lightweight">Setup cost: ReferenceEvaluator stays lightweight</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#plot-the-timings">Plot the timings</a></li>
 </ul>
   </nav></div>

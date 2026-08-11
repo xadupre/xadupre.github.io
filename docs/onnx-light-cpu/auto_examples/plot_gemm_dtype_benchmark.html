@@ -490,7 +490,7 @@ gets more compute-heavy.</p>
 <code class="docutils literal notranslate"><span class="pre">float16</span></code>. Its CPU execution provider does not implement <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> for
 <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>, so no onnxruntime <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> result is shown.</p>
 <p>An additional baseline, <code class="docutils literal notranslate"><span class="pre">onnx-light</span> <span class="pre">(built-in)</span></code>, shows <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s own
-un-accelerated (pure Python/reference) <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> kernel for <code class="docutils literal notranslate"><span class="pre">float32</span></code>, as a
+un-accelerated C++ reference <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> kernel for <code class="docutils literal notranslate"><span class="pre">float32</span></code>, as a
 baseline. It only supports <code class="docutils literal notranslate"><span class="pre">float32</span></code> (the reference kernel has no
 <code class="docutils literal notranslate"><span class="pre">float16</span></code>/<code class="docutils literal notranslate"><span class="pre">bfloat16</span></code> Gemm implementation) and is only measured for the
 <strong>single-tile</strong> and <strong>K-chunked</strong> shapes: it is dramatically slower on the
@@ -525,6 +525,7 @@ up the SIMD-accelerated kernel instead.</p>
     <span class="n">used_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_simd_level</span><span class="p">,</span> <span class="n">has_cpu_kernels</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpuregister</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_kernel_usage_recording</span>
 
 <span class="n">_SIMD_NAMES</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">&quot;scalar&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span> <span class="s2">&quot;SSE2&quot;</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">&quot;AVX&quot;</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="s2">&quot;AVX2&quot;</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span> <span class="s2">&quot;AVX-512&quot;</span><span class="p">}</span>
 
@@ -572,15 +573,17 @@ up the SIMD-accelerated kernel instead.</p>
 </section>
 <section id="timing-helper">
 <h2>Timing helper<a class="headerlink" href="#timing-helper" title="Link to this heading">#</a></h2>
-<p>Each candidate is called <code class="docutils literal notranslate"><span class="pre">repeat</span></code> times and the best (minimum) wall-clock
-time is kept to reduce the impact of scheduling noise.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">):</span>
-    <span class="n">best</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
+<p>Each candidate gets three untimed warm-up calls, then is called <code class="docutils literal notranslate"><span class="pre">repeat</span></code>
+times (at least seven) and the median wall-clock time is retained.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup</span><span class="p">):</span>
+        <span class="n">func</span><span class="p">()</span>
+    <span class="n">timings</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
         <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
         <span class="n">func</span><span class="p">()</span>
-        <span class="n">best</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">best</span><span class="p">,</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">best</span>
+        <span class="n">timings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">timings</span><span class="p">))</span>
 </pre></div>
 </div>
 </section>
@@ -617,7 +620,7 @@ and run here, once per included shape, before <code class="docutils literal notr
         <span class="k">continue</span>
     <span class="n">a</span> <span class="o">=</span> <span class="n">alone_rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">b</span> <span class="o">=</span> <span class="n">alone_rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
+    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
 
     <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">session</span><span class="o">=</span><span class="n">alone_session</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;A&quot;</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">&quot;B&quot;</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
@@ -647,10 +650,13 @@ and run here, once per included shape, before <code class="docutils literal notr
 <span class="n">clear_used_kernel_names</span><span class="p">()</span>
 <span class="n">sessions</span><span class="p">[</span><span class="s2">&quot;float32&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;A&quot;</span><span class="p">:</span> <span class="n">_probe</span><span class="p">,</span> <span class="s2">&quot;B&quot;</span><span class="p">:</span> <span class="n">_probe</span><span class="p">})</span>
 <span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;onnx_light_cpu::Gemm&quot;</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
+<span class="c1"># The usage log is diagnostic instrumentation and takes a mutex on every</span>
+<span class="c1"># invocation. Disable it after checking dispatch so it does not enter timings.</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light (built-in) | shape=single-tile              |      44.17 us
-onnx-light (built-in) | shape=K-chunked                |     176.96 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light (built-in) | shape=single-tile              |      45.41 us
+onnx-light (built-in) | shape=K-chunked                |     179.25 us
 </pre></div>
 </div>
 </section>
@@ -668,7 +674,7 @@ precision dtypes) so every combination agrees on the answer.</p>
     <span class="n">a32</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">b32</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">expected</span> <span class="o">=</span> <span class="n">a32</span> <span class="o">@</span> <span class="n">b32</span>
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
+    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
 
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">shape=</span><span class="si">{</span><span class="n">shape_label</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;24</span><span class="si">}</span><span class="s2"> M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2"> N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2"> repeat=</span><span class="si">{</span><span class="n">repeat</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">np_dtype</span><span class="p">)</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -698,27 +704,29 @@ precision dtypes) so every combination agrees on the answer.</p>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">ort_text</span> <span class="o">=</span> <span class="s2">&quot;not supported&quot;</span>
         <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;  </span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> | onnx-light-cpu=</span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | onnxruntime=</span><span class="si">{</span><span class="n">ort_text</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>shape=single-tile              M=64 N=64 K=64 repeat=50
-  float32   | onnx-light-cpu=     55.38 us | onnxruntime=     19.97 us
-  float16   | onnx-light-cpu=    139.24 us | onnxruntime=     23.51 us
-  bfloat16  | onnx-light-cpu=    131.96 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=     57.55 us | onnxruntime=     20.29 us
+  float16   | onnx-light-cpu=    117.35 us | onnxruntime=     24.60 us
+  bfloat16  | onnx-light-cpu=    106.73 us | onnxruntime=not supported
 
 shape=K-chunked                M=32 N=32 K=2048 repeat=50
-  float32   | onnx-light-cpu=    215.42 us | onnxruntime=     54.16 us
-  float16   | onnx-light-cpu=    642.83 us | onnxruntime=     99.70 us
-  bfloat16  | onnx-light-cpu=    696.50 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    220.86 us | onnxruntime=    109.56 us
+  float16   | onnx-light-cpu=    534.69 us | onnxruntime=    101.58 us
+  bfloat16  | onnx-light-cpu=    667.73 us | onnxruntime=not supported
 
-shape=multi-panel              M=512 N=512 K=128 repeat=5
-  float32   | onnx-light-cpu=   2733.00 us | onnxruntime=    441.47 us
-  float16   | onnx-light-cpu=   6745.31 us | onnxruntime=    422.26 us
-  bfloat16  | onnx-light-cpu=   3168.97 us | onnxruntime=not supported
+shape=multi-panel              M=512 N=512 K=128 repeat=7
+  float32   | onnx-light-cpu=   1736.70 us | onnxruntime=    390.15 us
+  float16   | onnx-light-cpu=   6618.75 us | onnxruntime=    424.23 us
+  bfloat16  | onnx-light-cpu=   3363.46 us | onnxruntime=not supported
 
 shape=skinny-M/wide-N          M=4 N=4096 K=128 repeat=50
-  float32   | onnx-light-cpu=    264.28 us | onnxruntime=     94.26 us
-  float16   | onnx-light-cpu=   1104.03 us | onnxruntime=    171.97 us
-  bfloat16  | onnx-light-cpu=   1027.80 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    290.52 us | onnxruntime=    191.02 us
+  float16   | onnx-light-cpu=   1699.78 us | onnxruntime=    180.73 us
+  bfloat16  | onnx-light-cpu=   1505.76 us | onnxruntime=not supported
 </pre></div>
 </div>
 </section>
@@ -811,7 +819,7 @@ backend and shape (values above 1 mean slower than float32).</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX2), float16 / bfloat16 widen/round-trip overhead" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.177 seconds)</p>
+<img src="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX2), float16 / bfloat16 widen/round-trip overhead" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.271 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-gemm-dtype-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/6b6928f2909723daf0c1d7ecae0d07ad/plot_gemm_dtype_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_gemm_dtype_benchmark.ipynb</span></code></a></p>

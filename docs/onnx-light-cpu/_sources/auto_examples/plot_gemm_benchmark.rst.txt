@@ -62,7 +62,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 45-71
+.. GENERATED FROM PYTHON SOURCE LINES 45-72
 
 .. code-block:: Python
 
@@ -84,6 +84,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
         used_kernel_names,
     )
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
+    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
@@ -105,7 +106,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 72-81
+.. GENERATED FROM PYTHON SOURCE LINES 73-82
 
 Build the shared ONNX model
 ---------------------------
@@ -117,7 +118,7 @@ the built-in (pre-registration) curve and once for onnxruntime / the
 accelerated onnx-light-cpu curve, so each gets its own model/graph object
 (see "Why the built-in curve stops early" above for why that matters).
 
-.. GENERATED FROM PYTHON SOURCE LINES 81-121
+.. GENERATED FROM PYTHON SOURCE LINES 82-124
 
 .. code-block:: Python
 
@@ -147,18 +148,20 @@ accelerated onnx-light-cpu curve, so each gets its own model/graph object
     # Timing helper
     # ---------------------------------------------------------------------------
     #
-    # Each candidate is called ``repeat`` times and the best (minimum) wall-clock
-    # time is kept to reduce the impact of scheduling noise. The number of repeats
-    # shrinks as the matrices grow so the whole benchmark stays fast.
+    # Each candidate gets three untimed warm-up calls, then is called ``repeat``
+    # times and the median wall-clock time is retained. The number of repeats
+    # shrinks as the matrices grow but never below seven.
 
 
-    def measure(func, repeat):
-        best = float("inf")
+    def measure(func, repeat, warmup=3):
+        for _ in range(warmup):
+            func()
+        timings = []
         for _ in range(repeat):
             start = time.perf_counter()
             func()
-            best = min(best, time.perf_counter() - start)
-        return best
+            timings.append(time.perf_counter() - start)
+        return float(np.median(timings))
 
 
 
@@ -168,7 +171,7 @@ accelerated onnx-light-cpu curve, so each gets its own model/graph object
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 122-130
+.. GENERATED FROM PYTHON SOURCE LINES 125-133
 
 Built-in onnx-light curve (measured *before* registering onnx-light-cpu)
 ---------------------------------------------------------------------------
@@ -179,7 +182,7 @@ onnx-light's own built-in reference kernel. Skipped for the last two sizes
 in ``size_grid`` (256 and 512) since the built-in kernel's cost grows much
 faster than the other back-ends.
 
-.. GENERATED FROM PYTHON SOURCE LINES 130-174
+.. GENERATED FROM PYTHON SOURCE LINES 133-180
 
 .. code-block:: Python
 
@@ -195,7 +198,7 @@ faster than the other back-ends.
         a = rng.standard_normal((size, size)).astype(np.float32)
         b = rng.standard_normal((size, size)).astype(np.float32)
         expected = a @ b
-        repeat = max(3, min(100, 20_000_000 // (size * size * size)))
+        repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
         def run_alone(a=a, b=b):
             return alone_session.run(None, {"A": a, "B": b})[0]
@@ -225,6 +228,9 @@ faster than the other back-ends.
     clear_used_kernel_names()
     run_light(_probe, _probe)
     assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+    # The usage log is diagnostic instrumentation and takes a mutex on every
+    # invocation. Disable it after checking dispatch so it does not enter timings.
+    set_kernel_usage_recording(False)
 
 
 
@@ -235,15 +241,15 @@ faster than the other back-ends.
 
  .. code-block:: none
 
-    size=  16x16   | onnx-light (built-in)=     19.46 us
-    size=  32x32   | onnx-light (built-in)=     41.80 us
-    size=  64x64   | onnx-light (built-in)=    179.01 us
-    size= 128x128  | onnx-light (built-in)=   2917.56 us
+    size=  16x16   | onnx-light (built-in)=     20.25 us
+    size=  32x32   | onnx-light (built-in)=     42.65 us
+    size=  64x64   | onnx-light (built-in)=    230.09 us
+    size= 128x128  | onnx-light (built-in)=   3118.31 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 175-181
+.. GENERATED FROM PYTHON SOURCE LINES 181-187
 
 Run the rest of the benchmark
 -------------------------------
@@ -252,7 +258,7 @@ For every size the same square inputs are fed to numpy, onnx-light-cpu and
 onnxruntime. The results are checked against :func:`numpy.matmul` so every
 implementation agrees.
 
-.. GENERATED FROM PYTHON SOURCE LINES 181-219
+.. GENERATED FROM PYTHON SOURCE LINES 187-227
 
 .. code-block:: Python
 
@@ -265,7 +271,7 @@ implementation agrees.
         b = rng.standard_normal((size, size)).astype(np.float32)
         expected = a @ b
 
-        repeat = max(3, min(100, 20_000_000 // (size * size * size)))
+        repeat = max(7, min(100, 20_000_000 // (size * size * size)))
 
         numpy_time = measure(lambda a=a, b=b: a @ b, repeat)
 
@@ -287,6 +293,8 @@ implementation agrees.
             f"onnxruntime={ort_time * 1e6:10.2f} us"
         )
 
+    set_kernel_usage_recording(True)
+
     sizes = np.array([r[0] for r in rows])
     numpy_times = np.array([r[1] for r in rows])
     cpu_times = np.array([r[2] for r in rows])
@@ -302,17 +310,17 @@ implementation agrees.
 
  .. code-block:: none
 
-    size=  16x16   | numpy=      2.79 us | onnx-light-cpu=     32.22 us | onnxruntime=     10.26 us
-    size=  32x32   | numpy=      4.22 us | onnx-light-cpu=     35.85 us | onnxruntime=     11.19 us
-    size=  64x64   | numpy=     10.98 us | onnx-light-cpu=     56.77 us | onnxruntime=     16.12 us
-    size= 128x128  | numpy=     31.01 us | onnx-light-cpu=    242.53 us | onnxruntime=     41.67 us
-    size= 256x256  | numpy=    203.19 us | onnx-light-cpu=   1466.86 us | onnxruntime=    468.02 us
-    size= 512x512  | numpy=   4982.97 us | onnx-light-cpu=   6998.06 us | onnxruntime=   3962.50 us
+    size=  16x16   | numpy=      2.91 us | onnx-light-cpu=     32.78 us | onnxruntime=     10.74 us
+    size=  32x32   | numpy=      4.35 us | onnx-light-cpu=     36.78 us | onnxruntime=     11.71 us
+    size=  64x64   | numpy=     11.14 us | onnx-light-cpu=     57.22 us | onnxruntime=     18.61 us
+    size= 128x128  | numpy=     31.84 us | onnx-light-cpu=    213.33 us | onnxruntime=     65.38 us
+    size= 256x256  | numpy=    205.57 us | onnx-light-cpu=   1452.45 us | onnxruntime=    460.36 us
+    size= 512x512  | numpy=   5867.00 us | onnx-light-cpu=  11485.69 us | onnxruntime=   1491.91 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 220-230
+.. GENERATED FROM PYTHON SOURCE LINES 228-238
 
 Plot the timings
 ----------------
@@ -325,7 +333,7 @@ onnxruntime and values below ``1`` are slower. The built-in onnx-light curve
 only has points for the sizes it was measured on (see "Why the built-in
 curve stops early" above).
 
-.. GENERATED FROM PYTHON SOURCE LINES 230-274
+.. GENERATED FROM PYTHON SOURCE LINES 238-282
 
 .. code-block:: Python
 
@@ -388,7 +396,7 @@ curve stops early" above).
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.146 seconds)
+   **Total running time of the script:** (0 minutes 1.288 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_gemm_benchmark.py:
