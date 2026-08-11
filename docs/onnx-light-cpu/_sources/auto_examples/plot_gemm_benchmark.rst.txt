@@ -62,7 +62,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 45-67
+.. GENERATED FROM PYTHON SOURCE LINES 45-71
 
 .. code-block:: Python
 
@@ -78,7 +78,11 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
     from onnx_light.onnx import TensorProto, checker, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
 
-    from onnx_light_cpu import register_kernels
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        used_kernel_names,
+    )
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 
     _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
@@ -96,12 +100,12 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
  .. code-block:: none
 
-    CPU kernels available, SIMD level: 4 (AVX-512)
+    CPU kernels available, SIMD level: 3 (AVX2)
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 68-77
+.. GENERATED FROM PYTHON SOURCE LINES 72-81
 
 Build the shared ONNX model
 ---------------------------
@@ -113,7 +117,7 @@ the built-in (pre-registration) curve and once for onnxruntime / the
 accelerated onnx-light-cpu curve, so each gets its own model/graph object
 (see "Why the built-in curve stops early" above for why that matters).
 
-.. GENERATED FROM PYTHON SOURCE LINES 77-117
+.. GENERATED FROM PYTHON SOURCE LINES 81-121
 
 .. code-block:: Python
 
@@ -164,7 +168,7 @@ accelerated onnx-light-cpu curve, so each gets its own model/graph object
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 118-126
+.. GENERATED FROM PYTHON SOURCE LINES 122-130
 
 Built-in onnx-light curve (measured *before* registering onnx-light-cpu)
 ---------------------------------------------------------------------------
@@ -175,7 +179,7 @@ onnx-light's own built-in reference kernel. Skipped for the last two sizes
 in ``size_grid`` (256 and 512) since the built-in kernel's cost grows much
 faster than the other back-ends.
 
-.. GENERATED FROM PYTHON SOURCE LINES 126-161
+.. GENERATED FROM PYTHON SOURCE LINES 130-174
 
 .. code-block:: Python
 
@@ -214,6 +218,15 @@ faster than the other back-ends.
         return light_session.run(None, {"A": a, "B": b})[0]
 
 
+    # Confirm the model dispatches to the onnx-light-cpu ``Gemm`` kernel (identified
+    # by the library-qualified name it records when it runs) rather than
+    # onnx-light's built-in kernel.
+    _probe = np.zeros((2, 2), dtype=np.float32)
+    clear_used_kernel_names()
+    run_light(_probe, _probe)
+    assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
+
+
 
 
 
@@ -222,15 +235,15 @@ faster than the other back-ends.
 
  .. code-block:: none
 
-    size=  16x16   | onnx-light (built-in)=     19.50 us
-    size=  32x32   | onnx-light (built-in)=     21.79 us
-    size=  64x64   | onnx-light (built-in)=     34.81 us
-    size= 128x128  | onnx-light (built-in)=    154.04 us
+    size=  16x16   | onnx-light (built-in)=     19.46 us
+    size=  32x32   | onnx-light (built-in)=     41.80 us
+    size=  64x64   | onnx-light (built-in)=    179.01 us
+    size= 128x128  | onnx-light (built-in)=   2917.56 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 162-168
+.. GENERATED FROM PYTHON SOURCE LINES 175-181
 
 Run the rest of the benchmark
 -------------------------------
@@ -239,7 +252,7 @@ For every size the same square inputs are fed to numpy, onnx-light-cpu and
 onnxruntime. The results are checked against :func:`numpy.matmul` so every
 implementation agrees.
 
-.. GENERATED FROM PYTHON SOURCE LINES 168-206
+.. GENERATED FROM PYTHON SOURCE LINES 181-219
 
 .. code-block:: Python
 
@@ -289,17 +302,17 @@ implementation agrees.
 
  .. code-block:: none
 
-    size=  16x16   | numpy=      1.70 us | onnx-light-cpu=     19.57 us | onnxruntime=      6.81 us
-    size=  32x32   | numpy=      2.44 us | onnx-light-cpu=     21.71 us | onnxruntime=      7.45 us
-    size=  64x64   | numpy=      6.57 us | onnx-light-cpu=     35.36 us | onnxruntime=     11.35 us
-    size= 128x128  | numpy=     24.39 us | onnx-light-cpu=    150.17 us | onnxruntime=     52.17 us
-    size= 256x256  | numpy=    168.71 us | onnx-light-cpu=    940.06 us | onnxruntime=    338.69 us
-    size= 512x512  | numpy=   2087.53 us | onnx-light-cpu=   7302.17 us | onnxruntime=   2481.87 us
+    size=  16x16   | numpy=      2.79 us | onnx-light-cpu=     32.22 us | onnxruntime=     10.26 us
+    size=  32x32   | numpy=      4.22 us | onnx-light-cpu=     35.85 us | onnxruntime=     11.19 us
+    size=  64x64   | numpy=     10.98 us | onnx-light-cpu=     56.77 us | onnxruntime=     16.12 us
+    size= 128x128  | numpy=     31.01 us | onnx-light-cpu=    242.53 us | onnxruntime=     41.67 us
+    size= 256x256  | numpy=    203.19 us | onnx-light-cpu=   1466.86 us | onnxruntime=    468.02 us
+    size= 512x512  | numpy=   4982.97 us | onnx-light-cpu=   6998.06 us | onnxruntime=   3962.50 us
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 207-217
+.. GENERATED FROM PYTHON SOURCE LINES 220-230
 
 Plot the timings
 ----------------
@@ -312,7 +325,7 @@ onnxruntime and values below ``1`` are slower. The built-in onnx-light curve
 only has points for the sizes it was measured on (see "Why the built-in
 curve stops early" above).
 
-.. GENERATED FROM PYTHON SOURCE LINES 217-261
+.. GENERATED FROM PYTHON SOURCE LINES 230-274
 
 .. code-block:: Python
 
@@ -364,7 +377,7 @@ curve stops early" above).
 
 
 .. image-sg:: /auto_examples/images/sphx_glr_plot_gemm_benchmark_001.png
-   :alt: Gemm execution time (SIMD: AVX-512), Gemm speed-up (onnxruntime = 1)
+   :alt: Gemm execution time (SIMD: AVX2), Gemm speed-up (onnxruntime = 1)
    :srcset: /auto_examples/images/sphx_glr_plot_gemm_benchmark_001.png
    :class: sphx-glr-single-img
 
@@ -375,7 +388,7 @@ curve stops early" above).
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.687 seconds)
+   **Total running time of the script:** (0 minutes 1.146 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_gemm_benchmark.py:
