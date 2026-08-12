@@ -681,11 +681,36 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     run repeatedly). Falls back to the ``ReferenceEvaluator`` wrapper when the
     low-level runtime bindings are unavailable (older onnx-light builds) or the
     model cannot be prepared through them.
+
+    Some models build a ``RuntimeSession`` successfully but only fail once a
+    kernel actually runs (e.g. ``CausalConvWithState`` or ops that the
+    ``RuntimeSession`` path rejects but the reference implementation accepts).
+    To ensure onnx-light still runs whenever it can, the returned runner also
+    falls back to the ``ReferenceEvaluator`` on the *first* run that raises,
+    then replays subsequent runs through the reference evaluator.
     """
     try:
-        return _make_onnx_light_runtime_session_runner(model)
+        session_runner = _make_onnx_light_runtime_session_runner(model)
     except (ImportError, AttributeError, TypeError, ValueError):
         return _make_onnx_light_reference_runner(model)
+
+    state: Dict[str, Any] = {"runner": session_runner}
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        runner = state["runner"]
+        try:
+            return runner(inputs)
+        except Exception:  # noqa: BLE001
+            if runner is not session_runner:
+                # Already on the reference evaluator; propagate the failure.
+                raise
+            # The RuntimeSession path cannot execute this model. Fall back to
+            # the reference evaluator so onnx-light still runs the model.
+            reference_runner = _make_onnx_light_reference_runner(model)
+            state["runner"] = reference_runner
+            return reference_runner(inputs)
+
+    return _run
 
 
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:

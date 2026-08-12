@@ -697,14 +697,34 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         self.assertEqual(telemetry["runs"], 2)
 
     def test_make_onnx_light_runner_prefers_runtime_session(self):
-        sentinel_session = object()
-        sentinel_reference = object()
+        session_calls = []
+        reference_calls = []
         saved_session = rlb._make_onnx_light_runtime_session_runner
         saved_reference = rlb._make_onnx_light_reference_runner
+
+        def _session(model):
+            def _run(inputs):
+                session_calls.append(inputs)
+                return ["session"]
+
+            return _run
+
+        def _reference(model):
+            def _run(inputs):
+                reference_calls.append(inputs)
+                return ["reference"]
+
+            return _run
+
         try:
-            rlb._make_onnx_light_runtime_session_runner = lambda model: sentinel_session
-            rlb._make_onnx_light_reference_runner = lambda model: sentinel_reference
-            self.assertIs(rlb._make_onnx_light_runner(object()), sentinel_session)
+            rlb._make_onnx_light_runtime_session_runner = _session
+            rlb._make_onnx_light_reference_runner = _reference
+            runner = rlb._make_onnx_light_runner(object())
+            # The runtime-session path succeeds, so it is used and the
+            # reference evaluator is never built.
+            self.assertEqual(runner(["in"]), ["session"])
+            self.assertEqual(session_calls, [["in"]])
+            self.assertEqual(reference_calls, [])
         finally:
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
@@ -721,6 +741,72 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_runtime_session_runner = _raise
             rlb._make_onnx_light_reference_runner = lambda model: sentinel_reference
             self.assertIs(rlb._make_onnx_light_runner(object()), sentinel_reference)
+        finally:
+            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_reference
+
+    def test_make_onnx_light_runner_falls_back_to_reference_at_run_time(self):
+        """A ``RuntimeSession`` that builds but raises while running a kernel
+        (e.g. ``CausalConvWithState`` or scalar-tensor ops) must fall back to
+        the reference evaluator so onnx-light still runs the model."""
+        session_calls = []
+        reference_calls = []
+        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_reference = rlb._make_onnx_light_reference_runner
+
+        def _session(model):
+            def _run(inputs):
+                session_calls.append(inputs)
+                raise RuntimeError("kernel cannot run")
+
+            return _run
+
+        def _reference(model):
+            def _run(inputs):
+                reference_calls.append(inputs)
+                return ["reference"]
+
+            return _run
+
+        try:
+            rlb._make_onnx_light_runtime_session_runner = _session
+            rlb._make_onnx_light_reference_runner = _reference
+            runner = rlb._make_onnx_light_runner(object())
+            # First run: session path raises, so it falls back and returns the
+            # reference result.
+            self.assertEqual(runner(["a"]), ["reference"])
+            # Subsequent runs go straight to the reference evaluator without
+            # re-trying the failing session path.
+            self.assertEqual(runner(["b"]), ["reference"])
+            self.assertEqual(session_calls, [["a"]])
+            self.assertEqual(reference_calls, [["a"], ["b"]])
+        finally:
+            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_reference
+
+    def test_make_onnx_light_runner_propagates_reference_failure(self):
+        """When the reference fallback also fails, the error propagates."""
+        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_reference = rlb._make_onnx_light_reference_runner
+
+        def _session(model):
+            def _run(inputs):
+                raise RuntimeError("session cannot run")
+
+            return _run
+
+        def _reference(model):
+            def _run(inputs):
+                raise RuntimeError("reference cannot run either")
+
+            return _run
+
+        try:
+            rlb._make_onnx_light_runtime_session_runner = _session
+            rlb._make_onnx_light_reference_runner = _reference
+            runner = rlb._make_onnx_light_runner(object())
+            with self.assertRaises(RuntimeError):
+                runner(["a"])
         finally:
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
