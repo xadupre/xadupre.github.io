@@ -725,28 +725,24 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             rlb._make_onnx_light_runtime_session_runner = saved_session
             rlb._make_onnx_light_reference_runner = saved_reference
 
-    def test_make_onnx_light_cpu_runner_registers_global_kernels(self):
-        """The cpu runner installs the SIMD kernels into onnx-light's global
-        dispatch table, then runs the model through the same ``RuntimeSession``
-        execution path as the plain onnx-light backend.
-
-        ``onnx-light-cpu`` no longer exposes per-op numpy kernels: a single
-        global ``register_kernels()`` call replaces the built-in
-        ``Abs``/``Exp``/``Log``/``Gemm``/``Not`` entries in onnx-light's shared
-        C++ dispatch table. The runner therefore just calls it and delegates to
-        the unmodified session runner.
+    def test_make_onnx_light_cpu_runner_registers_kernels_on_session(self):
+        """The cpu runner installs the SIMD kernels **on the session** (not
+        globally): it passes ``onnx_light_cpu.register_kernels`` to the session
+        runner's ``register`` hook, which calls it with the freshly created
+        ``RuntimeSession``. The model then runs through the same
+        ``RuntimeSession`` execution path as the plain onnx-light backend.
         """
         import types
 
         saved_session = rlb._make_onnx_light_runtime_session_runner
-        calls = {"register": 0, "model": None}
+        calls = {"register_fn": None, "model": None}
 
-        def _fake(model):
+        def _fake(model, register=None):
             calls["model"] = model
+            calls["register_fn"] = register
             return "runner"
 
         def _register_kernels(sess=None):
-            calls["register"] += 1
             return sess
 
         cpu_module = types.ModuleType("onnx_light_cpu")
@@ -766,10 +762,11 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
                 sys.modules["onnx_light_cpu"] = saved_cpu
 
         self.assertEqual(result, "runner")
-        # The SIMD kernels were installed globally exactly once, and the model
-        # was handed to the shared session runner untouched.
-        self.assertEqual(calls["register"], 1)
+        # The model was handed to the session runner untouched, and the
+        # onnx-light-cpu registration was wired to the session (not called
+        # globally beforehand) via the ``register`` hook.
         self.assertIs(calls["model"], model)
+        self.assertIs(calls["register_fn"], _register_kernels)
 
     def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
         """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
@@ -788,9 +785,9 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
 class TestOnnxLightCpuRunner(unittest.TestCase):
     """The onnx-light-cpu backend evaluates the model via the same
-    ``RuntimeSession`` execution path as the plain onnx-light backend, after a
-    single global ``onnx_light_cpu.register_kernels()`` call installs the
-    SIMD-accelerated kernels into onnx-light's shared C++ dispatch table."""
+    ``RuntimeSession`` execution path as the plain onnx-light backend, after
+    ``onnx_light_cpu.register_kernels(session)`` installs the SIMD-accelerated
+    kernels **on that session** (not process-wide)."""
 
     def _install_fakes(self):
         import types
@@ -887,8 +884,8 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         onnx_py._onnxpykernels = pyk
 
         # Fake onnx-light-cpu exposing only the global registration helper, as
-        # the real package does (the SIMD kernels are reachable only through
-        # onnx-light's runtime after registration).
+        # the real package does. The benchmark passes the session to it so the
+        # kernels are registered on that session.
         def _register_kernels(sess=None):
             events["registered"] += 1
             return sess
@@ -921,9 +918,9 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                 else:
                     sys.modules[name] = mod
 
-        # The SIMD kernels were installed globally exactly once, and the model
-        # ran through a single RuntimeSession (the same execution path as the
-        # plain onnx-light backend).
+        # The SIMD kernels were installed on the session exactly once, and the
+        # model ran through a single RuntimeSession (the same execution path as
+        # the plain onnx-light backend).
         self.assertEqual(events["registered"], 1)
         self.assertEqual(events["sessions"], 1)
         self.assertEqual(events["runs"], 1)
@@ -961,6 +958,65 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         self.assertEqual(used["cleared"], 1)
         self.assertEqual(events["runs"], 2)
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
+
+    def test_cpu_runner_registers_on_session_object(self):
+        """The onnx-light-cpu kernels are registered *on the session*: the
+        ``register_kernels`` hook is called with the ``RuntimeSession`` created
+        by the runner, not process-wide before it exists."""
+        model, modules, events = self._install_fakes()
+        seen = {"session": None}
+
+        runtime = modules["onnx_light.onnx_py._onnxpykernels.runtime"]
+        real_session_cls = runtime.RuntimeSession
+
+        def _register_kernels(sess=None):
+            events["registered"] += 1
+            seen["session"] = sess
+            return sess
+
+        modules["onnx_light_cpu"].register_kernels = _register_kernels
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            rlb._make_onnx_light_cpu_runner(model)
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(events["registered"], 1)
+        self.assertIsInstance(seen["session"], real_session_cls)
+
+    def test_cpu_runner_raises_when_non_cpu_kernel_used(self):
+        """Explicitly checks the used kernel names come from onnx-light-cpu: if a
+        name that is not an onnx-light-cpu kernel (e.g. a built-in kernel) is
+        recorded, the runner raises so a contaminated measurement is not
+        reported as an onnx-light-cpu result."""
+        model, modules, events = self._install_fakes()
+        cpu = modules["onnx_light_cpu"]
+        cpu.clear_used_kernel_names = lambda: None
+        # A built-in onnx-light kernel ran, not the onnx-light-cpu one.
+        cpu.used_kernel_names = lambda: ["onnx_light::Abs"]
+        cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            with self.assertRaises(RuntimeError) as ctx:
+                runner([np.array([-1.0, 2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertIn("not all from onnx-light-cpu", str(ctx.exception))
+        self.assertIn("onnx_light::Abs", str(ctx.exception))
 
     def test_cpu_runner_raises_when_no_cpu_kernel_used(self):
         """If no onnx-light-cpu kernel ran (the model uses none of the
