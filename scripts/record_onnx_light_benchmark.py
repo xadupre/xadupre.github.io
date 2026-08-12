@@ -738,7 +738,6 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
             return runner(inputs)
         clear_used_kernel_names()
         outputs = runner(inputs)
-        checked["done"] = True
         if not used_kernel_names():
             registered = getattr(onnx_light_cpu, "registered_kernel_names", None)
             overridden = sorted(registered()) if callable(registered) else []
@@ -746,6 +745,7 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
                 "no onnx-light-cpu kernel ran for this model; it contains none "
                 f"of the operators overridden by onnx-light-cpu ({overridden})"
             )
+        checked["done"] = True
         return outputs
 
     return _run_checked
