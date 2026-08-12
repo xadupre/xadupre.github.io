@@ -710,11 +710,45 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     of this backend is to measure the CPU kernels, so an unavailable
     onnx-light-cpu is surfaced as a load error rather than silently running the
     built-in kernels.
+
+    Because the registration is global, a model whose operators are *not*
+    overridden by onnx-light-cpu would run through the exact same built-in
+    kernels as the plain ``onnx-light`` backend, making the measurement
+    meaningless. To guard against that, the returned runner checks — on its
+    first invocation — that at least one onnx-light-cpu kernel actually ran,
+    using :func:`onnx_light_cpu.used_kernel_names`. If none did, it raises
+    ``RuntimeError`` so the backend records an error instead of silently
+    reporting built-in-kernel timings as onnx-light-cpu results. Builds that do
+    not expose the kernel-name introspection helpers skip the check.
     """
     import onnx_light_cpu
 
     onnx_light_cpu.register_kernels()
-    return _make_onnx_light_runtime_session_runner(model)
+    runner = _make_onnx_light_runtime_session_runner(model)
+
+    clear_used_kernel_names = getattr(onnx_light_cpu, "clear_used_kernel_names", None)
+    used_kernel_names = getattr(onnx_light_cpu, "used_kernel_names", None)
+    if clear_used_kernel_names is None or used_kernel_names is None:
+        return runner
+
+    checked = {"done": False}
+
+    def _run_checked(inputs: List[Any]) -> List[Any]:
+        if checked["done"]:
+            return runner(inputs)
+        clear_used_kernel_names()
+        outputs = runner(inputs)
+        checked["done"] = True
+        if not used_kernel_names():
+            registered = getattr(onnx_light_cpu, "registered_kernel_names", None)
+            overridden = sorted(registered()) if callable(registered) else []
+            raise RuntimeError(
+                "no onnx-light-cpu kernel ran for this model; it contains none "
+                f"of the operators overridden by onnx-light-cpu ({overridden})"
+            )
+        return outputs
+
+    return _run_checked
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {

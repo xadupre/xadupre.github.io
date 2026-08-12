@@ -929,6 +929,65 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         self.assertEqual(events["runs"], 1)
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
+    def test_cpu_runner_checks_used_kernel_names(self):
+        """When the build exposes the kernel-name helpers, the runner clears the
+        used-kernel record before the first run and accepts the run when at
+        least one onnx-light-cpu kernel actually ran."""
+        model, modules, events = self._install_fakes()
+        used = {"cleared": 0, "names": ["onnx_light_cpu::Abs"]}
+        cpu = modules["onnx_light_cpu"]
+
+        def _clear():
+            used["cleared"] += 1
+
+        cpu.clear_used_kernel_names = _clear
+        cpu.used_kernel_names = lambda: list(used["names"])
+        cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            out = runner([np.array([-1.0, 2.0], dtype=np.float32)])
+            # A second call does not re-clear or re-check.
+            runner([np.array([-1.0, 2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(used["cleared"], 1)
+        self.assertEqual(events["runs"], 2)
+        np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
+
+    def test_cpu_runner_raises_when_no_cpu_kernel_used(self):
+        """If no onnx-light-cpu kernel ran (the model uses none of the
+        overridden operators), the runner raises so the backend records an
+        error instead of reporting built-in-kernel timings as cpu results."""
+        model, modules, events = self._install_fakes()
+        cpu = modules["onnx_light_cpu"]
+        cpu.clear_used_kernel_names = lambda: None
+        cpu.used_kernel_names = lambda: []
+        cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            with self.assertRaises(RuntimeError) as ctx:
+                runner([np.array([-1.0, 2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertIn("no onnx-light-cpu kernel ran", str(ctx.exception))
+        self.assertIn("Abs", str(ctx.exception))
+
 
 class _FakeTypeProto:
     """Minimal ``TypeProto`` stand-in exposing a protobuf-like ``HasField``."""
