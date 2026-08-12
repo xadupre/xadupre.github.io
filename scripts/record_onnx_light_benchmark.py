@@ -556,6 +556,7 @@ def _runtime_tensor_to_numpy(runtime, numpy_helper, tensor):
 
 def _make_onnx_light_runtime_session_runner(
     model,
+    register: Optional[Callable[[Any], Any]] = None,
 ) -> Callable[[List[Any]], List[Any]]:
     """Run ``model`` through onnx-light's ``ExecutionPlan`` + ``RuntimeSession``.
 
@@ -571,10 +572,11 @@ def _make_onnx_light_runtime_session_runner(
     benchmarked, so positional inputs are wired to the graph's declared
     (non-initializer) inputs by name.
 
-    The ``onnx_light_cpu`` backend reuses this exact execution path — it only
-    differs in installing the SIMD-accelerated kernels into onnx-light's shared
-    dispatch table beforehand via ``onnx_light_cpu.register_kernels()`` — so no
-    per-run kernel registration hook is needed here.
+    ``register``, when provided, is invoked once with the freshly created
+    ``RuntimeSession`` before any run so a backend can install kernels *on that
+    session* (rather than process-wide). The ``onnx_light_cpu`` backend uses it
+    to register its SIMD kernels on the session via
+    ``onnx_light_cpu.register_kernels(session)``.
     """
     import numpy as np
     from onnx_light.onnx_lib import ModelProto as _LModelProto
@@ -609,6 +611,8 @@ def _make_onnx_light_runtime_session_runner(
     # caches the resolved kernels after its first ``run`` call.
     plan = _rt.ExecutionPlan(lmodel.graph)
     session = _rt.RuntimeSession(plan)
+    if register is not None:
+        register(session)
 
     def _run(inputs: List[Any]) -> List[Any]:
         ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
@@ -687,21 +691,15 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner with the ``onnx-light-cpu`` SIMD kernels active.
 
-    ``onnx-light-cpu`` installs its SIMD-accelerated ``Abs``/``Exp``/``Log``/
-    ``Gemm``/``Not`` kernels into onnx-light's shared C++
-    ``KernelDispatchTable`` through a single global
-    :func:`onnx_light_cpu.register_kernels` call, which replaces the
-    corresponding built-in entries for the default ONNX domain. After
-    registration every matching node executed by onnx-light's runtime
-    dispatches to the accelerated kernel, so the model runs through the exact
-    same ``RuntimeSession`` execution path as the plain ``onnx-light`` backend
-    and the only difference measured is the SIMD kernels themselves.
-
-    The registration is global and irreversible (``onnx-light-cpu`` exposes no
-    un-register hook), so it also affects the plain ``onnx-light`` backend once
-    it runs. The benchmark therefore times the built-in ``onnx-light`` pass over
-    every test *before* this backend registers the kernels — see
-    :func:`build_payload`.
+    ``onnx-light-cpu`` ships SIMD-accelerated ``Abs``/``Exp``/``Log``/``Gemm``/
+    ``Not`` kernels that override the corresponding built-in entries for the
+    default ONNX domain. The kernels are installed *on this benchmark's
+    session* — not process-wide — by passing the freshly created
+    ``RuntimeSession`` to :func:`onnx_light_cpu.register_kernels` through the
+    session runner's ``register`` hook. Scoping the registration to the session
+    keeps the plain ``onnx-light`` backend running its built-in kernels and lets
+    the model run through the exact same ``RuntimeSession`` execution path, so
+    the only difference measured is the SIMD kernels themselves.
 
     Importing ``onnx_light_cpu`` — or calling ``register_kernels`` — raises
     ``ImportError`` when ``onnx-light-cpu`` is not installed (or was built
@@ -710,11 +708,66 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     of this backend is to measure the CPU kernels, so an unavailable
     onnx-light-cpu is surfaced as a load error rather than silently running the
     built-in kernels.
+
+    A model whose operators are *not* overridden by onnx-light-cpu would run
+    through the exact same built-in kernels as the plain ``onnx-light`` backend,
+    making the measurement meaningless. To guard against that, the returned
+    runner checks — on its first invocation — that every kernel that actually
+    ran is an onnx-light-cpu kernel (its library-qualified name appears in
+    :func:`onnx_light_cpu.registered_kernel_names`), using
+    :func:`onnx_light_cpu.used_kernel_names`. It raises ``RuntimeError`` when no
+    onnx-light-cpu kernel ran, or when a name that is *not* an onnx-light-cpu
+    kernel is recorded, so the backend records an error instead of silently
+    reporting built-in-kernel timings as onnx-light-cpu results. Builds that do
+    not expose the kernel-name introspection helpers skip the check.
     """
     import onnx_light_cpu
 
-    onnx_light_cpu.register_kernels()
-    return _make_onnx_light_runtime_session_runner(model)
+    runner = _make_onnx_light_runtime_session_runner(
+        model, register=onnx_light_cpu.register_kernels
+    )
+
+    clear_used_kernel_names = getattr(onnx_light_cpu, "clear_used_kernel_names", None)
+    used_kernel_names = getattr(onnx_light_cpu, "used_kernel_names", None)
+    registered_kernel_names = getattr(onnx_light_cpu, "registered_kernel_names", None)
+    if clear_used_kernel_names is None or used_kernel_names is None:
+        return runner
+
+    # Map of ONNX ``op_type`` -> library-qualified kernel name that
+    # onnx-light-cpu overrides, e.g. ``{"Abs": "onnx_light_cpu::Abs"}``. The
+    # values are the names each onnx-light-cpu kernel records when it runs; a
+    # used name outside this value set means a built-in (non onnx-light-cpu)
+    # kernel ran.
+    registered = (
+        dict(registered_kernel_names()) if callable(registered_kernel_names) else {}
+    )
+    cpu_kernel_names = set(registered.values())
+
+    checked = {"done": False}
+
+    def _run_checked(inputs: List[Any]) -> List[Any]:
+        if checked["done"]:
+            return runner(inputs)
+        clear_used_kernel_names()
+        outputs = runner(inputs)
+        used = list(used_kernel_names())
+        if not used:
+            overridden = sorted(registered) if registered else []
+            raise RuntimeError(
+                "no onnx-light-cpu kernel ran for this model; it contains none "
+                f"of the operators overridden by onnx-light-cpu ({overridden})"
+            )
+        if cpu_kernel_names:
+            foreign = sorted(set(used) - cpu_kernel_names)
+            if foreign:
+                raise RuntimeError(
+                    "kernels that ran are not all from onnx-light-cpu; the "
+                    f"following names are not onnx-light-cpu kernels: {foreign}"
+                )
+        checked["done"] = True
+        return outputs
+
+    return _run_checked
 
 
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
