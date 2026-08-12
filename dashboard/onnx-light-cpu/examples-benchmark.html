@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light-cpu &mdash; examples benchmark (onnxruntime vs onnx-light-cpu)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; max-width: 1000px; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+h2 { margin: 0.2em 0 0.1em; font-size: 1.1em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
+.intro code, .meta code, .example-desc code {
+  background: rgba(110, 118, 129, 0.4);
+  padding: 0 0.3em;
+  border-radius: 4px;
+}
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  width: 100%;
+  max-width: 1000px;
+  box-sizing: border-box;
+  margin-bottom: 1em;
+}
+.meta { font-size: 0.85em; color: #8b949e; }
+.meta strong { color: #c9d1d9; }
+.example-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6em; }
+.example-desc { font-size: 0.85em; color: #8b949e; margin: 0.2em 0 0.6em; }
+.summary-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1em;
+  margin: 0.5em 0 0.75em;
+  font-size: 0.9em;
+}
+.summary-card {
+  background: rgba(13, 17, 23, 0.7);
+  border: 1px solid rgba(139, 148, 158, 0.25);
+  border-radius: 8px;
+  padding: 0.5em 0.8em;
+  min-width: 150px;
+  flex: 1 1 150px;
+}
+.summary-card .card-label { color: #8b949e; font-size: 0.8em; }
+.summary-card .card-value { font-size: 1.4em; margin-top: 0.15em; font-weight: bold; }
+.summary-card.faster .card-value { color: #3fb950; }
+.summary-card.slower .card-value { color: #f85149; }
+.summary-card.neutral .card-value { color: #79c0ff; }
+.table-wrap { overflow-x: auto; }
+table.benchmark { border-collapse: collapse; width: 100%; font-size: 0.85em; }
+table.benchmark th, table.benchmark td {
+  border-bottom: 1px solid rgba(139, 148, 158, 0.2);
+  padding: 0.4em 0.6em;
+  text-align: right;
+  white-space: nowrap;
+}
+table.benchmark th { color: #8b949e; font-weight: normal; }
+table.benchmark th:first-child, table.benchmark td:first-child { text-align: left; }
+table.benchmark td.faster { color: #3fb950; font-weight: bold; }
+table.benchmark td.slower { color: #f85149; font-weight: bold; }
+table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
+.message {
+  max-width: 1000px;
+  margin: 0 auto 1em;
+  padding: 0.6em 1em;
+  border-radius: 8px;
+  font-size: 0.9em;
+  display: none;
+}
+.message.visible { display: block; }
+.message.info { background: rgba(56, 139, 253, 0.12); border: 1px solid rgba(56, 139, 253, 0.4); color: #79c0ff; }
+.message.error { background: rgba(248, 81, 73, 0.12); border: 1px solid rgba(248, 81, 73, 0.5); color: #f85149; }
+.legend { font-size: 0.8em; color: #8b949e; margin-top: 0.6em; display: flex; flex-wrap: wrap; gap: 1em; }
+.legend .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; vertical-align: middle; }
+.legend .swatch.faster { background: #3fb950; }
+.legend .swatch.slower { background: #f85149; }
+</style>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light-cpu &mdash; examples benchmark</h1>
+  <p class="intro">
+    Processing time comparison between
+    <a href="https://onnxruntime.ai/"><code>onnxruntime</code></a> and
+    <a href="../../docs/onnx-light-cpu/index.html"><code>onnx&#8209;light&#8209;cpu</code></a>
+    (onnx&#8209;light's reference evaluator with the SIMD-accelerated CPU kernels
+    registered) on the benchmark
+    <a href="../../docs/onnx-light-cpu/auto_examples/index.html">examples</a>
+    shipped by <code>onnx&#8209;light&#8209;cpu</code>. Each example sweeps an
+    operator over a range of input sizes; <code>numpy</code> and
+    <code>onnx&#8209;light</code>'s own un-accelerated reference kernel are shown
+    as baselines. Every measurement runs
+    <strong id="nWarmupLabel">3</strong> warm-up calls (not timed) and keeps the
+    median of <strong id="nMeasureLabel">10</strong> timed repetitions.
+    <strong>speed-up (cpu)</strong> = <code>onnxruntime</code> /
+    <code>onnx&#8209;light&#8209;cpu</code>: values&nbsp;&gt;&nbsp;1 mean
+    onnx&#8209;light&#8209;cpu is faster than onnxruntime.
+  </p>
+</header>
+<div class="notice" style="max-width:1000px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
+
+<div id="message" class="message info"></div>
+
+<div id="metaPanel" class="panel" style="display:none;">
+  <div class="meta">
+    Snapshot recorded on <strong id="metaDate"></strong>.
+    <span id="metaSimd"></span>
+    <span id="metaVersions"></span>
+  </div>
+</div>
+
+<div id="examples"></div>
+
+<script>
+const JSON_URL = "../../cache_data/onnx-light-cpu/examples_benchmark.json";
+
+const BACKEND_LABELS = {
+  numpy: "numpy",
+  onnx_light: "onnx-light (built-in)",
+  onnx_light_cpu: "onnx-light-cpu",
+  onnxruntime: "onnxruntime",
+};
+
+function showMessage(text, kind) {
+  const msg = document.getElementById("message");
+  msg.textContent = text;
+  msg.className = "message visible " + (kind || "info");
+}
+
+function hideMessage() {
+  document.getElementById("message").className = "message";
+}
+
+function fmtMs(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  if (value >= 100) return value.toFixed(1);
+  if (value >= 1) return value.toFixed(2);
+  return value.toFixed(4);
+}
+
+function fmtSpeedup(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—";
+  return value.toFixed(2) + "×";
+}
+
+function renderMeta(payload) {
+  document.getElementById("metaPanel").style.display = "block";
+  document.getElementById("metaDate").textContent = payload.date || "(unknown date)";
+  if (payload.n_warmup !== undefined) {
+    document.getElementById("nWarmupLabel").textContent = payload.n_warmup;
+  }
+  if (payload.n_measure !== undefined) {
+    document.getElementById("nMeasureLabel").textContent = payload.n_measure;
+  }
+  const simd = document.getElementById("metaSimd");
+  if (payload.simd_name) {
+    simd.innerHTML = "CPU SIMD level: <strong>" + payload.simd_name + "</strong>.";
+  }
+  const versions = payload.versions || {};
+  const keys = Object.keys(versions).sort();
+  if (keys.length) {
+    const parts = keys.map(k => k + " " + versions[k]);
+    document.getElementById("metaVersions").textContent = "Versions: " + parts.join(", ") + ".";
+  }
+}
+
+function makeSummaryCard(label, value, cls) {
+  const card = document.createElement("div");
+  card.className = "summary-card " + (cls || "neutral");
+  const l = document.createElement("div");
+  l.className = "card-label";
+  l.textContent = label;
+  const v = document.createElement("div");
+  v.className = "card-value";
+  v.textContent = value;
+  card.appendChild(l);
+  card.appendChild(v);
+  return card;
+}
+
+function speedupClass(value) {
+  if (value === null || value === undefined || Number.isNaN(value)) return "";
+  return value >= 1 ? "faster" : "slower";
+}
+
+function renderExample(example) {
+  const panel = document.createElement("div");
+  panel.className = "panel";
+
+  const head = document.createElement("div");
+  head.className = "example-head";
+  const h2 = document.createElement("h2");
+  h2.textContent = example.title || example.name;
+  head.appendChild(h2);
+  if (example.source) {
+    const src = document.createElement("span");
+    src.className = "meta";
+    src.innerHTML = "<code>" + example.source + "</code>";
+    head.appendChild(src);
+  }
+  panel.appendChild(head);
+
+  const desc = document.createElement("p");
+  desc.className = "example-desc";
+  desc.innerHTML =
+    "Operator <code>" + (example.op || "") + "</code> swept over the " +
+    (example.xlabel || "input size") + ".";
+  panel.appendChild(desc);
+
+  const summary = example.summary || {};
+  const cards = document.createElement("div");
+  cards.className = "summary-cards";
+  if (summary.avg_speedup_cpu !== undefined) {
+    cards.appendChild(makeSummaryCard(
+      "avg speed-up vs onnxruntime", fmtSpeedup(summary.avg_speedup_cpu),
+      speedupClass(summary.avg_speedup_cpu)));
+  }
+  if (summary.max_speedup_cpu !== undefined) {
+    cards.appendChild(makeSummaryCard(
+      "best speed-up", fmtSpeedup(summary.max_speedup_cpu),
+      speedupClass(summary.max_speedup_cpu)));
+  }
+  if (summary.min_speedup_cpu !== undefined) {
+    cards.appendChild(makeSummaryCard(
+      "worst speed-up", fmtSpeedup(summary.min_speedup_cpu),
+      speedupClass(summary.min_speedup_cpu)));
+  }
+  cards.appendChild(makeSummaryCard("input sizes", String(summary.sizes || (example.rows || []).length)));
+  panel.appendChild(cards);
+
+  const backends = Array.isArray(example.backends) && example.backends.length
+    ? example.backends
+    : ["numpy", "onnx_light", "onnx_light_cpu", "onnxruntime"];
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  table.className = "benchmark";
+
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  const sizeTh = document.createElement("th");
+  sizeTh.textContent = example.size_key || "size";
+  htr.appendChild(sizeTh);
+  backends.forEach(b => {
+    const th = document.createElement("th");
+    th.innerHTML = (BACKEND_LABELS[b] || b) + " (ms)";
+    htr.appendChild(th);
+  });
+  const spTh = document.createElement("th");
+  spTh.textContent = "speed-up (cpu)";
+  htr.appendChild(spTh);
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  (example.rows || []).forEach(row => {
+    const tr = document.createElement("tr");
+    const sizeTd = document.createElement("td");
+    sizeTd.textContent = row.size;
+    tr.appendChild(sizeTd);
+    backends.forEach(b => {
+      const td = document.createElement("td");
+      td.textContent = fmtMs(row[b + "_ms"]);
+      tr.appendChild(td);
+    });
+    const spTd = document.createElement("td");
+    spTd.textContent = fmtSpeedup(row.speedup_cpu);
+    spTd.className = speedupClass(row.speedup_cpu);
+    tr.appendChild(spTd);
+    tbody.appendChild(tr);
+  });
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  panel.appendChild(wrap);
+
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  legend.innerHTML =
+    '<span><span class="swatch faster"></span>onnx-light-cpu faster than onnxruntime</span>' +
+    '<span><span class="swatch slower"></span>onnx-light-cpu slower than onnxruntime</span>';
+  panel.appendChild(legend);
+
+  return panel;
+}
+
+fetch(JSON_URL, { cache: "no-store" })
+  .then(r => {
+    if (r.status === 404) {
+      showMessage(
+        "No benchmark snapshot available yet. The JSON file will appear once " +
+        "the 'DATA onnx-light-cpu examples benchmark' workflow has published its first run.",
+        "info"
+      );
+      return null;
+    }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return r.json();
+  })
+  .then(payload => {
+    if (!payload) return;
+    const examples = Array.isArray(payload.examples) ? payload.examples : [];
+    if (examples.length === 0) {
+      showMessage(
+        "The benchmark snapshot is empty. The dashboard will populate " +
+        "automatically once the recording workflow produces measurements.",
+        "info"
+      );
+      return;
+    }
+    hideMessage();
+    renderMeta(payload);
+    const container = document.getElementById("examples");
+    examples.forEach(ex => container.appendChild(renderExample(ex)));
+  })
+  .catch(err => {
+    showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
+  });
+</script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light-cpu/examples_benchmark.json" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+</body>
+</html>

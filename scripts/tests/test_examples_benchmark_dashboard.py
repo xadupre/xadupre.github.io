@@ -1,0 +1,101 @@
+"""Tests for the onnx-light-cpu examples benchmark dashboard and wiring."""
+
+from __future__ import annotations
+
+import os
+import unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
+PAGE = os.path.join(
+    REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html"
+)
+INDEX = os.path.join(REPO_ROOT, "index.html")
+WORKFLOW = os.path.join(
+    REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
+)
+SCRIPT = os.path.join(
+    REPO_ROOT, "scripts", "record_onnx_light_cpu_examples_benchmark.py"
+)
+
+
+def _read(path: str) -> str:
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+class TestExamplesBenchmarkDashboard(unittest.TestCase):
+    def test_page_exists(self):
+        self.assertTrue(os.path.isfile(PAGE), f"missing page: {PAGE}")
+
+    def test_page_loads_the_expected_json(self):
+        text = _read(PAGE)
+        self.assertIn(
+            'const JSON_URL = "../../cache_data/onnx-light-cpu/examples_benchmark.json";',
+            text,
+        )
+
+    def test_page_renders_examples_and_speedup(self):
+        text = _read(PAGE)
+        self.assertIn("function renderExample(example)", text)
+        self.assertIn("payload.examples", text)
+        self.assertIn("speedup_cpu", text)
+        # The four backends are labelled for the table header.
+        for backend in ("numpy", "onnx-light (built-in)", "onnx-light-cpu", "onnxruntime"):
+            self.assertIn(backend, text)
+
+    def test_page_has_footer_pointing_at_cache(self):
+        text = _read(PAGE)
+        self.assertIn(
+            'data-source="../../cache_data/onnx-light-cpu/examples_benchmark.json"',
+            text,
+        )
+        self.assertIn('<script src="../../assets/last-updated.js">', text)
+
+
+class TestIndexWiring(unittest.TestCase):
+    def test_index_links_dashboard(self):
+        text = _read(INDEX)
+        self.assertIn(
+            'href="dashboard/onnx-light-cpu/examples-benchmark.html"', text
+        )
+        # The doc-link label / word must match (checked generically elsewhere).
+        self.assertIn('data-word="BENCH"', text)
+
+    def test_index_has_workflow_badge(self):
+        text = _read(INDEX)
+        self.assertIn("record_onnx_light_cpu_examples_benchmark.yml", text)
+
+
+class TestWorkflow(unittest.TestCase):
+    def test_workflow_exists(self):
+        self.assertTrue(os.path.isfile(WORKFLOW), f"missing workflow: {WORKFLOW}")
+
+    def test_workflow_builds_from_source_and_runs_script(self):
+        text = _read(WORKFLOW)
+        self.assertIn("name: DATA onnx-light-cpu examples benchmark", text)
+        # Both dependencies are built from source, as required by the issue.
+        self.assertIn("repository: xadupre/onnx-light", text)
+        self.assertIn("repository: xadupre/onnx-light-cpu", text)
+        self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
+        self.assertIn(
+            "python -u scripts/record_onnx_light_cpu_examples_benchmark.py", text
+        )
+        self.assertIn(
+            "cache_data/onnx-light-cpu/examples_benchmark.json", text
+        )
+
+
+class TestScriptCLI(unittest.TestCase):
+    def test_script_is_executable_module(self):
+        # A trivial import-time smoke test to make sure the module has no syntax
+        # errors and exposes its public entry points.
+        import importlib
+
+        module = importlib.import_module("record_onnx_light_cpu_examples_benchmark")
+        for name in ("build_payload", "write_payload", "main", "parse_args"):
+            self.assertTrue(hasattr(module, name), f"missing {name}")
+
+
+if __name__ == "__main__":
+    unittest.main()
