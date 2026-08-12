@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 11, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 12, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -520,9 +520,8 @@ up the SIMD-accelerated kernel instead.</p>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">clear_used_kernel_names</span><span class="p">,</span>
     <span class="n">register_kernels</span><span class="p">,</span>
-    <span class="n">used_kernel_names</span><span class="p">,</span>
+    <span class="n">registered_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_simd_level</span><span class="p">,</span> <span class="n">has_cpu_kernels</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpuregister</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_kernel_usage_recording</span>
@@ -643,20 +642,30 @@ and run here, once per included shape, before <code class="docutils literal notr
     <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="s2">&quot;float16&quot;</span><span class="p">)</span>
 <span class="p">}</span>
 
-<span class="c1"># Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel</span>
-<span class="c1"># (identified by the library-qualified name it records when it runs) rather</span>
-<span class="c1"># than onnx-light&#39;s built-in kernel.</span>
-<span class="n">_probe</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-<span class="n">clear_used_kernel_names</span><span class="p">()</span>
+<span class="c1"># Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu&#39;s accelerated</span>
+<span class="c1"># kernel rather than onnx-light&#39;s built-in one. ``register_kernels()`` installed</span>
+<span class="c1"># onnx-light-cpu&#39;s kernels (``registered_kernel_names()`` lists the ops it</span>
+<span class="c1"># overrides) into onnx-light&#39;s process-wide dispatch table, and onnx-light&#39;s</span>
+<span class="c1"># ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually</span>
+<span class="c1"># resolved once it has run. Because the baseline session above was built and run</span>
+<span class="c1"># *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,</span>
+<span class="c1"># so the two curves genuinely use different kernels.</span>
+<span class="n">_probe</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
 <span class="n">sessions</span><span class="p">[</span><span class="s2">&quot;float32&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;A&quot;</span><span class="p">:</span> <span class="n">_probe</span><span class="p">,</span> <span class="s2">&quot;B&quot;</span><span class="p">:</span> <span class="n">_probe</span><span class="p">})</span>
-<span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">&quot;onnx_light_cpu::Gemm&quot;</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
-<span class="c1"># The usage log is diagnostic instrumentation and takes a mutex on every</span>
-<span class="c1"># invocation. Disable it after checking dispatch so it does not enter timings.</span>
+<span class="n">accelerated_ops</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">registered_kernel_names</span><span class="p">())</span>
+<span class="n">used_kernels</span> <span class="o">=</span> <span class="n">sessions</span><span class="p">[</span><span class="s2">&quot;float32&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">used_kernels</span><span class="p">()</span>
+<span class="n">used_ops</span> <span class="o">=</span> <span class="p">{</span><span class="n">key</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">&quot;:&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">used_kernels</span><span class="p">}</span>
+<span class="k">assert</span> <span class="s2">&quot;Gemm&quot;</span> <span class="ow">in</span> <span class="n">used_ops</span> <span class="o">&amp;</span> <span class="n">accelerated_ops</span><span class="p">,</span> <span class="n">used_kernels</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;onnx-light-cpu kernels dispatched by the accelerated session: </span><span class="si">{</span><span class="n">used_kernels</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+<span class="c1"># onnx-light-cpu kernels record their name on every run (a mutex per call);</span>
+<span class="c1"># only the accelerated curves would pay that cost, so disable recording to keep</span>
+<span class="c1"># the timings below fair.</span>
 <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light (built-in) | shape=single-tile              |      45.41 us
-onnx-light (built-in) | shape=K-chunked                |     179.25 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light (built-in) | shape=single-tile              |      24.17 us
+onnx-light (built-in) | shape=K-chunked                |     169.79 us
+onnx-light-cpu kernels dispatched by the accelerated session: [&#39;ai.onnx:Gemm&#39;]
 </pre></div>
 </div>
 </section>
@@ -709,24 +718,24 @@ precision dtypes) so every combination agrees on the answer.</p>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>shape=single-tile              M=64 N=64 K=64 repeat=50
-  float32   | onnx-light-cpu=     57.55 us | onnxruntime=     20.29 us
-  float16   | onnx-light-cpu=    117.35 us | onnxruntime=     24.60 us
-  bfloat16  | onnx-light-cpu=    106.73 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=     28.97 us | onnxruntime=     14.82 us
+  float16   | onnx-light-cpu=     80.07 us | onnxruntime=     22.74 us
+  bfloat16  | onnx-light-cpu=     74.61 us | onnxruntime=not supported
 
 shape=K-chunked                M=32 N=32 K=2048 repeat=50
-  float32   | onnx-light-cpu=    220.86 us | onnxruntime=    109.56 us
-  float16   | onnx-light-cpu=    534.69 us | onnxruntime=    101.58 us
-  bfloat16  | onnx-light-cpu=    667.73 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    193.37 us | onnxruntime=     56.06 us
+  float16   | onnx-light-cpu=    739.65 us | onnxruntime=    131.25 us
+  bfloat16  | onnx-light-cpu=    611.07 us | onnxruntime=not supported
 
 shape=multi-panel              M=512 N=512 K=128 repeat=7
-  float32   | onnx-light-cpu=   1736.70 us | onnxruntime=    390.15 us
-  float16   | onnx-light-cpu=   6618.75 us | onnxruntime=    424.23 us
-  bfloat16  | onnx-light-cpu=   3363.46 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=   3997.29 us | onnxruntime=    991.25 us
+  float16   | onnx-light-cpu=   5351.40 us | onnxruntime=    456.50 us
+  bfloat16  | onnx-light-cpu=   3751.11 us | onnxruntime=not supported
 
 shape=skinny-M/wide-N          M=4 N=4096 K=128 repeat=50
-  float32   | onnx-light-cpu=    290.52 us | onnxruntime=    191.02 us
-  float16   | onnx-light-cpu=   1699.78 us | onnxruntime=    180.73 us
-  bfloat16  | onnx-light-cpu=   1505.76 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    271.20 us | onnxruntime=    113.94 us
+  float16   | onnx-light-cpu=   1617.50 us | onnxruntime=    120.69 us
+  bfloat16  | onnx-light-cpu=   1963.07 us | onnxruntime=not supported
 </pre></div>
 </div>
 </section>
@@ -785,7 +794,7 @@ backend and shape (values above 1 mean slower than float32).</p>
 <span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">&quot;log&quot;</span><span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">ax_time</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">shape_labels</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+<span class="n">ax_time</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">shape_labels</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">rotation</span><span class="o">=</span><span class="mi">45</span><span class="p">,</span> <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;right&quot;</span><span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;time (microseconds)&quot;</span><span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Gemm execution time by code path (SIMD: </span><span class="si">{</span><span class="n">simd_name</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
 <span class="n">ax_time</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
@@ -811,7 +820,7 @@ backend and shape (values above 1 mean slower than float32).</p>
 <span class="n">ax_overhead</span><span class="o">.</span><span class="n">axhline</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">&quot;grey&quot;</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">&quot;:&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="s2">&quot;float32 baseline&quot;</span><span class="p">)</span>
 <span class="n">ax_overhead</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;time relative to float32&quot;</span><span class="p">)</span>
 <span class="n">ax_overhead</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;float16 / bfloat16 widen/round-trip overhead&quot;</span><span class="p">)</span>
-<span class="n">ax_overhead</span><span class="o">.</span><span class="n">tick_params</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">labelrotation</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">labelsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
+<span class="n">ax_overhead</span><span class="o">.</span><span class="n">tick_params</span><span class="p">(</span><span class="n">axis</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">labelrotation</span><span class="o">=</span><span class="mi">45</span><span class="p">,</span> <span class="n">labelsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
 <span class="n">ax_overhead</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
 
 <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
@@ -819,7 +828,7 @@ backend and shape (values above 1 mean slower than float32).</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX2), float16 / bfloat16 widen/round-trip overhead" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.271 seconds)</p>
+<img src="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX2), float16 / bfloat16 widen/round-trip overhead" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.139 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-gemm-dtype-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/6b6928f2909723daf0c1d7ecae0d07ad/plot_gemm_dtype_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_gemm_dtype_benchmark.ipynb</span></code></a></p>
@@ -923,7 +932,7 @@ backend and shape (values above 1 mean slower than float32).</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 11, 2026.
+  Last updated on Aug 12, 2026.
   <br/>
 </p></div>
       

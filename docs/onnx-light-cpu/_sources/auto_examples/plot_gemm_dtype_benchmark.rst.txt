@@ -77,7 +77,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 60-88
+.. GENERATED FROM PYTHON SOURCE LINES 60-87
 
 .. code-block:: Python
 
@@ -95,9 +95,8 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
     from onnx_light.onnx.reference import ReferenceEvaluator
 
     from onnx_light_cpu import (
-        clear_used_kernel_names,
         register_kernels,
-        used_kernel_names,
+        registered_kernel_names,
     )
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
     from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -122,7 +121,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 89-94
+.. GENERATED FROM PYTHON SOURCE LINES 88-93
 
 Element types under test
 -------------------------
@@ -130,7 +129,7 @@ Element types under test
 Each entry maps a label to the ``TensorProto`` element type and the numpy /
 ``ml_dtypes`` dtype used to encode the random inputs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 94-122
+.. GENERATED FROM PYTHON SOURCE LINES 93-121
 
 .. code-block:: Python
 
@@ -169,7 +168,7 @@ Each entry maps a label to the ``TensorProto`` element type and the numpy /
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 123-128
+.. GENERATED FROM PYTHON SOURCE LINES 122-127
 
 Timing helper
 -------------
@@ -177,7 +176,7 @@ Timing helper
 Each candidate gets three untimed warm-up calls, then is called ``repeat``
 times (at least seven) and the median wall-clock time is retained.
 
-.. GENERATED FROM PYTHON SOURCE LINES 128-141
+.. GENERATED FROM PYTHON SOURCE LINES 127-140
 
 .. code-block:: Python
 
@@ -201,7 +200,7 @@ times (at least seven) and the median wall-clock time is retained.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 142-148
+.. GENERATED FROM PYTHON SOURCE LINES 141-147
 
 Shapes chosen to activate each Gemm code path
 -----------------------------------------------
@@ -210,7 +209,7 @@ Shapes chosen to activate each Gemm code path
 ``onnx_light_cpu/impl/math/gemm_kernel.cc``); every shape below is picked to
 sit clearly on one side of those thresholds.
 
-.. GENERATED FROM PYTHON SOURCE LINES 148-161
+.. GENERATED FROM PYTHON SOURCE LINES 147-160
 
 .. code-block:: Python
 
@@ -234,7 +233,7 @@ sit clearly on one side of those thresholds.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 162-169
+.. GENERATED FROM PYTHON SOURCE LINES 161-168
 
 Prime the built-in baseline before registering the accelerated kernels
 ------------------------------------------------------------------------
@@ -244,7 +243,7 @@ kernel; a session only picks up whichever kernel is registered at the time
 of its *first* ``run()`` call. So a dedicated ``float32`` session is built
 and run here, once per included shape, before ``register_kernels()`` runs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 169-213
+.. GENERATED FROM PYTHON SOURCE LINES 168-221
 
 .. code-block:: Python
 
@@ -280,15 +279,24 @@ and run here, once per included shape, before ``register_kernels()`` runs.
         for label in ("float32", "float16")
     }
 
-    # Confirm the sessions dispatch to the onnx-light-cpu ``Gemm`` kernel
-    # (identified by the library-qualified name it records when it runs) rather
-    # than onnx-light's built-in kernel.
-    _probe = np.zeros((2, 2), dtype=np.float32)
-    clear_used_kernel_names()
+    # Confirm these sessions dispatch ``Gemm`` to onnx-light-cpu's accelerated
+    # kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
+    # onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
+    # overrides) into onnx-light's process-wide dispatch table, and onnx-light's
+    # ``ReferenceEvaluator.used_kernels()`` reports the kernels a session actually
+    # resolved once it has run. Because the baseline session above was built and run
+    # *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
+    # so the two curves genuinely use different kernels.
+    _probe = np.zeros((64, 64), dtype=np.float32)
     sessions["float32"].run(None, {"A": _probe, "B": _probe})
-    assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
-    # The usage log is diagnostic instrumentation and takes a mutex on every
-    # invocation. Disable it after checking dispatch so it does not enter timings.
+    accelerated_ops = set(registered_kernel_names())
+    used_kernels = sessions["float32"].used_kernels()
+    used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
+    assert "Gemm" in used_ops & accelerated_ops, used_kernels
+    print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+    # onnx-light-cpu kernels record their name on every run (a mutex per call);
+    # only the accelerated curves would pay that cost, so disable recording to keep
+    # the timings below fair.
     set_kernel_usage_recording(False)
 
 
@@ -300,13 +308,14 @@ and run here, once per included shape, before ``register_kernels()`` runs.
 
  .. code-block:: none
 
-    onnx-light (built-in) | shape=single-tile              |      45.41 us
-    onnx-light (built-in) | shape=K-chunked                |     179.25 us
+    onnx-light (built-in) | shape=single-tile              |      24.17 us
+    onnx-light (built-in) | shape=K-chunked                |     169.79 us
+    onnx-light-cpu kernels dispatched by the accelerated session: ['ai.onnx:Gemm']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 214-221
+.. GENERATED FROM PYTHON SOURCE LINES 222-229
 
 Run the benchmark
 -----------------
@@ -316,7 +325,7 @@ target dtype and fed through the matching session. Results are checked
 against ``float32`` numpy matmul (with a wider tolerance for the lower
 precision dtypes) so every combination agrees on the answer.
 
-.. GENERATED FROM PYTHON SOURCE LINES 221-263
+.. GENERATED FROM PYTHON SOURCE LINES 229-271
 
 .. code-block:: Python
 
@@ -372,29 +381,29 @@ precision dtypes) so every combination agrees on the answer.
 
 
     shape=single-tile              M=64 N=64 K=64 repeat=50
-      float32   | onnx-light-cpu=     57.55 us | onnxruntime=     20.29 us
-      float16   | onnx-light-cpu=    117.35 us | onnxruntime=     24.60 us
-      bfloat16  | onnx-light-cpu=    106.73 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=     28.97 us | onnxruntime=     14.82 us
+      float16   | onnx-light-cpu=     80.07 us | onnxruntime=     22.74 us
+      bfloat16  | onnx-light-cpu=     74.61 us | onnxruntime=not supported
 
     shape=K-chunked                M=32 N=32 K=2048 repeat=50
-      float32   | onnx-light-cpu=    220.86 us | onnxruntime=    109.56 us
-      float16   | onnx-light-cpu=    534.69 us | onnxruntime=    101.58 us
-      bfloat16  | onnx-light-cpu=    667.73 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=    193.37 us | onnxruntime=     56.06 us
+      float16   | onnx-light-cpu=    739.65 us | onnxruntime=    131.25 us
+      bfloat16  | onnx-light-cpu=    611.07 us | onnxruntime=not supported
 
     shape=multi-panel              M=512 N=512 K=128 repeat=7
-      float32   | onnx-light-cpu=   1736.70 us | onnxruntime=    390.15 us
-      float16   | onnx-light-cpu=   6618.75 us | onnxruntime=    424.23 us
-      bfloat16  | onnx-light-cpu=   3363.46 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=   3997.29 us | onnxruntime=    991.25 us
+      float16   | onnx-light-cpu=   5351.40 us | onnxruntime=    456.50 us
+      bfloat16  | onnx-light-cpu=   3751.11 us | onnxruntime=not supported
 
     shape=skinny-M/wide-N          M=4 N=4096 K=128 repeat=50
-      float32   | onnx-light-cpu=    290.52 us | onnxruntime=    191.02 us
-      float16   | onnx-light-cpu=   1699.78 us | onnxruntime=    180.73 us
-      bfloat16  | onnx-light-cpu=   1505.76 us | onnxruntime=not supported
+      float32   | onnx-light-cpu=    271.20 us | onnxruntime=    113.94 us
+      float16   | onnx-light-cpu=   1617.50 us | onnxruntime=    120.69 us
+      bfloat16  | onnx-light-cpu=   1963.07 us | onnxruntime=not supported
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 264-271
+.. GENERATED FROM PYTHON SOURCE LINES 272-279
 
 Plot the timings
 ----------------
@@ -404,7 +413,7 @@ solid bars are onnx-light-cpu and hatched bars are onnxruntime. The right
 panel shows the float16/bfloat16 overhead relative to float32 for the same
 backend and shape (values above 1 mean slower than float32).
 
-.. GENERATED FROM PYTHON SOURCE LINES 271-353
+.. GENERATED FROM PYTHON SOURCE LINES 279-361
 
 .. code-block:: Python
 
@@ -458,7 +467,7 @@ backend and shape (values above 1 mean slower than float32).
     )
     ax_time.set_yscale("log")
     ax_time.set_xticks(x)
-    ax_time.set_xticklabels(shape_labels, fontsize=8)
+    ax_time.set_xticklabels(shape_labels, fontsize=8, rotation=45, ha="right")
     ax_time.set_ylabel("time (microseconds)")
     ax_time.set_title(f"Gemm execution time by code path (SIMD: {simd_name})")
     ax_time.legend()
@@ -484,7 +493,7 @@ backend and shape (values above 1 mean slower than float32).
     ax_overhead.axhline(1.0, color="grey", linewidth=0.8, linestyle=":", label="float32 baseline")
     ax_overhead.set_ylabel("time relative to float32")
     ax_overhead.set_title("float16 / bfloat16 widen/round-trip overhead")
-    ax_overhead.tick_params(axis="x", labelrotation=0, labelsize=8)
+    ax_overhead.tick_params(axis="x", labelrotation=45, labelsize=8)
     ax_overhead.legend()
 
     fig.tight_layout()
@@ -505,7 +514,7 @@ backend and shape (values above 1 mean slower than float32).
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.271 seconds)
+   **Total running time of the script:** (0 minutes 1.139 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_gemm_dtype_benchmark.py:

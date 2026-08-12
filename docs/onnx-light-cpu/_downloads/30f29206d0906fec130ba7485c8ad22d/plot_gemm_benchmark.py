@@ -55,9 +55,8 @@ from onnx_light.onnx import TensorProto, checker, helper
 from onnx_light.onnx.reference import ReferenceEvaluator
 
 from onnx_light_cpu import (
-    clear_used_kernel_names,
     register_kernels,
-    used_kernel_names,
+    registered_kernel_names,
 )
 from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level, has_cpu_kernels
 from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
@@ -165,15 +164,25 @@ def run_light(a, b):
     return light_session.run(None, {"A": a, "B": b})[0]
 
 
-# Confirm the model dispatches to the onnx-light-cpu ``Gemm`` kernel (identified
-# by the library-qualified name it records when it runs) rather than
-# onnx-light's built-in kernel.
-_probe = np.zeros((2, 2), dtype=np.float32)
-clear_used_kernel_names()
+# Confirm this session dispatches ``Gemm`` to onnx-light-cpu's accelerated
+# kernel rather than onnx-light's built-in one. ``register_kernels()`` installed
+# onnx-light-cpu's kernels (``registered_kernel_names()`` lists the ops it
+# overrides) into onnx-light's process-wide dispatch table, and onnx-light's
+# ``ReferenceEvaluator.used_kernels()`` reports the kernels this session actually
+# resolved once it has run. Because the baseline session above was built and run
+# *before* ``register_kernels()``, its ``Gemm`` resolved to the built-in kernel,
+# so the two curves genuinely use different kernels. Probe with a real benchmark
+# size so the check exercises the same path that is timed below.
+_probe = rng.standard_normal((size_grid[0], size_grid[0])).astype(np.float32)
 run_light(_probe, _probe)
-assert used_kernel_names() == ["onnx_light_cpu::Gemm"], used_kernel_names()
-# The usage log is diagnostic instrumentation and takes a mutex on every
-# invocation. Disable it after checking dispatch so it does not enter timings.
+accelerated_ops = set(registered_kernel_names())
+used_kernels = light_session.used_kernels()
+used_ops = {key.rsplit(":", 1)[-1] for key in used_kernels}
+assert "Gemm" in used_ops & accelerated_ops, used_kernels
+print(f"onnx-light-cpu kernels dispatched by the accelerated session: {used_kernels}")
+# onnx-light-cpu kernels record their name on every run (a mutex per call);
+# only the accelerated curve would pay that cost, so disable recording to keep
+# the timings below fair.
 set_kernel_usage_recording(False)
 
 
@@ -232,7 +241,9 @@ alone_grid_times = np.array([alone_times[size] for size in alone_sizes])
 # log-log scale. The right panel shows the speed-up relative to
 # **onnxruntime** (the baseline): for each back-end the onnxruntime time is
 # divided by the back-end time, so values above ``1`` are faster than
-# onnxruntime and values below ``1`` are slower. The built-in onnx-light curve
+# onnxruntime and values below ``1`` are slower. The speed-up is drawn on a
+# logarithmic y-axis so that a given ratio and its reciprocal are equidistant
+# from the ``1`` baseline. The built-in onnx-light curve
 # only has points for the sizes it was measured on (see "Why the built-in
 # curve stops early" above).
 
@@ -265,7 +276,18 @@ ax_speedup.plot(
     color="#5cb85c",
 )
 if light_session is not None:
-    ax_speedup.plot(sizes, ort_times / cpu_times, "o-", label=light_label, color="#4a9eff")
+    cpu_speedup = ort_times / cpu_times
+    ax_speedup.plot(sizes, cpu_speedup, "o-", label=light_label, color="#4a9eff")
+    for size, speedup in zip(sizes, cpu_speedup, strict=True):
+        ax_speedup.annotate(
+            f"{speedup:.2f}x",
+            (size, speedup),
+            xytext=(0, 7),
+            textcoords="offset points",
+            ha="center",
+            fontsize=8,
+            color="#4a9eff",
+        )
 ax_speedup.plot(sizes, ort_times / ort_times, "o-", label="onnxruntime", color="#f4a259")
 ax_speedup.axhline(1.0, color="grey", linewidth=0.8, linestyle=":")
 ax_speedup.set_xscale("log")
