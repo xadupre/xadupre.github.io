@@ -1139,7 +1139,7 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                     sys.modules[name] = mod
 
         self.assertIn("built-in kernels", str(ctx.exception))
-        self.assertIn("overridable operator", str(ctx.exception))
+        self.assertIn("Exp", str(ctx.exception))
 
 
 class _FakeTypeProto:

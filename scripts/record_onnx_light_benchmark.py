@@ -749,23 +749,31 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
                 )
         # Session-scoped cross-check (onnx-light#4391): every operator the
         # session executed that onnx-light-cpu overrides must have been served
-        # by an onnx-light-cpu kernel. A mismatch means an overridable operator
-        # ran with a built-in kernel, i.e. onnx-light-cpu was not really used.
+        # by an onnx-light-cpu kernel. Registration replaces the kernel per
+        # ``(domain, op_type)`` on the session's dispatch table, so an overridable
+        # operator is served by onnx-light-cpu for every node or not at all; an
+        # overridable operator the session ran that is missing from the served
+        # set means it fell back to a built-in kernel, i.e. onnx-light-cpu was
+        # not really used.
         session = session_box.get("session")
         session_used_kernels = getattr(session, "used_kernels", None)
         if callable(session_used_kernels) and overridden_op_types:
-            overridable_ran = [
-                identifier
+            session_overridable = {
+                identifier.rsplit(":", 1)[-1]
                 for identifier in session_used_kernels()
                 if identifier.rsplit(":", 1)[-1] in overridden_op_types
-            ]
-            if len(overridable_ran) != len(used):
+            }
+            # Invert ``registered`` (op_type -> kernel name) to map the recorded
+            # onnx-light-cpu kernel names back to the op_types they served.
+            served = {
+                op_type for op_type, kernel in registered.items() if kernel in used
+            }
+            missing = sorted(session_overridable - served)
+            if missing:
                 raise RuntimeError(
                     "some operators overridden by onnx-light-cpu ran with the "
-                    "built-in kernels instead: the session executed "
-                    f"{len(overridable_ran)} overridable operator(s) "
-                    f"{sorted(set(overridable_ran))} but only {len(used)} "
-                    "onnx-light-cpu kernel(s) ran"
+                    "built-in kernels instead of the onnx-light-cpu kernels: "
+                    f"{missing}"
                 )
         checked["done"] = True
         return outputs
