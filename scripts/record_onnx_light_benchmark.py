@@ -421,12 +421,6 @@ def _load_test_data_sets(
     return data_sets
 
 
-def _model_input_names(model) -> List[str]:
-    """Return the names of the graph inputs that are not initializers."""
-    initializer_names = {init.name for init in model.graph.initializer}
-    return [i.name for i in model.graph.input if i.name not in initializer_names]
-
-
 def _type_proto_kind(type_proto: Any) -> str:
     """Return ``"sequence"``, ``"map"`` or ``"tensor"`` for a graph value type.
 
@@ -646,46 +640,17 @@ def _make_onnx_light_runtime_session_runner(
     return _run
 
 
-def _make_onnx_light_reference_runner(
-    model, register: Optional[Callable[[Any], Any]] = None
-) -> Callable[[List[Any]], List[Any]]:
-    from onnx_light.onnx.reference import ReferenceEvaluator
-
-    evaluator = ReferenceEvaluator(model.SerializeToString())
-    if register is not None:
-        register(evaluator)
-    input_names = _model_input_names(model)
-
-    def _run(inputs: List[Any]) -> List[Any]:
-        import numpy as np
-
-        feeds: Dict[str, Any] = {}
-        for name, value in zip(input_names, inputs):
-            if isinstance(value, dict):
-                map_keys_name = f"{name}_keys"
-                map_values_name = f"{name}_values"
-                items = list(value.items())
-                feeds[map_keys_name] = np.asarray([k for k, _ in items])
-                feeds[map_values_name] = np.asarray([v for _, v in items])
-                continue
-            feeds[name] = value
-        return list(evaluator.run(None, feeds))
-
-    return _run
-
-
 def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner for ``model``.
 
-    Prefers the reusable ``RuntimeSession`` execution path (init kernels once,
-    run repeatedly). Falls back to the ``ReferenceEvaluator`` wrapper when the
-    low-level runtime bindings are unavailable (older onnx-light builds) or the
-    model cannot be prepared through them.
+    Runs ``model`` through onnx-light's reusable ``RuntimeSession`` execution
+    path (init kernels once, run repeatedly), the same execution path used by
+    the ``onnx_light_cpu`` backend. Any failure — whether while building the
+    session or while a kernel runs — is surfaced so the benchmark records a
+    clear error, exactly like the ``onnxruntime`` and ``onnx_light_cpu``
+    backends; there is no fallback to another runner.
     """
-    try:
-        return _make_onnx_light_runtime_session_runner(model)
-    except (ImportError, AttributeError, TypeError, ValueError):
-        return _make_onnx_light_reference_runner(model)
+    return _make_onnx_light_runtime_session_runner(model)
 
 
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
