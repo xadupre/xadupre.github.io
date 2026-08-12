@@ -654,8 +654,9 @@ cmake<span class="w"> </span>--install<span class="w"> </span>build-install
 </div>
 <p>The exported CMake package then provides only the kernel-free targets —
 <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_lib</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_manipulations</span></code>,
-<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_shape</span></code> and
-<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>.  <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_kernels</span></code> and
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_shape</span></code>,
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_patterns</span></code> and <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>.
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_kernels</span></code> and
 <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_backend_test</span></code> are not built and not part of the package.</p>
 <p><code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_KERNELS=OFF</span></code> is incompatible with
 <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_PYTHON=ON</span></code> and <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_BUILD_TESTS=ON</span></code>: the Python
@@ -675,7 +676,8 @@ cmake<span class="w"> </span>--install<span class="w"> </span>build-install
 <p>When downstream code only needs the schema / checker / shape-inference /
 version-converter / proto layer (<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_lib</span></code>,
 <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_manipulations</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_op</span></code>,
-<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_shape</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>), pass
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_shape</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_patterns</span></code>,
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_proto</span></code>), pass
 <code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_BUILD_KERNELS=OFF</span></code> at configure time to skip building and
 installing the much larger <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> (operator-kernel runtime)
 and <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> (backend-test case registry) libraries.
@@ -711,14 +713,29 @@ link the manipulations target, which only depends on <code class="docutils liter
 <span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::lib_onnx_manipulations</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>When shape inference dispatch and graph optimization passes are also needed
-(without pulling in the full <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_lib</span></code> checker/inliner/version
-converter), link the optim target instead, which transitively pulls in
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code> and <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>:</p>
+<p>When the standalone shape-inference dispatch is needed without the full
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_lib</span></code> checker/inliner/version converter, link:</p>
 <div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">find_package</span><span class="p">(</span><span class="s">onnx_light</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
 <span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::lib_onnx_shape</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>The generic graph optimizer and custom-pattern registry are part of
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_core</span></code>. To use the standard ONNX rewrite patterns, link
+the extension library and register its patterns explicitly:</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">find_package</span><span class="p">(</span><span class="s">onnx_light</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
+<span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_target</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light::lib_onnx_patterns</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_core/builder/pattern_registry.h&quot;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&quot;onnx_extensions/patterns/dispatch_table.h&quot;</span>
+
+<span class="n">onnx_patterns</span><span class="o">::</span><span class="n">RegisterPatterns</span><span class="p">();</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">patterns</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">builder</span><span class="o">::</span><span class="n">CreateRegisteredPatterns</span><span class="p">();</span>
+</pre></div>
+</div>
+<p>Applications that provide only custom patterns can instead link
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_core</span></code> and call
+<code class="docutils literal notranslate"><span class="pre">core::builder::RegisterPattern</span></code> directly.</p>
 <p>To evaluate ONNX nodes / graphs / models in-process using the bundled C++
 <strong>reference implementation</strong> of the ONNX operators (runtime
 <code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">RunGraph</span></code> / <code class="docutils literal notranslate"><span class="pre">RunFunction</span></code> / <code class="docutils literal notranslate"><span class="pre">RunModel</span></code>, the
@@ -771,8 +788,8 @@ configure the downstream project with <code class="docutils literal notranslate"
 </div>
 <p>Use the in-tree <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> target instead when only proto
 parsing/serialization is needed, or <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>,
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> or
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_gradient</span></code> for the
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code>,
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code> or <code class="docutils literal notranslate"><span class="pre">lib_onnx_gradient</span></code> for the
 corresponding feature subset.  This uses the
 in-tree build targets directly instead of <code class="docutils literal notranslate"><span class="pre">find_package</span></code>.</p>
 </section>

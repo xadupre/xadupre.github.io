@@ -64,8 +64,8 @@
     <link rel="icon" href="../_static/logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Proto schema inheritance" href="2026-08_proto_inheritance.html" />
-    <link rel="prev" title="Structured views over byte buffers" href="2026-08_custom_types.html" />
+    <link rel="next" title="Miscellaneous" href="../misc/index.html" />
+    <link rel="prev" title="Integrating onnx-light into onnxruntime (PR #29723)" href="2026-07_onnxruntime_onnx_light.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -418,16 +418,28 @@
 <nav class="bd-docs-nav bd-links"
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
-  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+  <div class="bd-toc-item navbar-nav"><p aria-level="2" class="caption" role="heading"><span class="caption-text">In progress</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="2026-08_processor_aware_kernel_thresholds.html">Processor-aware kernel thresholds</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_optimization.html">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Discussion</span></p>
+<ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured views over byte buffers</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Reducing the <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> binary size</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_optimization.html">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_prepared_execution.html">Parallel model initialization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_buffer_reuse_arena.html">Buffer-reuse arena allocator</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_split_wheels.html">Splitting <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into composable wheels</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Completed</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="2025-07_onnx_proto.html">Building <code class="docutils literal notranslate"><span class="pre">onnx_proto</span></code>, the protobuf-free ONNX schema</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-07_onnxruntime_onnx_light.html">Integrating <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into onnxruntime (PR #29723)</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Reducing the <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> binary size</a></li>
 </ul>
 </div>
 </nav></div>
@@ -510,6 +522,101 @@ every convenience wrapper generated for every message class.</p>
 <p>Size reduction must preserve the ONNX wire format, parser and serializer
 behavior, external-data support required by ordinary models, and the ability
 to exchange proto objects across onnx-light shared libraries.</p>
+</section>
+<section id="post-mortem">
+<h2>Post-mortem<a class="headerlink" href="#post-mortem" title="Link to this heading">#</a></h2>
+<p>The work was delivered as a sequence of small pull requests.  Each one made
+the next step easier to measure or safer to deploy:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 15.0%" />
+<col style="width: 27.0%" />
+<col style="width: 34.0%" />
+<col style="width: 24.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Pull request</p></th>
+<th class="head"><p>Change</p></th>
+<th class="head"><p>Result</p></th>
+<th class="head"><p>Role in the sequence</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4204">PR #4204</a></p></td>
+<td><p>Enabled function and data sections plus linker garbage collection on
+GNU/Clang, Apple, and MSVC builds.</p></td>
+<td><p>Allowed unused code to be discarded, but no isolated size measurement
+was recorded.</p></td>
+<td><p>Established the linker foundation used by the later reductions.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4333">PR #4333</a></p></td>
+<td><p>Added a cross-platform size reporter to CI and stripped Release wheel
+artifacts explicitly.</p></td>
+<td><p>Reduced the installed Linux library from 2,178,120 to 1,810,208 bytes,
+a saving of 367,912 bytes (16.9%).</p></td>
+<td><p>Turned binary size into an observable release metric before changing
+the ABI surface.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4344">PR #4344</a></p></td>
+<td><p>Hid symbols by default on ELF and Mach-O and introduced
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_PROTO_API</span></code> for the required public and cross-library ABI.</p></td>
+<td><p>Reduced the stripped library from 1,810,208 to 1,625,024 bytes and
+defined dynamic symbols from 2,128 to 1,191.</p></td>
+<td><p>Let <code class="docutils literal notranslate"><span class="pre">--gc-sections</span></code> discard implementation details that had previously
+been retained only because they were exported.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4349">PR #4349</a></p></td>
+<td><p>Replaced per-message out-of-line convenience wrappers with the
+<code class="docutils literal notranslate"><span class="pre">ProtoMessageAdapter&lt;T&gt;</span></code> CRTP adapter and shared the <code class="docutils literal notranslate"><span class="pre">CopyFrom</span></code> wire
+pipeline through a type-erased implementation.</p></td>
+<td><p>Reduced the stripped library from 1,625,024 to 1,001,208 bytes and
+defined dynamic symbols from 1,191 to 652.</p></td>
+<td><p>Removed the structural source of duplication rather than relying on
+compiler flags to fold it.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4355">PR #4355</a></p></td>
+<td><p>Added a tested 1.2 MiB installed-size budget to Linux CI.</p></td>
+<td><p>Produced no immediate size reduction.</p></td>
+<td><p>Converted the achieved size into a regression guard.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The comparable stripped baseline therefore decreased from 1,810,208 to
+1,001,208 bytes: 809,000 bytes, or 44.7%.  Including Release stripping, the
+installed artifact decreased by 1,176,912 bytes (54.0%).  The defined dynamic
+symbol count fell by 69.4%, from 2,128 to 652.  The largest individual gain
+came from removing duplicated generated wrappers, not from a more aggressive
+optimization level.</p>
+<section id="what-worked">
+<h3>What worked<a class="headerlink" href="#what-worked" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Measuring the packaged library, ELF sections, exported symbols, and shared
+dependencies prevented file-size changes from being mistaken for code-size
+changes.  Stripping reduced the installed artifact but did not reduce mapped
+executable code.</p></li>
+<li><p>Reducing symbol visibility before consolidating wrappers separated two
+overlapping effects: dead-code elimination at link time and elimination of
+duplicated source-level implementations.</p></li>
+<li><p>Keeping the type-specific wire-format core unchanged limited the refactoring
+risk.  Compatibility entry points moved to an inline CRTP adapter, while
+parsing, serialization, size computation, and printing remained explicit
+per-message operations.</p></li>
+<li><p>The sequence <code class="docutils literal notranslate"><span class="pre">measure</span> <span class="pre">-&gt;</span> <span class="pre">constrain</span> <span class="pre">exports</span> <span class="pre">-&gt;</span> <span class="pre">remove</span> <span class="pre">duplication</span> <span class="pre">-&gt;</span> <span class="pre">enforce</span>
+<span class="pre">budget</span></code> kept every pull request reviewable and left a measurement after each
+architectural change.</p></li>
+</ul>
+</section>
+<section id="what-remains">
+<h3>What remains<a class="headerlink" href="#what-remains" title="Link to this heading">#</a></h3>
+<p>The 1.00 MiB stretch target was reached without <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, or
+identical-code-folding experiments beyond the existing linker configuration.
+Those options were not pursued because their expected gain was smaller and
+more toolchain-dependent.  Splitting verification, crypto, hashing, external
+data tools, and text printing into optional libraries may still save
+100–300 KiB for parser-only consumers, but it changes target composition and
+dependency ownership and should be treated as a separate project.</p>
+</section>
 </section>
 <section id="measured-baseline">
 <h2>Measured baseline<a class="headerlink" href="#measured-baseline" title="Link to this heading">#</a></h2>
@@ -824,11 +931,12 @@ x86-64 Release build. See
 <a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4355">PR #4355</a>.</p></li>
 </ol>
 </section>
-<section id="expected-gain-by-step">
-<h2>Expected gain by step<a class="headerlink" href="#expected-gain-by-step" title="Link to this heading">#</a></h2>
-<p>The following estimates use the 2.08 MiB unstripped Linux baseline. They are
-not additive: visibility, wrapper consolidation, garbage collection, and LTO
-may eliminate some of the same code.</p>
+<section id="outcome-by-step">
+<h2>Outcome by step<a class="headerlink" href="#outcome-by-step" title="Link to this heading">#</a></h2>
+<p>The following measured results and optional projection use the 2.08 MiB
+unstripped Linux baseline. They are presented in implementation order;
+visibility, wrapper consolidation, and garbage collection may eliminate some
+of the same code.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 8.0%" />
@@ -841,8 +949,8 @@ may eliminate some of the same code.</p>
 <tr class="row-odd"><th class="head"><p>Step</p></th>
 <th class="head"><p>Change</p></th>
 <th class="head"><p>Direct gain</p></th>
-<th class="head"><p>Expected resulting size</p></th>
-<th class="head"><p>Confidence</p></th>
+<th class="head"><p>Resulting size</p></th>
+<th class="head"><p>Status</p></th>
 </tr>
 </thead>
 <tbody>
@@ -850,31 +958,31 @@ may eliminate some of the same code.</p>
 <td><p>Strip Release artifacts</p></td>
 <td><p>359 KiB measured</p></td>
 <td><p>1.73 MiB</p></td>
-<td><p>High</p></td>
+<td><p>Measured</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>Hide internal symbols and reduce exports</p></td>
 <td><p>181 KiB measured</p></td>
 <td><p>1.55 MiB</p></td>
-<td><p>High</p></td>
+<td><p>Measured</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>Share or inline per-message convenience wrappers</p></td>
 <td><p>609 KiB measured</p></td>
 <td><p>0.95 MiB</p></td>
-<td><p>High</p></td>
+<td><p>Measured</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>Optional: <code class="docutils literal notranslate"><span class="pre">MinSizeRel</span></code>, LTO, and identical-code folding</p></td>
 <td><p>50–150 KiB</p></td>
 <td><p>0.85–1.15 MiB</p></td>
-<td><p>Low until benchmarked</p></td>
+<td><p>Not pursued</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
 <td><p>Enforce the CI budget</p></td>
 <td><p>No immediate reduction</p></td>
 <td><p>Prevents regressions</p></td>
-<td><p>High</p></td>
+<td><p>Implemented</p></td>
 </tr>
 </tbody>
 </table>
@@ -901,20 +1009,20 @@ the matching Linux x86-64 Release build.</p>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="2026-08_custom_types.html"
+       href="2026-07_onnxruntime_onnx_light.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Structured views over byte buffers</p>
+        <p class="prev-next-title">Integrating <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into onnxruntime (PR #29723)</p>
       </div>
     </a>
     <a class="right-next"
-       href="2026-08_proto_inheritance.html"
+       href="../misc/index.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Proto schema inheritance</p>
+        <p class="prev-next-title">Miscellaneous</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -938,6 +1046,11 @@ the matching Linux x86-64 Release build.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#post-mortem">Post-mortem</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-worked">What worked</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-remains">What remains</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measured-baseline">Measured baseline</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-the-library-is-large">Why the library is large</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#generated-message-api">Generated message API</a></li>
@@ -953,7 +1066,7 @@ the matching Linux x86-64 Release build.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measurement-plan">Measurement plan</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#proposed-budgets">Proposed budgets</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementation-order">Implementation order</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#expected-gain-by-step">Expected gain by step</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#outcome-by-step">Outcome by step</a></li>
 </ul>
   </nav></div>
 

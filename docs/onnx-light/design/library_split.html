@@ -539,6 +539,7 @@ base dependency):</p>
     └── lib_onnx_core
             ├── lib_onnx_op
             ├── lib_onnx_shape
+            ├── lib_onnx_patterns
             ├── lib_onnx_kernels
             │       └── lib_onnx_backend_test
             ├── lib_onnx_gradient
@@ -559,8 +560,9 @@ them depending on each other.  The <code class="docutils literal notranslate"><s
 <code class="docutils literal notranslate"><span class="pre">ToTypeString</span></code> converter live one level lower, in <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>
 (<code class="docutils literal notranslate"><span class="pre">onnx_proto/type_helper.h</span></code>), so that <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> itself can use
 them.
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> are siblings that each depend on <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code>
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code>,
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code>, and <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> are siblings that each depend
+on <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code>
 (and transitively on <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>).  <code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code> depends on
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> only (it does <strong>not</strong> pull in <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code> or
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_lib</span></code>).  <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> depends on <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code>
@@ -623,14 +625,21 @@ the concrete ONNX operator implementations live in sibling libraries
 <code class="docutils literal notranslate"><span class="pre">BuiltinKernelFunctions()</span></code> and registers them through
 <code class="docutils literal notranslate"><span class="pre">RegisterKernelFunctions()</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Backend tests</p></td>
+<tr class="row-odd"><td><p>Graph optimization patterns</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/builder/pattern_registry.h</span></code> defines
+<code class="docutils literal notranslate"><span class="pre">PatternFactory</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterPattern</span></code> /
+<code class="docutils literal notranslate"><span class="pre">CreateRegisteredPatterns</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/patterns/dispatch_table.cc</span></code> registers the concrete
+patterns through <code class="docutils literal notranslate"><span class="pre">RegisterPatterns()</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Backend tests</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/backend_test/test_case_registry.h/.cc</span></code> defines
 <code class="docutils literal notranslate"><span class="pre">TestCasesCollectorFn</span></code> + <code class="docutils literal notranslate"><span class="pre">RegisterTestCasesCollector</span></code> /
 <code class="docutils literal notranslate"><span class="pre">GetRegisteredCollectors</span></code>.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/backend_test/collect_test_cases.cc</span></code> registers
 every category collector and implements <code class="docutils literal notranslate"><span class="pre">CollectTestCases</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p>Light operator schema</p></td>
+<tr class="row-odd"><td><p>Light operator schema</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">onnx_core/light_op_schema/light_op_schema.h</span></code> defines
 <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code> and related schema data structures.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">onnx_op/operator_sets*.cc</span></code> implements per-domain schema history,
@@ -640,7 +649,7 @@ and <code class="docutils literal notranslate"><span class="pre">onnx_op/operato
 </tbody>
 </table>
 </div>
-<p>For the first three rows above, explicit registration keeps <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>
+<p>For the first four rows above, explicit registration keeps <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>
 independent from the extension libraries:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// shape inference + peak memory</span>
 <span class="n">onnx_shapes</span><span class="o">::</span><span class="n">RegisterShapeFunctions</span><span class="p">();</span>
@@ -648,11 +657,15 @@ independent from the extension libraries:</p>
 
 <span class="c1">// runtime kernels</span>
 <span class="n">onnx_kernels</span><span class="o">::</span><span class="n">RegisterKernelFunctions</span><span class="p">();</span>
+
+<span class="c1">// graph optimization patterns</span>
+<span class="n">onnx_patterns</span><span class="o">::</span><span class="n">RegisterPatterns</span><span class="p">();</span>
 </pre></div>
 </div>
 <p>This means a downstream binary can keep linking minimal. If it never calls
-shape inference, peak-memory estimation, runtime execution, or backend-test
-collection, it does not need to link the corresponding extension library.</p>
+shape inference, peak-memory estimation, runtime execution, graph-pattern
+registration, or backend-test collection, it does not need to link the
+corresponding extension library.</p>
 <p>When installed (<code class="docutils literal notranslate"><span class="pre">cmake</span> <span class="pre">--install</span></code>) all libraries are exported under the
 <code class="docutils literal notranslate"><span class="pre">onnx_light::</span></code> namespace and can be consumed individually through
 <code class="docutils literal notranslate"><span class="pre">find_package(onnx_light)</span></code>.</p>
@@ -691,13 +704,16 @@ library, the <code class="docutils literal notranslate"><span class="pre">LightO
 runtime execution engine, and the (initially empty) kernel and
 shape-inference <strong>dispatch tables</strong> so that <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>,
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>, <code class="docutils literal notranslate"><span class="pre">lib_onnx_shape</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> can share them without depending on each other.
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code> and <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> can share them without
+depending on each other.
 It implements <em>all</em> the generic mechanisms but registers <strong>no</strong>
-concrete operators. The actual schemas, kernels, shape-inference and
-peak-memory functions are <strong>registered</strong> into those shared dispatch
-tables by the extension libraries through their
+concrete operators or optimization patterns. The actual schemas,
+kernels, shape-inference functions, peak-memory functions, and graph
+patterns are <strong>registered</strong> into those shared registries by the
+extension libraries through their
 <code class="docutils literal notranslate"><span class="pre">Register*Functions()</span></code> entry points (<code class="docutils literal notranslate"><span class="pre">RegisterKernelFunctions</span></code>,
-<code class="docutils literal notranslate"><span class="pre">RegisterShapeFunctions</span></code>, <code class="docutils literal notranslate"><span class="pre">RegisterPeakMemoryFunctions</span></code>, …).
+<code class="docutils literal notranslate"><span class="pre">RegisterShapeFunctions</span></code>, <code class="docutils literal notranslate"><span class="pre">RegisterPeakMemoryFunctions</span></code>,
+<code class="docutils literal notranslate"><span class="pre">RegisterPatterns</span></code>, …).
 Depends publicly on <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> (which owns the
 <code class="docutils literal notranslate"><span class="pre">TensorType</span></code> enumeration and <code class="docutils literal notranslate"><span class="pre">ToTypeString</span></code> converter).</p></td>
 </tr>
@@ -745,7 +761,16 @@ optimization helpers.  Depends publicly on <code class="docutils literal notrans
 (and transitively on <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>).  Does <strong>not</strong> depend
 on <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_kernels</span></code> (in-tree target <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code>):
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_patterns</span></code> (in-tree target
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code>):
+<code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/patterns/</span></code></p></td>
+<td><p>Concrete ONNX graph-rewriting patterns and the explicit
+<code class="docutils literal notranslate"><span class="pre">onnx_patterns::RegisterPatterns</span></code> entry point. The generic
+<code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code> interface, registry, and optimizer context
+remain in <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code>. Depends publicly on <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> and
+is not linked back into it.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_kernels</span></code> (in-tree target <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code>):
 <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/kernels/</span></code></p></td>
 <td><p>C++ <strong>reference implementation</strong> of the ONNX operators used to
 evaluate models in-process.  Contains the runtime data model
@@ -761,7 +786,7 @@ without depending on any third-party runtime.  Intentionally
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>; depends publicly on <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code>
 (and transitively on <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_backend_test</span></code> (in-tree target
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_backend_test</span></code> (in-tree target
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_backend_test</span></code>):
 <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/backend_test/</span></code></p></td>
 <td><p>Backend test infrastructure (<code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">TestCase</span></code>, the
@@ -773,7 +798,7 @@ Depends publicly on <code class="docutils literal notranslate"><span class="pre"
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> / <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>); intentionally <strong>independent</strong>
 from <code class="docutils literal notranslate"><span class="pre">lib_onnx_lib</span></code> / <code class="docutils literal notranslate"><span class="pre">lib_onnx_op</span></code> / <code class="docutils literal notranslate"><span class="pre">lib_onnx_manipulations</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_gradient</span></code> (in-tree target
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_gradient</span></code> (in-tree target
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_gradient</span></code>):
 <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/gradient/</span></code></p></td>
 <td><p>Reverse-mode automatic differentiation for ONNX graphs.  Provides
@@ -805,9 +830,14 @@ utilities, graph-input collection) without pulling in the operator
 schemas — link <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_manipulations</span></code>.</p></li>
 <li><p><strong>Full ONNX feature set</strong> (schemas with history, checker, inliner,
 shape inference, version conversion) — link <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_lib</span></code>.</p></li>
-<li><p><strong>Shape inference and graph optimization passes</strong> — link
+<li><p><strong>Shape inference</strong> — link
 <code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_shape</span></code> (which transitively pulls
 <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> and <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>).</p></li>
+<li><p><strong>Use the standard graph-rewriting patterns</strong> — link
+<code class="docutils literal notranslate"><span class="pre">onnx_light::lib_onnx_patterns</span></code> and call
+<code class="docutils literal notranslate"><span class="pre">onnx_patterns::RegisterPatterns()</span></code> before creating the registered
+pattern instances. Custom-only optimizers can link <code class="docutils literal notranslate"><span class="pre">lib_onnx_core</span></code> and
+call <code class="docutils literal notranslate"><span class="pre">core::builder::RegisterPattern</span></code> directly.</p></li>
 <li><p><strong>Evaluate ONNX nodes / graphs / models in C++</strong> using the bundled
 reference kernels (runtime <code class="docutils literal notranslate"><span class="pre">struct</span> <span class="pre">Tensor</span></code>, <code class="docutils literal notranslate"><span class="pre">RunGraph</span></code> /
 <code class="docutils literal notranslate"><span class="pre">RunFunction</span></code> / <code class="docutils literal notranslate"><span class="pre">RunModel</span></code>, <code class="docutils literal notranslate"><span class="pre">SplitMix64</span></code> RNG, …) without

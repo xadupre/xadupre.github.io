@@ -64,8 +64,8 @@
     <link rel="icon" href="../_static/logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Mutable execution cache" href="2026-08_mutable_cache.html" />
-    <link rel="prev" title="Quantized values in GraphBuilder" href="2026-08_graph_builder_quantized_tensor.html" />
+    <link rel="next" title="Structured views over byte buffers" href="2026-08_custom_types.html" />
+    <link rel="prev" title="Processor-aware kernel thresholds" href="2026-08_processor_aware_kernel_thresholds.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
@@ -418,16 +418,28 @@
 <nav class="bd-docs-nav bd-links"
      aria-label="Section Navigation">
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
-  <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
+  <div class="bd-toc-item navbar-nav"><p aria-level="2" class="caption" role="heading"><span class="caption-text">In progress</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="2026-08_processor_aware_kernel_thresholds.html">Processor-aware kernel thresholds</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Discussion</span></p>
+<ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured views over byte buffers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_proto_binary_size.html">Reducing the <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> binary size</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Pattern-based optimization in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_prepared_execution.html">Parallel model initialization</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_buffer_reuse_arena.html">Buffer-reuse arena allocator</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_split_wheels.html">Splitting <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into composable wheels</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Completed</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="2025-07_onnx_proto.html">Building <code class="docutils literal notranslate"><span class="pre">onnx_proto</span></code>, the protobuf-free ONNX schema</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-07_onnxruntime_onnx_light.html">Integrating <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into onnxruntime (PR #29723)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_proto_binary_size.html">Reducing the <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> binary size</a></li>
 </ul>
 </div>
 </nav></div>
@@ -501,15 +513,56 @@
 <code class="docutils literal notranslate"><span class="pre">core::builder::GraphBuilder</span></code>. The missing piece is a rewriting
 engine that recognizes local subgraphs and replaces them with cheaper
 equivalents, in the spirit of the Python
-<a class="reference external" href="https://github.com/xadupre/yet-another-onnx-builder/blob/main/yobx/xoptim/graph_builder_optim.py">GraphBuilderPatternOptimization</a>.</p>
-<p>The goal is a C++ <code class="docutils literal notranslate"><span class="pre">GraphBuilderPatternOptimization</span></code> that runs entirely on an
-existing <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>. It reuses the builder’s shape and type inference,
-its constant knowledge, and its existing cleanup passes
+<a class="reference external" href="https://github.com/xadupre/yet-another-onnx-builder/blob/main/yobx/xoptim/graph_builder_optim.py">pattern optimizer</a>.</p>
+<p>The C++ optimizer is implemented directly by <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code> over an existing
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>. It reuses the builder’s shape and type inference, its
+constant knowledge, and its existing cleanup passes
 (<code class="docutils literal notranslate"><span class="pre">RemoveIdentityNodes</span></code>, <code class="docutils literal notranslate"><span class="pre">RemoveUnusedNodes</span></code>,
 <code class="docutils literal notranslate"><span class="pre">RemoveDuplicateNodes</span></code>) instead of duplicating them.</p>
 <p>A pattern must never reuse an existing name: every value it produces is new.
 This invariant keeps the successor and predecessor maps valid between two
 rewrites of the same iteration.</p>
+</section>
+<section id="progress">
+<h2>Progress<a class="headerlink" href="#progress" title="Link to this heading">#</a></h2>
+<p>The initial design and the first two implementation steps were delivered in
+separate pull requests:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 18.0%" />
+<col style="width: 30.0%" />
+<col style="width: 52.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Pull request</p></th>
+<th class="head"><p>Step</p></th>
+<th class="head"><p>Result</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4351">PR #4351</a></p></td>
+<td><p>Initial plan</p></td>
+<td><p>Defined the graph index, pattern API, rewrite loop, cleanup,
+constant-folding, subgraph, and statistics design.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4369">PR #4369</a></p></td>
+<td><p>Graph index and value queries</p></td>
+<td><p>Added <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code> over <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> with structural, shape, type,
+and constant queries.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4389">PR #4389</a></p></td>
+<td><p>Pattern interfaces</p></td>
+<td><p>Added <code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code>, <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code>, the optimizer context,
+and the first <code class="docutils literal notranslate"><span class="pre">Cast(Cast(x))</span></code> pattern.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Current</p></td>
+<td><p>Match/apply loop and cleanup</p></td>
+<td><p>Applies disjoint matches by priority and runs duplicate, identity, and
+unused-node cleanup passes until convergence.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 </section>
 <section id="graph-structure-on-graph">
 <h2>Graph structure on Graph<a class="headerlink" href="#graph-structure-on-graph" title="Link to this heading">#</a></h2>
@@ -522,6 +575,10 @@ rebuilt after each iteration. The Python <code class="docutils literal notransla
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*</span><span class="n">NodeBefore</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <span class="w">  </span><span class="c1">// Nodes consuming ``name`` (in insertion order, deduplicated).</span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">NextNodes</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+
+<span class="w">  </span><span class="c1">// Node-level neighbours in the data-flow graph.</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*&gt;</span><span class="w"> </span><span class="n">Predecessors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*&gt;</span><span class="w"> </span><span class="n">Successors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">node</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">IsOutput</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">bool</span><span class="w"> </span><span class="nf">IsUsed</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="n">name</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
@@ -582,27 +639,79 @@ name because a name is assigned once and never reused.</p>
 
 <span class="k">class</span><span class="w"> </span><span class="nc">PatternOptimization</span><span class="w"> </span><span class="p">{</span>
 <span class="k">public</span><span class="o">:</span>
+<span class="w">  </span><span class="k">explicit</span><span class="w"> </span><span class="n">PatternOptimization</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">)</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">priority</span><span class="p">(</span><span class="n">priority</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
 <span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="o">~</span><span class="n">PatternOptimization</span><span class="p">()</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">default</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Fast pre-filter: operator types this pattern can start from.</span>
 <span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">set</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">FastOpType</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="p">{};</span><span class="w"> </span><span class="p">}</span>
 
-<span class="w">  </span><span class="c1">// Yields every match rooted at a candidate node.</span>
-<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">MatchResult</span><span class="o">&gt;</span>
-<span class="w">  </span><span class="n">Match</span><span class="p">(</span><span class="n">GraphBuilderPatternOptimization</span><span class="w"> </span><span class="o">&amp;</span><span class="n">opt</span><span class="p">,</span>
-<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">candidates</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">  </span><span class="c1">// Returns the match rooted at a candidate node (empty when none).</span>
+<span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="n">MatchResult</span>
+<span class="w">  </span><span class="n">Match</span><span class="p">(</span><span class="n">GraphGraph</span><span class="w"> </span><span class="o">&amp;</span><span class="n">graph</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">candidate</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
 <span class="w">  </span><span class="c1">// Produces the replacement nodes for one match.</span>
 <span class="w">  </span><span class="k">virtual</span><span class="w"> </span><span class="n">utils</span><span class="o">::</span><span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">NodeProto</span><span class="o">&gt;</span>
-<span class="w">  </span><span class="n">Apply</span><span class="p">(</span><span class="n">GraphBuilderPatternOptimization</span><span class="w"> </span><span class="o">&amp;</span><span class="n">opt</span><span class="p">,</span>
+<span class="w">  </span><span class="n">Apply</span><span class="p">(</span><span class="n">GraphGraph</span><span class="w"> </span><span class="o">&amp;</span><span class="n">graph</span><span class="p">,</span>
 <span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">*&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">nodes</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
 
-<span class="w">  </span><span class="kt">int</span><span class="w"> </span><span class="n">priority</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">int</span><span class="w"> </span><span class="n">priority</span><span class="p">;</span>
 <span class="p">};</span>
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">FastOpType</span></code> lets the driver restrict a pattern to the nodes of one operator
 type, exactly like <code class="docutils literal notranslate"><span class="pre">fast_op_type</span></code> gates <code class="docutils literal notranslate"><span class="pre">subset_nodes</span></code> in Python.</p>
+</section>
+<section id="pattern-library-and-registration">
+<h2>Pattern library and registration<a class="headerlink" href="#pattern-library-and-registration" title="Link to this heading">#</a></h2>
+<p>The optimization engine and generic pattern interfaces belong to
+<code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>. Concrete ONNX rewrite patterns do not: they live under
+<code class="docutils literal notranslate"><span class="pre">onnx_extensions/patterns</span></code> and are built as a separate
+<code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code> library. This follows the existing shape-inference
+split:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">onnx_core</span></code> owns the optimizer, <code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code>, <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code>,
+and the pattern registry;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">onnx_extensions/patterns</span></code> owns implementations such as
+<code class="docutils literal notranslate"><span class="pre">CastCastPattern</span></code> and depends on <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">onnx_core</span></code> never depends on <code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code>.</p></li>
+</ul>
+<p>The pattern currently introduced under <code class="docutils literal notranslate"><span class="pre">onnx_core/builder/patterns</span></code> is moved
+to <code class="docutils literal notranslate"><span class="pre">onnx_extensions/patterns</span></code> as part of this separation.</p>
+<p>As with <code class="docutils literal notranslate"><span class="pre">onnx_shapes::RegisterShapeFunctions</span></code>, registration is explicit so a
+static archive cannot discard an otherwise unreferenced translation unit:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">namespace</span><span class="w"> </span><span class="nn">core</span><span class="o">::</span><span class="nn">builder</span><span class="w"> </span><span class="p">{</span>
+
+<span class="k">using</span><span class="w"> </span><span class="n">PatternFactory</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">function</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">PatternOptimization</span><span class="o">&gt;</span><span class="p">()</span><span class="o">&gt;</span><span class="p">;</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">RegisterPattern</span><span class="p">(</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&amp;</span><span class="w"> </span><span class="n">name</span><span class="p">,</span>
+<span class="w">    </span><span class="n">PatternFactory</span><span class="w"> </span><span class="n">factory</span><span class="p">);</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">PatternOptimization</span><span class="o">&gt;&gt;</span>
+<span class="n">CreateRegisteredPatterns</span><span class="p">();</span>
+
+<span class="p">}</span><span class="w">  </span><span class="c1">// namespace core::builder</span>
+
+<span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_patterns</span><span class="w"> </span><span class="p">{</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">RegisterPatterns</span><span class="p">();</span>
+
+<span class="p">}</span><span class="w">  </span><span class="c1">// namespace onnx_patterns</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">onnx_patterns::RegisterPatterns</span></code> registers every built-in ONNX pattern once
+and is idempotent. Entry points that want the standard pattern set call it
+before constructing the optimizer; applications linking only <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code> may
+instead register their own patterns. Pattern names are stable diagnostic and
+selection identifiers. Registering two different factories under the same name
+is rejected rather than silently changing optimization behavior.</p>
+<p>The public headers, CMake target, explicit registration requirement, pattern
+selection, and an example custom pattern must be documented alongside the C++
+API. Tests cover an <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code> optimizer with no extension library, explicit
+built-in registration, duplicate registration, and a custom application
+pattern.</p>
 <p>Replacement nodes use <code class="docutils literal notranslate"><span class="pre">utils::RepeatedProtoField&lt;NodeProto&gt;</span></code> because they
 own protobuf messages. Moving that container transfers its pointer-backed
 storage without copying each <code class="docutils literal notranslate"><span class="pre">NodeProto</span></code> and matches the node storage used
@@ -634,6 +743,47 @@ name markers). Application rebuilds the builder node field in order. It moves
 retained node pointers and replacement fields into a new
 <code class="docutils literal notranslate"><span class="pre">utils::RepeatedProtoField&lt;NodeProto&gt;</span></code> before replacing the old field, so no
 <code class="docutils literal notranslate"><span class="pre">NodeProto</span></code> needs a deep copy.</p>
+</section>
+<section id="rewrites-as-data-localrewriting-and-replay">
+<h2>Rewrites as data: <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> and replay<a class="headerlink" href="#rewrites-as-data-localrewriting-and-replay" title="Link to this heading">#</a></h2>
+<p>A <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> only describes a match in terms of the transient
+<code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">NodeProto</span> <span class="pre">*</span></code> pointers of one <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code>; those pointers become
+invalid as soon as the builder node field is rebuilt. To make rewrites
+reusable, <code class="docutils literal notranslate"><span class="pre">optimize</span></code> is refactored so that it returns the list of applied
+matches instead of only mutating the builder in place:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">MatchResult</span><span class="o">&gt;</span>
+<span class="n">GraphBuilderPatternOptimization</span><span class="o">::</span><span class="n">Optimize</span><span class="p">(...);</span>
+</pre></div>
+</div>
+<p>Each applied <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> is converted into a self-contained
+<code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> object. A <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> no longer refers to live node
+pointers: it records, by value name and node content, which nodes a rewrite
+removes and which nodes (and initializers) it adds. It therefore survives the
+index rebuild and can be serialized, logged, or stored:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">LocalRewriting</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="n">pattern</span><span class="p">;</span><span class="w">                        </span><span class="c1">// pattern that produced it</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">removed_nodes</span><span class="p">;</span><span class="w">     </span><span class="c1">// outputs of removed nodes</span>
+<span class="w">  </span><span class="n">utils</span><span class="o">::</span><span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">NodeProto</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added_nodes</span><span class="p">;</span><span class="w">   </span><span class="c1">// replacement nodes</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">insert_at</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w">                  </span><span class="c1">// position of the first match</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>Because a pattern never reuses an existing name, a <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> is fully
+determined by the names it consumes and the new names it produces, so it does
+not depend on the order in which other rewrites are applied within the same
+iteration.</p>
+<p>Given a <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> and an ordered list of <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code>, the final
+optimized graph can be reconstructed by replaying the rewrites, without
+re-running the matching phase:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">GraphProto</span><span class="w"> </span><span class="nf">Replay</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">ModelProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">model</span><span class="p">,</span>
+<span class="w">                  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">LocalRewriting</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rewrites</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>Replay applies each <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> in order: it drops the removed nodes and
+splices the added nodes in at <code class="docutils literal notranslate"><span class="pre">insert_at</span></code>, then runs the same cleanup passes
+as the live loop. This gives a cheap, deterministic way to cache and reproduce
+an optimization, to audit exactly which rewrites fired, and to apply a captured
+sequence to a fresh <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> without paying the cost of matching again.</p>
 </section>
 <section id="cleanup-and-convergence">
 <h2>Cleanup and convergence<a class="headerlink" href="#cleanup-and-convergence" title="Link to this heading">#</a></h2>
@@ -673,15 +823,46 @@ instances, elapsed time). The records are returned from <code class="docutils li
 can profile which patterns fire and how long each phase takes, as the Python
 <code class="docutils literal notranslate"><span class="pre">statistics</span></code> list does.</p>
 </section>
+<section id="logging-and-phase-timing">
+<h2>Logging and phase timing<a class="headerlink" href="#logging-and-phase-timing" title="Link to this heading">#</a></h2>
+<p>At the very end of <code class="docutils literal notranslate"><span class="pre">Optimize</span></code>, the collected records are summarized into a
+report the user can print. The report breaks the total time down per phase, so
+a caller can tell how long was spent:</p>
+<ul class="simple">
+<li><p>matching candidate nodes against the registered patterns;</p></li>
+<li><p>rewriting, that is applying the matches and rebuilding the node field;</p></li>
+<li><p>removing dead-end branches and other cleanup
+(<code class="docutils literal notranslate"><span class="pre">RemoveDuplicateNodes</span></code>, <code class="docutils literal notranslate"><span class="pre">RemoveIdentityNodes</span></code>, <code class="docutils literal notranslate"><span class="pre">RemoveUnusedNodes</span></code>);</p></li>
+<li><p>constant folding of all-constant rewrites;</p></li>
+<li><p>optimizing subgraphs of control-flow nodes.</p></li>
+</ul>
+<p>Each <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> also carries the pattern name and its own match/apply
+durations, so the summary can attribute time both per phase and per pattern.
+The report is returned alongside the rewrites and is opt-in: it is only
+assembled when the caller asks for it, keeping the hot loop free of formatting
+work.</p>
+</section>
 <section id="implementation-order">
 <h2>Implementation order<a class="headerlink" href="#implementation-order" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
-<li><p>Add <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code> and the value queries over <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>.</p></li>
+<li><p>Add <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code> and the value queries over <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>
+(<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4369">PR #4369</a>).</p></li>
 <li><p>Add the <code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code> / <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> interfaces and one trivial
-pattern (for example <code class="docutils literal notranslate"><span class="pre">Cast(Cast(x))</span></code> collapsing).</p></li>
+pattern, <code class="docutils literal notranslate"><span class="pre">Cast(Cast(x))</span></code> collapsing
+(<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4389">PR #4389</a>).</p></li>
+<li><p>Create <code class="docutils literal notranslate"><span class="pre">lib_onnx_patterns</span></code> under <code class="docutils literal notranslate"><span class="pre">onnx_extensions/patterns</span></code>, move the
+concrete pattern out of <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>, and add the explicit core registry
+plus <code class="docutils literal notranslate"><span class="pre">onnx_patterns::RegisterPatterns</span></code>.</p></li>
 <li><p>Implement the match/apply loop and wire in the existing cleanup passes.</p></li>
+<li><p>Refactor <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> to return the list of applied <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code>, add the
+<code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> representation, and add <code class="docutils literal notranslate"><span class="pre">Replay</span></code> so a captured list of
+rewrites reconstructs the final graph from a <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>.</p></li>
+<li><p>Add logging with per-phase timing (match, rewrite, dead-branch removal,
+constant folding, subgraph optimization) reported at the end of <code class="docutils literal notranslate"><span class="pre">Optimize</span></code>.</p></li>
 <li><p>Add constant folding of all-constant rewrites.</p></li>
 <li><p>Extend to subgraphs and add the statistics output.</p></li>
+<li><p>Document the core/extension boundary, registration and selection APIs,
+linking requirements, and a custom-pattern example.</p></li>
 <li><p>Port the pattern library incrementally, one pattern per change, each with a
 C++ test that checks the rewritten graph against the expected one.</p></li>
 </ol>
@@ -699,20 +880,20 @@ C++ test that checks the rewritten graph against the expected one.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="2026-08_graph_builder_quantized_tensor.html"
+       href="2026-08_processor_aware_kernel_thresholds.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></p>
+        <p class="prev-next-title">Processor-aware kernel thresholds</p>
       </div>
     </a>
     <a class="right-next"
-       href="2026-08_mutable_cache.html"
+       href="2026-08_custom_types.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Mutable execution cache</p>
+        <p class="prev-next-title">Structured views over byte buffers</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -736,14 +917,18 @@ C++ test that checks the rewritten graph against the expected one.</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#progress">Progress</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#graph-structure-on-graph">Graph structure on Graph</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#value-queries">Value queries</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pattern-api">Pattern API</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pattern-library-and-registration">Pattern library and registration</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#match-and-apply-loop">Match and apply loop</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rewrites-as-data-localrewriting-and-replay">Rewrites as data: <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> and replay</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cleanup-and-convergence">Cleanup and convergence</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#constant-folding">Constant folding</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#subgraphs">Subgraphs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#statistics">Statistics</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-and-phase-timing">Logging and phase timing</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementation-order">Implementation order</a></li>
 </ul>
   </nav></div>
