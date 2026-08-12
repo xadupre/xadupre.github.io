@@ -694,20 +694,21 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     except (ImportError, AttributeError, TypeError, ValueError):
         return _make_onnx_light_reference_runner(model)
 
-    state: Dict[str, Any] = {"runner": session_runner}
+    state: Dict[str, Any] = {"runner": session_runner, "fallback": False}
 
     def _run(inputs: List[Any]) -> List[Any]:
         runner = state["runner"]
         try:
             return runner(inputs)
         except Exception:  # noqa: BLE001
-            if runner is not session_runner:
+            if state["fallback"]:
                 # Already on the reference evaluator; propagate the failure.
                 raise
             # The RuntimeSession path cannot execute this model. Fall back to
             # the reference evaluator so onnx-light still runs the model.
             reference_runner = _make_onnx_light_reference_runner(model)
             state["runner"] = reference_runner
+            state["fallback"] = True
             return reference_runner(inputs)
 
     return _run
