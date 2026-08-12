@@ -10,9 +10,9 @@ on:
         required: false
         default: "main"
       onnx_light_ref:
-        description: "Git ref (branch or tag) of xadupre/onnx-light to build and link against"
+        description: "Git ref (branch, tag or SHA) of xadupre/onnx-light to build and link against"
         required: false
-        default: "0.1.15"
+        default: "main"
   schedule:
     # Rebuild documentation biweekly (1st and 3rd Monday of each month) so it stays in sync with the source repository.
     - cron: "57 7 1-7,15-21 * 1"
@@ -31,11 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      # onnx-light version to build and link the onnx-light integration
-      # against. Uses the workflow_dispatch input when provided (manual runs)
-      # and falls back to the same default for scheduled runs, which carry no
-      # ``inputs``. Kept in one place so both code paths stay in sync.
-      ONNX_LIGHT_REF: ${{ inputs.onnx_light_ref || '0.1.15' }}
+      # onnx-light ref to build and link the onnx-light integration against.
+      # Uses the workflow_dispatch input when provided (manual runs) and falls
+      # back to the same default for scheduled runs, which carry no ``inputs``.
+      # Defaults to the ``main`` (default) branch so the docs are built against
+      # the latest onnx-light sources from GitHub rather than a pinned release,
+      # mirroring onnx-light-cpu's own ``docs.yml`` (recent sources add C++
+      # headers the CPU integration relies on that are not yet in a tag). Kept
+      # in one place so both code paths stay in sync.
+      ONNX_LIGHT_REF: ${{ inputs.onnx_light_ref || 'main' }}
     steps:
       - name: Checkout xadupre.github.io
         uses: actions/checkout@v6
@@ -100,8 +104,10 @@ jobs:
           python -m pip install --upgrade pip
           # onnx-light's CMake calls find_package(nanobind) via "python -m
           # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
-          # importable before configuring it.
-          pip install nanobind scikit-build-core
+          # importable before configuring it. Recent onnx-light sources also
+          # query numpy.get_include() at configure time, so numpy is required
+          # too (matches onnx-light-cpu's own ``docs.yml``).
+          pip install nanobind scikit-build-core numpy
           git clone --depth 1 --branch "${ONNX_LIGHT_REF}" \
             https://github.com/xadupre/onnx-light.git /tmp/onnx-light
           cmake -S /tmp/onnx-light -B /tmp/onnx-light/build \
