@@ -768,7 +768,10 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             calls["register_fn"] = register
             return "runner"
 
+        registered = {"session": None}
+
         def _register_kernels(sess=None):
+            registered["session"] = sess
             return sess
 
         cpu_module = types.ModuleType("onnx_light_cpu")
@@ -790,9 +793,13 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         self.assertEqual(result, "runner")
         # The model was handed to the session runner untouched, and the
         # onnx-light-cpu registration was wired to the session (not called
-        # globally beforehand) via the ``register`` hook.
+        # globally beforehand) via the ``register`` hook: invoking the hook with
+        # a session delegates to ``onnx_light_cpu.register_kernels(session)``.
         self.assertIs(calls["model"], model)
-        self.assertIs(calls["register_fn"], _register_kernels)
+        self.assertTrue(callable(calls["register_fn"]))
+        sentinel = object()
+        self.assertIs(calls["register_fn"](sentinel), sentinel)
+        self.assertIs(registered["session"], sentinel)
 
     def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
         """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
@@ -815,7 +822,7 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
     ``onnx_light_cpu.register_kernels(session)`` installs the SIMD-accelerated
     kernels **on that session** (not process-wide)."""
 
-    def _install_fakes(self):
+    def _install_fakes(self, session_used_kernels=None):
         import types
 
         events = {"sessions": 0, "runs": 0, "registered": 0}
@@ -869,6 +876,11 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                 # Mirror the real engine feeding the graph output as a tensor
                 # carrying data_type/shape used by _runtime_tensor_to_numpy.
                 ctx.set("y", _OutTensor(np.abs(ctx.get("x"))))
+
+        # onnx-light#4391 exposes ``RuntimeSession.used_kernels()``; only attach
+        # it when the test asks for it so the "old build" path is exercised too.
+        if session_used_kernels is not None:
+            _RuntimeSession.used_kernels = lambda self: list(session_used_kernels)
 
         class _ExecutionPlan:
             def __init__(self, graph):
@@ -1069,6 +1081,65 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
 
         self.assertIn("no onnx-light-cpu kernel ran", str(ctx.exception))
         self.assertIn("Abs", str(ctx.exception))
+
+    def test_cpu_runner_accepts_when_session_kernels_all_cpu(self):
+        """When the build exposes ``RuntimeSession.used_kernels()``
+        (onnx-light#4391), the runner cross-checks the operators the session
+        executed against the onnx-light-cpu kernels that ran: if every
+        overridable operator was served by onnx-light-cpu, the run is accepted."""
+        model, modules, events = self._install_fakes(
+            session_used_kernels=["ai.onnx:Abs"]
+        )
+        cpu = modules["onnx_light_cpu"]
+        cpu.clear_used_kernel_names = lambda: None
+        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            out = runner([np.array([-1.0, 2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
+
+    def test_cpu_runner_raises_when_overridable_op_falls_back(self):
+        """The session executed two operators onnx-light-cpu overrides but only
+        one onnx-light-cpu kernel ran: the other fell back to a built-in kernel,
+        so onnx-light-cpu was *not* really used and the runner raises."""
+        model, modules, events = self._install_fakes(
+            session_used_kernels=["ai.onnx:Abs", "ai.onnx:Exp"]
+        )
+        cpu = modules["onnx_light_cpu"]
+        cpu.clear_used_kernel_names = lambda: None
+        # Only Abs ran through onnx-light-cpu; Exp silently used the built-in.
+        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.registered_kernel_names = lambda: {
+            "Abs": "onnx_light_cpu::Abs",
+            "Exp": "onnx_light_cpu::Exp",
+        }
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            runner = rlb._make_onnx_light_cpu_runner(model)
+            with self.assertRaises(RuntimeError) as ctx:
+                runner([np.array([-1.0, 2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertIn("built-in kernels", str(ctx.exception))
+        self.assertIn("Exp", str(ctx.exception))
 
 
 class _FakeTypeProto:
