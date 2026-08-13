@@ -44,6 +44,16 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         for backend in ("numpy", "onnx-light (built-in)", "onnx-light-cpu", "onnxruntime"):
             self.assertIn(backend, text)
 
+    def test_operator_tables_are_folded_with_summary_rows(self):
+        text = _read(PAGE)
+        self.assertIn('document.createElement("details")', text)
+        self.assertIn('document.createElement("summary")', text)
+        self.assertIn('summaryRow.className = "operator-summary"', text)
+        self.assertIn('details.className = "operator-details"', text)
+        self.assertNotIn("panel.open = true", text)
+        for label in ("input sizes", "average speed-up", "best speed-up", "worst speed-up"):
+            self.assertIn(label, text)
+
     def test_page_has_footer_pointing_at_cache(self):
         text = _read(PAGE)
         self.assertIn(

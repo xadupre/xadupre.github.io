@@ -22,7 +22,6 @@ a { color: #58a6ff; text-decoration: none; }
 a:hover { text-decoration: underline; }
 header { text-align: center; margin-bottom: 1em; max-width: 1000px; }
 h1 { margin: 0.2em 0; font-size: 1.4em; }
-h2 { margin: 0.2em 0 0.1em; font-size: 1.1em; }
 .nav { font-size: 0.9em; margin-bottom: 0.5em; }
 .intro { font-size: 0.9em; color: #c9d1d9; margin: 0.5em 0; }
 .intro code, .meta code, .example-desc code {
@@ -41,28 +40,42 @@ h2 { margin: 0.2em 0 0.1em; font-size: 1.1em; }
 }
 .meta { font-size: 0.85em; color: #8b949e; }
 .meta strong { color: #c9d1d9; }
-.example-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.6em; }
 .example-desc { font-size: 0.85em; color: #8b949e; margin: 0.2em 0 0.6em; }
-.summary-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1em;
-  margin: 0.5em 0 0.75em;
-  font-size: 0.9em;
+#examples { width: 100%; max-width: 1000px; }
+.operator-panel { padding: 0; overflow: hidden; }
+.operator-summary {
+  cursor: pointer;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.5fr) repeat(4, minmax(105px, 1fr));
+  gap: 0.75em;
+  align-items: center;
+  padding: 0.8em 1em;
+  list-style: none;
 }
-.summary-card {
-  background: rgba(13, 17, 23, 0.7);
-  border: 1px solid rgba(139, 148, 158, 0.25);
-  border-radius: 8px;
-  padding: 0.5em 0.8em;
-  min-width: 150px;
-  flex: 1 1 150px;
+.operator-summary::-webkit-details-marker { display: none; }
+.operator-summary:hover { background: rgba(56, 139, 253, 0.08); }
+.operator-summary:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+.operator-summary .summary-label {
+  color: #8b949e;
+  display: block;
+  font-size: 0.72em;
+  margin-bottom: 0.2em;
 }
-.summary-card .card-label { color: #8b949e; font-size: 0.8em; }
-.summary-card .card-value { font-size: 1.4em; margin-top: 0.15em; font-weight: bold; }
-.summary-card.faster .card-value { color: #3fb950; }
-.summary-card.slower .card-value { color: #f85149; }
-.summary-card.neutral .card-value { color: #79c0ff; }
+.operator-summary .summary-value { font-weight: bold; }
+.operator-summary .operator-name::before {
+  color: #8b949e;
+  content: "▸";
+  display: inline-block;
+  margin-right: 0.5em;
+  width: 0.7em;
+}
+.operator-panel[open] .operator-name::before { content: "▾"; }
+.operator-summary .faster { color: #3fb950; }
+.operator-summary .slower { color: #f85149; }
+.operator-details {
+  border-top: 1px solid rgba(139, 148, 158, 0.2);
+  padding: 0.8em 1em 1em;
+}
 .table-wrap { overflow-x: auto; }
 table.benchmark { border-collapse: collapse; width: 100%; font-size: 0.85em; }
 table.benchmark th, table.benchmark td {
@@ -91,6 +104,10 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
 .legend .swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; vertical-align: middle; }
 .legend .swatch.faster { background: #3fb950; }
 .legend .swatch.slower { background: #f85149; }
+@media (max-width: 720px) {
+  .operator-summary { grid-template-columns: 1fr 1fr; }
+  .operator-summary .operator-name { grid-column: 1 / -1; }
+}
 </style>
 </head>
 <body>
@@ -112,7 +129,8 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
     median of <strong id="nMeasureLabel">10</strong> timed repetitions.
     <strong>speed-up (cpu)</strong> = <code>onnxruntime</code> /
     <code>onnx&#8209;light&#8209;cpu</code>: values&nbsp;&gt;&nbsp;1 mean
-    onnx&#8209;light&#8209;cpu is faster than onnxruntime.
+    onnx&#8209;light&#8209;cpu is faster than onnxruntime. Select an operator
+    summary row to expand its detailed measurements.
   </p>
 </header>
 <div class="notice" style="max-width:1000px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -182,69 +200,57 @@ function renderMeta(payload) {
   }
 }
 
-function makeSummaryCard(label, value, cls) {
-  const card = document.createElement("div");
-  card.className = "summary-card " + (cls || "neutral");
-  const l = document.createElement("div");
-  l.className = "card-label";
-  l.textContent = label;
-  const v = document.createElement("div");
-  v.className = "card-value";
-  v.textContent = value;
-  card.appendChild(l);
-  card.appendChild(v);
-  return card;
-}
-
 function speedupClass(value) {
   if (value === null || value === undefined || Number.isNaN(value)) return "";
   return value >= 1 ? "faster" : "slower";
 }
 
 function renderExample(example) {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-
-  const head = document.createElement("div");
-  head.className = "example-head";
-  const h2 = document.createElement("h2");
-  h2.textContent = example.title || example.name;
-  head.appendChild(h2);
-  if (example.source) {
-    const src = document.createElement("span");
-    src.className = "meta";
-    src.innerHTML = "<code>" + example.source + "</code>";
-    head.appendChild(src);
-  }
-  panel.appendChild(head);
-
-  const desc = document.createElement("p");
-  desc.className = "example-desc";
-  desc.innerHTML =
-    "Operator <code>" + (example.op || "") + "</code> swept over the " +
-    (example.xlabel || "input size") + ".";
-  panel.appendChild(desc);
+  const panel = document.createElement("details");
+  panel.className = "panel operator-panel";
 
   const summary = example.summary || {};
-  const cards = document.createElement("div");
-  cards.className = "summary-cards";
-  if (summary.avg_speedup_cpu !== undefined) {
-    cards.appendChild(makeSummaryCard(
-      "avg speed-up vs onnxruntime", fmtSpeedup(summary.avg_speedup_cpu),
-      speedupClass(summary.avg_speedup_cpu)));
+  const summaryRow = document.createElement("summary");
+  summaryRow.className = "operator-summary";
+  const summaryValues = [
+    ["operator", example.op || example.title || example.name, "operator-name"],
+    ["input sizes", String(summary.sizes || (example.rows || []).length), ""],
+    ["average speed-up", fmtSpeedup(summary.avg_speedup_cpu),
+      speedupClass(summary.avg_speedup_cpu)],
+    ["best speed-up", fmtSpeedup(summary.max_speedup_cpu),
+      speedupClass(summary.max_speedup_cpu)],
+    ["worst speed-up", fmtSpeedup(summary.min_speedup_cpu),
+      speedupClass(summary.min_speedup_cpu)],
+  ];
+  summaryValues.forEach(([label, value, cls]) => {
+    const cell = document.createElement("span");
+    cell.className = cls;
+    const cellLabel = document.createElement("span");
+    cellLabel.className = "summary-label";
+    cellLabel.textContent = label;
+    const cellValue = document.createElement("span");
+    cellValue.className = "summary-value";
+    cellValue.textContent = value;
+    cell.appendChild(cellLabel);
+    cell.appendChild(cellValue);
+    summaryRow.appendChild(cell);
+  });
+  panel.appendChild(summaryRow);
+
+  const details = document.createElement("div");
+  details.className = "operator-details";
+  const desc = document.createElement("p");
+  desc.className = "example-desc";
+  desc.textContent = (example.title || example.name) + " — " +
+    (example.xlabel || "input size") + ".";
+  if (example.source) {
+    const source = document.createElement("code");
+    source.textContent = example.source;
+    desc.appendChild(document.createTextNode(" Source: "));
+    desc.appendChild(source);
+    desc.appendChild(document.createTextNode("."));
   }
-  if (summary.max_speedup_cpu !== undefined) {
-    cards.appendChild(makeSummaryCard(
-      "best speed-up", fmtSpeedup(summary.max_speedup_cpu),
-      speedupClass(summary.max_speedup_cpu)));
-  }
-  if (summary.min_speedup_cpu !== undefined) {
-    cards.appendChild(makeSummaryCard(
-      "worst speed-up", fmtSpeedup(summary.min_speedup_cpu),
-      speedupClass(summary.min_speedup_cpu)));
-  }
-  cards.appendChild(makeSummaryCard("input sizes", String(summary.sizes || (example.rows || []).length)));
-  panel.appendChild(cards);
+  details.appendChild(desc);
 
   const backends = Array.isArray(example.backends) && example.backends.length
     ? example.backends
@@ -290,14 +296,15 @@ function renderExample(example) {
   });
   table.appendChild(tbody);
   wrap.appendChild(table);
-  panel.appendChild(wrap);
+  details.appendChild(wrap);
 
   const legend = document.createElement("div");
   legend.className = "legend";
   legend.innerHTML =
     '<span><span class="swatch faster"></span>onnx-light-cpu faster than onnxruntime</span>' +
     '<span><span class="swatch slower"></span>onnx-light-cpu slower than onnxruntime</span>';
-  panel.appendChild(legend);
+  details.appendChild(legend);
+  panel.appendChild(details);
 
   return panel;
 }
