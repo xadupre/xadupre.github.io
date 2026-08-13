@@ -142,6 +142,16 @@ class TestMeasure(unittest.TestCase):
         self.assertGreaterEqual(value, 0.0)
         self.assertEqual(counter["n"], 7)
 
+    def test_together_rotates_all_calls(self):
+        calls = []
+        values = rcd.measure_together(
+            (lambda: calls.append("a"), lambda: calls.append("b")),
+            repeat=3,
+            warmup=1,
+        )
+        self.assertEqual(calls, ["a", "b", "a", "b", "b", "a", "a", "b"])
+        self.assertEqual(len(values), 2)
+
 
 class TestBuildPayload(unittest.TestCase):
     def _fake_run(self, shapes, n_warmup, n_measure):

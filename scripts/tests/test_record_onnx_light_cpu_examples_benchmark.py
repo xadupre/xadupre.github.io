@@ -140,6 +140,16 @@ class TestMeasure(unittest.TestCase):
         # 2 warm-up + 5 timed = 7 calls.
         self.assertEqual(counter["n"], 7)
 
+    def test_together_rotates_all_calls(self):
+        calls = []
+        values = rce.measure_together(
+            (lambda: calls.append("a"), lambda: calls.append("b")),
+            repeat=3,
+            warmup=1,
+        )
+        self.assertEqual(calls, ["a", "b", "a", "b", "b", "a", "a", "b"])
+        self.assertEqual(len(values), 2)
+
 
 class TestBuildPayload(unittest.TestCase):
     def _fake_run(self, examples, n_warmup, n_measure):

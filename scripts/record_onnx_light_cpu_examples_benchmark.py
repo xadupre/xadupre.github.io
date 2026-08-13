@@ -134,6 +134,27 @@ def measure(func: Callable[[], Any], repeat: int, warmup: int = N_WARMUP) -> flo
     return float(np.median(timings))
 
 
+def measure_together(
+    funcs: Tuple[Callable[[], Any], ...],
+    repeat: int,
+    warmup: int = N_WARMUP,
+) -> Tuple[float, ...]:
+    """Measure callables in a rotating order and return their median times."""
+    import numpy as np
+
+    timings: Tuple[List[float], ...] = tuple([] for _ in funcs)
+    for iteration in range(max(0, warmup)):
+        for offset in range(len(funcs)):
+            funcs[(iteration + offset) % len(funcs)]()
+    for iteration in range(max(1, repeat)):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # ---------------------------------------------------------------------------
 # Example (benchmark scenario) definitions
 # ---------------------------------------------------------------------------
@@ -318,9 +339,10 @@ def run_examples(
     """Run every scenario and return ``(example_results, meta)``.
 
     ``register_kernels()`` overrides onnx-light's process-wide dispatch table
-    irreversibly, so the un-accelerated ``onnx_light`` baseline is measured for
-    every example *first*, then the kernels are registered once, then the
-    onnx-light-cpu / onnxruntime / numpy curves are measured.
+    irreversibly, so the un-accelerated ``onnx_light`` baseline is primed for
+    every example *first*. After registration, cached built-in sessions are
+    measured together with onnx-light-cpu / onnxruntime / numpy in rotating
+    order so the speed-up ratios compare equivalent samples.
     """
     from onnx_light_cpu import (
         clear_used_kernel_names,
@@ -334,20 +356,16 @@ def run_examples(
     meta["simd_level"] = level
     meta["simd_name"] = simd_name
 
-    # --- Pass 1: onnx-light built-in baseline (before registration) ---------
-    builtin_times: Dict[str, Dict[int, float]] = {}
+    # --- Pass 1: prime onnx-light built-in before registration --------------
+    builtin_runners: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
     for example in examples:
         name = example["name"]
-        builtin_times[name] = {}
         model = example["make_model"]()
         runner = _make_reference_runner(model)
-        for size in example["builtin_sizes"]:
-            feeds = example["make_inputs"](size)
-            repeat = example["repeat_for"](size)
-            builtin_times[name][size] = measure_fn(
-                lambda feeds=feeds: runner(feeds), repeat, warmup=n_warmup
-            )
-        _log(f"Measured onnx-light built-in baseline for {name!r}.")
+        builtin_runners[name] = runner
+        if example["builtin_sizes"]:
+            runner(example["make_inputs"](example["builtin_sizes"][0]))
+        _log(f"Primed onnx-light built-in baseline for {name!r}.")
 
     # --- Register the SIMD kernels once (process-wide, irreversible) --------
     register_kernels()
@@ -379,23 +397,26 @@ def run_examples(
             feeds = example["make_inputs"](size)
             repeat = example["repeat_for"](size)
 
-            numpy_ms = measure_fn(
-                lambda feeds=feeds: example["numpy_op"](feeds), repeat, warmup=n_warmup
-            ) * 1e3
-            cpu_ms = measure_fn(
-                lambda feeds=feeds: cpu_runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
-            ort_ms = measure_fn(
-                lambda feeds=feeds: ort_runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
+            funcs = (
+                lambda feeds=feeds, numpy_op=example["numpy_op"]: numpy_op(feeds),
+                lambda feeds=feeds, runner=cpu_runner: runner(feeds),
+                lambda feeds=feeds, runner=ort_runner: runner(feeds),
+            )
+            has_builtin = size in example["builtin_sizes"]
+            if has_builtin:
+                builtin_runner = builtin_runners[name]
+                funcs += (
+                    lambda feeds=feeds, runner=builtin_runner: runner(feeds),
+                )
+            measured = measure_together(funcs, repeat, warmup=n_warmup)
+            numpy_ms, cpu_ms, ort_ms = (value * 1e3 for value in measured[:3])
 
             times: Dict[str, Optional[float]] = {
                 "numpy": numpy_ms,
                 "onnx_light_cpu": cpu_ms,
                 "onnxruntime": ort_ms,
             }
-            builtin = builtin_times.get(name, {}).get(size)
-            times["onnx_light"] = builtin * 1e3 if builtin is not None else None
+            times["onnx_light"] = measured[3] * 1e3 if has_builtin else None
             rows.append(_row_from_times(size, times))
 
         set_kernel_usage_recording(True)

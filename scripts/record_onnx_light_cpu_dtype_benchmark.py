@@ -141,6 +141,27 @@ def measure(func: Callable[[], Any], repeat: int, warmup: int = N_WARMUP) -> flo
     return float(np.median(timings))
 
 
+def measure_together(
+    funcs: Tuple[Callable[[], Any], ...],
+    repeat: int,
+    warmup: int = N_WARMUP,
+) -> Tuple[float, ...]:
+    """Measure callables in a rotating order and return their median times."""
+    import numpy as np
+
+    timings: Tuple[List[float], ...] = tuple([] for _ in funcs)
+    for iteration in range(max(0, warmup)):
+        for offset in range(len(funcs)):
+            funcs[(iteration + offset) % len(funcs)]()
+    for iteration in range(max(1, repeat)):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # ---------------------------------------------------------------------------
 # Shape (kernel code path) definitions
 # ---------------------------------------------------------------------------
@@ -368,20 +389,36 @@ def run_benchmark(
         label, m, n, k = shape["label"], shape["M"], shape["N"], shape["K"]
         repeat = repeat_for(m, n, k)
         times: Dict[str, Optional[float]] = {}
-
-        for dtype in CPU_DTYPES:
-            feeds = _make_inputs(dtype, m, n, k)
-            runner = cpu_runners[dtype]
-            times[f"onnx_light_cpu_{dtype}"] = measure_fn(
-                lambda feeds=feeds, runner=runner: runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
-
-        for dtype in ORT_DTYPES:
-            feeds = _make_inputs(dtype, m, n, k)
-            runner = ort_runners[dtype]
-            times[f"onnxruntime_{dtype}"] = measure_fn(
-                lambda feeds=feeds, runner=runner: runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
+        feeds_by_dtype = {
+            dtype: _make_inputs(dtype, m, n, k) for dtype in CPU_DTYPES
+        }
+        keys = tuple(
+            [f"onnx_light_cpu_{dtype}" for dtype in CPU_DTYPES]
+            + [f"onnxruntime_{dtype}" for dtype in ORT_DTYPES]
+        )
+        funcs = tuple(
+            [
+                (
+                    lambda runner=cpu_runners[dtype],
+                    feeds=feeds_by_dtype[dtype]: runner(feeds)
+                )
+                for dtype in CPU_DTYPES
+            ]
+            + [
+                (
+                    lambda runner=ort_runners[dtype],
+                    feeds=feeds_by_dtype[dtype]: runner(feeds)
+                )
+                for dtype in ORT_DTYPES
+            ]
+        )
+        measured = measure_together(funcs, repeat, warmup=n_warmup)
+        times.update(
+            {
+                key: elapsed * 1e3
+                for key, elapsed in zip(keys, measured, strict=True)
+            }
+        )
 
         builtin = builtin_times.get(label)
         times["onnx_light_float32"] = builtin * 1e3 if builtin is not None else None
