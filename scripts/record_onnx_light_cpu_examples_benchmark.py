@@ -7,8 +7,7 @@ un-accelerated reference kernels). This script reproduces those benchmark
 examples so their results can be published on a dashboard rather than only
 living as static images in the rendered gallery.
 
-Two of the gallery examples are genuine ``onnxruntime`` vs ``onnx-light-cpu``
-benchmarks and are reproduced here:
+The dashboard records five ``onnxruntime`` vs ``onnx-light-cpu`` benchmarks:
 
 ``abs`` (``plot_abs_benchmark.py``)
     A single ``Abs`` node evaluated on a 1-D ``float32`` array whose length
@@ -17,6 +16,12 @@ benchmarks and are reproduced here:
 ``gemm`` (``plot_gemm_benchmark.py``)
     A single ``Gemm`` node computing ``Y = A @ B`` for square ``float32``
     matrices of increasing size.
+
+``exp``, ``log`` and ``not``
+    Single-node vector benchmarks for the additional elementwise kernels
+    accelerated by ``onnx-light-cpu``. ``Exp`` uses bounded ``float32`` values,
+    ``Log`` uses strictly positive ``float32`` values and ``Not`` uses boolean
+    values.
 
 For every example and every input size the script measures the wall-clock
 time of:
@@ -45,7 +50,8 @@ The resulting payload is persisted to
 Usage::
 
     python scripts/record_onnx_light_cpu_examples_benchmark.py [--cache-dir DIR]
-        [--n-warmup N] [--n-measure N] [--max-abs-size N] [--max-gemm-size N]
+        [--n-warmup N] [--n-measure N] [--max-abs-size N]
+        [--max-unary-size N] [--max-gemm-size N]
 """
 
 from __future__ import annotations
@@ -134,6 +140,27 @@ def measure(func: Callable[[], Any], repeat: int, warmup: int = N_WARMUP) -> flo
     return float(np.median(timings))
 
 
+def measure_together(
+    funcs: Tuple[Callable[[], Any], ...],
+    repeat: int,
+    warmup: int = N_WARMUP,
+) -> Tuple[float, ...]:
+    """Measure callables in a rotating order and return their median times."""
+    import numpy as np
+
+    timings: Tuple[List[float], ...] = tuple([] for _ in funcs)
+    for iteration in range(max(0, warmup)):
+        for offset in range(len(funcs)):
+            funcs[(iteration + offset) % len(funcs)]()
+    for iteration in range(max(1, repeat)):
+        for offset in range(len(funcs)):
+            index = (iteration + offset) % len(funcs)
+            start = time.perf_counter()
+            funcs[index]()
+            timings[index].append(time.perf_counter() - start)
+    return tuple(float(np.median(values)) for values in timings)
+
+
 # ---------------------------------------------------------------------------
 # Example (benchmark scenario) definitions
 # ---------------------------------------------------------------------------
@@ -148,6 +175,22 @@ def _make_abs_model():
         "abs_bench",
         [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
         [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    checker.check_model(model)
+    return model
+
+
+def _make_unary_model(op_type: str, boolean: bool = False):
+    """Return a single-node unary model with a dynamic vector input."""
+    from onnx_light.onnx import TensorProto, checker, helper
+
+    dtype = TensorProto.BOOL if boolean else TensorProto.FLOAT
+    graph = helper.make_graph(
+        [helper.make_node(op_type, ["X"], ["Y"])],
+        f"{op_type.lower()}_bench",
+        [helper.make_tensor_value_info("X", dtype, ["N"])],
+        [helper.make_tensor_value_info("Y", dtype, ["N"])],
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
     checker.check_model(model)
@@ -258,11 +301,67 @@ def _gemm_example(max_size: Optional[int] = None) -> Dict[str, Any]:
     }
 
 
+def _unary_example(
+    name: str, op_type: str, max_size: Optional[int] = None
+) -> Dict[str, Any]:
+    """Return an elementwise unary benchmark scenario description."""
+    import numpy as np
+
+    size_grid = [10**k for k in range(2, 9)]
+    if max_size is not None:
+        size_grid = [s for s in size_grid if s <= max_size] or size_grid[:1]
+
+    rng = np.random.default_rng(0)
+
+    def make_inputs(size: int) -> Dict[str, Any]:
+        if op_type == "Exp":
+            values = rng.uniform(-10.0, 10.0, size=size).astype(np.float32)
+        elif op_type == "Log":
+            values = rng.uniform(1e-4, 100.0, size=size).astype(np.float32)
+        else:
+            values = rng.integers(0, 2, size=size).astype(np.bool_)
+        return {"X": values}
+
+    def numpy_op(feeds: Dict[str, Any]) -> Any:
+        if op_type == "Exp":
+            return np.exp(feeds["X"])
+        if op_type == "Log":
+            return np.log(feeds["X"])
+        return np.logical_not(feeds["X"])
+
+    def repeat_for(size: int) -> int:
+        return max(7, min(200, 2_000_000 // size))
+
+    return {
+        "name": name,
+        "title": f"{op_type}: onnxruntime vs onnx-light-cpu",
+        "op": op_type,
+        "source": "record_onnx_light_cpu_examples_benchmark.py",
+        "xlabel": "array size (elements)",
+        "size_key": "size",
+        "make_model": lambda: _make_unary_model(op_type, op_type == "Not"),
+        "size_grid": size_grid,
+        "builtin_sizes": list(size_grid),
+        "make_inputs": make_inputs,
+        "numpy_op": numpy_op,
+        "repeat_for": repeat_for,
+        "kernel_name": f"onnx_light_cpu::{op_type}",
+    }
+
+
 def default_examples(
-    max_abs_size: Optional[int] = None, max_gemm_size: Optional[int] = None
+    max_abs_size: Optional[int] = None,
+    max_gemm_size: Optional[int] = None,
+    max_unary_size: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Return the benchmark scenarios reproduced from the onnx-light-cpu gallery."""
-    return [_abs_example(max_abs_size), _gemm_example(max_gemm_size)]
+    """Return the benchmark scenarios displayed on the examples dashboard."""
+    return [
+        _abs_example(max_abs_size),
+        _unary_example("exp", "Exp", max_unary_size),
+        _unary_example("log", "Log", max_unary_size),
+        _unary_example("not", "Not", max_unary_size),
+        _gemm_example(max_gemm_size),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -318,9 +417,10 @@ def run_examples(
     """Run every scenario and return ``(example_results, meta)``.
 
     ``register_kernels()`` overrides onnx-light's process-wide dispatch table
-    irreversibly, so the un-accelerated ``onnx_light`` baseline is measured for
-    every example *first*, then the kernels are registered once, then the
-    onnx-light-cpu / onnxruntime / numpy curves are measured.
+    irreversibly, so the un-accelerated ``onnx_light`` baseline is primed for
+    every example *first*. After registration, cached built-in sessions are
+    measured together with onnx-light-cpu / onnxruntime / numpy in rotating
+    order so the speed-up ratios compare equivalent samples.
     """
     from onnx_light_cpu import (
         clear_used_kernel_names,
@@ -334,20 +434,16 @@ def run_examples(
     meta["simd_level"] = level
     meta["simd_name"] = simd_name
 
-    # --- Pass 1: onnx-light built-in baseline (before registration) ---------
-    builtin_times: Dict[str, Dict[int, float]] = {}
+    # --- Pass 1: prime onnx-light built-in before registration --------------
+    builtin_runners: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
     for example in examples:
         name = example["name"]
-        builtin_times[name] = {}
         model = example["make_model"]()
         runner = _make_reference_runner(model)
-        for size in example["builtin_sizes"]:
-            feeds = example["make_inputs"](size)
-            repeat = example["repeat_for"](size)
-            builtin_times[name][size] = measure_fn(
-                lambda feeds=feeds: runner(feeds), repeat, warmup=n_warmup
-            )
-        _log(f"Measured onnx-light built-in baseline for {name!r}.")
+        builtin_runners[name] = runner
+        if example["builtin_sizes"]:
+            runner(example["make_inputs"](example["builtin_sizes"][0]))
+        _log(f"Primed onnx-light built-in baseline for {name!r}.")
 
     # --- Register the SIMD kernels once (process-wide, irreversible) --------
     register_kernels()
@@ -379,23 +475,26 @@ def run_examples(
             feeds = example["make_inputs"](size)
             repeat = example["repeat_for"](size)
 
-            numpy_ms = measure_fn(
-                lambda feeds=feeds: example["numpy_op"](feeds), repeat, warmup=n_warmup
-            ) * 1e3
-            cpu_ms = measure_fn(
-                lambda feeds=feeds: cpu_runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
-            ort_ms = measure_fn(
-                lambda feeds=feeds: ort_runner(feeds), repeat, warmup=n_warmup
-            ) * 1e3
+            funcs = (
+                lambda feeds=feeds, numpy_op=example["numpy_op"]: numpy_op(feeds),
+                lambda feeds=feeds, runner=cpu_runner: runner(feeds),
+                lambda feeds=feeds, runner=ort_runner: runner(feeds),
+            )
+            has_builtin = size in example["builtin_sizes"]
+            if has_builtin:
+                builtin_runner = builtin_runners[name]
+                funcs += (
+                    lambda feeds=feeds, runner=builtin_runner: runner(feeds),
+                )
+            measured = measure_together(funcs, repeat, warmup=n_warmup)
+            numpy_ms, cpu_ms, ort_ms = (value * 1e3 for value in measured[:3])
 
             times: Dict[str, Optional[float]] = {
                 "numpy": numpy_ms,
                 "onnx_light_cpu": cpu_ms,
                 "onnxruntime": ort_ms,
             }
-            builtin = builtin_times.get(name, {}).get(size)
-            times["onnx_light"] = builtin * 1e3 if builtin is not None else None
+            times["onnx_light"] = measured[3] * 1e3 if has_builtin else None
             rows.append(_row_from_times(size, times))
 
         set_kernel_usage_recording(True)
@@ -466,6 +565,7 @@ def build_payload(
     n_measure: int = N_MEASURE,
     max_abs_size: Optional[int] = None,
     max_gemm_size: Optional[int] = None,
+    max_unary_size: Optional[int] = None,
     examples: Optional[List[Dict[str, Any]]] = None,
     run: Callable[..., Tuple[List[Dict[str, Any]], Dict[str, Any]]] = run_examples,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
@@ -475,7 +575,7 @@ def build_payload(
     if versions is None:
         versions = collect_versions
     if examples is None:
-        examples = default_examples(max_abs_size, max_gemm_size)
+        examples = default_examples(max_abs_size, max_gemm_size, max_unary_size)
 
     now_dt = now or dt.datetime.now(tz=dt.timezone.utc)
     now_iso = _format_iso(now_dt)
@@ -539,6 +639,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optionally cap the largest Gemm matrix size benchmarked.",
     )
+    parser.add_argument(
+        "--max-unary-size",
+        type=int,
+        default=None,
+        help="Optionally cap the largest Exp, Log and Not array size benchmarked.",
+    )
     return parser.parse_args(argv)
 
 
@@ -553,6 +659,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             n_measure=args.n_measure,
             max_abs_size=args.max_abs_size,
             max_gemm_size=args.max_gemm_size,
+            max_unary_size=args.max_unary_size,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record examples benchmark: {exc}")
