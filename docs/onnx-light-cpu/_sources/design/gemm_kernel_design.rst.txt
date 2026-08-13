@@ -4,7 +4,7 @@ Gemm Kernel Design
 This page documents the internal design of the ``Gemm`` (general matrix
 multiplication) CPU kernel implemented in
 ``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
-``onnx_light_cpu/impl/math/gemm_kernel_avx512.cc``: how it picks a
+``onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
 not (yet) implemented, with their expected gain and risk.
 
@@ -78,6 +78,27 @@ the full rationale):
    spread across ``ParallelFor`` on **both** the ``M`` and ``N`` axes, so
    "skinny" shapes (e.g. ``M == 1``, a single-example matvec) still get
    parallelism instead of running on a single thread.
+
+Prepared execution interfaces
+-----------------------------
+
+``onnx_light_cpu/impl/math/gemm/gemm_plan.h`` defines reusable typed plans for
+``float32`` and ``float64``. ``GemmPlan`` records dimensions, transpose and
+scaling attributes, current cache/register blocking, useful parallelism, and
+the typed kernel entry point. It can also own a constant B matrix so its
+lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
+promotion, batched matrix multiplication, multidirectional batch broadcasting,
+transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
+tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
+heterogeneous batches respectively. Plans derive ``MC``, ``NC``, and ``KC``
+from deterministic CPUID cache descriptors on x86, align them to register
+tiles, and retain conservative defaults when cache discovery is unavailable.
+The selected values are passed to the five-loop engine rather than being
+descriptive metadata.
+
+The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
+or split-K path once from the prepared shape. Persistent packed constant panels
+are introduced by a later roadmap step.
 
 Platform support (x86_64)
 -------------------------
@@ -168,6 +189,10 @@ Implemented optimizations (for reference)
      - Status
    * - K-blocking (``kGemmTileK``)
      - Implemented -- bounds the packed ``B`` panel to an L2-resident size.
+   * - Hierarchical L1/L2/L3 cache blocking
+     - Implemented -- deterministic x86 CPUID cache descriptors select aligned
+       ``MC``, ``NC``, and ``KC`` values stored in each plan; conservative
+       defaults cover unavailable cache discovery.
    * - 2D M x N task parallelism
      - Implemented -- flattened task list, fixes the ``M == 1`` starvation case.
    * - A-panel packing (``PackARowBlock``)
@@ -209,17 +234,6 @@ gains.
        compiler to spill to the stack and erase the gain (or regress). Needs a
        remainder loop for ``K`` not a multiple of the unroll factor. Lower risk
        on AVX-512 (32 ZMM registers).
-   * - Hierarchical L1/L2/L3 cache blocking
-     - Detect real cache sizes (e.g. via CPUID leaves) and size ``mc``/``kc``/``nc``
-       accordingly instead of the fixed ``kGemmTileM/N/K`` constants; add an
-       ``nc`` blocking level above ``kGemmTileN`` (OpenBLAS/BLIS style).
-     - Moderate, especially for very large ``K``/``N`` shapes that currently
-       only get one level of blocking; likely small to negligible for shapes
-       that already fit today's fixed tile sizes.
-     - Portability of the CPUID cache-size probe across vendors
-       (Intel/AMD leaf differences); more tuning constants to validate;
-       higher implementation/testing cost for an uncertain payoff on
-       already-well-sized default tiles.
    * - Hand-written assembly micro-kernels
      - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
        (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
@@ -250,7 +264,7 @@ gains.
        ``onnx_light_cpu/impl/math/exp_log_kernel.cc``). This is correct and
        reuses the full float32 SIMD path for the matmul itself, but the
        widen/round-trip is pure per-element overhead with no vectorization of
-       its own (see ``plot_gemm_dtype_benchmark.py`` in the example gallery
+       its own (see ``plot_gemm_dtype_benchmark.py`` in the benchmark gallery
        for measured overhead across representative shapes). What remains is
        the **SIMD acceleration layer**: real half-precision vector
        micro-kernels (AVX2 ``F16C``/``VCVTPH2PS`` for convert-then-FMA-in-
