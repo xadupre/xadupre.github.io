@@ -7,8 +7,7 @@ un-accelerated reference kernels). This script reproduces those benchmark
 examples so their results can be published on a dashboard rather than only
 living as static images in the rendered gallery.
 
-Two of the gallery examples are genuine ``onnxruntime`` vs ``onnx-light-cpu``
-benchmarks and are reproduced here:
+The dashboard records five ``onnxruntime`` vs ``onnx-light-cpu`` benchmarks:
 
 ``abs`` (``plot_abs_benchmark.py``)
     A single ``Abs`` node evaluated on a 1-D ``float32`` array whose length
@@ -17,6 +16,12 @@ benchmarks and are reproduced here:
 ``gemm`` (``plot_gemm_benchmark.py``)
     A single ``Gemm`` node computing ``Y = A @ B`` for square ``float32``
     matrices of increasing size.
+
+``exp``, ``log`` and ``not``
+    Single-node vector benchmarks for the additional elementwise kernels
+    accelerated by ``onnx-light-cpu``. ``Exp`` uses bounded ``float32`` values,
+    ``Log`` uses strictly positive ``float32`` values and ``Not`` uses boolean
+    values.
 
 For every example and every input size the script measures the wall-clock
 time of:
@@ -45,7 +50,8 @@ The resulting payload is persisted to
 Usage::
 
     python scripts/record_onnx_light_cpu_examples_benchmark.py [--cache-dir DIR]
-        [--n-warmup N] [--n-measure N] [--max-abs-size N] [--max-gemm-size N]
+        [--n-warmup N] [--n-measure N] [--max-abs-size N]
+        [--max-unary-size N] [--max-gemm-size N]
 """
 
 from __future__ import annotations
@@ -175,6 +181,22 @@ def _make_abs_model():
     return model
 
 
+def _make_unary_model(op_type: str, boolean: bool = False):
+    """Return a single-node unary model with a dynamic vector input."""
+    from onnx_light.onnx import TensorProto, checker, helper
+
+    dtype = TensorProto.BOOL if boolean else TensorProto.FLOAT
+    graph = helper.make_graph(
+        [helper.make_node(op_type, ["X"], ["Y"])],
+        f"{op_type.lower()}_bench",
+        [helper.make_tensor_value_info("X", dtype, ["N"])],
+        [helper.make_tensor_value_info("Y", dtype, ["N"])],
+    )
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    checker.check_model(model)
+    return model
+
+
 def _make_gemm_model():
     """Return the single-node ``Gemm`` model used by ``plot_gemm_benchmark``."""
     from onnx_light.onnx import TensorProto, checker, helper
@@ -279,11 +301,67 @@ def _gemm_example(max_size: Optional[int] = None) -> Dict[str, Any]:
     }
 
 
+def _unary_example(
+    name: str, op_type: str, max_size: Optional[int] = None
+) -> Dict[str, Any]:
+    """Return an elementwise unary benchmark scenario description."""
+    import numpy as np
+
+    size_grid = [10**k for k in range(2, 9)]
+    if max_size is not None:
+        size_grid = [s for s in size_grid if s <= max_size] or size_grid[:1]
+
+    rng = np.random.default_rng(0)
+
+    def make_inputs(size: int) -> Dict[str, Any]:
+        if op_type == "Exp":
+            values = rng.uniform(-10.0, 10.0, size=size).astype(np.float32)
+        elif op_type == "Log":
+            values = rng.uniform(1e-4, 100.0, size=size).astype(np.float32)
+        else:
+            values = rng.integers(0, 2, size=size).astype(np.bool_)
+        return {"X": values}
+
+    def numpy_op(feeds: Dict[str, Any]) -> Any:
+        if op_type == "Exp":
+            return np.exp(feeds["X"])
+        if op_type == "Log":
+            return np.log(feeds["X"])
+        return np.logical_not(feeds["X"])
+
+    def repeat_for(size: int) -> int:
+        return max(7, min(200, 2_000_000 // size))
+
+    return {
+        "name": name,
+        "title": f"{op_type}: onnxruntime vs onnx-light-cpu",
+        "op": op_type,
+        "source": "record_onnx_light_cpu_examples_benchmark.py",
+        "xlabel": "array size (elements)",
+        "size_key": "size",
+        "make_model": lambda: _make_unary_model(op_type, op_type == "Not"),
+        "size_grid": size_grid,
+        "builtin_sizes": list(size_grid),
+        "make_inputs": make_inputs,
+        "numpy_op": numpy_op,
+        "repeat_for": repeat_for,
+        "kernel_name": f"onnx_light_cpu::{op_type}",
+    }
+
+
 def default_examples(
-    max_abs_size: Optional[int] = None, max_gemm_size: Optional[int] = None
+    max_abs_size: Optional[int] = None,
+    max_gemm_size: Optional[int] = None,
+    max_unary_size: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Return the benchmark scenarios reproduced from the onnx-light-cpu gallery."""
-    return [_abs_example(max_abs_size), _gemm_example(max_gemm_size)]
+    """Return the benchmark scenarios displayed on the examples dashboard."""
+    return [
+        _abs_example(max_abs_size),
+        _unary_example("exp", "Exp", max_unary_size),
+        _unary_example("log", "Log", max_unary_size),
+        _unary_example("not", "Not", max_unary_size),
+        _gemm_example(max_gemm_size),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +565,7 @@ def build_payload(
     n_measure: int = N_MEASURE,
     max_abs_size: Optional[int] = None,
     max_gemm_size: Optional[int] = None,
+    max_unary_size: Optional[int] = None,
     examples: Optional[List[Dict[str, Any]]] = None,
     run: Callable[..., Tuple[List[Dict[str, Any]], Dict[str, Any]]] = run_examples,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
@@ -496,7 +575,7 @@ def build_payload(
     if versions is None:
         versions = collect_versions
     if examples is None:
-        examples = default_examples(max_abs_size, max_gemm_size)
+        examples = default_examples(max_abs_size, max_gemm_size, max_unary_size)
 
     now_dt = now or dt.datetime.now(tz=dt.timezone.utc)
     now_iso = _format_iso(now_dt)
@@ -560,6 +639,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optionally cap the largest Gemm matrix size benchmarked.",
     )
+    parser.add_argument(
+        "--max-unary-size",
+        type=int,
+        default=None,
+        help="Optionally cap the largest Exp, Log and Not array size benchmarked.",
+    )
     return parser.parse_args(argv)
 
 
@@ -574,6 +659,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             n_measure=args.n_measure,
             max_abs_size=args.max_abs_size,
             max_gemm_size=args.max_gemm_size,
+            max_unary_size=args.max_unary_size,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record examples benchmark: {exc}")

@@ -81,7 +81,7 @@ class TestDefaultExamples(unittest.TestCase):
     def test_examples_shape(self):
         examples = rce.default_examples()
         names = [e["name"] for e in examples]
-        self.assertEqual(names, ["abs", "gemm"])
+        self.assertEqual(names, ["abs", "exp", "log", "not", "gemm"])
         for example in examples:
             for key in (
                 "title",
@@ -100,11 +100,15 @@ class TestDefaultExamples(unittest.TestCase):
             self.assertTrue(example["size_grid"])
 
     def test_max_size_caps_grid(self):
-        examples = rce.default_examples(max_abs_size=10000, max_gemm_size=64)
+        examples = rce.default_examples(
+            max_abs_size=10000, max_gemm_size=64, max_unary_size=1000
+        )
         abs_ex = next(e for e in examples if e["name"] == "abs")
         gemm_ex = next(e for e in examples if e["name"] == "gemm")
+        unary = [e for e in examples if e["name"] in {"exp", "log", "not"}]
         self.assertTrue(all(s <= 10000 for s in abs_ex["size_grid"]))
         self.assertTrue(all(s <= 64 for s in gemm_ex["size_grid"]))
+        self.assertTrue(all(s <= 1000 for e in unary for s in e["size_grid"]))
 
     def test_gemm_builtin_sizes_subset(self):
         gemm_ex = rce._gemm_example()
@@ -126,6 +130,21 @@ class TestDefaultExamples(unittest.TestCase):
         self.assertIn("B", feeds)
         result = gemm_ex["numpy_op"](feeds)
         self.assertEqual(result.shape, (16, 16))
+
+    def test_unary_inputs_and_numpy_ops(self):
+        examples = {
+            e["name"]: e for e in rce.default_examples(max_unary_size=100)
+        }
+        exp_values = examples["exp"]["make_inputs"](100)["X"]
+        log_values = examples["log"]["make_inputs"](100)["X"]
+        not_values = examples["not"]["make_inputs"](100)["X"]
+        self.assertEqual(exp_values.dtype.name, "float32")
+        self.assertTrue((log_values > 0).all())
+        self.assertEqual(not_values.dtype.name, "bool")
+        for name in ("exp", "log", "not"):
+            example = examples[name]
+            feeds = example["make_inputs"](100)
+            self.assertEqual(example["numpy_op"](feeds).shape, (100,))
 
 
 class TestMeasure(unittest.TestCase):
@@ -227,14 +246,25 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.n_measure, rce.N_MEASURE)
         self.assertIsNone(args.max_abs_size)
         self.assertIsNone(args.max_gemm_size)
+        self.assertIsNone(args.max_unary_size)
 
     def test_overrides(self):
         args = rce.parse_args(
-            ["--n-warmup", "1", "--n-measure", "2", "--max-abs-size", "100"]
+            [
+                "--n-warmup",
+                "1",
+                "--n-measure",
+                "2",
+                "--max-abs-size",
+                "100",
+                "--max-unary-size",
+                "1000",
+            ]
         )
         self.assertEqual(args.n_warmup, 1)
         self.assertEqual(args.n_measure, 2)
         self.assertEqual(args.max_abs_size, 100)
+        self.assertEqual(args.max_unary_size, 1000)
 
 
 class TestMain(unittest.TestCase):
