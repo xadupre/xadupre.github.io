@@ -6,7 +6,7 @@ the installed ``onnx-light`` package and measures the processing time of
 C++ ``KernelDispatchTable``, and ``onnx-light`` running with the
 ``onnx-light-cpu`` SIMD kernels registered on top. The ``onnx-light-cpu``
 backend runs the model through the exact same ``onnx-light``
-``RuntimeSession`` execution path as the plain ``onnx-light`` backend, but
+``ReferenceEvaluator`` API as the plain ``onnx-light`` backend, but
 first calls ``onnx_light_cpu.register_kernels()`` to install the
 SIMD-accelerated ``Abs``/``Exp``/``Log``/``Gemm``/``Not`` kernels into
 ``onnx-light``'s shared C++ ``KernelDispatchTable`` (replacing the built-in
@@ -15,11 +15,10 @@ SIMD-accelerated kernel. That registration is global and irreversible, so the
 built-in ``onnx-light`` pass over every test runs before the
 ``onnx-light-cpu`` pass registers the kernels.
 
-``onnx-light`` runs a model through a reusable ``RuntimeSession`` that
-resolves every kernel once and then replays them on each subsequent run, so
-the benchmark builds the model's ``ExecutionPlan`` and ``RuntimeSession``
-once (outside the timed loop) and reuses them across the measured
-iterations.
+``onnx-light`` runs each model through its public NumPy-based
+``ReferenceEvaluator`` API. The evaluator owns a reusable native C++ runner,
+resolves each kernel once and replays the cached execution plan on subsequent
+runs.
 
 For each test the measurement protocol is:
 
@@ -66,7 +65,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 #: ``onnx_light_cpu`` are timed; the reference implementation is intentionally
 #: omitted because it is Python-only and not representative of production
 #: performance. ``onnx_light_cpu`` runs the model through the *same*
-#: ``onnx-light`` ``RuntimeSession`` execution path as ``onnx_light``, but with
+#: ``onnx-light`` ``ReferenceEvaluator`` API as ``onnx_light``, but with
 #: the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` installed into
 #: onnx-light's shared C++ dispatch table via ``register_kernels``, so it
 #: isolates the effect of those kernels within the same engine.
@@ -424,11 +423,8 @@ def _load_test_data_sets(
 def _type_proto_kind(type_proto: Any) -> str:
     """Return ``"sequence"``, ``"map"`` or ``"tensor"`` for a graph value type.
 
-    The low-level ``RuntimeSession`` execution path keeps tensor, sequence and
-    map values in separate name-keyed stores on :class:`RuntimeContext`. The
-    kind of a graph input/output therefore selects which store the benchmark
-    feeds (``set`` / ``put_sequence`` / ``put_map``) and reads back (``get`` /
-    ``get_sequence`` / ``get_map``). Both the protobuf ``HasField`` API and
+    Tensor, sequence and map values have different serialized representations
+    in backend test datasets. Both the protobuf ``HasField`` API and
     onnx-light's ``has_*_type()`` accessors are supported.
     """
     if type_proto is None:
@@ -530,112 +526,32 @@ def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
-def _runtime_tensor_to_numpy(runtime, numpy_helper, tensor):
-    """Convert an onnx-light runtime ``Tensor`` into a :class:`numpy.ndarray`.
-
-    Standard fixed-width dtypes are reinterpreted from the tensor's raw byte
-    view returned by ``runtime.tensor_to_numpy`` (no copy); packed sub-byte
-    types and strings fall back to the general ``numpy_helper.to_array`` path
-    via ``runtime.tensor_to_proto``.
-    """
-    import numpy as np
-
-    dtype = _cc_numpy_dtype_for(int(tensor.data_type))
-    if dtype is not None:
-        raw = runtime.tensor_to_numpy(tensor)
-        arr = raw.view(dtype)
-        return arr.reshape(tuple(int(d) for d in tensor.shape))
-    return numpy_helper.to_array(runtime.tensor_to_proto(tensor))
-
-
-def _make_onnx_light_runtime_session_runner(
+def _make_onnx_light_reference_runner(
     model,
-    register: Optional[Callable[[Any], Any]] = None,
+    register: Optional[Callable[[], Any]] = None,
 ) -> Callable[[List[Any]], List[Any]]:
-    """Run ``model`` through onnx-light's ``ExecutionPlan`` + ``RuntimeSession``.
+    """Run ``model`` through onnx-light's public NumPy-based evaluator API.
 
-    onnx-light now exposes a reusable
-    :class:`~onnx_light.onnx_py._onnxpykernels.runtime.RuntimeSession` that
-    resolves every kernel once (on its first ``run``) and replays the cached
-    kernels on subsequent runs, mirroring how an inference runtime prepares an
-    executable graph once and then runs it repeatedly.
+    ``ReferenceEvaluator`` owns and reuses its native C++ execution runner.
+    Inputs are passed directly as NumPy arrays, just as they are for
+    ``onnxruntime.InferenceSession.run``; the benchmark does not construct
+    runtime tensors or protobuf values itself.
 
-    The benchmark builds the plan and session a single time (outside the timed
-    loop) so the measured iterations reflect the model's execution rather than
-    the one-off kernel initialisation. Only the numeric backend-test corpus is
-    benchmarked, so positional inputs are wired to the graph's declared
-    (non-initializer) inputs by name.
-
-    ``register``, when provided, is invoked once with the freshly created
-    ``RuntimeSession`` before any run so a backend can install kernels *on that
-    session* (rather than process-wide). The ``onnx_light_cpu`` backend uses it
-    to register its SIMD kernels on the session via
-    ``onnx_light_cpu.register_kernels(session)``.
+    ``register``, when provided, runs before evaluator construction because
+    onnx-light-cpu installs its kernels into the process-wide dispatch table.
     """
-    import numpy as np
-    from onnx_light.onnx_lib import ModelProto as _LModelProto
-    from onnx_light.onnx_lib import numpy_helper as _lnh
-    from onnx_light.onnx_py._onnxpykernels import runtime as _rt
+    from onnx_light.onnx.reference import ReferenceEvaluator
 
-    lmodel = model
-    if not isinstance(model, _LModelProto):
-        lmodel = _LModelProto()
-        lmodel.ParseFromString(model.SerializeToString())
-
-    version = 18
-    for opset in lmodel.opset_import:
-        if opset.domain in ("", "ai.onnx"):
-            version = int(opset.version)
-            break
-
-    initializers = list(lmodel.graph.initializer)
-    initializer_names = {init.name for init in initializers}
-    graph_inputs = [vi for vi in lmodel.graph.input if vi.name not in initializer_names]
-    input_names = [vi.name for vi in graph_inputs]
-    input_kinds = [_type_proto_kind(getattr(vi, "type", None)) for vi in graph_inputs]
-    output_names = [vi.name for vi in lmodel.graph.output]
-    output_kinds = [
-        _type_proto_kind(getattr(vi, "type", None)) for vi in lmodel.graph.output
-    ]
-
-    def _to_tensor(name: str, value: Any):
-        return _rt.tensor_from_proto(_lnh.from_array(np.ascontiguousarray(value), name=name))
-
-    # Build the execution plan and the reusable session once; the session
-    # caches the resolved kernels after its first ``run`` call.
-    plan = _rt.ExecutionPlan(lmodel.graph)
-    session = _rt.RuntimeSession(plan)
     if register is not None:
-        register(session)
+        register()
+
+    evaluator = ReferenceEvaluator(model.SerializeToString())
+    input_names = evaluator.input_names
 
     def _run(inputs: List[Any]) -> List[Any]:
-        ctx = _rt.RuntimeContext(_rt.KernelContext(_rt.default_opset(version)))
-        # Sequence and map inputs live in dedicated stores on the context, so
-        # feed each graph input through the store matching its declared type.
-        for name, kind, value in zip(input_names, input_kinds, inputs):
-            if kind == "sequence":
-                ctx.put_sequence(name, [_to_tensor(name, elem) for elem in value])
-            elif kind == "map":
-                ctx.put_map(name, value)
-            else:
-                ctx.set(name, _to_tensor(name, value))
-        _rt.register_model_functions(lmodel, ctx)
-        for init in initializers:
-            if not ctx.has(init.name):
-                ctx.set(init.name, _rt.tensor_from_proto(init), "initializer")
-        session.run(ctx)
-        # Read every graph output back from the store matching its type.
-        results: List[Any] = []
-        for name, kind in zip(output_names, output_kinds):
-            if kind == "sequence":
-                results.append(
-                    [_runtime_tensor_to_numpy(_rt, _lnh, t) for t in ctx.get_sequence(name)]
-                )
-            elif kind == "map":
-                results.append(ctx.get_map(name))
-            else:
-                results.append(_runtime_tensor_to_numpy(_rt, _lnh, ctx.get(name)))
-        return results
+        return list(evaluator.run(None, dict(zip(input_names, inputs))))
+
+    _run.used_kernels = evaluator.used_kernels  # type: ignore[attr-defined]
 
     return _run
 
@@ -643,14 +559,14 @@ def _make_onnx_light_runtime_session_runner(
 def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner for ``model``.
 
-    Runs ``model`` through onnx-light's reusable ``RuntimeSession`` execution
-    path (init kernels once, run repeatedly), the same execution path used by
-    the ``onnx_light_cpu`` backend. Any failure — whether while building the
-    session or while a kernel runs — is surfaced so the benchmark records a
+    Runs ``model`` through onnx-light's public ``ReferenceEvaluator`` API
+    (native runner initialized once, then reused), the same API used by the
+    ``onnx_light_cpu`` backend. Any failure — whether while building the
+    evaluator or while a kernel runs — is surfaced so the benchmark records a
     clear error, exactly like the ``onnxruntime`` and ``onnx_light_cpu``
     backends; there is no fallback to another runner.
     """
-    return _make_onnx_light_runtime_session_runner(model)
+    return _make_onnx_light_reference_runner(model)
 
 
 def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
@@ -658,13 +574,11 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
 
     ``onnx-light-cpu`` ships SIMD-accelerated ``Abs``/``Exp``/``Log``/``Gemm``/
     ``Not`` kernels that override the corresponding built-in entries for the
-    default ONNX domain. The kernels are installed *on this benchmark's
-    session* — not process-wide — by passing the freshly created
-    ``RuntimeSession`` to :func:`onnx_light_cpu.register_kernels` through the
-    session runner's ``register`` hook. Scoping the registration to the session
-    keeps the plain ``onnx-light`` backend running its built-in kernels and lets
-    the model run through the exact same ``RuntimeSession`` execution path, so
-    the only difference measured is the SIMD kernels themselves.
+    default ONNX domain. The kernels are installed process-wide through
+    :func:`onnx_light_cpu.register_kernels` before constructing the evaluator.
+    The plain ``onnx-light`` backend is benchmarked for every model before that
+    global registration occurs, so its measurements retain the built-in
+    kernels.
 
     Importing ``onnx_light_cpu`` — or calling ``register_kernels`` — raises
     ``ImportError`` when ``onnx-light-cpu`` is not installed (or was built
@@ -686,11 +600,10 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     reporting built-in-kernel timings as onnx-light-cpu results. Builds that do
     not expose the kernel-name introspection helpers skip the check.
 
-    When the onnx-light build exposes the session-scoped
-    ``RuntimeSession.used_kernels()`` introspection (onnx-light#4391) — the
-    normalized ``"<domain>:<op_type>"`` identifiers of the operators this
-    session actually executed — the check is tightened: every operator the
-    session ran that onnx-light-cpu overrides *must* have been served by an
+    ``ReferenceEvaluator.used_kernels()`` exposes the normalized
+    ``"<domain>:<op_type>"`` identifiers of the operators the evaluator
+    executed. The check uses it to ensure every operator that onnx-light-cpu
+    overrides was served by an
     onnx-light-cpu kernel. This catches the case where an overridable operator
     silently fell back to a built-in kernel (so onnx-light-cpu is *not* really
     used where it should be), which the process-wide
@@ -698,20 +611,17 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     """
     import onnx_light_cpu
 
-    # Capture the ``RuntimeSession`` created by the runner so, after a run, we
-    # can ask it which operators actually executed (onnx-light#4391) and confirm
-    # onnx-light-cpu served every operator it overrides.
-    session_box: Dict[str, Any] = {}
-
-    def _register(session: Any) -> Any:
-        session_box["session"] = session
-        return onnx_light_cpu.register_kernels(session)
-
-    runner = _make_onnx_light_runtime_session_runner(model, register=_register)
+    runner = _make_onnx_light_reference_runner(
+        model, register=onnx_light_cpu.register_kernels
+    )
 
     clear_used_kernel_names = getattr(onnx_light_cpu, "clear_used_kernel_names", None)
     used_kernel_names = getattr(onnx_light_cpu, "used_kernel_names", None)
     registered_kernel_names = getattr(onnx_light_cpu, "registered_kernel_names", None)
+    try:
+        from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
+    except ImportError:
+        set_kernel_usage_recording = None
     if clear_used_kernel_names is None or used_kernel_names is None:
         return runner
 
@@ -731,52 +641,50 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     def _run_checked(inputs: List[Any]) -> List[Any]:
         if checked["done"]:
             return runner(inputs)
+        if set_kernel_usage_recording is not None:
+            set_kernel_usage_recording(True)
         clear_used_kernel_names()
-        outputs = runner(inputs)
-        used = list(used_kernel_names())
-        if not used:
-            overridden = sorted(registered) if registered else []
-            raise RuntimeError(
-                "no onnx-light-cpu kernel ran for this model; it contains none "
-                f"of the operators overridden by onnx-light-cpu ({overridden})"
-            )
-        if cpu_kernel_names:
-            foreign = sorted(set(used) - cpu_kernel_names)
-            if foreign:
+        try:
+            outputs = runner(inputs)
+            used = list(used_kernel_names())
+            if not used:
+                overridden = sorted(registered) if registered else []
                 raise RuntimeError(
-                    "kernels that ran are not all from onnx-light-cpu; the "
-                    f"following names are not onnx-light-cpu kernels: {foreign}"
+                    "no onnx-light-cpu kernel ran for this model; it contains none "
+                    f"of the operators overridden by onnx-light-cpu ({overridden})"
                 )
-        # Session-scoped cross-check (onnx-light#4391): every operator the
-        # session executed that onnx-light-cpu overrides must have been served
-        # by an onnx-light-cpu kernel. Registration replaces the kernel per
-        # ``(domain, op_type)`` on the session's dispatch table, so an overridable
-        # operator is served by onnx-light-cpu for every node or not at all; an
-        # overridable operator the session ran that is missing from the served
-        # set means it fell back to a built-in kernel, i.e. onnx-light-cpu was
-        # not really used.
-        session = session_box.get("session")
-        session_used_kernels = getattr(session, "used_kernels", None)
-        if callable(session_used_kernels) and overridden_op_types:
-            session_overridable = {
-                identifier.rsplit(":", 1)[-1]
-                for identifier in session_used_kernels()
-                if identifier.rsplit(":", 1)[-1] in overridden_op_types
-            }
-            # Invert ``registered`` (op_type -> kernel name) to map the recorded
-            # onnx-light-cpu kernel names back to the op_types they served.
-            served = {
-                op_type for op_type, kernel in registered.items() if kernel in used
-            }
-            missing = sorted(session_overridable - served)
-            if missing:
-                raise RuntimeError(
-                    "some operators overridden by onnx-light-cpu ran with the "
-                    "built-in kernels instead of the onnx-light-cpu kernels: "
-                    f"{missing}"
-                )
-        checked["done"] = True
-        return outputs
+            if cpu_kernel_names:
+                foreign = sorted(set(used) - cpu_kernel_names)
+                if foreign:
+                    raise RuntimeError(
+                        "kernels that ran are not all from onnx-light-cpu; the "
+                        f"following names are not onnx-light-cpu kernels: {foreign}"
+                    )
+            # Session-scoped cross-check (onnx-light#4391): every operator the
+            # session executed that onnx-light-cpu overrides must have been served
+            # by an onnx-light-cpu kernel.
+            session_used_kernels = getattr(runner, "used_kernels", None)
+            if callable(session_used_kernels) and overridden_op_types:
+                session_overridable = {
+                    identifier.rsplit(":", 1)[-1]
+                    for identifier in session_used_kernels()
+                    if identifier.rsplit(":", 1)[-1] in overridden_op_types
+                }
+                served = {
+                    op_type for op_type, kernel in registered.items() if kernel in used
+                }
+                missing = sorted(session_overridable - served)
+                if missing:
+                    raise RuntimeError(
+                        "some operators overridden by onnx-light-cpu ran with the "
+                        "built-in kernels instead of the onnx-light-cpu kernels: "
+                        f"{missing}"
+                    )
+            checked["done"] = True
+            return outputs
+        finally:
+            if set_kernel_usage_recording is not None:
+                set_kernel_usage_recording(False)
 
     return _run_checked
 
