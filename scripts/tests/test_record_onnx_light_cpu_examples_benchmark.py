@@ -21,14 +21,13 @@ class TestRowFromTimes(unittest.TestCase):
             100,
             {
                 "numpy": 0.001,
-                "onnx_light": 0.02,
                 "onnx_light_cpu": 0.025,
                 "onnxruntime": 0.05,
             },
         )
         self.assertEqual(row["size"], 100)
         self.assertEqual(row["numpy_ms"], 0.001)
-        self.assertEqual(row["onnx_light_ms"], 0.02)
+        self.assertNotIn("onnx_light_ms", row)
         self.assertEqual(row["onnx_light_cpu_ms"], 0.025)
         self.assertEqual(row["onnxruntime_ms"], 0.05)
         # speedup_cpu = onnxruntime / onnx_light_cpu = 0.05 / 0.025 = 2.0
@@ -90,7 +89,6 @@ class TestDefaultExamples(unittest.TestCase):
                 "xlabel",
                 "make_model",
                 "size_grid",
-                "builtin_sizes",
                 "make_inputs",
                 "numpy_op",
                 "repeat_for",
@@ -110,10 +108,7 @@ class TestDefaultExamples(unittest.TestCase):
         self.assertTrue(all(s <= 64 for s in gemm_ex["size_grid"]))
         self.assertTrue(all(s <= 1000 for e in unary for s in e["size_grid"]))
 
-    def test_gemm_builtin_sizes_subset(self):
-        gemm_ex = rce._gemm_example()
-        # The built-in reference kernel is skipped for the two largest sizes.
-        self.assertEqual(gemm_ex["builtin_sizes"], gemm_ex["size_grid"][:-2])
+
 
     def test_abs_inputs_and_numpy_op(self):
         abs_ex = rce._abs_example(max_size=1000)

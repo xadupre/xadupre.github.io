@@ -40,8 +40,8 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("function renderExample(example)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
-        # The four backends are labelled for the table header.
-        for backend in ("numpy", "onnx-light (built-in)", "onnx-light-cpu", "onnxruntime"):
+        # The three backends are labelled for the table header.
+        for backend in ("numpy", "onnx-light-cpu", "onnxruntime"):
             self.assertIn(backend, text)
 
     def test_operator_tables_are_folded_with_summary_rows(self):
