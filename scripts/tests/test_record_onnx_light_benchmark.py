@@ -518,8 +518,8 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.limit, 10)
 
 
-class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
-    """The onnx-light runner drives the model through a reusable RuntimeSession."""
+class TestOnnxLightReferenceRunner(unittest.TestCase):
+    """The onnx-light runner uses the public NumPy-based evaluator API."""
 
     def _install_fake_onnx_light(self, out_value, input_kind="tensor", output_kind="tensor"):
         """Register minimal fake ``onnx_light`` modules exposing the runtime API.
@@ -547,7 +547,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             return None if kind == "tensor" else _FakeTypeProto(kind)
 
         class _FakeModelProto:
-            pass
+            def SerializeToString(self):
+                return b"model"
 
         class _Named:
             def __init__(self, name, type_proto=None):
@@ -636,6 +637,10 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         runtime.ExecutionPlan = _ExecutionPlan
         runtime.RuntimeSession = _RuntimeSession
         runtime.tensor_from_proto = lambda tp: ("tensor", tp)
+        runtime.tensor_from_numpy = lambda name, dtype, shape, raw, copy=True: (
+            "tensor",
+            raw.view(rlb._cc_numpy_dtype_for(dtype)).reshape(shape),
+        )
 
         def _register(model_, ctx):
             telemetry["registered"] += 1
@@ -656,6 +661,28 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         onnx_lib.numpy_helper = numpy_helper
 
         onnx_light = types.ModuleType("onnx_light")
+        onnx_pkg = types.ModuleType("onnx_light.onnx")
+        reference = types.ModuleType("onnx_light.onnx.reference")
+
+        class _ReferenceEvaluator:
+            def __init__(self, model_bytes):
+                self.input_names = ["x"]
+                telemetry["plans"] += 1
+                telemetry["sessions"] += 1
+
+            def run(self, output_names, feeds):
+                telemetry["runs"] += 1
+                telemetry.setdefault("feeds", []).append(feeds)
+                if output_kind == "sequence":
+                    return [[np.asarray(out_value)]]
+                if output_kind == "map":
+                    return [{1: 2}]
+                return [np.asarray(out_value)]
+
+            def used_kernels(self):
+                return []
+
+        reference.ReferenceEvaluator = _ReferenceEvaluator
         onnx_py = types.ModuleType("onnx_light.onnx_py")
         pyk = types.ModuleType("onnx_light.onnx_py._onnxpykernels")
         pyk.runtime = runtime
@@ -663,6 +690,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
         modules = {
             "onnx_light": onnx_light,
+            "onnx_light.onnx": onnx_pkg,
+            "onnx_light.onnx.reference": reference,
             "onnx_light.onnx_lib": onnx_lib,
             "onnx_light.onnx_lib.numpy_helper": numpy_helper,
             "onnx_light.onnx_py": onnx_py,
@@ -678,8 +707,9 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         saved = {name: sys.modules.get(name) for name in modules}
         try:
             sys.modules.update(modules)
-            runner = rlb._make_onnx_light_runtime_session_runner(model)
-            first = runner([np.array([1.0, 2.0], dtype=np.float32)])
+            runner = rlb._make_onnx_light_reference_runner(model)
+            first_input = np.array([1.0, 2.0], dtype=np.float32)
+            first = runner([first_input])
             second = runner([np.array([3.0, 4.0], dtype=np.float32)])
         finally:
             for name, mod in saved.items():
@@ -695,12 +725,13 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         self.assertEqual(telemetry["plans"], 1)
         self.assertEqual(telemetry["sessions"], 1)
         self.assertEqual(telemetry["runs"], 2)
+        self.assertIs(telemetry["feeds"][0]["x"], first_input)
 
     def test_make_onnx_light_runner_uses_runtime_session(self):
         """The onnx_light backend runs through the ``RuntimeSession`` path, the
         same way as the other backends (no fallback runner)."""
         session_calls = []
-        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_session = rlb._make_onnx_light_reference_runner
 
         def _session(model):
             def _run(inputs):
@@ -710,17 +741,17 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             return _run
 
         try:
-            rlb._make_onnx_light_runtime_session_runner = _session
+            rlb._make_onnx_light_reference_runner = _session
             runner = rlb._make_onnx_light_runner(object())
             self.assertEqual(runner(["in"]), ["session"])
             self.assertEqual(session_calls, [["in"]])
         finally:
-            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_session
 
     def test_make_onnx_light_runner_propagates_run_time_error(self):
         """A ``RuntimeSession`` that raises while a kernel runs surfaces the
         error instead of falling back to another runner."""
-        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_session = rlb._make_onnx_light_reference_runner
 
         def _session(model):
             def _run(inputs):
@@ -729,27 +760,27 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
             return _run
 
         try:
-            rlb._make_onnx_light_runtime_session_runner = _session
+            rlb._make_onnx_light_reference_runner = _session
             runner = rlb._make_onnx_light_runner(object())
             with self.assertRaises(RuntimeError):
                 runner(["a"])
         finally:
-            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_session
 
     def test_make_onnx_light_runner_propagates_load_error(self):
         """A failure while building the ``RuntimeSession`` propagates (no
         fallback runner is built)."""
-        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_session = rlb._make_onnx_light_reference_runner
 
         def _raise(model):
             raise ImportError("no runtime bindings")
 
         try:
-            rlb._make_onnx_light_runtime_session_runner = _raise
+            rlb._make_onnx_light_reference_runner = _raise
             with self.assertRaises(ImportError):
                 rlb._make_onnx_light_runner(object())
         finally:
-            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_session
 
     def test_make_onnx_light_cpu_runner_registers_kernels_on_session(self):
         """The cpu runner installs the SIMD kernels **on the session** (not
@@ -760,7 +791,7 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         """
         import types
 
-        saved_session = rlb._make_onnx_light_runtime_session_runner
+        saved_session = rlb._make_onnx_light_reference_runner
         calls = {"register_fn": None, "model": None}
 
         def _fake(model, register=None):
@@ -770,9 +801,8 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
 
         registered = {"session": None}
 
-        def _register_kernels(sess=None):
-            registered["session"] = sess
-            return sess
+        def _register_kernels():
+            registered["calls"] = registered.get("calls", 0) + 1
 
         cpu_module = types.ModuleType("onnx_light_cpu")
         cpu_module.register_kernels = _register_kernels
@@ -780,26 +810,23 @@ class TestOnnxLightRuntimeSessionRunner(unittest.TestCase):
         saved_cpu = sys.modules.get("onnx_light_cpu")
         model = object()
         try:
-            rlb._make_onnx_light_runtime_session_runner = _fake
+            rlb._make_onnx_light_reference_runner = _fake
             sys.modules["onnx_light_cpu"] = cpu_module
             result = rlb._make_onnx_light_cpu_runner(model)
         finally:
-            rlb._make_onnx_light_runtime_session_runner = saved_session
+            rlb._make_onnx_light_reference_runner = saved_session
             if saved_cpu is None:
                 sys.modules.pop("onnx_light_cpu", None)
             else:
                 sys.modules["onnx_light_cpu"] = saved_cpu
 
         self.assertEqual(result, "runner")
-        # The model was handed to the session runner untouched, and the
-        # onnx-light-cpu registration was wired to the session (not called
-        # globally beforehand) via the ``register`` hook: invoking the hook with
-        # a session delegates to ``onnx_light_cpu.register_kernels(session)``.
+        # Registration is wired into evaluator construction and runs globally
+        # before the evaluator is created.
         self.assertIs(calls["model"], model)
         self.assertTrue(callable(calls["register_fn"]))
-        sentinel = object()
-        self.assertIs(calls["register_fn"](sentinel), sentinel)
-        self.assertIs(registered["session"], sentinel)
+        calls["register_fn"]()
+        self.assertEqual(registered["calls"], 1)
 
     def test_make_onnx_light_cpu_runner_raises_when_package_missing(self):
         """An unavailable onnx-light-cpu surfaces as an ImportError (no fallback)."""
@@ -825,11 +852,20 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
     def _install_fakes(self, session_used_kernels=None):
         import types
 
-        events = {"sessions": 0, "runs": 0, "registered": 0}
+        events = {
+            "sessions": 0,
+            "runs": 0,
+            "registered": 0,
+            "tensor_copies": [],
+            "usage_recording": [],
+        }
 
         class _FakeModelProto:
             def ParseFromString(self, data):
                 pass
+
+            def SerializeToString(self):
+                return b"model"
 
         class _Named:
             def __init__(self, name):
@@ -893,6 +929,12 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         runtime.ExecutionPlan = _ExecutionPlan
         runtime.RuntimeSession = _RuntimeSession
         runtime.tensor_from_proto = lambda tp: tp["arr"] if isinstance(tp, dict) else tp
+        runtime.tensor_from_numpy = (
+            lambda name, dtype, shape, raw, copy=True: (
+                events["tensor_copies"].append(copy)
+                or raw.view(np.float32).reshape(shape)
+            )
+        )
         runtime.register_model_functions = lambda m, ctx: None
         runtime.tensor_to_numpy = lambda t: np.asarray(t, dtype=np.float32).view(np.uint8)
         runtime.tensor_to_proto = lambda t: t
@@ -916,6 +958,22 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         onnx_lib.numpy_helper = numpy_helper
 
         onnx_light = types.ModuleType("onnx_light")
+        onnx_pkg = types.ModuleType("onnx_light.onnx")
+        reference = types.ModuleType("onnx_light.onnx.reference")
+
+        class _ReferenceEvaluator:
+            def __init__(self, model_bytes):
+                self.input_names = ["x"]
+
+            def run(self, output_names, feeds):
+                events["runs"] += 1
+                events.setdefault("feeds", []).append(feeds)
+                return [np.abs(feeds["x"])]
+
+            def used_kernels(self):
+                return list(session_used_kernels or [])
+
+        reference.ReferenceEvaluator = _ReferenceEvaluator
         onnx_py = types.ModuleType("onnx_light.onnx_py")
         pyk = types.ModuleType("onnx_light.onnx_py._onnxpykernels")
         pyk.runtime = runtime
@@ -930,15 +988,24 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
 
         cpu = types.ModuleType("onnx_light_cpu")
         cpu.register_kernels = _register_kernels
+        cpu_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        cpu_register = types.ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        cpu_register.set_kernel_usage_recording = (
+            lambda enabled: events["usage_recording"].append(enabled)
+        )
 
         modules = {
             "onnx_light": onnx_light,
+            "onnx_light.onnx": onnx_pkg,
+            "onnx_light.onnx.reference": reference,
             "onnx_light.onnx_lib": onnx_lib,
             "onnx_light.onnx_lib.numpy_helper": numpy_helper,
             "onnx_light.onnx_py": onnx_py,
             "onnx_light.onnx_py._onnxpykernels": pyk,
             "onnx_light.onnx_py._onnxpykernels.runtime": runtime,
             "onnx_light_cpu": cpu,
+            "onnx_light_cpu.onnx_py": cpu_py,
+            "onnx_light_cpu.onnx_py._cpuregister": cpu_register,
         }
         return model, modules, events
 
@@ -960,8 +1027,8 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         # model ran through a single RuntimeSession (the same execution path as
         # the plain onnx-light backend).
         self.assertEqual(events["registered"], 1)
-        self.assertEqual(events["sessions"], 1)
         self.assertEqual(events["runs"], 1)
+        self.assertIsInstance(events["feeds"][0]["x"], np.ndarray)
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
     def test_cpu_runner_checks_used_kernel_names(self):
@@ -995,22 +1062,17 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
 
         self.assertEqual(used["cleared"], 1)
         self.assertEqual(events["runs"], 2)
+        self.assertEqual(events["usage_recording"], [True, False])
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
-    def test_cpu_runner_registers_on_session_object(self):
-        """The onnx-light-cpu kernels are registered *on the session*: the
-        ``register_kernels`` hook is called with the ``RuntimeSession`` created
-        by the runner, not process-wide before it exists."""
+    def test_cpu_runner_registers_globally_before_evaluator(self):
+        """The public API registers CPU kernels globally before construction."""
         model, modules, events = self._install_fakes()
-        seen = {"session": None}
+        seen = {"args": None}
 
-        runtime = modules["onnx_light.onnx_py._onnxpykernels.runtime"]
-        real_session_cls = runtime.RuntimeSession
-
-        def _register_kernels(sess=None):
+        def _register_kernels(*args):
             events["registered"] += 1
-            seen["session"] = sess
-            return sess
+            seen["args"] = args
 
         modules["onnx_light_cpu"].register_kernels = _register_kernels
 
@@ -1026,7 +1088,7 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
                     sys.modules[name] = mod
 
         self.assertEqual(events["registered"], 1)
-        self.assertIsInstance(seen["session"], real_session_cls)
+        self.assertEqual(seen["args"], ())
 
     def test_cpu_runner_raises_when_non_cpu_kernel_used(self):
         """Explicitly checks the used kernel names come from onnx-light-cpu: if a
@@ -1194,9 +1256,9 @@ class TestTypeProtoKindDetection(unittest.TestCase):
         self.assertEqual(rlb._type_proto_kind(_Type()), "map")
 
 
-class TestRuntimeSessionSequenceIO(unittest.TestCase):
+class TestReferenceEvaluatorSequenceIO(unittest.TestCase):
     def _run_with_kinds(self, out_value, input_kind, output_kind, inputs):
-        helper = TestOnnxLightRuntimeSessionRunner()
+        helper = TestOnnxLightReferenceRunner()
         model, telemetry, modules = helper._install_fake_onnx_light(
             out_value, input_kind=input_kind, output_kind=output_kind
         )
@@ -1204,7 +1266,7 @@ class TestRuntimeSessionSequenceIO(unittest.TestCase):
         saved = {name: sys.modules.get(name) for name in modules}
         try:
             sys.modules.update(modules)
-            runner = rlb._make_onnx_light_runtime_session_runner(model)
+            runner = rlb._make_onnx_light_reference_runner(model)
             result = runner(inputs)
         finally:
             for name, mod in saved.items():

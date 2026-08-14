@@ -7,6 +7,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -163,6 +164,50 @@ class TestMeasure(unittest.TestCase):
         )
         self.assertEqual(calls, ["a", "b", "a", "b", "b", "a", "a", "b"])
         self.assertEqual(len(values), 2)
+
+
+class TestReferenceRunner(unittest.TestCase):
+    def test_passes_numpy_feeds_directly_to_public_evaluator(self):
+        calls = {}
+
+        class _ReferenceEvaluator:
+            def __init__(self, model):
+                calls["model"] = model
+
+            def run(self, output_names, feeds):
+                calls["output_names"] = output_names
+                calls["feeds"] = feeds
+                return ["output"]
+
+        reference = types.ModuleType("onnx_light.onnx.reference")
+        reference.ReferenceEvaluator = _ReferenceEvaluator
+        onnx = types.ModuleType("onnx_light.onnx")
+        onnx.reference = reference
+        onnx_light = types.ModuleType("onnx_light")
+        onnx_light.onnx = onnx
+        modules = {
+            "onnx_light": onnx_light,
+            "onnx_light.onnx": onnx,
+            "onnx_light.onnx.reference": reference,
+        }
+        saved = {name: sys.modules.get(name) for name in modules}
+        model = object()
+        feeds = {"X": object()}
+        try:
+            sys.modules.update(modules)
+            runner = rce._make_reference_runner(model)
+            result = runner(feeds)
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        self.assertEqual(result, ["output"])
+        self.assertIs(calls["model"], model)
+        self.assertIsNone(calls["output_names"])
+        self.assertIs(calls["feeds"], feeds)
 
 
 class TestBuildPayload(unittest.TestCase):
