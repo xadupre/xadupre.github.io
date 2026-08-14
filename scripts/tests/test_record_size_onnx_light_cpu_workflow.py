@@ -14,9 +14,6 @@ class TestRecordSizeOnnxLightCpuWorkflow(unittest.TestCase):
         with open(WORKFLOW, encoding="utf-8") as fh:
             cls.content = fh.read()
 
-    def test_workflow_exists(self):
-        self.assertTrue(os.path.isfile(WORKFLOW))
-
     def test_builds_with_onnx_light_integration(self):
         # The recorded binaries must reflect the released build, which links
         # the onnx-light C++ integration (mirrors build_onnx_light_cpu_docs.yml).
