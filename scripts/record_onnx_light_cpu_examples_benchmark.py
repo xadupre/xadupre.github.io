@@ -2,10 +2,9 @@
 
 The ``onnx-light-cpu`` documentation ships a gallery of runnable benchmark
 examples that compare the SIMD-accelerated CPU kernels against
-``onnxruntime`` (and, for context, plain ``numpy`` and ``onnx-light``'s own
-un-accelerated reference kernels). This script reproduces those benchmark
-examples so their results can be published on a dashboard rather than only
-living as static images in the rendered gallery.
+``onnxruntime`` (and, for context, plain ``numpy``). This script reproduces
+those benchmark examples so their results can be published on a dashboard
+rather than only living as static images in the rendered gallery.
 
 The dashboard records five ``onnxruntime`` vs ``onnx-light-cpu`` benchmarks:
 
@@ -32,9 +31,6 @@ time of:
   ``ReferenceEvaluator`` after :func:`onnx_light_cpu.register_kernels` has
   installed the SIMD-accelerated kernels into onnx-light's shared C++ dispatch
   table, so every matching node dispatches to the SIMD kernel.
-* **onnx-light** - onnx-light's own un-accelerated reference kernel, measured
-  *before* ``register_kernels()`` is called (registration is process-wide and
-  irreversible), as a baseline for what onnx-light-cpu adds on top of it.
 * **numpy** - the equivalent :mod:`numpy` operation, as a reference baseline.
 
 Each measurement runs :data:`N_WARMUP` untimed warm-up calls and then retains
@@ -70,11 +66,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 
 #: Backends reported by the dashboard. ``onnxruntime`` and ``onnx_light_cpu``
-#: are the headline comparison; ``onnx_light`` (built-in) and ``numpy`` are
-#: included as context, exactly like the gallery examples.
+#: are the headline comparison; ``numpy`` is included as context, exactly like
+#: the gallery examples.
 BENCHMARK_BACKENDS: Tuple[str, ...] = (
     "numpy",
-    "onnx_light",
     "onnx_light_cpu",
     "onnxruntime",
 )
@@ -249,8 +244,6 @@ def _abs_example(max_size: Optional[int] = None) -> Dict[str, Any]:
         "size_key": "size",
         "make_model": _make_abs_model,
         "size_grid": size_grid,
-        # ``onnx-light`` built-in is measured across the whole grid for Abs.
-        "builtin_sizes": list(size_grid),
         "make_inputs": make_inputs,
         "numpy_op": numpy_op,
         "repeat_for": repeat_for,
@@ -265,11 +258,6 @@ def _gemm_example(max_size: Optional[int] = None) -> Dict[str, Any]:
     size_grid = [16, 32, 64, 128, 256, 512]
     if max_size is not None:
         size_grid = [s for s in size_grid if s <= max_size] or size_grid[:1]
-
-    # The built-in reference Gemm kernel grows much faster than the other
-    # back-ends, so the example only measures it for all but the two largest
-    # sizes to keep the benchmark's runtime reasonable.
-    builtin_sizes = size_grid[:-2] if len(size_grid) > 2 else list(size_grid)
 
     rng = np.random.default_rng(0)
 
@@ -293,7 +281,6 @@ def _gemm_example(max_size: Optional[int] = None) -> Dict[str, Any]:
         "size_key": "size",
         "make_model": _make_gemm_model,
         "size_grid": size_grid,
-        "builtin_sizes": builtin_sizes,
         "make_inputs": make_inputs,
         "numpy_op": numpy_op,
         "repeat_for": repeat_for,
@@ -341,7 +328,6 @@ def _unary_example(
         "size_key": "size",
         "make_model": lambda: _make_unary_model(op_type, op_type == "Not"),
         "size_grid": size_grid,
-        "builtin_sizes": list(size_grid),
         "make_inputs": make_inputs,
         "numpy_op": numpy_op,
         "repeat_for": repeat_for,
@@ -416,11 +402,10 @@ def run_examples(
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Run every scenario and return ``(example_results, meta)``.
 
-    ``register_kernels()`` overrides onnx-light's process-wide dispatch table
-    irreversibly, so the un-accelerated ``onnx_light`` baseline is primed for
-    every example *first*. After registration, cached built-in sessions are
-    measured together with onnx-light-cpu / onnxruntime / numpy in rotating
-    order so the speed-up ratios compare equivalent samples.
+    ``register_kernels()`` installs onnx-light-cpu's SIMD kernels into
+    onnx-light's process-wide dispatch table once (irreversibly). Afterwards
+    every example is measured for onnx-light-cpu / onnxruntime / numpy in
+    rotating order so the speed-up ratios compare equivalent samples.
     """
     from onnx_light_cpu import (
         clear_used_kernel_names,
@@ -434,26 +419,14 @@ def run_examples(
     meta["simd_level"] = level
     meta["simd_name"] = simd_name
 
-    # --- Pass 1: prime onnx-light built-in before registration --------------
-    builtin_runners: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
-    for example in examples:
-        name = example["name"]
-        model = example["make_model"]()
-        runner = _make_reference_runner(model)
-        builtin_runners[name] = runner
-        if example["builtin_sizes"]:
-            runner(example["make_inputs"](example["builtin_sizes"][0]))
-        _log(f"Primed onnx-light built-in baseline for {name!r}.")
-
     # --- Register the SIMD kernels once (process-wide, irreversible) --------
     register_kernels()
 
-    # --- Pass 2: onnxruntime, onnx-light-cpu and numpy ----------------------
+    # --- onnxruntime, onnx-light-cpu and numpy ------------------------------
     results: List[Dict[str, Any]] = []
     for example in examples:
         name = example["name"]
-        model = example["make_model"]()
-        cpu_runner = _make_reference_runner(model)
+        cpu_runner = _make_reference_runner(example["make_model"]())
         ort_runner = _make_onnxruntime_runner(example["make_model"]())
 
         # Confirm the model dispatches to the onnx-light-cpu kernel rather than
@@ -480,21 +453,14 @@ def run_examples(
                 lambda feeds=feeds, runner=cpu_runner: runner(feeds),
                 lambda feeds=feeds, runner=ort_runner: runner(feeds),
             )
-            has_builtin = size in example["builtin_sizes"]
-            if has_builtin:
-                builtin_runner = builtin_runners[name]
-                funcs += (
-                    lambda feeds=feeds, runner=builtin_runner: runner(feeds),
-                )
             measured = measure_together(funcs, repeat, warmup=n_warmup)
-            numpy_ms, cpu_ms, ort_ms = (value * 1e3 for value in measured[:3])
+            numpy_ms, cpu_ms, ort_ms = (value * 1e3 for value in measured)
 
             times: Dict[str, Optional[float]] = {
                 "numpy": numpy_ms,
                 "onnx_light_cpu": cpu_ms,
                 "onnxruntime": ort_ms,
             }
-            times["onnx_light"] = measured[3] * 1e3 if has_builtin else None
             rows.append(_row_from_times(size, times))
 
         set_kernel_usage_recording(True)
