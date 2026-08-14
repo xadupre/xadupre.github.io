@@ -36,6 +36,7 @@ class TestBenchmarkDashboard(unittest.TestCase):
         )
         # And the legend documents the new colour.
         self.assertIn('class="swatch close"', text)
+        self.assertIn("within 10% (speedup in [0.9, 1[)", text)
 
 
 if __name__ == "__main__":
