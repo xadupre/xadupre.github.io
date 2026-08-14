@@ -56,6 +56,8 @@ from record_build_durations import (  # noqa: E402
 
 DEFAULT_REPOS = (
     "xadupre/onnx-light",
+    "xadupre/onnx-light-cpu",
+    "xadupre/onnx-light-kernel-images",
     "xadupre/yet-another-onnx-builder",
     "xadupre/yet-another-onnxruntime-extensions",
 )
