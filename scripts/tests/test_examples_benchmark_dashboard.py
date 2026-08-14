@@ -62,6 +62,18 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         )
         self.assertIn('<script src="../../assets/last-updated.js">', text)
 
+    def test_speedup_near_one_uses_neutral_color(self):
+        text = _read(PAGE)
+        # Speed-ups in [0.9, 1[ are neither red nor green but a distinct color.
+        self.assertIn('if (value >= 0.9 && value < 1) return "neutral";', text)
+        self.assertIn(".operator-summary .neutral { color: #bc8cff; }", text)
+        self.assertIn(
+            "table.benchmark td.neutral { color: #bc8cff; font-weight: bold; }",
+            text,
+        )
+        self.assertIn(".legend .swatch.neutral { background: #bc8cff; }", text)
+        self.assertIn('class="swatch neutral"', text)
+
 
 class TestIndexWiring(unittest.TestCase):
     def test_index_links_dashboard(self):
