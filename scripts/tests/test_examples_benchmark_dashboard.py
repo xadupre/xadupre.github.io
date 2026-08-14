@@ -37,7 +37,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_page_renders_examples_and_speedup(self):
         text = _read(PAGE)
-        self.assertIn("function renderExample(example)", text)
+        self.assertIn("function renderExample(example, cats)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
         # The three backends are labelled for the table header.
@@ -73,6 +73,36 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         )
         self.assertIn(".legend .swatch.neutral { background: #bc8cff; }", text)
         self.assertIn('class="swatch neutral"', text)
+
+    def test_page_classifies_operators_into_small_mid_big(self):
+        text = _read(PAGE)
+        self.assertIn("function classifyExample(example)", text)
+        # SMALL/MID/BIG derive from the speed-up on the first/last/middle sizes.
+        self.assertIn("cats.small = first !== null && first > 1;", text)
+        self.assertIn("cats.big = last !== null && last > 1;", text)
+        self.assertIn(
+            "cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text
+        )
+
+    def test_page_has_category_checkbox_column(self):
+        text = _read(PAGE)
+        self.assertIn("categories", text)
+        self.assertIn('catValue.className = "summary-value category-boxes";', text)
+        self.assertIn('[["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]]', text)
+        # The per-operator category boxes are read-only indicators.
+        self.assertIn("input.disabled = true;", text)
+
+    def test_page_has_filter_tool(self):
+        text = _read(PAGE)
+        self.assertIn('id="filterPanel"', text)
+        self.assertIn("function setupFilter(rendered)", text)
+        for value in ("small", "mid", "big"):
+            self.assertIn(
+                f'<input type="checkbox" class="filter-check" value="{value}" />',
+                text,
+            )
+        self.assertIn('id="filterCount"', text)
+        self.assertIn("operators shown", text)
 
 
 class TestIndexWiring(unittest.TestCase):
