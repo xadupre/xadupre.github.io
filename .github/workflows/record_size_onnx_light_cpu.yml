@@ -1,0 +1,298 @@
+name: DATA onnx-light-cpu size and loc
+
+# Runs on a weekly schedule and can also be triggered manually. Only the
+# repository owner (xadupre) is allowed to actually run the build when it is
+# triggered manually; any other actor will see the job skipped. Scheduled
+# runs always proceed because they are initiated by GitHub itself.
+on:
+  schedule:
+    # Run once a week, Monday at 06:47 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the hour/minute is offset
+    # from the other weekly recording workflows so they do not compete for
+    # the same runner slot.
+    - cron: "47 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/onnx-light-cpu to build"
+        required: false
+        default: "main"
+      onnx_light_ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/onnx-light to build and link against"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-publish:
+    # Only the repository owner is allowed to publish data, but scheduled runs
+    # (initiated by GitHub itself) are always allowed.
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # onnx-light ref to build and link the onnx-light-cpu integration
+      # against. Uses the workflow_dispatch input when provided (manual runs)
+      # and falls back to ``main`` for scheduled runs, which carry no
+      # ``inputs`` (mirrors build_onnx_light_cpu_docs.yml).
+      ONNX_LIGHT_REF: ${{ inputs.onnx_light_ref || 'main' }}
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          path: site
+          # Full history so that we can rebase on top of any concurrent
+          # commits to the default branch before pushing the recorded data.
+          fetch-depth: 0
+          # Use a dedicated bot token (when available) so that the push
+          # below is allowed to bypass branch protection rules. Falls
+          # back to the default ``GITHUB_TOKEN`` when ``BOT_TOKEN`` is
+          # not configured.
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout onnx-light-cpu
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light-cpu
+          ref: ${{ inputs.ref || 'main' }}
+          path: onnx-light-cpu
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Detect CPU cores
+        run: |
+          # Expose the number of available CPU cores as
+          # ``CMAKE_BUILD_PARALLEL_LEVEL`` for every subsequent step so the
+          # onnx-light-cpu C++ build uses all cores rather than a hard-coded
+          # value.
+          cores="$(nproc)"
+          echo "Detected ${cores} CPU cores."
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
+
+      - name: Build and install onnx-light from source
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # The onnx-light-cpu package depends on the onnx-light Python package
+          # (``onnx_light``) *and* on onnx-light's C++ development tree: building
+          # onnx-light-cpu with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` compiles
+          # the ``_cpuregister`` extension, which links onnx-light's
+          # ``lib_onnx_core`` located via ``find_package(onnx_light)``. A
+          # prebuilt wheel does not ship the CMake package config needed for
+          # that, so build onnx-light from source (with sccache to keep repeat
+          # runs fast), install its CMake package and expose it on
+          # ``CMAKE_PREFIX_PATH``, then ``pip install`` it for the Python
+          # runtime. This mirrors build_onnx_light_cpu_docs.yml.
+          python -m pip install --upgrade pip
+          # onnx-light's CMake calls find_package(nanobind) via "python -m
+          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
+          # importable before configuring it. Recent onnx-light sources also
+          # query numpy.get_include() at configure time, so numpy is required
+          # too.
+          pip install nanobind scikit-build-core numpy
+          git clone --depth 1 --branch "${ONNX_LIGHT_REF}" \
+            https://github.com/xadupre/onnx-light.git /tmp/onnx-light
+          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build /tmp/onnx-light/build --config Release --parallel
+          cmake --install /tmp/onnx-light/build --config Release
+          pip install /tmp/onnx-light
+          echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          # The onnx-light-cpu ``_cpuregister`` extension links onnx-light's
+          # shared libraries, so the install lib dir must be on
+          # LD_LIBRARY_PATH.
+          onnx_light_libdir="$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_core.so' | head -1)")"
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install onnx-light-cpu
+        working-directory: onnx-light-cpu
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # Build the compiled CPU kernel extensions in-place so their sizes
+          # can be recorded below: the package ships
+          # ``onnx_light_cpu.onnx_py._cpukernels`` and ``_cpuregister``
+          # (nanobind extensions). Build with the onnx-light integration
+          # enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) so the released
+          # build is measured, matching build_onnx_light_cpu_docs.yml.
+          pip install --upgrade pip
+          pip install scikit-build-core nanobind
+          pip install \
+            -C build-dir=build \
+            -C cmake.build-type=Release \
+            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -e "." -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Record onnx_py shared library sizes
+        working-directory: onnx-light-cpu
+        run: |
+          # Record the size of every shared library produced in onnx_py/ so
+          # that the evolution of the compiled extension size can be tracked
+          # over time. The data is appended (one CSV row per .so file) to
+          # cache_data/onnx-light-cpu/so_sizes.csv inside the xadupre.github.io
+          # checkout so that the "Commit and push cache data" step below picks
+          # it up and pushes it back to this repository.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu"
+          mkdir -p "$out_dir"
+          out="${out_dir}/so_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,size,name" > "$out"
+          fi
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          found=0
+          # Track every shared library shipped in the onnx_py package (.so on
+          # Linux/macOS, .dylib on macOS, .pyd on Windows just in case).
+          while IFS= read -r -d '' f; do
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
+          done < <(find onnx_light_cpu/onnx_py -maxdepth 2 -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.pyd' \) -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "No shared library found under onnx_light_cpu/onnx_py/; nothing to record."
+          fi
+
+      - name: Build and record onnx-light-cpu wheel size
+        working-directory: onnx-light-cpu
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          # Build a distributable wheel from the onnx-light-cpu checkout and
+          # append one CSV row per .whl file produced to
+          # cache_data/onnx-light-cpu/wheel_sizes.csv inside the
+          # xadupre.github.io checkout. The CSV columns
+          # (date,commit,run_id,size,name) match the schema produced by
+          # scripts/record_wheel_sizes.py so the dashboard can consume rows
+          # from either source interchangeably.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu"
+          mkdir -p "$out_dir"
+          out="${out_dir}/wheel_sizes.csv"
+          if [ ! -f "$out" ]; then
+            echo "date,commit,run_id,size,name" > "$out"
+          fi
+          wheel_dir="${GITHUB_WORKSPACE}/wheel-out"
+          rm -rf "$wheel_dir"
+          mkdir -p "$wheel_dir"
+          # ``pip wheel`` builds the project in an isolated temporary directory
+          # (leaving the in-place build artifacts recorded above untouched) and
+          # writes one ``.whl`` to ``$wheel_dir``. ``--no-deps`` ensures we only
+          # build onnx-light-cpu itself.
+          python -m pip wheel . \
+            --no-deps \
+            --wheel-dir "$wheel_dir" \
+            -C build-dir=build-wheel \
+            -C cmake.build-type=Release \
+            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          run_id="${GITHUB_RUN_ID:-local}"
+          found=0
+          for f in "$wheel_dir"/*.whl; do
+            [ -f "$f" ] || continue
+            size="$(wc -c < "$f")"
+            name="$(basename "$f")"
+            echo "${date_iso},${commit_sha},${run_id},${size},${name}" >> "$out"
+            found=1
+            echo "Recorded wheel ${name} (${size} bytes) at ${commit_sha}."
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "No wheel was produced by 'pip wheel .'; nothing to record." >&2
+            exit 1
+          fi
+
+      - name: Record Python and C++ lines of code
+        run: |
+          # Count the lines of Python and C++ source code in the
+          # onnx-light-cpu checkout and append one row per language to
+          # cache_data/onnx-light-cpu/loc.csv inside the xadupre.github.io
+          # checkout. The "Commit and push cache data" step below will then
+          # publish the new rows alongside the shared-library and wheel sizes.
+          python "${GITHUB_WORKSPACE}/site/scripts/record_loc.py" \
+            --source-dir "${GITHUB_WORKSPACE}/onnx-light-cpu" \
+            --output "${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu/loc.csv"
+
+      - name: Commit and push cache data
+        working-directory: site
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/onnx-light-cpu
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            built_sha="$(git -C ../onnx-light-cpu rev-parse HEAD)"
+            git commit -m "Update onnx-light-cpu size/loc data (from ${built_sha})"
+            # Retry the push a few times, rebasing on top of any new commits
+            # that may have landed on the remote in the meantime. This avoids
+            # "fetch first" / non-fast-forward push failures when another
+            # workflow run pushed to the same branch concurrently.
+            branch="${GITHUB_REF_NAME:-main}"
+            attempts=5
+            for i in $(seq 1 "$attempts"); do
+              push_err="$(mktemp)"
+              if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+                echo "Push succeeded on attempt ${i}."
+                rm -f "$push_err"
+                exit 0
+              fi
+              # A permission error (HTTP 403) is not a transient race and will not be
+              # fixed by retrying. Fail fast with a pointer to the README section that
+              # explains which GitHub setting needs to be changed.
+              if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+                rm -f "$push_err"
+                echo "" >&2
+                echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+                echo "Retrying will not help: the authenticated user shown above is" >&2
+                echo "not allowed to push to ${branch}." >&2
+                echo "" >&2
+                echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+                echo "setting to change:" >&2
+                echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+                exit 1
+              fi
+              rm -f "$push_err"
+              echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+              # Drop any leftover working-tree or untracked changes so that
+              # the rebase below does not abort with "cannot rebase: You
+              # have unstaged changes." Everything we want to publish has
+              # already been committed above, so any remainder is safe to
+              # set aside.
+              git stash push --include-untracked --quiet -- || true
+              git fetch origin "${branch}"
+              # Rebase our single data commit on top of the latest remote
+              # state. Prefer our version for the cache data directory in
+              # case of conflicts, since we just regenerated it.
+              if ! git rebase -X ours "origin/${branch}"; then
+                echo "Rebase failed; aborting."
+                git rebase --abort || true
+                exit 1
+              fi
+              sleep $((i * 5))
+            done
+            echo "Failed to push after ${attempts} attempts." >&2
+            exit 1
+          fi
