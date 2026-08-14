@@ -66,12 +66,12 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         text = _read(PAGE)
         # Speed-ups in [0.9, 1[ are neither red nor green but a distinct color.
         self.assertIn('if (value >= 0.9 && value < 1) return "neutral";', text)
-        self.assertIn(".operator-summary .neutral { color: #d29922; }", text)
+        self.assertIn(".operator-summary .neutral { color: #bc8cff; }", text)
         self.assertIn(
-            "table.benchmark td.neutral { color: #d29922; font-weight: bold; }",
+            "table.benchmark td.neutral { color: #bc8cff; font-weight: bold; }",
             text,
         )
-        self.assertIn(".legend .swatch.neutral { background: #d29922; }", text)
+        self.assertIn(".legend .swatch.neutral { background: #bc8cff; }", text)
         self.assertIn('class="swatch neutral"', text)
 
 

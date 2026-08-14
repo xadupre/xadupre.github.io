@@ -21,15 +21,16 @@ class TestBenchmarkDashboard(unittest.TestCase):
 
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
-        # A speed-up in [0.9, 1[ is coloured amber, neither red nor green.
+        # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,
+        # and distinct from the orange used for onnx-light times/light-only rows.
         self.assertIn("function speedupCellClass(v)", text)
         self.assertIn('if (v >= 0.9 && v < 1) return "speedup-close";', text)
         self.assertIn(
-            "table.benchmark td.speedup-close { color: #d29922; font-weight: bold; }",
+            "table.benchmark td.speedup-close { color: #bc8cff; font-weight: bold; }",
             text,
         )
-        # Summary cards for the average speed-up also use the amber shade.
-        self.assertIn(".summary-card.close .card-value { color: #d29922; }", text)
+        # Summary cards for the average speed-up also use the purple shade.
+        self.assertIn(".summary-card.close .card-value { color: #bc8cff; }", text)
         self.assertIn(
             'avgSpeedup >= 1 ? "faster" : (avgSpeedup >= 0.9 ? "close" : "slower")',
             text,
