@@ -46,7 +46,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .operator-summary {
   cursor: pointer;
   display: grid;
-  grid-template-columns: minmax(150px, 1.5fr) repeat(4, minmax(105px, 1fr));
+  grid-template-columns: minmax(150px, 1.5fr) repeat(4, minmax(85px, 1fr)) minmax(150px, 1.3fr);
   gap: 0.75em;
   align-items: center;
   padding: 0.8em 1em;
@@ -73,6 +73,33 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .operator-summary .faster { color: #3fb950; }
 .operator-summary .slower { color: #f85149; }
 .operator-summary .neutral { color: #bc8cff; }
+.category-boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em 0.8em;
+  font-weight: normal;
+}
+.category-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  font-size: 0.82em;
+  color: #8b949e;
+}
+.category-box input { accent-color: #3fb950; }
+.category-box input:checked + span { color: #3fb950; font-weight: bold; }
+.filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5em 1.2em;
+  font-size: 0.85em;
+}
+.filter .filter-title { color: #c9d1d9; font-weight: bold; }
+.filter label { display: inline-flex; align-items: center; gap: 0.35em; cursor: pointer; }
+.filter label input { accent-color: #58a6ff; }
+.filter .filter-desc { color: #8b949e; }
+.filter #filterCount { color: #8b949e; margin-left: auto; }
 .operator-details {
   border-top: 1px solid rgba(139, 148, 158, 0.2);
   padding: 0.8em 1em 1em;
@@ -110,6 +137,8 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
 @media (max-width: 720px) {
   .operator-summary { grid-template-columns: 1fr 1fr; }
   .operator-summary .operator-name { grid-column: 1 / -1; }
+  .operator-summary .summary-categories { grid-column: 1 / -1; }
+  .filter #filterCount { margin-left: 0; }
 }
 </style>
 </head>
@@ -144,6 +173,30 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
     Snapshot recorded on <strong id="metaDate"></strong>.
     <span id="metaSimd"></span>
     <span id="metaVersions"></span>
+  </div>
+</div>
+
+<div id="filterPanel" class="panel" style="display:none;">
+  <div class="filter">
+    <span class="filter-title">Filter operators:</span>
+    <label title="onnx-light-cpu is faster on the smallest size">
+      <input type="checkbox" class="filter-check" value="small" />
+      <span><strong>SMALL</strong></span>
+    </label>
+    <label title="onnx-light-cpu is faster on the smallest and largest sizes but slowest in a middle size">
+      <input type="checkbox" class="filter-check" value="mid" />
+      <span><strong>MID</strong></span>
+    </label>
+    <label title="onnx-light-cpu is faster on the largest size">
+      <input type="checkbox" class="filter-check" value="big" />
+      <span><strong>BIG</strong></span>
+    </label>
+    <span class="filter-desc">
+      <strong>SMALL</strong>: faster on the smallest size &middot;
+      <strong>MID</strong>: faster on the smallest &amp; largest sizes but slowest
+      in a middle size &middot; <strong>BIG</strong>: faster on the largest size.
+    </span>
+    <span id="filterCount"></span>
   </div>
 </div>
 
@@ -207,7 +260,40 @@ function speedupClass(value) {
   return value >= 1 ? "faster" : "slower";
 }
 
-function renderExample(example) {
+// Classify an operator by where onnx-light-cpu is faster than onnxruntime
+// (speed-up > 1). Rows are ordered from the smallest to the largest input size.
+//   SMALL: faster on the first (smallest) size.
+//   BIG:   faster on the last (largest) size.
+//   MID:   faster on both the first and the last size but its lowest speed-up
+//          (the "slowest" measurement of the sweep) falls on a middle size.
+function classifyExample(example) {
+  const rows = example.rows || [];
+  const cats = { small: false, mid: false, big: false };
+  if (rows.length === 0) return cats;
+  const speedup = i => {
+    const v = rows[i].speedup_cpu;
+    return (v === null || v === undefined || Number.isNaN(v)) ? null : v;
+  };
+  const first = speedup(0);
+  const last = speedup(rows.length - 1);
+  cats.small = first !== null && first > 1;
+  cats.big = last !== null && last > 1;
+  if (rows.length >= 3 && cats.small && cats.big) {
+    let minIdx = -1;
+    let minVal = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const v = speedup(i);
+      if (v !== null && v < minVal) {
+        minVal = v;
+        minIdx = i;
+      }
+    }
+    cats.mid = minIdx > 0 && minIdx < rows.length - 1;
+  }
+  return cats;
+}
+
+function renderExample(example, cats) {
   const panel = document.createElement("details");
   panel.className = "panel operator-panel";
 
@@ -237,6 +323,30 @@ function renderExample(example) {
     cell.appendChild(cellValue);
     summaryRow.appendChild(cell);
   });
+
+  const catCell = document.createElement("span");
+  catCell.className = "summary-categories";
+  const catLabel = document.createElement("span");
+  catLabel.className = "summary-label";
+  catLabel.textContent = "categories";
+  const catValue = document.createElement("span");
+  catValue.className = "summary-value category-boxes";
+  [["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]].forEach(([key, text]) => {
+    const box = document.createElement("label");
+    box.className = "category-box";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = !!(cats && cats[key]);
+    input.disabled = true;
+    const span = document.createElement("span");
+    span.textContent = text;
+    box.appendChild(input);
+    box.appendChild(span);
+    catValue.appendChild(box);
+  });
+  catCell.appendChild(catLabel);
+  catCell.appendChild(catValue);
+  summaryRow.appendChild(catCell);
   panel.appendChild(summaryRow);
 
   const details = document.createElement("div");
@@ -312,6 +422,25 @@ function renderExample(example) {
   return panel;
 }
 
+function setupFilter(rendered) {
+  const filterPanel = document.getElementById("filterPanel");
+  filterPanel.style.display = "block";
+  const checks = Array.from(document.querySelectorAll(".filter-check"));
+  const count = document.getElementById("filterCount");
+  function apply() {
+    const active = checks.filter(c => c.checked).map(c => c.value);
+    let shown = 0;
+    rendered.forEach(({ panel, cats }) => {
+      const match = active.length === 0 || active.some(key => cats[key]);
+      panel.style.display = match ? "" : "none";
+      if (match) shown += 1;
+    });
+    count.textContent = shown + " / " + rendered.length + " operators shown";
+  }
+  checks.forEach(c => c.addEventListener("change", apply));
+  apply();
+}
+
 fetch(JSON_URL, { cache: "no-store" })
   .then(r => {
     if (r.status === 404) {
@@ -339,7 +468,14 @@ fetch(JSON_URL, { cache: "no-store" })
     hideMessage();
     renderMeta(payload);
     const container = document.getElementById("examples");
-    examples.forEach(ex => container.appendChild(renderExample(ex)));
+    const rendered = [];
+    examples.forEach(ex => {
+      const cats = classifyExample(ex);
+      const panel = renderExample(ex, cats);
+      container.appendChild(panel);
+      rendered.push({ panel, cats });
+    });
+    setupFilter(rendered);
   })
   .catch(err => {
     showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
