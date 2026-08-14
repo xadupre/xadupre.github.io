@@ -6,7 +6,10 @@ multiplication) CPU kernel implemented in
 ``onnx_light_cpu/impl/math/gemm_kernel.cc`` and
 ``onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc``: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
-not (yet) implemented, with their expected gain and risk.
+not (yet) implemented, with their expected gain and risk. Delivery order,
+performance gates, and remaining work are tracked in the
+:doc:`Gemm, MatMul, and Attention roadmap
+<../next_steps/2026_08_gemm_matmul>`.
 
 Kernel selection decision tree
 -------------------------------
@@ -71,13 +74,103 @@ the full rationale):
 
 1. ``K`` is split into ``kGemmTileK``-sized chunks, and ``A`` and ``B`` are
    each packed into small contiguous buffers per (task, k-chunk) --
-   ``PackARowBlock`` and ``PackBPanel`` -- so the hot inner loop only ever
+   ``PackAPanel`` and ``PackBPanel`` -- so the hot inner loop only ever
    touches L1/L2-resident, unit-stride memory regardless of ``trans_a`` /
    ``trans_b`` or the caller's strides.
-2. The output grid is flattened into ``(row block, column panel)`` tasks and
-   spread across ``ParallelFor`` on **both** the ``M`` and ``N`` axes, so
-   "skinny" shapes (e.g. ``M == 1``, a single-example matvec) still get
-   parallelism instead of running on a single thread.
+2. The general path schedules the Cartesian product of row and column panels.
+   Column panels are grouped into bounded waves, so every active B panel is
+   packed once and shared without allocating an unbounded ``K x N`` workspace.
+
+Task scheduler decomposition
+----------------------------
+
+The five-loop scheduler maps panels of ``A`` and ``B`` to disjoint rectangular
+zones of ``Y``:
+
+.. code-block:: text
+
+                 B (K x N)
+            +--------+--------+--------+
+            | B0     | B1     | B2     |  NC-wide column panels
+            +--------+--------+--------+
+
+    A (M x K)                 Y (M x N)
+    +--------+            +------+------+------+
+    | A0     |----------->| T00  | T01  | T02  |
+    +--------+            +------+------+------+
+    | A1     |----------->| T10  | T11  | T12  |
+    +--------+            +------+------+------+
+    | A2     |----------->| T20  | T21  | T22  |
+    +--------+            +------+------+------+
+      MC-high                 independent output zones
+      row panels
+
+``T(i,j)`` computes ``Ai @ Bj`` and writes only output zone ``Y(i,j)``.
+Consequently, tasks in the grid need no output locks. With six threads and
+three row panels, two column panels form a full wave:
+
+.. code-block:: text
+
+   wave 1: B0, B1 -> T00 T10 T20 T01 T11 T21
+   wave 2: B2     -> T02 T12 T22
+
+For every K chunk, ``B0`` and ``B1`` are each packed once before the first
+wave. Their packed buffers remain read-only while the six tasks reuse them.
+Each task packs the required A row panel and accumulates into its own zone of
+``Y``. Shape-aware constraints reduce cache-derived ``MC`` and ``NC`` only
+when the original values would expose fewer useful tasks than available
+threads.
+
+The scheduler chooses the outermost useful dimension in this order:
+
+1. independent small batch items;
+2. the M x N panel grid of one GEMM;
+3. split-K when neither batch nor M/N provides enough tasks.
+
+Split-K divides the reduction dimension into independent packed SIMD products
+and combines their partial outputs:
+
+.. code-block:: text
+
+   K = [K0 | K1 | K2]
+         |    |    |
+         v    v    v
+        P0   P1   P2  ->  Y = alpha * (P0 + P1 + P2) + beta * C
+
+When a product is already running inside a parallel batch region, nested
+split-K is disabled: the product executes its M x N grid directly, avoiding
+serial split-K partitions, temporary partial buffers, and a redundant
+reduction.
+
+Thread runtime and affinity
+---------------------------
+
+The persistent pool discovers the processors available to the process rather
+than treating ``std::thread::hardware_concurrency()`` as a physical-core
+count. Linux discovery combines ``sched_getaffinity`` with sysfs package,
+core, sibling, ``core_type``, and capacity data. Windows discovery uses
+``GetLogicalProcessorInformationEx`` processor-core records, processor groups,
+SMT flags, and efficiency classes.
+
+The default participant count uses one logical thread per physical core,
+bounded by ``ONNX_LIGHT_CPU_MAX_THREADS``. Hybrid machines order P-cores before
+unknown cores and E-cores; SMT siblings are appended only when an explicit
+``ONNX_LIGHT_CPU_NUM_THREADS`` value requires them. Worker threads receive the
+corresponding Linux CPU affinity or Windows processor-group affinity once at
+startup. The caller remains unpinned so embedding applications retain control
+of their main thread.
+
+After a task, workers spin for a bounded number of CPU-relax iterations before
+parking on the condition variable. ``ONNX_LIGHT_CPU_SPIN_COUNT`` configures
+this budget, including ``0`` for immediate parking. A local pinned sweep of
+``0``, ``500``, ``2000``, and ``10000`` retained ``2000`` as the default:
+longer spinning regressed small and medium GEMM while immediate parking added
+wakeup latency.
+
+Applications that already own a pool construct
+``ParallelForExternalRegion`` inside each caller worker before invoking a
+kernel. Nested ``ParallelFor`` calls then execute inline on that worker, so the
+global pool is not awakened and cannot oversubscribe the caller's pool.
 
 Prepared execution interfaces
 -----------------------------
@@ -90,18 +183,24 @@ lifetime is independent of the caller. ``MatMulPlan`` implements ONNX rank-1
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. ``StridedBatchedGemm`` and ``GroupedGemm`` expose uniform and
-heterogeneous batches respectively. Plans derive ``MC``, ``NC``, and ``KC``
-from deterministic CPUID cache descriptors on x86, align them to register
-tiles, and retain conservative defaults when cache discovery is unavailable.
-The selected values are passed to the five-loop engine rather than being
-descriptive metadata.
+heterogeneous batches respectively. Small independent products are scheduled
+across the persistent pool; products with useful internal M/N parallelism keep
+the batch loop serial to avoid nested pools. Plans derive ``MC``, ``NC``, and
+``KC`` from deterministic CPUID cache descriptors on x86, align them to
+register tiles, then reduce ``MC``/``NC`` when necessary to expose enough work
+for the available threads. The selected values and ``useful_threads`` estimate
+drive execution rather than being descriptive metadata.
 
 The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
-or split-K path once from the prepared shape. Persistent packed constant panels
-are introduced by a later roadmap step.
+or split-K path once from the prepared shape. It may own constant B in its
+original representation; persistent B prepacking is explicitly excluded from
+the roadmap.
 
-Platform support (x86_64)
--------------------------
+Platform support
+----------------
+
+x86_64
+~~~~~~
 
 Every vectorized micro-kernel (AVX-512/AVX/SSE2) is x86-specific: it is
 written directly against ``<immintrin.h>`` intrinsics and gated behind
@@ -109,8 +208,7 @@ written directly against ``<immintrin.h>`` intrinsics and gated behind
 defined(_M_IX86)`` (``ONNX_LIGHT_CPU_X86``). ``DetectSimdLevel()``
 (``onnx_light_cpu/impl/simd_level.cc``) is likewise x86-only: it uses CPUID
 and XGETBV. On any x86_64 platform (Intel or AMD, Linux, Windows, or macOS)
-this gate evaluates true and the kernel gets full SIMD acceleration; see
-"Non-x86 platforms" below for what happens where it does not.
+this gate evaluates true and the kernel gets full SIMD acceleration.
 
 .. list-table::
    :header-rows: 1
@@ -147,16 +245,28 @@ this gate evaluates true and the kernel gets full SIMD acceleration; see
        rare on Intel Macs (Apple never shipped an AVX-512-capable Mac), so in
        practice most Intel Macs run the ``kAVX``/``kAVX2`` path.
 
-Non-x86 platforms (ARM / Apple Silicon)
-----------------------------------------
+ARM64 / Apple Silicon
+~~~~~~~~~~~~~~~~~~~~~
 
-There is currently **no NEON, SVE, or other non-x86 SIMD implementation**.
-This does not make the kernel fail on non-x86 platforms --
-``GemmMicroKernel_ScalarImpl`` is a portable, architecture-agnostic C++
-fallback that ``SelectGemmKernelKind<T>()`` returns whenever
-``ONNX_LIGHT_CPU_X86 == 0`` -- but it does mean those platforms get **no SIMD
-acceleration at all**, only the scalar path, so Gemm calls are correct but
-much slower there than on x86.
+ARM64 has dedicated FP32 and FP64 micro-kernels. The fixed-width NEON kernel
+uses six output rows by two 128-bit vectors (``float32x4_t`` or
+``float64x2_t``), reuses each loaded B vector across the six rows, and uses the
+portable scalar kernel only for its final sub-vector tail. The SVE kernel uses
+four rows by two scalable vectors and predicated loads/stores for every tail,
+so its lane count follows ``svcntw()``/``svcntd()`` rather than a build-time
+width.
+
+``DetectArmSimdLevel()`` reads Linux ``AT_HWCAP``/``AT_HWCAP2`` for Advanced
+SIMD, SVE, and SVE2. On other AArch64 systems, including Apple Silicon, NEON is
+part of the architecture baseline. SVE and SVE2 share the same floating-point
+kernel because SVE2 does not replace the SVE FP FMA instructions used here.
+The SVE translation unit is compiled separately with ``-march=armv8-a+sve``;
+the baseline library never executes it unless runtime detection succeeds.
+
+SVE vector length is part of the runtime profile. Widths of 256 bits and above
+select the predicated SVE kernel. A 128-bit SVE implementation retains the
+six-row NEON kernel, which has the same lane width and more B reuse. If a
+toolchain cannot compile SVE, the same binary keeps its NEON fallback.
 
 .. list-table::
    :header-rows: 1
@@ -166,17 +276,17 @@ much slower there than on x86.
      - Status
      - Notes
    * - macOS, Apple Silicon (M1/M2/M3/M4, ARM64/AArch64)
-     - Compiles and runs correctly, **no SIMD acceleration**
-     - ``ONNX_LIGHT_CPU_X86`` evaluates to ``0``, so ``SelectGemmKernelKind<T>()``
-       always returns ``GemmKernelKind::kScalar``: Gemm calls are correct but
-       run through the un-vectorized scalar micro-kernel only. Adding NEON
-       (and, if targeted, SVE/SVE2) micro-kernels -- see
-       "Remaining optimizations" below -- would close this gap; this was
-       flagged but not implemented in this pass.
-   * - Other ARM64/AArch64 (e.g. Linux on ARM servers, Android)
-     - Compiles and runs correctly, **no SIMD acceleration**
-     - Same reasoning as Apple Silicon above: falls back to the scalar
-       micro-kernel.
+     - NEON FP32/FP64
+     - Uses the architecture-baseline NEON kernel; current Apple processors do
+       not expose SVE.
+   * - Linux ARM64/AArch64 (including Grace and Neoverse)
+     - NEON plus runtime SVE/SVE2 dispatch
+     - Linux HWCAP gates SVE instructions. Runtime vector lengths below 256
+       bits and builds without SVE support fall back to NEON.
+   * - Other architectures
+     - Portable scalar fallback
+     - ``GemmMicroKernel_ScalarImpl`` remains available when neither an x86 nor
+       ARM64 vector profile is usable.
 
 Implemented optimizations (for reference)
 ------------------------------------------
@@ -193,14 +303,36 @@ Implemented optimizations (for reference)
      - Implemented -- deterministic x86 CPUID cache descriptors select aligned
        ``MC``, ``NC``, and ``KC`` values stored in each plan; conservative
        defaults cover unavailable cache discovery.
-   * - 2D M x N task parallelism
-     - Implemented -- flattened task list, fixes the ``M == 1`` starvation case.
+   * - M/N task parallelism
+     - Implemented -- the general five-loop path schedules the row-panel x
+       column-panel grid in bounded column waves. Each B panel is packed once
+       per K chunk, while task-aware MC/NC constraints expose enough row and
+       column work without an unbounded packed workspace.
+   * - Batch scheduling
+     - Implemented -- ``MatMulPlan``, ``StridedBatchedGemm``, and
+       ``GroupedGemm`` parallelize collections of small products after
+       validating every input. A product with useful internal parallelism runs
+       its batches serially.
+   * - Split-K
+     - Implemented -- used for long-K products whose M/N grid is insufficient.
+       Partitions use the same packed SIMD micro-kernels as the general path,
+       then a parallel tolerance-preserving reduction. Active batch regions
+       take priority over nested split-K.
    * - A-panel packing (``PackARowBlock``)
      - Implemented -- resolves ``trans_a`` once per (row block, k-chunk).
    * - B-panel packing (``PackBPanel``)
-     - Implemented -- reused across every A row block of a task/k-chunk.
+     - Implemented -- each bounded-wave panel is packed once per K chunk and
+       reused across every A row panel.
    * - NR=2 wide micro-kernel tiles
-     - Implemented -- AVX2/SSE2/AVX-512, all element types.
+     - Implemented -- AVX2/SSE2/AVX-512, NEON, and SVE, all FP32/FP64
+       element types.
+   * - ARM64 NEON micro-kernels
+     - Implemented -- FP32/FP64 MR=1 through 6 variants use two 128-bit
+       vectors, FMA, scalar sub-vector tails, and the shared packed panels.
+   * - ARM64 SVE/SVE2 micro-kernels
+     - Implemented -- FP32/FP64 MR=1 through 4 variants use two scalable
+       vectors and predicated tails. Linux HWCAP and runtime vector length
+       select SVE at 256 bits or wider, with a NEON fallback otherwise.
    * - AVX-512 micro-kernel
      - Implemented -- separate TU, compile+runtime gated (see tree above).
    * - Software prefetch (``B`` rows, T0 hint)
@@ -215,11 +347,43 @@ Implemented optimizations (for reference)
      - Implemented -- FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
        iteration, with a remainder loop and no additional accumulators.
    * - AVX2+FMA MR variants
-     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+     - Implemented -- compile-time FP32/FP64 MR=1 through 6 variants cover
        both NR=1 and NR=2, selected from the actual row-block size.
    * - AVX-512 MR variants
-     - Implemented -- compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
-       both NR=1 and NR=2, selected from the actual row-block size.
+     - Implemented -- compile-time FP32/FP64 MR=1 through 8 variants cover
+       both NR=1 and NR=2.
+   * - ISA-specific register blocking
+     - Implemented -- candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
+       are compiled. CPUID family/model dispatch uses the measured MR=5
+       profile on modern Intel Core AVX2 processors and conservative MR=4
+       AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
+       algorithm selection, MC alignment, row packing, and execution.
+   * - Aligned packed panels
+     - Implemented -- A and B workspaces are 64-byte aligned. B row strides
+       are padded to the active vector width, keeping AVX2 and AVX-512 loads
+       on aligned addresses. The kernels use branch-free unaligned-load
+       instructions, which have the same throughput on these aligned
+       addresses and also keep direct kernels safe.
+   * - Measured software prefetch
+     - Implemented -- disabling the four-row lookahead increased local
+       single-thread square-matrix medians by 1.5x to 2.1x, so the measured
+       four-row T0 lookahead is retained.
+   * - Generated instruction ordering
+     - Implemented -- generated AVX2 assembly was inspected for every candidate.
+       Removing the explicit four-row K unroll to reduce compiler-generated
+       stack traffic made the measured kernels 2x to 3x slower, so the unrolled
+       intrinsic ordering is retained rather than replaced by unproven
+       handwritten assembly.
+   * - Unit-scale and no-bias epilogues
+     - Implemented -- scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
+       redundant ``alpha``/``beta`` multiplies when the scale is one; zero
+       ``beta`` and absent bias avoid reading ``C``.
+   * - Typed broadcast and fused epilogues
+     - Implemented -- scalar, row, column, and matrix bias layouts are consumed
+       without an expanded M x N temporary. The typed epilogue can combine
+       bias, broadcast residual, ReLU, and FP16/BF16 narrowing in one output
+       pass; the matrix-bias-only case remains fused directly in the SIMD
+       micro-kernel.
 
 Remaining optimizations (not implemented)
 --------------------------------------------
@@ -242,24 +406,26 @@ gains.
      - Small on CPUs without AVX/FMA; zero on the priority AVX2/AVX-512 fleet.
      - Additional complexity in a fallback path, with limited performance
        relevance and a remainder loop required for non-multiple K values.
+   * - Compile-time ``GemmAccumMode`` specialization
+     - Dispatch once per micro-kernel call to ``kInitZero``, ``kInitBias``, or
+       ``kAccumulate`` template variants so ``if constexpr`` removes the
+       mode tests from each output-vector finalization. The current tests are
+       outside the K/FMA loop and the mode is stable for the whole call, so
+       branch prediction makes this optional rather than a correctness or
+       parity prerequisite.
+     - Small for large K; potentially measurable for tiny and small-K direct
+       kernels where output finalization is a larger fraction of total work.
+     - Multiplies x86, NEON, and SVE kernel variants and code size. Keep only
+       if a pinned small-K benchmark demonstrates a repeatable gain.
    * - Hand-written assembly micro-kernels
-     - Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
-       (wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
-       mirroring OpenBLAS/BLIS.
-     - Potentially large (BLAS-competitive), but only with substantial tuning
-       per microarchitecture.
-     - High engineering/maintenance cost; fragile across compiler versions and
-       CPU generations; loses the portability of intrinsics-based code; large
-       testing surface (correctness + performance regressions per target).
-   * - Per-microarchitecture dispatch (DYNAMIC_ARCH style)
-     - Detect the specific microarchitecture (Zen vs. Skylake vs. Haswell,
-       etc.) instead of only the instruction-set level, and pick a
-       microarchitecture-tuned kernel/tile size.
-     - Moderate on mixed fleets; ~0 on a single, known, dedicated machine
-       (the point of this row's premise) since there is only one
-       microarchitecture to tune for.
-     - Combinatorial growth of kernel variants to maintain and test; detection
-       logic (CPUID family/model parsing) is itself a source of bugs.
+     - Replace selected intrinsic kernels only if a pinned parity benchmark
+       demonstrates a persistent arithmetic-kernel gap after thread-runtime
+       work. The current x86 tuning pass found no priority regression versus
+       its ``main`` baseline that justified an assembly variant.
+     - Potentially large, but only after isolating a compiler-code-generation
+       bottleneck from packing and scheduling costs.
+     - High engineering and maintenance cost, with a separate implementation
+       required for each microarchitecture.
    * - Native SIMD float16 / bfloat16 Gemm
      - **Large effort**, the remaining half of the work started in this pass.
        ``Gemm`` now has a **scalar/correctness layer** for
@@ -298,19 +464,8 @@ gains.
        multi-panel, etc.); out of scope unless a caller actually needs
        SIMD-accelerated half precision beyond the widen/round-trip path
        already shipped.
-   * - ARM NEON / SVE micro-kernels
-     - Port the AVX2-style NR=2 micro-kernel design to ``float32x4_t`` /
-       ``float64x2_t`` NEON intrinsics (128-bit, all ARM64), and optionally to
-       SVE/SVE2 (variable-width vectors) where available server-side, with a
-       ``DetectSimdLevel()``-equivalent ARM feature probe (``getauxval(AT_HWCAP)``
-       or ``/proc/cpuinfo``) instead of CPUID.
-     - Large on ARM64 targets (macOS Apple Silicon, ARM Linux servers), which
-       currently get **no** SIMD acceleration at all (scalar fallback only,
-       see "Platform support" above); ``0`` on x86 targets.
-     - New translation unit(s), new feature-detection code path, and a full
-       new test/benchmark matrix on ARM hardware; SVE's variable vector width
-       is a different programming model from NEON's fixed 128-bit registers,
-       so it is effectively a second port rather than a small extension.
 
-The next x86 tuning step is to select the maximum MR/NR variant by detected
-microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.
+The next x86 tuning step is to extend measured profiles beyond the currently
+available modern Intel Core AVX2 measurements as benchmark hosts become
+available, before adding additional family/model
+dispatch.

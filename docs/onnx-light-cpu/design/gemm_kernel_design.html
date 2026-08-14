@@ -475,7 +475,9 @@ multiplication) CPU kernel implemented in
 <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/math/gemm_kernel.cc</span></code> and
 <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/math/gemm/avx512/gemm_kernel_avx512.cc</span></code>: how it picks a
 micro-kernel at runtime, and which further optimizations were considered but
-not (yet) implemented, with their expected gain and risk.</p>
+not (yet) implemented, with their expected gain and risk. Delivery order,
+performance gates, and remaining work are tracked in the
+<a class="reference internal" href="../next_steps/2026_08_gemm_matmul.html"><span class="doc">Gemm, MatMul, and Attention roadmap</span></a>.</p>
 <section id="kernel-selection-decision-tree">
 <h2>Kernel selection decision tree<a class="headerlink" href="#kernel-selection-decision-tree" title="Link to this heading">#</a></h2>
 <p>The kernel is selected <strong>once per (element type, process)</strong> by
@@ -538,14 +540,92 @@ the full rationale):</p>
 <ol class="arabic simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">K</span></code> is split into <code class="docutils literal notranslate"><span class="pre">kGemmTileK</span></code>-sized chunks, and <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> are
 each packed into small contiguous buffers per (task, k-chunk) –
-<code class="docutils literal notranslate"><span class="pre">PackARowBlock</span></code> and <code class="docutils literal notranslate"><span class="pre">PackBPanel</span></code> – so the hot inner loop only ever
+<code class="docutils literal notranslate"><span class="pre">PackAPanel</span></code> and <code class="docutils literal notranslate"><span class="pre">PackBPanel</span></code> – so the hot inner loop only ever
 touches L1/L2-resident, unit-stride memory regardless of <code class="docutils literal notranslate"><span class="pre">trans_a</span></code> /
 <code class="docutils literal notranslate"><span class="pre">trans_b</span></code> or the caller’s strides.</p></li>
-<li><p>The output grid is flattened into <code class="docutils literal notranslate"><span class="pre">(row</span> <span class="pre">block,</span> <span class="pre">column</span> <span class="pre">panel)</span></code> tasks and
-spread across <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> on <strong>both</strong> the <code class="docutils literal notranslate"><span class="pre">M</span></code> and <code class="docutils literal notranslate"><span class="pre">N</span></code> axes, so
-“skinny” shapes (e.g. <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">==</span> <span class="pre">1</span></code>, a single-example matvec) still get
-parallelism instead of running on a single thread.</p></li>
+<li><p>The general path schedules the Cartesian product of row and column panels.
+Column panels are grouped into bounded waves, so every active B panel is
+packed once and shared without allocating an unbounded <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">x</span> <span class="pre">N</span></code> workspace.</p></li>
 </ol>
+</section>
+<section id="task-scheduler-decomposition">
+<h2>Task scheduler decomposition<a class="headerlink" href="#task-scheduler-decomposition" title="Link to this heading">#</a></h2>
+<p>The five-loop scheduler maps panels of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> to disjoint rectangular
+zones of <code class="docutils literal notranslate"><span class="pre">Y</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>             B (K x N)
+        +--------+--------+--------+
+        | B0     | B1     | B2     |  NC-wide column panels
+        +--------+--------+--------+
+
+A (M x K)                 Y (M x N)
++--------+            +------+------+------+
+| A0     |-----------&gt;| T00  | T01  | T02  |
++--------+            +------+------+------+
+| A1     |-----------&gt;| T10  | T11  | T12  |
++--------+            +------+------+------+
+| A2     |-----------&gt;| T20  | T21  | T22  |
++--------+            +------+------+------+
+  MC-high                 independent output zones
+  row panels
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">T(i,j)</span></code> computes <code class="docutils literal notranslate"><span class="pre">Ai</span> <span class="pre">&#64;</span> <span class="pre">Bj</span></code> and writes only output zone <code class="docutils literal notranslate"><span class="pre">Y(i,j)</span></code>.
+Consequently, tasks in the grid need no output locks. With six threads and
+three row panels, two column panels form a full wave:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>wave 1: B0, B1 -&gt; T00 T10 T20 T01 T11 T21
+wave 2: B2     -&gt; T02 T12 T22
+</pre></div>
+</div>
+<p>For every K chunk, <code class="docutils literal notranslate"><span class="pre">B0</span></code> and <code class="docutils literal notranslate"><span class="pre">B1</span></code> are each packed once before the first
+wave. Their packed buffers remain read-only while the six tasks reuse them.
+Each task packs the required A row panel and accumulates into its own zone of
+<code class="docutils literal notranslate"><span class="pre">Y</span></code>. Shape-aware constraints reduce cache-derived <code class="docutils literal notranslate"><span class="pre">MC</span></code> and <code class="docutils literal notranslate"><span class="pre">NC</span></code> only
+when the original values would expose fewer useful tasks than available
+threads.</p>
+<p>The scheduler chooses the outermost useful dimension in this order:</p>
+<ol class="arabic simple">
+<li><p>independent small batch items;</p></li>
+<li><p>the M x N panel grid of one GEMM;</p></li>
+<li><p>split-K when neither batch nor M/N provides enough tasks.</p></li>
+</ol>
+<p>Split-K divides the reduction dimension into independent packed SIMD products
+and combines their partial outputs:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>K = [K0 | K1 | K2]
+      |    |    |
+      v    v    v
+     P0   P1   P2  -&gt;  Y = alpha * (P0 + P1 + P2) + beta * C
+</pre></div>
+</div>
+<p>When a product is already running inside a parallel batch region, nested
+split-K is disabled: the product executes its M x N grid directly, avoiding
+serial split-K partitions, temporary partial buffers, and a redundant
+reduction.</p>
+</section>
+<section id="thread-runtime-and-affinity">
+<h2>Thread runtime and affinity<a class="headerlink" href="#thread-runtime-and-affinity" title="Link to this heading">#</a></h2>
+<p>The persistent pool discovers the processors available to the process rather
+than treating <code class="docutils literal notranslate"><span class="pre">std::thread::hardware_concurrency()</span></code> as a physical-core
+count. Linux discovery combines <code class="docutils literal notranslate"><span class="pre">sched_getaffinity</span></code> with sysfs package,
+core, sibling, <code class="docutils literal notranslate"><span class="pre">core_type</span></code>, and capacity data. Windows discovery uses
+<code class="docutils literal notranslate"><span class="pre">GetLogicalProcessorInformationEx</span></code> processor-core records, processor groups,
+SMT flags, and efficiency classes.</p>
+<p>The default participant count uses one logical thread per physical core,
+bounded by <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_MAX_THREADS</span></code>. Hybrid machines order P-cores before
+unknown cores and E-cores; SMT siblings are appended only when an explicit
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code> value requires them. Worker threads receive the
+corresponding Linux CPU affinity or Windows processor-group affinity once at
+startup. The caller remains unpinned so embedding applications retain control
+of their main thread.</p>
+<p>After a task, workers spin for a bounded number of CPU-relax iterations before
+parking on the condition variable. <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_SPIN_COUNT</span></code> configures
+this budget, including <code class="docutils literal notranslate"><span class="pre">0</span></code> for immediate parking. A local pinned sweep of
+<code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">500</span></code>, <code class="docutils literal notranslate"><span class="pre">2000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> retained <code class="docutils literal notranslate"><span class="pre">2000</span></code> as the default:
+longer spinning regressed small and medium GEMM while immediate parking added
+wakeup latency.</p>
+<p>Applications that already own a pool construct
+<code class="docutils literal notranslate"><span class="pre">ParallelForExternalRegion</span></code> inside each caller worker before invoking a
+kernel. Nested <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> calls then execute inline on that worker, so the
+global pool is not awakened and cannot oversubscribe the caller’s pool.</p>
 </section>
 <section id="prepared-execution-interfaces">
 <h2>Prepared execution interfaces<a class="headerlink" href="#prepared-execution-interfaces" title="Link to this heading">#</a></h2>
@@ -557,25 +637,29 @@ lifetime is independent of the caller. <code class="docutils literal notranslate
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. <code class="docutils literal notranslate"><span class="pre">StridedBatchedGemm</span></code> and <code class="docutils literal notranslate"><span class="pre">GroupedGemm</span></code> expose uniform and
-heterogeneous batches respectively. Plans derive <code class="docutils literal notranslate"><span class="pre">MC</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, and <code class="docutils literal notranslate"><span class="pre">KC</span></code>
-from deterministic CPUID cache descriptors on x86, align them to register
-tiles, and retain conservative defaults when cache discovery is unavailable.
-The selected values are passed to the five-loop engine rather than being
-descriptive metadata.</p>
+heterogeneous batches respectively. Small independent products are scheduled
+across the persistent pool; products with useful internal M/N parallelism keep
+the batch loop serial to avoid nested pools. Plans derive <code class="docutils literal notranslate"><span class="pre">MC</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">KC</span></code> from deterministic CPUID cache descriptors on x86, align them to
+register tiles, then reduce <code class="docutils literal notranslate"><span class="pre">MC</span></code>/<code class="docutils literal notranslate"><span class="pre">NC</span></code> when necessary to expose enough work
+for the available threads. The selected values and <code class="docutils literal notranslate"><span class="pre">useful_threads</span></code> estimate
+drive execution rather than being descriptive metadata.</p>
 <p>The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
-or split-K path once from the prepared shape. Persistent packed constant panels
-are introduced by a later roadmap step.</p>
+or split-K path once from the prepared shape. It may own constant B in its
+original representation; persistent B prepacking is explicitly excluded from
+the roadmap.</p>
 </section>
-<section id="platform-support-x86-64">
-<h2>Platform support (x86_64)<a class="headerlink" href="#platform-support-x86-64" title="Link to this heading">#</a></h2>
+<section id="platform-support">
+<h2>Platform support<a class="headerlink" href="#platform-support" title="Link to this heading">#</a></h2>
+<section id="x86-64">
+<h3>x86_64<a class="headerlink" href="#x86-64" title="Link to this heading">#</a></h3>
 <p>Every vectorized micro-kernel (AVX-512/AVX/SSE2) is x86-specific: it is
 written directly against <code class="docutils literal notranslate"><span class="pre">&lt;immintrin.h&gt;</span></code> intrinsics and gated behind
 <code class="docutils literal notranslate"><span class="pre">#if</span> <span class="pre">defined(__x86_64__)</span> <span class="pre">||</span> <span class="pre">defined(_M_X64)</span> <span class="pre">||</span> <span class="pre">defined(__i386__)</span> <span class="pre">||</span>
 <span class="pre">defined(_M_IX86)</span></code> (<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_X86</span></code>). <code class="docutils literal notranslate"><span class="pre">DetectSimdLevel()</span></code>
 (<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/simd_level.cc</span></code>) is likewise x86-only: it uses CPUID
 and XGETBV. On any x86_64 platform (Intel or AMD, Linux, Windows, or macOS)
-this gate evaluates true and the kernel gets full SIMD acceleration; see
-“Non-x86 platforms” below for what happens where it does not.</p>
+this gate evaluates true and the kernel gets full SIMD acceleration.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 22.0%" />
@@ -624,15 +708,25 @@ practice most Intel Macs run the <code class="docutils literal notranslate"><spa
 </table>
 </div>
 </section>
-<section id="non-x86-platforms-arm-apple-silicon">
-<h2>Non-x86 platforms (ARM / Apple Silicon)<a class="headerlink" href="#non-x86-platforms-arm-apple-silicon" title="Link to this heading">#</a></h2>
-<p>There is currently <strong>no NEON, SVE, or other non-x86 SIMD implementation</strong>.
-This does not make the kernel fail on non-x86 platforms –
-<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarImpl</span></code> is a portable, architecture-agnostic C++
-fallback that <code class="docutils literal notranslate"><span class="pre">SelectGemmKernelKind&lt;T&gt;()</span></code> returns whenever
-<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_X86</span> <span class="pre">==</span> <span class="pre">0</span></code> – but it does mean those platforms get <strong>no SIMD
-acceleration at all</strong>, only the scalar path, so Gemm calls are correct but
-much slower there than on x86.</p>
+<section id="arm64-apple-silicon">
+<h3>ARM64 / Apple Silicon<a class="headerlink" href="#arm64-apple-silicon" title="Link to this heading">#</a></h3>
+<p>ARM64 has dedicated FP32 and FP64 micro-kernels. The fixed-width NEON kernel
+uses six output rows by two 128-bit vectors (<code class="docutils literal notranslate"><span class="pre">float32x4_t</span></code> or
+<code class="docutils literal notranslate"><span class="pre">float64x2_t</span></code>), reuses each loaded B vector across the six rows, and uses the
+portable scalar kernel only for its final sub-vector tail. The SVE kernel uses
+four rows by two scalable vectors and predicated loads/stores for every tail,
+so its lane count follows <code class="docutils literal notranslate"><span class="pre">svcntw()</span></code>/<code class="docutils literal notranslate"><span class="pre">svcntd()</span></code> rather than a build-time
+width.</p>
+<p><code class="docutils literal notranslate"><span class="pre">DetectArmSimdLevel()</span></code> reads Linux <code class="docutils literal notranslate"><span class="pre">AT_HWCAP</span></code>/<code class="docutils literal notranslate"><span class="pre">AT_HWCAP2</span></code> for Advanced
+SIMD, SVE, and SVE2. On other AArch64 systems, including Apple Silicon, NEON is
+part of the architecture baseline. SVE and SVE2 share the same floating-point
+kernel because SVE2 does not replace the SVE FP FMA instructions used here.
+The SVE translation unit is compiled separately with <code class="docutils literal notranslate"><span class="pre">-march=armv8-a+sve</span></code>;
+the baseline library never executes it unless runtime detection succeeds.</p>
+<p>SVE vector length is part of the runtime profile. Widths of 256 bits and above
+select the predicated SVE kernel. A 128-bit SVE implementation retains the
+six-row NEON kernel, which has the same lane width and more B reuse. If a
+toolchain cannot compile SVE, the same binary keeps its NEON fallback.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 22.0%" />
@@ -647,22 +741,24 @@ much slower there than on x86.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>macOS, Apple Silicon (M1/M2/M3/M4, ARM64/AArch64)</p></td>
-<td><p>Compiles and runs correctly, <strong>no SIMD acceleration</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_X86</span></code> evaluates to <code class="docutils literal notranslate"><span class="pre">0</span></code>, so <code class="docutils literal notranslate"><span class="pre">SelectGemmKernelKind&lt;T&gt;()</span></code>
-always returns <code class="docutils literal notranslate"><span class="pre">GemmKernelKind::kScalar</span></code>: Gemm calls are correct but
-run through the un-vectorized scalar micro-kernel only. Adding NEON
-(and, if targeted, SVE/SVE2) micro-kernels – see
-“Remaining optimizations” below – would close this gap; this was
-flagged but not implemented in this pass.</p></td>
+<td><p>NEON FP32/FP64</p></td>
+<td><p>Uses the architecture-baseline NEON kernel; current Apple processors do
+not expose SVE.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Other ARM64/AArch64 (e.g. Linux on ARM servers, Android)</p></td>
-<td><p>Compiles and runs correctly, <strong>no SIMD acceleration</strong></p></td>
-<td><p>Same reasoning as Apple Silicon above: falls back to the scalar
-micro-kernel.</p></td>
+<tr class="row-odd"><td><p>Linux ARM64/AArch64 (including Grace and Neoverse)</p></td>
+<td><p>NEON plus runtime SVE/SVE2 dispatch</p></td>
+<td><p>Linux HWCAP gates SVE instructions. Runtime vector lengths below 256
+bits and builds without SVE support fall back to NEON.</p></td>
+</tr>
+<tr class="row-even"><td><p>Other architectures</p></td>
+<td><p>Portable scalar fallback</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarImpl</span></code> remains available when neither an x86 nor
+ARM64 vector profile is usable.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+</section>
 </section>
 <section id="implemented-optimizations-for-reference">
 <h2>Implemented optimizations (for reference)<a class="headerlink" href="#implemented-optimizations-for-reference" title="Link to this heading">#</a></h2>
@@ -685,17 +781,43 @@ micro-kernel.</p></td>
 <code class="docutils literal notranslate"><span class="pre">MC</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, and <code class="docutils literal notranslate"><span class="pre">KC</span></code> values stored in each plan; conservative
 defaults cover unavailable cache discovery.</p></td>
 </tr>
-<tr class="row-even"><td><p>2D M x N task parallelism</p></td>
-<td><p>Implemented – flattened task list, fixes the <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">==</span> <span class="pre">1</span></code> starvation case.</p></td>
+<tr class="row-even"><td><p>M/N task parallelism</p></td>
+<td><p>Implemented – the general five-loop path schedules the row-panel x
+column-panel grid in bounded column waves. Each B panel is packed once
+per K chunk, while task-aware MC/NC constraints expose enough row and
+column work without an unbounded packed workspace.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Batch scheduling</p></td>
+<td><p>Implemented – <code class="docutils literal notranslate"><span class="pre">MatMulPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">StridedBatchedGemm</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">GroupedGemm</span></code> parallelize collections of small products after
+validating every input. A product with useful internal parallelism runs
+its batches serially.</p></td>
+</tr>
+<tr class="row-even"><td><p>Split-K</p></td>
+<td><p>Implemented – used for long-K products whose M/N grid is insufficient.
+Partitions use the same packed SIMD micro-kernels as the general path,
+then a parallel tolerance-preserving reduction. Active batch regions
+take priority over nested split-K.</p></td>
 </tr>
 <tr class="row-odd"><td><p>A-panel packing (<code class="docutils literal notranslate"><span class="pre">PackARowBlock</span></code>)</p></td>
 <td><p>Implemented – resolves <code class="docutils literal notranslate"><span class="pre">trans_a</span></code> once per (row block, k-chunk).</p></td>
 </tr>
 <tr class="row-even"><td><p>B-panel packing (<code class="docutils literal notranslate"><span class="pre">PackBPanel</span></code>)</p></td>
-<td><p>Implemented – reused across every A row block of a task/k-chunk.</p></td>
+<td><p>Implemented – each bounded-wave panel is packed once per K chunk and
+reused across every A row panel.</p></td>
 </tr>
 <tr class="row-odd"><td><p>NR=2 wide micro-kernel tiles</p></td>
-<td><p>Implemented – AVX2/SSE2/AVX-512, all element types.</p></td>
+<td><p>Implemented – AVX2/SSE2/AVX-512, NEON, and SVE, all FP32/FP64
+element types.</p></td>
+</tr>
+<tr class="row-even"><td><p>ARM64 NEON micro-kernels</p></td>
+<td><p>Implemented – FP32/FP64 MR=1 through 6 variants use two 128-bit
+vectors, FMA, scalar sub-vector tails, and the shared packed panels.</p></td>
+</tr>
+<tr class="row-odd"><td><p>ARM64 SVE/SVE2 micro-kernels</p></td>
+<td><p>Implemented – FP32/FP64 MR=1 through 4 variants use two scalable
+vectors and predicated tails. Linux HWCAP and runtime vector length
+select SVE at 256 bits or wider, with a NEON fallback otherwise.</p></td>
 </tr>
 <tr class="row-even"><td><p>AVX-512 micro-kernel</p></td>
 <td><p>Implemented – separate TU, compile+runtime gated (see tree above).</p></td>
@@ -716,12 +838,50 @@ iteration, with a remainder loop and no additional accumulators.</p></td>
 iteration, with a remainder loop and no additional accumulators.</p></td>
 </tr>
 <tr class="row-odd"><td><p>AVX2+FMA MR variants</p></td>
-<td><p>Implemented – compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+<td><p>Implemented – compile-time FP32/FP64 MR=1 through 6 variants cover
 both NR=1 and NR=2, selected from the actual row-block size.</p></td>
 </tr>
 <tr class="row-even"><td><p>AVX-512 MR variants</p></td>
-<td><p>Implemented – compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
-both NR=1 and NR=2, selected from the actual row-block size.</p></td>
+<td><p>Implemented – compile-time FP32/FP64 MR=1 through 8 variants cover
+both NR=1 and NR=2.</p></td>
+</tr>
+<tr class="row-odd"><td><p>ISA-specific register blocking</p></td>
+<td><p>Implemented – candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
+are compiled. CPUID family/model dispatch uses the measured MR=5
+profile on modern Intel Core AVX2 processors and conservative MR=4
+AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
+algorithm selection, MC alignment, row packing, and execution.</p></td>
+</tr>
+<tr class="row-even"><td><p>Aligned packed panels</p></td>
+<td><p>Implemented – A and B workspaces are 64-byte aligned. B row strides
+are padded to the active vector width, keeping AVX2 and AVX-512 loads
+on aligned addresses. The kernels use branch-free unaligned-load
+instructions, which have the same throughput on these aligned
+addresses and also keep direct kernels safe.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Measured software prefetch</p></td>
+<td><p>Implemented – disabling the four-row lookahead increased local
+single-thread square-matrix medians by 1.5x to 2.1x, so the measured
+four-row T0 lookahead is retained.</p></td>
+</tr>
+<tr class="row-even"><td><p>Generated instruction ordering</p></td>
+<td><p>Implemented – generated AVX2 assembly was inspected for every candidate.
+Removing the explicit four-row K unroll to reduce compiler-generated
+stack traffic made the measured kernels 2x to 3x slower, so the unrolled
+intrinsic ordering is retained rather than replaced by unproven
+handwritten assembly.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Unit-scale and no-bias epilogues</p></td>
+<td><p>Implemented – scalar, SSE2, AVX, AVX2+FMA, and AVX-512 kernels skip
+redundant <code class="docutils literal notranslate"><span class="pre">alpha</span></code>/<code class="docutils literal notranslate"><span class="pre">beta</span></code> multiplies when the scale is one; zero
+<code class="docutils literal notranslate"><span class="pre">beta</span></code> and absent bias avoid reading <code class="docutils literal notranslate"><span class="pre">C</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Typed broadcast and fused epilogues</p></td>
+<td><p>Implemented – scalar, row, column, and matrix bias layouts are consumed
+without an expanded M x N temporary. The typed epilogue can combine
+bias, broadcast residual, ReLU, and FP16/BF16 narrowing in one output
+pass; the matrix-bias-only case remains fused directly in the SIMD
+micro-kernel.</p></td>
 </tr>
 </tbody>
 </table>
@@ -754,25 +914,27 @@ AVX2+FMA and AVX-512 are already unrolled by four.</p></td>
 <td><p>Additional complexity in a fallback path, with limited performance
 relevance and a remainder loop required for non-multiple K values.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Hand-written assembly micro-kernels</p></td>
-<td><p>Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
-(wider tiles, e.g. 8x8 or 24x8, explicit instruction interleaving),
-mirroring OpenBLAS/BLIS.</p></td>
-<td><p>Potentially large (BLAS-competitive), but only with substantial tuning
-per microarchitecture.</p></td>
-<td><p>High engineering/maintenance cost; fragile across compiler versions and
-CPU generations; loses the portability of intrinsics-based code; large
-testing surface (correctness + performance regressions per target).</p></td>
+<tr class="row-odd"><td><p>Compile-time <code class="docutils literal notranslate"><span class="pre">GemmAccumMode</span></code> specialization</p></td>
+<td><p>Dispatch once per micro-kernel call to <code class="docutils literal notranslate"><span class="pre">kInitZero</span></code>, <code class="docutils literal notranslate"><span class="pre">kInitBias</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">kAccumulate</span></code> template variants so <code class="docutils literal notranslate"><span class="pre">if</span> <span class="pre">constexpr</span></code> removes the
+mode tests from each output-vector finalization. The current tests are
+outside the K/FMA loop and the mode is stable for the whole call, so
+branch prediction makes this optional rather than a correctness or
+parity prerequisite.</p></td>
+<td><p>Small for large K; potentially measurable for tiny and small-K direct
+kernels where output finalization is a larger fraction of total work.</p></td>
+<td><p>Multiplies x86, NEON, and SVE kernel variants and code size. Keep only
+if a pinned small-K benchmark demonstrates a repeatable gain.</p></td>
 </tr>
-<tr class="row-even"><td><p>Per-microarchitecture dispatch (DYNAMIC_ARCH style)</p></td>
-<td><p>Detect the specific microarchitecture (Zen vs. Skylake vs. Haswell,
-etc.) instead of only the instruction-set level, and pick a
-microarchitecture-tuned kernel/tile size.</p></td>
-<td><p>Moderate on mixed fleets; ~0 on a single, known, dedicated machine
-(the point of this row’s premise) since there is only one
-microarchitecture to tune for.</p></td>
-<td><p>Combinatorial growth of kernel variants to maintain and test; detection
-logic (CPUID family/model parsing) is itself a source of bugs.</p></td>
+<tr class="row-even"><td><p>Hand-written assembly micro-kernels</p></td>
+<td><p>Replace selected intrinsic kernels only if a pinned parity benchmark
+demonstrates a persistent arithmetic-kernel gap after thread-runtime
+work. The current x86 tuning pass found no priority regression versus
+its <code class="docutils literal notranslate"><span class="pre">main</span></code> baseline that justified an assembly variant.</p></td>
+<td><p>Potentially large, but only after isolating a compiler-code-generation
+bottleneck from packing and scheduling costs.</p></td>
+<td><p>High engineering and maintenance cost, with a separate implementation
+required for each microarchitecture.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Native SIMD float16 / bfloat16 Gemm</p></td>
 <td><p><strong>Large effort</strong>, the remaining half of the work started in this pass.
@@ -813,25 +975,13 @@ multi-panel, etc.); out of scope unless a caller actually needs
 SIMD-accelerated half precision beyond the widen/round-trip path
 already shipped.</p></td>
 </tr>
-<tr class="row-even"><td><p>ARM NEON / SVE micro-kernels</p></td>
-<td><p>Port the AVX2-style NR=2 micro-kernel design to <code class="docutils literal notranslate"><span class="pre">float32x4_t</span></code> /
-<code class="docutils literal notranslate"><span class="pre">float64x2_t</span></code> NEON intrinsics (128-bit, all ARM64), and optionally to
-SVE/SVE2 (variable-width vectors) where available server-side, with a
-<code class="docutils literal notranslate"><span class="pre">DetectSimdLevel()</span></code>-equivalent ARM feature probe (<code class="docutils literal notranslate"><span class="pre">getauxval(AT_HWCAP)</span></code>
-or <code class="docutils literal notranslate"><span class="pre">/proc/cpuinfo</span></code>) instead of CPUID.</p></td>
-<td><p>Large on ARM64 targets (macOS Apple Silicon, ARM Linux servers), which
-currently get <strong>no</strong> SIMD acceleration at all (scalar fallback only,
-see “Platform support” above); <code class="docutils literal notranslate"><span class="pre">0</span></code> on x86 targets.</p></td>
-<td><p>New translation unit(s), new feature-detection code path, and a full
-new test/benchmark matrix on ARM hardware; SVE’s variable vector width
-is a different programming model from NEON’s fixed 128-bit registers,
-so it is effectively a second port rather than a small extension.</p></td>
-</tr>
 </tbody>
 </table>
 </div>
-<p>The next x86 tuning step is to select the maximum MR/NR variant by detected
-microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.</p>
+<p>The next x86 tuning step is to extend measured profiles beyond the currently
+available modern Intel Core AVX2 measurements as benchmark hosts become
+available, before adding additional family/model
+dispatch.</p>
 </section>
 </section>
 
@@ -883,9 +1033,14 @@ microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#kernel-selection-decision-tree">Kernel selection decision tree</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#task-scheduler-decomposition">Task scheduler decomposition</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#thread-runtime-and-affinity">Thread runtime and affinity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-execution-interfaces">Prepared execution interfaces</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#platform-support-x86-64">Platform support (x86_64)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#non-x86-platforms-arm-apple-silicon">Non-x86 platforms (ARM / Apple Silicon)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#platform-support">Platform support</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#x86-64">x86_64</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arm64-apple-silicon">ARM64 / Apple Silicon</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implemented-optimizations-for-reference">Implemented optimizations (for reference)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-optimizations-not-implemented">Remaining optimizations (not implemented)</a></li>
 </ul>
