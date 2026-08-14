@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 13, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 14, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -717,7 +717,9 @@ conservative defaults when cache discovery is unavailable. This is
 implemented for x86 deterministic CPUID cache descriptors; other platforms
 currently use the conservative defaults.</p></li>
 <li><p>Build the immutable execution plan once and benchmark each algorithm both
-single-threaded and multi-threaded.</p></li>
+single-threaded and multi-threaded. The benchmark corpus includes a
+shape-forced case for every algorithm and supports process-level thread
+selection through <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code>.</p></li>
 </ol>
 </section>
 <section id="phase-2-saturate-the-floating-point-units">
@@ -725,14 +727,20 @@ single-threaded and multi-threaded.</p></li>
 <ul class="simple">
 <li><p>Compile FMA micro-kernels in dedicated translation units and use them only
 after checking both AVX/AVX2 and FMA. The current default <code class="docutils literal notranslate"><span class="pre">-mavx2</span></code> build
-does not define <code class="docutils literal notranslate"><span class="pre">__FMA__</span></code>, so its hot loop emits separate multiply and add
-instructions.</p></li>
+does not define <code class="docutils literal notranslate"><span class="pre">__FMA__</span></code>. Dedicated FP32/FP64 AVX2+FMA micro-kernels are
+now compiled with <code class="docutils literal notranslate"><span class="pre">-mavx2</span> <span class="pre">-mfma</span></code> and selected only when CPUID reports FMA;
+the baseline AVX path remains available on CPUs without FMA.</p></li>
 <li><p>Keep distinct SSE2, AVX2+FMA, AVX-512F, and microarchitecture-specific
 variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
 MR/NR and cache blocks even when they expose the same ISA.</p></li>
-<li><p>Generate several MR x NR micro-kernels instead of fixing <code class="docutils literal notranslate"><span class="pre">MR</span> <span class="pre">==</span> <span class="pre">4</span></code>.</p></li>
+<li><p>Generate several MR x NR micro-kernels instead of fixing <code class="docutils literal notranslate"><span class="pre">MR</span> <span class="pre">==</span> <span class="pre">4</span></code>.
+AVX2+FMA and AVX-512 now emit compile-time <code class="docutils literal notranslate"><span class="pre">MR=1..4</span></code> variants for both NR=1
+and NR=2, selected from the actual row-block size; microarchitecture-specific
+maximum MR/NR selection remains.</p></li>
 <li><p>Unroll K enough to maintain independent FMA chains without spilling
-accumulators.</p></li>
+accumulators. The AVX2+FMA and AVX-512 FP32/FP64 kernels now reduce four K
+rows per loop iteration and use a scalar-count remainder loop without adding
+accumulator registers.</p></li>
 <li><p>Use aligned panel loads and software prefetch only where hardware-counter
 measurements show reduced stalls.</p></li>
 <li><p>Specialize the arithmetic epilogue for <code class="docutils literal notranslate"><span class="pre">alpha</span> <span class="pre">==</span> <span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">beta</span> <span class="pre">==</span> <span class="pre">0</span></code>, scalar
@@ -1041,12 +1049,17 @@ performance regression.</p>
 </section>
 <section id="implementation-order-and-dependencies">
 <h2>Implementation order and dependencies<a class="headerlink" href="#implementation-order-and-dependencies" title="Link to this heading">#</a></h2>
+<p>This roadmap and its dependency ordering were consolidated in
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/137">onnx-light-cpu #137</a>. The status below
+distinguishes implemented code from performance exit criteria that still
+require measurements on dedicated hardware.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
-<col style="width: 8.0%" />
-<col style="width: 24.0%" />
-<col style="width: 36.0%" />
-<col style="width: 17.0%" />
+<col style="width: 7.0%" />
+<col style="width: 21.0%" />
+<col style="width: 30.0%" />
+<col style="width: 14.0%" />
+<col style="width: 13.0%" />
 <col style="width: 15.0%" />
 </colgroup>
 <thead>
@@ -1054,6 +1067,7 @@ performance regression.</p>
 <th class="head"><p>Deliverable</p></th>
 <th class="head"><p>Exit criterion</p></th>
 <th class="head"><p>Dependency</p></th>
+<th class="head"><p>Status</p></th>
 <th class="head"><p>Pull requests</p></th>
 </tr>
 </thead>
@@ -1064,6 +1078,7 @@ performance regression.</p>
 <td><p>Stable medians and dispersion for the agreed shape/type corpus on pinned
 hardware.</p></td>
 <td><p>None.</p></td>
+<td><p>Corpus implemented; dedicated-hardware measurements pending.</p></td>
 <td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/134">onnx-light-cpu #134</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4412">onnx-light #4412</a></p></td>
 </tr>
@@ -1074,6 +1089,7 @@ hardware.</p></td>
 <td><p>Existing Gemm results remain correct with no material performance
 regression.</p></td>
 <td><p>P0.</p></td>
+<td><p>Implemented.</p></td>
 <td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/135">onnx-light-cpu #135</a></p></td>
 </tr>
 <tr class="row-even"><td><p>P2</p></td>
@@ -1081,25 +1097,40 @@ regression.</p></td>
 <td><p>Differential tests pass for rank-1, batched, broadcast, transpose, and
 empty-dimension cases.</p></td>
 <td><p>P1.</p></td>
-<td><p>TBD.</p></td>
+<td><p>Implemented.</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/138">onnx-light-cpu #138</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>P3</p></td>
 <td><p>Five-loop FP32/FP64 engine and shape-specific algorithms.</p></td>
 <td><p>Generic dense path reaches at least 0.8x MLAS before assembly-level
 tuning.</p></td>
 <td><p>P1.</p></td>
-<td><p>TBD.</p></td>
+<td><p>Engine, algorithms, cache-derived blocking, and benchmark corpus
+implemented; 0.8x MLAS gate pending.</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/136">onnx-light-cpu #136</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/139">onnx-light-cpu #139</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/140">onnx-light-cpu #140</a></p></td>
 </tr>
 <tr class="row-even"><td><p>P4</p></td>
 <td><p>FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.</p></td>
 <td><p>Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.</p></td>
 <td><p>P3.</p></td>
-<td><p>TBD.</p></td>
+<td><p>AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
+unrolling and compile-time MR=1..4 variants; ARM kernels,
+microarchitecture-specific MR/NR selection, scheduler tuning, and the
+performance gate remain.</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/133">onnx-light-cpu #133</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/141">onnx-light-cpu #141</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/142">onnx-light-cpu #142</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/143">onnx-light-cpu #143</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/145">onnx-light-cpu #145</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/146">onnx-light-cpu #146</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>P5</p></td>
 <td><p>Native/panel-converted FP16, BF16, and integer paths.</p></td>
 <td><p>Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.</p></td>
 <td><p>P3-P4.</p></td>
+<td><p>Planned.</p></td>
 <td><p>TBD.</p></td>
 </tr>
 <tr class="row-even"><td><p>P6</p></td>
@@ -1107,6 +1138,7 @@ tuning.</p></td>
 <td><p>MHA/GQA/MQA, masks, causal behavior, and tensor past/present
 differential tests pass.</p></td>
 <td><p>P1-P2.</p></td>
+<td><p>Planned.</p></td>
 <td><p>TBD.</p></td>
 </tr>
 <tr class="row-odd"><td><p>P7</p></td>
@@ -1114,6 +1146,7 @@ differential tests pass.</p></td>
 <td><p>No full score/probability tensor; long-context prefill is within 1.1x of
 ONNX Runtime with bounded temporary memory.</p></td>
 <td><p>P4 and P6.</p></td>
+<td><p>Planned.</p></td>
 <td><p>TBD.</p></td>
 </tr>
 </tbody>
@@ -1224,7 +1257,7 @@ ONNX Runtime with bounded temporary memory.</p></td>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 13, 2026.
+  Last updated on Aug 14, 2026.
   <br/>
 </p></div>
       

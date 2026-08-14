@@ -219,21 +219,29 @@ core algorithm without conversion overhead.
    implemented for x86 deterministic CPUID cache descriptors; other platforms
    currently use the conservative defaults.
 5. Build the immutable execution plan once and benchmark each algorithm both
-   single-threaded and multi-threaded.
+   single-threaded and multi-threaded. The benchmark corpus includes a
+   shape-forced case for every algorithm and supports process-level thread
+   selection through ``ONNX_LIGHT_CPU_NUM_THREADS``.
 
 Phase 2: saturate the floating-point units
 ------------------------------------------
 
 * Compile FMA micro-kernels in dedicated translation units and use them only
   after checking both AVX/AVX2 and FMA. The current default ``-mavx2`` build
-  does not define ``__FMA__``, so its hot loop emits separate multiply and add
-  instructions.
+  does not define ``__FMA__``. Dedicated FP32/FP64 AVX2+FMA micro-kernels are
+  now compiled with ``-mavx2 -mfma`` and selected only when CPUID reports FMA;
+  the baseline AVX path remains available on CPUs without FMA.
 * Keep distinct SSE2, AVX2+FMA, AVX-512F, and microarchitecture-specific
   variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
   MR/NR and cache blocks even when they expose the same ISA.
 * Generate several MR x NR micro-kernels instead of fixing ``MR == 4``.
+  AVX2+FMA and AVX-512 now emit compile-time ``MR=1..4`` variants for both NR=1
+  and NR=2, selected from the actual row-block size; microarchitecture-specific
+  maximum MR/NR selection remains.
 * Unroll K enough to maintain independent FMA chains without spilling
-  accumulators.
+  accumulators. The AVX2+FMA and AVX-512 FP32/FP64 kernels now reduce four K
+  rows per loop iteration and use a scalar-count remainder loop without adding
+  accumulator registers.
 * Use aligned panel loads and software prefetch only where hardware-counter
   measurements show reduced stalls.
 * Specialize the arithmetic epilogue for ``alpha == 1``, ``beta == 0``, scalar
@@ -520,14 +528,21 @@ performance regression.
 Implementation order and dependencies
 -------------------------------------
 
+This roadmap and its dependency ordering were consolidated in
+`onnx-light-cpu #137
+<https://github.com/xadupre/onnx-light-cpu/pull/137>`_. The status below
+distinguishes implemented code from performance exit criteria that still
+require measurements on dedicated hardware.
+
 .. list-table::
    :header-rows: 1
-   :widths: 8 24 36 17 15
+   :widths: 7 21 30 14 13 15
 
    * - Step
      - Deliverable
      - Exit criterion
      - Dependency
+     - Status
      - Pull requests
    * - P0
      - Reproducible MLAS and Attention cases in ``onnx-light``'s C++
@@ -535,6 +550,7 @@ Implementation order and dependencies
      - Stable medians and dispersion for the agreed shape/type corpus on pinned
        hardware.
      - None.
+     - Corpus implemented; dedicated-hardware measurements pending.
      - `onnx-light-cpu #134
        <https://github.com/xadupre/onnx-light-cpu/pull/134>`_,
        `onnx-light #4412
@@ -546,6 +562,7 @@ Implementation order and dependencies
      - Existing Gemm results remain correct with no material performance
        regression.
      - P0.
+     - Implemented.
      - `onnx-light-cpu #135
        <https://github.com/xadupre/onnx-light-cpu/pull/135>`_
    * - P2
@@ -553,32 +570,59 @@ Implementation order and dependencies
      - Differential tests pass for rank-1, batched, broadcast, transpose, and
        empty-dimension cases.
      - P1.
-     - TBD.
+     - Implemented.
+     - `onnx-light-cpu #138
+       <https://github.com/xadupre/onnx-light-cpu/pull/138>`_
    * - P3
      - Five-loop FP32/FP64 engine and shape-specific algorithms.
      - Generic dense path reaches at least 0.8x MLAS before assembly-level
        tuning.
      - P1.
-     - TBD.
+     - Engine, algorithms, cache-derived blocking, and benchmark corpus
+       implemented; 0.8x MLAS gate pending.
+     - `onnx-light-cpu #136
+       <https://github.com/xadupre/onnx-light-cpu/pull/136>`_,
+       `onnx-light-cpu #139
+       <https://github.com/xadupre/onnx-light-cpu/pull/139>`_,
+       `onnx-light-cpu #140
+       <https://github.com/xadupre/onnx-light-cpu/pull/140>`_
    * - P4
      - FMA/AVX2/AVX-512/ARM micro-kernels and tuned scheduler.
      - Priority FP32/FP64 corpus reaches 0.9-1.0x MLAS.
      - P3.
-     - TBD.
+     - AVX2+FMA and AVX-512 micro-kernels implemented, including four-way K
+       unrolling and compile-time MR=1..4 variants; ARM kernels,
+       microarchitecture-specific MR/NR selection, scheduler tuning, and the
+       performance gate remain.
+     - `onnx-light-cpu #133
+       <https://github.com/xadupre/onnx-light-cpu/pull/133>`_,
+       `onnx-light-cpu #141
+       <https://github.com/xadupre/onnx-light-cpu/pull/141>`_,
+       `onnx-light-cpu #142
+       <https://github.com/xadupre/onnx-light-cpu/pull/142>`_,
+       `onnx-light-cpu #143
+       <https://github.com/xadupre/onnx-light-cpu/pull/143>`_,
+       `onnx-light-cpu #145
+       <https://github.com/xadupre/onnx-light-cpu/pull/145>`_,
+       `onnx-light-cpu #146
+       <https://github.com/xadupre/onnx-light-cpu/pull/146>`_
    * - P5
      - Native/panel-converted FP16, BF16, and integer paths.
      - Low-precision corpus reaches 0.9x MLAS where MLAS supports the type.
      - P3-P4.
+     - Planned.
      - TBD.
    * - P6
      - ``AttentionPlan`` and materialized tensor correctness implementation.
      - MHA/GQA/MQA, masks, causal behavior, and tensor past/present
        differential tests pass.
      - P1-P2.
+     - Planned.
      - TBD.
    * - P7
      - Online-softmax prefill Attention.
      - No full score/probability tensor; long-context prefill is within 1.1x of
        ONNX Runtime with bounded temporary memory.
      - P4 and P6.
+     - Planned.
      - TBD.

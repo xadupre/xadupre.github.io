@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 13, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 14, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -703,6 +703,26 @@ defaults cover unavailable cache discovery.</p></td>
 <tr class="row-odd"><td><p>Software prefetch (<code class="docutils literal notranslate"><span class="pre">B</span></code> rows, T0 hint)</p></td>
 <td><p>Implemented – AVX2/AVX-512 NR=2 loops, <code class="docutils literal notranslate"><span class="pre">kGemmPrefetchDistanceK</span> <span class="pre">=</span> <span class="pre">4</span></code>.</p></td>
 </tr>
+<tr class="row-even"><td><p>Dedicated AVX2+FMA micro-kernels</p></td>
+<td><p>Implemented – FP32/FP64 kernels are compiled with <code class="docutils literal notranslate"><span class="pre">-mavx2</span> <span class="pre">-mfma</span></code> in
+a separate translation unit and selected only when CPUID reports FMA.</p></td>
+</tr>
+<tr class="row-odd"><td><p>AVX-512 K-loop unrolling</p></td>
+<td><p>Implemented – FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
+iteration, with a remainder loop and no additional accumulators.</p></td>
+</tr>
+<tr class="row-even"><td><p>AVX2+FMA K-loop unrolling</p></td>
+<td><p>Implemented – FP32/FP64 NR=1 and NR=2 loops reduce four K rows per
+iteration, with a remainder loop and no additional accumulators.</p></td>
+</tr>
+<tr class="row-odd"><td><p>AVX2+FMA MR variants</p></td>
+<td><p>Implemented – compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+both NR=1 and NR=2, selected from the actual row-block size.</p></td>
+</tr>
+<tr class="row-even"><td><p>AVX-512 MR variants</p></td>
+<td><p>Implemented – compile-time FP32/FP64 MR=1, 2, 3, and 4 variants cover
+both NR=1 and NR=2, selected from the actual row-block size.</p></td>
+</tr>
 </tbody>
 </table>
 </div>
@@ -727,19 +747,12 @@ gains.</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Explicit k-loop unrolling</p></td>
-<td><p>Manually unroll the inner <code class="docutils literal notranslate"><span class="pre">k</span></code> reduction (e.g. by 4) in the NR=2
-AVX2/SSE2/AVX-512 kernels to expose more independent FMA chains to the
-out-of-order scheduler, on top of what <code class="docutils literal notranslate"><span class="pre">-O2</span></code>/<code class="docutils literal notranslate"><span class="pre">-O3</span></code> may already do.</p></td>
-<td><p>Small, ~5-10% on AVX2; a bit more on AVX-512 (more registers headroom).
-Real bottleneck is more likely memory bandwidth/loop overhead than FMA
-latency, which caps the upside.</p></td>
-<td><p><strong>Register spilling</strong>: AVX2 has only 16 YMM registers; the kernel
-already holds 8 live accumulators (<code class="docutils literal notranslate"><span class="pre">acc0</span></code>/<code class="docutils literal notranslate"><span class="pre">acc1</span></code> x <code class="docutils literal notranslate"><span class="pre">kGemmMR</span></code>).
-Unrolling by 4 without care can need 32+ live registers, forcing the
-compiler to spill to the stack and erase the gain (or regress). Needs a
-remainder loop for <code class="docutils literal notranslate"><span class="pre">K</span></code> not a multiple of the unroll factor. Lower risk
-on AVX-512 (32 ZMM registers).</p></td>
+<tr class="row-even"><td><p>Explicit SSE2 k-loop unrolling</p></td>
+<td><p>Manually unroll the inner <code class="docutils literal notranslate"><span class="pre">k</span></code> reduction in the NR=2 SSE2 kernels.
+AVX2+FMA and AVX-512 are already unrolled by four.</p></td>
+<td><p>Small on CPUs without AVX/FMA; zero on the priority AVX2/AVX-512 fleet.</p></td>
+<td><p>Additional complexity in a fallback path, with limited performance
+relevance and a remainder loop required for non-multiple K values.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Hand-written assembly micro-kernels</p></td>
 <td><p>Replace the C++/intrinsics micro-kernels with hand-scheduled assembly
@@ -817,10 +830,8 @@ so it is effectively a second port rather than a small extension.</p></td>
 </tbody>
 </table>
 </div>
-<p>The most favorable next step, if any, is likely explicit k-loop unrolling on
-the AVX-512 kernel specifically (more registers, less spilling risk) – but
-given the modest expected gain versus the completed optimizations above, it
-was not implemented in this pass.</p>
+<p>The next x86 tuning step is to select the maximum MR/NR variant by detected
+microarchitecture instead of using MR=4 and NR=2 vectors for every x86 CPU.</p>
 </section>
 </section>
 
@@ -911,7 +922,7 @@ was not implemented in this pass.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 13, 2026.
+  Last updated on Aug 14, 2026.
   <br/>
 </p></div>
       
