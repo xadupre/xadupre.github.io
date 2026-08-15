@@ -125,6 +125,7 @@ Load the custom C++ operators:
 
     getting_started
     custom_ops/index
+    next_steps/index
     api/index
     auto_examples/index
 
