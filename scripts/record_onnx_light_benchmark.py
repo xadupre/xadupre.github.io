@@ -36,12 +36,14 @@ For each test the measurement protocol is:
    ``onnxruntime`` on that test case.
 5. Aggregate two summary averages: ``avg_speedup`` is the unweighted mean
    of every per-test ``speedup`` ratio, while ``avg_speedup_weighted`` is
-   ``sum(onnxruntime_avg_ms) / sum(onnx_light_avg_ms)`` across those same
-   tests. The unweighted mean treats every kernel equally regardless of
-   its actual cost, so an O(1) kernel (``Shape``, ``Reshape``, ...) counts
-   as much as an O(n) (``Add``) or O(n^2) (``Gemm``) one; the weighted
-   average instead reflects the aggregate wall-clock time saved, giving
-   more importance to the more expensive kernels.
+   ``sum(N_i * speedup_i) / sum(N_i)`` across those same tests, where
+   ``N_i`` is a symbolic per-test cost estimate (the number of scalar
+   elements in the test's input/output tensors, see ``_symbolic_cost``).
+   The unweighted mean treats every kernel equally regardless of its
+   actual cost, so an O(1) kernel (``Shape``, ``Reshape``, ...) counts as
+   much as an O(n) (``Add``) or O(n^2) (``Gemm``) one; the weighted
+   average instead gives more importance to kernels that process more
+   data, without depending on any backend's measured execution time.
 
 The resulting payload is persisted to
 ``cache_data/onnx-light/benchmark.json``. The dashboard at
@@ -819,8 +821,41 @@ def run_benchmark(
     }
 
 
+def _count_elements(value: Any) -> int:
+    """Return a rough element count for ``value``, used by :func:`_symbolic_cost`."""
+    size = getattr(value, "size", None)
+    if isinstance(size, int):
+        return size
+    if isinstance(value, (list, tuple)):
+        return sum(_count_elements(v) for v in value)
+    return 1
+
+
+def _symbolic_cost(data_sets: List[Tuple[List[Any], List[Any]]]) -> Optional[int]:
+    """Return a symbolic complexity estimate ``N`` for a test's first data set.
+
+    ``N`` is the total number of scalar elements across the test's input and
+    output tensors (or, for sequence/map values, the sum of the element
+    counts of their nested values). It is a *symbolic* size, derived purely
+    from the shapes of the data used by the test, not from any measured
+    execution time — an O(1) kernel (e.g. ``Shape``/``Reshape``) applied to a
+    huge tensor still touches every element of that tensor and gets a large
+    ``N`` here, but the point is only to approximate how much data a kernel
+    processes so bigger kernels are weighed more than trivial ones, without
+    depending on how fast any particular backend happens to run.
+    """
+    if not data_sets:
+        return None
+    try:
+        inputs, outputs = data_sets[0]
+    except (ValueError, TypeError):
+        return None
+    total = _count_elements(list(inputs)) + _count_elements(list(outputs))
+    return total or None
+
+
 def _weighted_avg_speedup(
-    rows: List[Dict[str, Any]], ort_key: str, other_key: str
+    rows: List[Dict[str, Any]], speedup_key: str, cost_key: str = "cost_n"
 ) -> Optional[float]:
     """Return a cost-weighted average speedup, or ``None`` when unavailable.
 
@@ -828,26 +863,27 @@ def _weighted_avg_speedup(
     ``speedup`` ratios, so a cheap O(1) kernel (e.g. ``Shape``/``Reshape``)
     counts exactly as much as an O(n^2) kernel (e.g. ``Gemm``) even though the
     latter dominates real-world execution time. This helper instead weighs
-    every test by its ``onnxruntime`` execution time (a proxy for its actual
-    computational cost), computing::
+    every test by its symbolic cost ``N`` (see :func:`_symbolic_cost`) — an
+    estimate of how much data the test processes, not a measured timing —
+    computing::
 
-        weighted_speedup = sum(onnxruntime_avg_ms) / sum(other_avg_ms)
+        weighted_speedup = sum(N_i * speedup_i) / sum(N_i)
 
-    which reflects how much wall-clock time would be saved in aggregate,
-    rather than treating every test case as equally important.
+    which gives more importance to tests that process more data, without
+    tying the metric to any one backend's measured execution time.
     """
-    ort_total = 0.0
-    other_total = 0.0
+    weighted_total = 0.0
+    weight_total = 0.0
     for row in rows:
-        ort_ms = row.get(ort_key)
-        other_ms = row.get(other_key)
-        if ort_ms is None or other_ms is None or ort_ms <= 0 or other_ms <= 0:
+        speedup = row.get(speedup_key)
+        weight = row.get(cost_key)
+        if speedup is None or weight is None or weight <= 0:
             continue
-        ort_total += ort_ms
-        other_total += other_ms
-    if other_total <= 0:
+        weighted_total += speedup * weight
+        weight_total += weight
+    if weight_total <= 0:
         return None
-    return round(ort_total / other_total, 4)
+    return round(weighted_total / weight_total, 4)
 
 
 def _row_from_results(
@@ -855,6 +891,7 @@ def _row_from_results(
     results: Dict[str, Dict[str, Any]],
     tag: str = "",
     graph: Optional[Dict[str, Any]] = None,
+    cost_n: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Build a dashboard row from per-backend benchmark results."""
     row: Dict[str, Any] = {"name": name}
@@ -862,6 +899,8 @@ def _row_from_results(
         row["tag"] = tag
     if graph is not None:
         row["graph"] = graph
+    if cost_n is not None:
+        row["cost_n"] = cost_n
 
     for backend in BENCHMARK_BACKENDS:
         info = results.get(backend, {})
@@ -977,12 +1016,20 @@ def build_payload(
         except Exception:  # noqa: BLE001
             graph = None
 
+        cost_n = _symbolic_cost(data_sets)
+
         results: Dict[str, Dict[str, Any]] = {}
         for backend in first_pass_backends:
             results[backend] = _benchmark(name, model, data_sets, backend)
 
         per_test.append(
-            {"name": name, "tag": tag, "graph": graph, "results": results}
+            {
+                "name": name,
+                "tag": tag,
+                "graph": graph,
+                "results": results,
+                "cost_n": cost_n,
+            }
         )
 
         if (idx + 1) % 50 == 0:
@@ -1000,7 +1047,11 @@ def build_payload(
 
     rows: List[Dict[str, Any]] = [
         _row_from_results(
-            entry["name"], entry["results"], tag=entry["tag"], graph=entry["graph"]
+            entry["name"],
+            entry["results"],
+            tag=entry["tag"],
+            graph=entry["graph"],
+            cost_n=entry["cost_n"],
         )
         for entry in per_test
     ]
@@ -1015,9 +1066,7 @@ def build_payload(
         summary["avg_speedup"] = round(sum(speedups) / len(speedups), 4)
         summary["min_speedup"] = round(min(speedups), 4)
         summary["max_speedup"] = round(max(speedups), 4)
-    weighted = _weighted_avg_speedup(
-        both_ok, "onnxruntime_avg_ms", "onnx_light_avg_ms"
-    )
+    weighted = _weighted_avg_speedup(both_ok, "speedup")
     if weighted is not None:
         summary["avg_speedup_weighted"] = weighted
 
@@ -1033,9 +1082,7 @@ def build_payload(
         summary["avg_speedup_cpu"] = round(sum(speedups_cpu) / len(speedups_cpu), 4)
         summary["min_speedup_cpu"] = round(min(speedups_cpu), 4)
         summary["max_speedup_cpu"] = round(max(speedups_cpu), 4)
-    weighted_cpu = _weighted_avg_speedup(
-        cpu_ok, "onnxruntime_avg_ms", "onnx_light_cpu_avg_ms"
-    )
+    weighted_cpu = _weighted_avg_speedup(cpu_ok, "speedup_cpu")
     if weighted_cpu is not None:
         summary["avg_speedup_weighted_cpu"] = weighted_cpu
 

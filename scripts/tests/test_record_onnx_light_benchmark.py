@@ -348,45 +348,55 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
 
+class TestSymbolicCost(unittest.TestCase):
+    def test_none_when_no_data_sets(self):
+        self.assertIsNone(rlb._symbolic_cost([]))
+
+    def test_sums_input_and_output_elements(self):
+        inputs = [np.zeros((2, 3)), np.zeros((4,))]
+        outputs = [np.zeros((5, 5))]
+        data_sets = [(inputs, outputs)]
+        # 2*3 + 4 + 5*5 = 6 + 4 + 25 = 35
+        self.assertEqual(rlb._symbolic_cost(data_sets), 35)
+
+    def test_only_uses_first_data_set(self):
+        small = ([np.zeros((1,))], [np.zeros((1,))])
+        big = ([np.zeros((100,))], [np.zeros((100,))])
+        self.assertEqual(rlb._symbolic_cost([small, big]), 2)
+
+
 class TestWeightedAvgSpeedup(unittest.TestCase):
     def test_none_when_no_rows(self):
-        self.assertIsNone(
-            rlb._weighted_avg_speedup([], "onnxruntime_avg_ms", "onnx_light_avg_ms")
-        )
+        self.assertIsNone(rlb._weighted_avg_speedup([], "speedup"))
 
     def test_weighted_average_favors_expensive_tests(self):
-        # A cheap O(1)-like test where onnx-light is much slower, and an
-        # expensive O(n^2)-like test where onnx-light is much faster. The
-        # unweighted mean of the two speedups treats both tests equally
-        # (~5.05x), but the weighted average should track the costly test's
-        # speedup (~10x) much more closely since it consumes almost all of
-        # the aggregate runtime.
+        # A cheap O(1)-like test (tiny tensors, small cost_n) where onnx-light
+        # is much slower, and an expensive O(n^2)-like test (large tensors,
+        # large cost_n) where onnx-light is much faster. The unweighted mean
+        # of the two speedups treats both tests equally, but the weighted
+        # average should track the costly test's speedup much more closely
+        # since it processes almost all of the aggregate data.
         rows = [
-            {"onnxruntime_avg_ms": 0.001, "onnx_light_avg_ms": 0.01},  # cheap, slower
-            {"onnxruntime_avg_ms": 100.0, "onnx_light_avg_ms": 10.0},  # costly, faster
+            {"speedup": 0.1, "cost_n": 4},  # cheap, slower
+            {"speedup": 10.0, "cost_n": 10_000},  # costly, faster
         ]
-        unweighted = sum(
-            r["onnxruntime_avg_ms"] / r["onnx_light_avg_ms"] for r in rows
-        ) / len(rows)
-        weighted = rlb._weighted_avg_speedup(
-            rows, "onnxruntime_avg_ms", "onnx_light_avg_ms"
-        )
+        unweighted = sum(r["speedup"] for r in rows) / len(rows)
+        weighted = rlb._weighted_avg_speedup(rows, "speedup")
         self.assertGreater(weighted, 1.0)
         # The costly test dominates, so the weighted average is much closer
-        # to its ~10x speedup than the unweighted mean of ~5.05x.
+        # to its 10x speedup than the unweighted mean of ~5.05x.
         self.assertGreater(weighted, unweighted)
-        self.assertAlmostEqual(weighted, 100.001 / 10.01, places=4)
+        expected = (0.1 * 4 + 10.0 * 10_000) / (4 + 10_000)
+        self.assertAlmostEqual(weighted, expected, places=4)
 
     def test_skips_rows_missing_or_zero_values(self):
         rows = [
-            {"onnxruntime_avg_ms": 1.0, "onnx_light_avg_ms": 0.0},
-            {"onnxruntime_avg_ms": 2.0},
-            {"onnxruntime_avg_ms": 4.0, "onnx_light_avg_ms": 2.0},
+            {"speedup": 1.0, "cost_n": 0},
+            {"speedup": 2.0},
+            {"speedup": 4.0, "cost_n": 2},
         ]
-        weighted = rlb._weighted_avg_speedup(
-            rows, "onnxruntime_avg_ms", "onnx_light_avg_ms"
-        )
-        self.assertAlmostEqual(weighted, 2.0, places=4)
+        weighted = rlb._weighted_avg_speedup(rows, "speedup")
+        self.assertAlmostEqual(weighted, 4.0, places=4)
 
 
 class TestBuildPayload(unittest.TestCase):
