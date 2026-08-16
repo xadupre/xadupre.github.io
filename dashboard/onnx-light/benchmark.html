@@ -276,6 +276,18 @@ table.benchmark tr.graph-row > td {
     <a href="../../docs/onnx-light-cpu/index.html"><code>onnx&#8209;light&#8209;cpu</code></a>
     SIMD kernels layered on top, and its speedup uses the same
     <code>onnxruntime&nbsp;avg</code> baseline.
+    The <em>avg speedup</em> card is the unweighted mean of every
+    per-test speedup, so an O(1) kernel (e.g.
+    <code>Shape</code>/<code>Reshape</code>) counts as much as an O(n)
+    (<code>Add</code>) or O(n&sup2;) (<code>Gemm</code>) one; the
+    <em>weighted avg speedup</em> card instead weighs each test by a
+    symbolic cost <code>N</code> &mdash; the number of scalar elements in
+    its input/output tensors, a size-based proxy for kernel cost that does
+    not depend on any backend's measured execution time
+    (<code>sum(N&nbsp;&times;&nbsp;speedup)&nbsp;/&nbsp;sum(N)</code>),
+    giving more weight to tests that process more data. The weight
+    <code>N</code> attributed to each operator (summed across its tests) is
+    listed in the collapsible table below the summary cards.
   </p>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -289,6 +301,26 @@ table.benchmark tr.graph-row > td {
     <span id="metaProtocol"></span>
   </div>
   <div class="summary-cards" id="summaryCards" style="margin-top:0.8em;"></div>
+  <div id="operatorWeightsPanel" style="display:none;margin-top:0.8em;">
+    <details>
+      <summary style="cursor:pointer;color:#8b949e;font-size:0.85em;">
+        weight (symbolic <code>N</code>) used per operator in <em>weighted avg speedup</em>
+      </summary>
+      <div class="table-wrap" style="margin-top:0.5em;">
+        <table class="benchmark" id="operatorWeightsTable">
+          <thead>
+            <tr>
+              <th>operator</th>
+              <th class="center">tests</th>
+              <th class="center">total weight (N)</th>
+              <th class="center">share</th>
+            </tr>
+          </thead>
+          <tbody id="operatorWeightsBody"></tbody>
+        </table>
+      </div>
+    </details>
+  </div>
 </div>
 
 <div id="mainPanel" class="panel" style="display:none;">
@@ -387,7 +419,45 @@ function renderMeta(payload) {
     (payload.n_measure || 10) + " timed iteration(s) per test.";
 
   renderSummaryCards(payload.summary || {}, payload.tests || [], payload.n_warmup, payload.n_measure);
+  renderOperatorWeights(payload.summary || {});
 }
+
+function renderOperatorWeights(summary) {
+  const panel = document.getElementById("operatorWeightsPanel");
+  const body = document.getElementById("operatorWeightsBody");
+  const weights = summary.operator_weights;
+  body.innerHTML = "";
+  if (!weights || !weights.length) {
+    panel.style.display = "none";
+    return;
+  }
+  panel.style.display = "";
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  for (const w of weights) {
+    const tr = document.createElement("tr");
+
+    const nameTd = document.createElement("td");
+    const code = document.createElement("code");
+    code.textContent = w.operator;
+    nameTd.appendChild(code);
+
+    const testsTd = document.createElement("td");
+    testsTd.className = "center";
+    testsTd.textContent = String(w.tests);
+
+    const weightTd = document.createElement("td");
+    weightTd.className = "center";
+    weightTd.textContent = w.weight.toLocaleString();
+
+    const shareTd = document.createElement("td");
+    shareTd.className = "center";
+    shareTd.textContent = total > 0 ? ((w.weight / total) * 100).toFixed(1) + "%" : "";
+
+    tr.append(nameTd, testsTd, weightTd, shareTd);
+    body.appendChild(tr);
+  }
+}
+
 
 function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   const host = document.getElementById("summaryCards");
@@ -413,7 +483,12 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   addCard("neutral", "both succeeded", String(bothOk), "of " + total + " tests");
   if (avgSpeedup !== undefined) {
     const cls = avgSpeedup >= 1 ? "faster" : (avgSpeedup >= 0.9 ? "close" : "slower");
-    addCard(cls, "avg speedup (ort / light)", avgSpeedup.toFixed(2) + "×", "speedup > 1 means onnx-light is faster");
+    addCard(cls, "avg speedup (ort / light)", avgSpeedup.toFixed(2) + "×", "unweighted mean of per-test speedups");
+  }
+  const avgSpeedupWeighted = summary.avg_speedup_weighted;
+  if (avgSpeedupWeighted !== undefined) {
+    const clsW = avgSpeedupWeighted >= 1 ? "faster" : (avgSpeedupWeighted >= 0.9 ? "close" : "slower");
+    addCard(clsW, "weighted avg speedup (ort / light)", avgSpeedupWeighted.toFixed(2) + "×", "weighted by a symbolic size N (input/output element count), i.e. kernel cost");
   }
   addCard("faster", "onnx-light faster", String(nFaster), "of " + bothOk + " jointly successful");
   addCard("slower", "onnx-light slower", String(nSlower), "of " + bothOk + " jointly successful");
@@ -421,6 +496,11 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   if (avgSpeedupCpu !== undefined) {
     const clsCpu = avgSpeedupCpu >= 1 ? "faster" : (avgSpeedupCpu >= 0.9 ? "close" : "slower");
     addCard(clsCpu, "avg speedup (ort / light+cpu)", avgSpeedupCpu.toFixed(2) + "×", "onnx-light with onnx-light-cpu kernels vs onnxruntime");
+  }
+  const avgSpeedupWeightedCpu = summary.avg_speedup_weighted_cpu;
+  if (avgSpeedupWeightedCpu !== undefined) {
+    const clsWCpu = avgSpeedupWeightedCpu >= 1 ? "faster" : (avgSpeedupWeightedCpu >= 0.9 ? "close" : "slower");
+    addCard(clsWCpu, "weighted avg speedup (ort / light+cpu)", avgSpeedupWeightedCpu.toFixed(2) + "×", "weighted by a symbolic size N (input/output element count), i.e. kernel cost");
   }
   if (nWarmup !== undefined) addCard("neutral", "warm-up iterations", String(nWarmup), "not timed");
   if (nMeasure !== undefined) addCard("neutral", "timed iterations", String(nMeasure), "per test");

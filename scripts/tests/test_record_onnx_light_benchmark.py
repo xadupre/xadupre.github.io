@@ -348,6 +348,128 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
 
+class TestSymbolicCost(unittest.TestCase):
+    def test_none_when_no_data_sets(self):
+        self.assertIsNone(rlb._symbolic_cost([]))
+
+    def test_sums_input_and_output_elements(self):
+        inputs = [np.zeros((2, 3)), np.zeros((4,))]
+        outputs = [np.zeros((5, 5))]
+        data_sets = [(inputs, outputs)]
+        # 2*3 + 4 + 5*5 = 6 + 4 + 25 = 35
+        self.assertEqual(rlb._symbolic_cost(data_sets), 35)
+
+    def test_only_uses_first_data_set(self):
+        small = ([np.zeros((1,))], [np.zeros((1,))])
+        big = ([np.zeros((100,))], [np.zeros((100,))])
+        self.assertEqual(rlb._symbolic_cost([small, big]), 2)
+
+
+class TestOperatorName(unittest.TestCase):
+    def _model(self, op_types):
+        class Node:
+            def __init__(self, op_type):
+                self.op_type = op_type
+
+        class Graph:
+            def __init__(self, nodes):
+                self.node = nodes
+
+        class Model:
+            def __init__(self, nodes):
+                self.graph = Graph(nodes)
+
+        return Model([Node(op_type) for op_type in op_types])
+
+    def test_single_node(self):
+        self.assertEqual(rlb._operator_name(self._model(["Add"])), "Add")
+
+    def test_multiple_nodes_joined_and_deduplicated(self):
+        model = self._model(["Cast", "Add", "Cast"])
+        self.assertEqual(rlb._operator_name(model), "Cast+Add")
+
+    def test_empty_without_graph(self):
+        self.assertEqual(rlb._operator_name(object()), "")
+
+
+class TestOperatorWeights(unittest.TestCase):
+    def test_aggregates_weight_and_count_per_operator(self):
+        rows = [
+            {"operator": "Add", "cost_n": 10},
+            {"operator": "Add", "cost_n": 5},
+            {"operator": "Gemm", "cost_n": 1000},
+        ]
+        weights = rlb._operator_weights(rows)
+        self.assertEqual(
+            weights,
+            [
+                {"operator": "Gemm", "weight": 1000, "tests": 1},
+                {"operator": "Add", "weight": 15, "tests": 2},
+            ],
+        )
+
+    def test_skips_rows_missing_operator_or_weight(self):
+        rows = [
+            {"operator": "", "cost_n": 10},
+            {"cost_n": 10},
+            {"operator": "Add", "cost_n": None},
+            {"operator": "Add", "cost_n": 0},
+        ]
+        self.assertEqual(rlb._operator_weights(rows), [])
+
+
+class TestWeightedAvgSpeedup(unittest.TestCase):
+    def test_none_when_no_rows(self):
+        self.assertIsNone(rlb._weighted_avg_speedup([], "speedup"))
+
+    def test_weighted_average_favors_expensive_tests(self):
+        # A cheap O(1)-like test (tiny tensors, small cost_n) where onnx-light
+        # is much slower, and an expensive O(n^2)-like test (large tensors,
+        # large cost_n) where onnx-light is much faster. The unweighted mean
+        # of the two speedups treats both tests equally, but the weighted
+        # average should track the costly test's speedup much more closely
+        # since it processes almost all of the aggregate data.
+        rows = [
+            {"speedup": 0.1, "cost_n": 4},  # cheap, slower
+            {"speedup": 10.0, "cost_n": 10_000},  # costly, faster
+        ]
+        unweighted = sum(r["speedup"] for r in rows) / len(rows)
+        weighted = rlb._weighted_avg_speedup(rows, "speedup")
+        self.assertGreater(weighted, 1.0)
+        # The costly test dominates, so the weighted average is much closer
+        # to its 10x speedup than the unweighted mean of ~5.05x.
+        self.assertGreater(weighted, unweighted)
+        expected = (0.1 * 4 + 10.0 * 10_000) / (4 + 10_000)
+        self.assertAlmostEqual(weighted, expected, places=4)
+
+    def test_skips_rows_missing_or_zero_values(self):
+        rows = [
+            {"speedup": 1.0, "cost_n": 0},
+            {"speedup": 2.0},
+            {"speedup": 4.0, "cost_n": 2},
+        ]
+        weighted = rlb._weighted_avg_speedup(rows, "speedup")
+        self.assertAlmostEqual(weighted, 4.0, places=4)
+
+
+def _stub_model(op_type):
+    """Return a minimal object exposing ``model.graph.node[i].op_type``."""
+
+    class Node:
+        def __init__(self, op_type):
+            self.op_type = op_type
+
+    class Graph:
+        def __init__(self, op_type):
+            self.node = [Node(op_type)]
+
+    class Model:
+        def __init__(self, op_type):
+            self.graph = Graph(op_type)
+
+    return Model(op_type)
+
+
 class TestBuildPayload(unittest.TestCase):
     def test_build_payload_with_stub_discover_and_run(self):
         """build_payload wires together discovery and benchmarking correctly."""
@@ -356,13 +478,13 @@ class TestBuildPayload(unittest.TestCase):
             return [
                 {
                     "name": "test_abs",
-                    "model": object(),
+                    "model": _stub_model("Abs"),
                     "data_sets": [([np.array([1.0])], [np.array([1.0])])],
                     "tag": "",
                 },
                 {
                     "name": "test_relu",
-                    "model": object(),
+                    "model": _stub_model("Relu"),
                     "data_sets": [([np.array([-1.0, 2.0])], [np.array([0.0, 2.0])])],
                     "tag": "mygroup",
                 },
@@ -420,12 +542,28 @@ class TestBuildPayload(unittest.TestCase):
         self.assertEqual(summary["total"], 2)
         self.assertEqual(summary["both_succeeded"], 2)
         self.assertIn("avg_speedup", summary)
+        # A cost-weighted average speedup is reported alongside the
+        # unweighted mean of per-test ratios.
+        self.assertIn("avg_speedup_weighted", summary)
         # The onnx-light-cpu backend is timed as well, so its summary and
         # per-row speedup are present too.
         self.assertEqual(summary["cpu_succeeded"], 2)
         self.assertIn("avg_speedup_cpu", summary)
+        self.assertIn("avg_speedup_weighted_cpu", summary)
         for row in payload["tests"]:
             self.assertIn("speedup_cpu", row, msg=row["name"])
+
+        # Each row's operator is derived from its model's node op_type, and
+        # the summary exposes the symbolic weight attributed to each
+        # operator that feeds into avg_speedup_weighted.
+        operators = {row["name"]: row.get("operator") for row in payload["tests"]}
+        self.assertEqual(operators, {"test_abs": "Abs", "test_relu": "Relu"})
+        self.assertIn("operator_weights", summary)
+        weighted_operators = {w["operator"] for w in summary["operator_weights"]}
+        self.assertEqual(weighted_operators, {"Abs", "Relu"})
+        for entry in summary["operator_weights"]:
+            self.assertEqual(entry["tests"], 1)
+            self.assertGreater(entry["weight"], 0)
 
     def test_build_payload_limit(self):
         """The ``limit`` parameter caps the number of tests."""
