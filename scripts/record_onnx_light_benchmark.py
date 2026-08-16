@@ -44,6 +44,10 @@ For each test the measurement protocol is:
    much as an O(n) (``Add``) or O(n^2) (``Gemm``) one; the weighted
    average instead gives more importance to kernels that process more
    data, without depending on any backend's measured execution time.
+   Each row also carries an ``operator`` field (its model's node
+   ``op_type``(s)), and ``summary["operator_weights"]`` reports, for every
+   operator, the total ``N`` weight it contributes (see
+   ``_operator_weights``), making the weighting transparent per operator.
 
 The resulting payload is persisted to
 ``cache_data/onnx-light/benchmark.json``. The dashboard at
@@ -854,6 +858,45 @@ def _symbolic_cost(data_sets: List[Tuple[List[Any], List[Any]]]) -> Optional[int
     return total or None
 
 
+def _operator_name(model: Any) -> str:
+    """Return the ``op_type`` (or ``+``-joined op_types) exercised by ``model``.
+
+    Backend node tests build a graph around the single operator under test
+    (occasionally chained with a couple of helper ops), so the graph's node
+    ``op_type``s identify which operator a test's :func:`_symbolic_cost`
+    weight is attributed to.
+    """
+    try:
+        nodes = model.graph.node
+    except AttributeError:
+        return ""
+    seen: List[str] = []
+    for node in nodes:
+        op_type = getattr(node, "op_type", "") or ""
+        if op_type and op_type not in seen:
+            seen.append(op_type)
+    return "+".join(seen)
+
+
+def _operator_weights(rows: List[Dict[str, Any]], cost_key: str = "cost_n") -> List[Dict[str, Any]]:
+    """Return per-operator ``{"operator", "weight", "tests"}`` totals, sorted by weight desc.
+
+    Aggregates the symbolic cost ``N`` (see :func:`_symbolic_cost`) of every
+    row by its ``operator`` field, making explicit how much each operator
+    contributes to :func:`_weighted_avg_speedup`.
+    """
+    totals: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        operator = row.get("operator") or ""
+        weight = row.get(cost_key)
+        if not operator or weight is None or weight <= 0:
+            continue
+        entry = totals.setdefault(operator, {"operator": operator, "weight": 0, "tests": 0})
+        entry["weight"] += weight
+        entry["tests"] += 1
+    return sorted(totals.values(), key=lambda e: e["weight"], reverse=True)
+
+
 def _weighted_avg_speedup(
     rows: List[Dict[str, Any]], speedup_key: str, cost_key: str = "cost_n"
 ) -> Optional[float]:
@@ -892,6 +935,7 @@ def _row_from_results(
     tag: str = "",
     graph: Optional[Dict[str, Any]] = None,
     cost_n: Optional[int] = None,
+    operator: str = "",
 ) -> Dict[str, Any]:
     """Build a dashboard row from per-backend benchmark results."""
     row: Dict[str, Any] = {"name": name}
@@ -901,6 +945,8 @@ def _row_from_results(
         row["graph"] = graph
     if cost_n is not None:
         row["cost_n"] = cost_n
+    if operator:
+        row["operator"] = operator
 
     for backend in BENCHMARK_BACKENDS:
         info = results.get(backend, {})
@@ -1017,6 +1063,7 @@ def build_payload(
             graph = None
 
         cost_n = _symbolic_cost(data_sets)
+        operator = _operator_name(model)
 
         results: Dict[str, Dict[str, Any]] = {}
         for backend in first_pass_backends:
@@ -1029,6 +1076,7 @@ def build_payload(
                 "graph": graph,
                 "results": results,
                 "cost_n": cost_n,
+                "operator": operator,
             }
         )
 
@@ -1052,9 +1100,11 @@ def build_payload(
             tag=entry["tag"],
             graph=entry["graph"],
             cost_n=entry["cost_n"],
+            operator=entry["operator"],
         )
         for entry in per_test
     ]
+
 
     # Summary stats across all tests that both backends succeeded on.
     both_ok = [
@@ -1069,6 +1119,9 @@ def build_payload(
     weighted = _weighted_avg_speedup(both_ok, "speedup")
     if weighted is not None:
         summary["avg_speedup_weighted"] = weighted
+    operator_weights = _operator_weights(both_ok)
+    if operator_weights:
+        summary["operator_weights"] = operator_weights
 
     # Summary stats for the onnx-light + onnx-light-cpu kernels backend.
     cpu_ok = [
