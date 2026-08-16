@@ -181,30 +181,13 @@
   </a>
 </li>
 
-            <li class="nav-item dropdown">
-                <button class="btn dropdown-toggle nav-item" type="button"
-                data-bs-toggle="dropdown" aria-expanded="false"
-                aria-controls="pst-nav-more-links">
-                    More
-                </button>
-                <ul id="pst-nav-more-links" class="dropdown-menu">
-                    
-<li class=" ">
-  <a class="nav-link dropdown-item nav-internal" href="../benchmarks.html">
-    Benchmarks
-  </a>
-</li>
 
-
-<li class=" current active">
-  <a class="nav-link dropdown-item nav-internal" href="index.html">
+<li class="nav-item current active">
+  <a class="nav-link nav-internal" href="index.html">
     Next Steps
   </a>
 </li>
 
-                </ul>
-            </li>
-            
   </ul>
 </nav></div>
       
@@ -331,13 +314,6 @@
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../examples.html">
     Examples
-  </a>
-</li>
-
-
-<li class="nav-item ">
-  <a class="nav-link nav-internal" href="../benchmarks.html">
-    Benchmarks
   </a>
 </li>
 
@@ -861,7 +837,12 @@ K partitions.</p>
 extra full-matrix memory passes.</p>
 <ul class="simple">
 <li><p>For AVX2/F16C, load FP16 panels, convert vectors to FP32 while packing, and
-accumulate with FMA. Narrow only the final output.</p></li>
+accumulate with FMA. Narrow only the final output. <em>(First step landed:
+``GemmHalfWithEpilogue`` converts each FP16/BF16 element to float32 during
+the general algorithm’s packing copy instead of widening the whole tensors,
+accumulates in float32, and narrows only in the epilogue. The conversion is
+still scalar; the F16C ``cvtph2ps`` vectorization of the contiguous packing
+copy is the next sub-step.)</em></p></li>
 <li><p>For AVX-512BF16 and AVX-512FP16, add native dot-product/multiply-accumulate
 kernels with FP32 accumulation where required by the ONNX numerical contract.</p></li>
 <li><p>Add AMX tile kernels behind OS-enabled tile-state detection. AMX must remain
@@ -1229,7 +1210,9 @@ evidence.</p></td>
 performance with no priority shape below 0.9x where the type is
 supported.</p></td>
 <td><p>P3-P4.</p></td>
-<td><p>Four-PR sequence fixed below; all pending.</p></td>
+<td><p>Roadmap PR07 is in progress (native FP16/BF16 convert-while-packing for
+the general algorithm, no full-tensor widening); PR08 through PR10
+below remain pending.</p></td>
 <td><p>Roadmap PR07 through PR10 below.</p></td>
 </tr>
 <tr class="row-even"><td><p>P6</p></td>
@@ -1440,8 +1423,41 @@ the skinny-N K reduction, including <code class="docutils literal notranslate"><
 absolute-GFLOP/s prediction: every quantitative target is a ratio versus
 ONNX Runtime, which this isolated driver cannot measure. These are
 diagnostic shared-runner numbers, not the dedicated-machine ONNX Runtime
-evidence the gate requires, so the FP64 large-matrix single-thread
-blocking is the next measured priority before the gate can close.</p></td>
+evidence the gate requires.
+The large-matrix weakness that followed is now fixed as well: the five
+loops packed one <code class="docutils literal notranslate"><span class="pre">KC</span> <span class="pre">x</span> <span class="pre">NC</span></code> B panel but walked it with the row tiles
+outside and the columns inside, so every row tile re-streamed the whole
+L3-sized panel, and each <code class="docutils literal notranslate"><span class="pre">k</span></code> step of the micro-kernel jumped by the
+panel width – a large power of two for the priority shapes, which maps a
+micro-panel onto very few L1 sets and defeats the hardware prefetcher.
+<code class="docutils literal notranslate"><span class="pre">PackBPanel</span></code> now stores the panel as contiguous <code class="docutils literal notranslate"><span class="pre">KC</span> <span class="pre">x</span> <span class="pre">column_block</span></code>
+column micro-panels (<code class="docutils literal notranslate"><span class="pre">SelectGemmColumnBlock</span></code>, four cache lines per
+<code class="docutils literal notranslate"><span class="pre">k</span></code> row) and the tile loops iterate <code class="docutils literal notranslate"><span class="pre">jr</span></code> outside and <code class="docutils literal notranslate"><span class="pre">ir</span></code> inside, as
+the five-loop decomposition above prescribes, so the micro-kernel reads B
+sequentially and each micro-panel is reused from L2 by every row tile of
+the packed A panel. On the shared AMD EPYC 7763 runner the single-thread
+square shapes rise from 74.9 to 85.1 GFLOP/s FP32 and 25.5 to 44.4 FP64 at
+512³, from 49.2 to 86.0 and 25.5 to 44.9 at 1024³, and from 48.3 to 85.9
+and 24.8 to 44.7 at 2048³ (about 1.8x for both types), with
+<code class="docutils literal notranslate"><span class="pre">transformer_proj</span></code> rising from 45.6 to 81.1 GFLOP/s FP32 and 23.4 to
+40.8 FP64; the two-thread runs improve in the same proportion (1024³ from
+69.5 to 120.5 GFLOP/s FP32 and 42.8 to 72.2 FP64, 2048³ from 83.1 to 144.9
+and 47.1 to 82.7). Throughput now sustains from 512³ to 2048³ instead of
+decaying, and no priority shape regresses: <code class="docutils literal notranslate"><span class="pre">skinny_m_gemv</span></code>,
+<code class="docutils literal notranslate"><span class="pre">skinny_n</span></code>, <code class="docutils literal notranslate"><span class="pre">large_k</span></code>, <code class="docutils literal notranslate"><span class="pre">trans_a_128</span></code>, and <code class="docutils literal notranslate"><span class="pre">trans_b_128</span></code> are equal
+or better. Re-measuring an Intel AVX-512 runner (Xeon 6900-series,
+AVX-512, generic profile, six register rows, four vCPU) confirms the
+column micro-panel layout removed the FP64 large-matrix drop there too:
+the single-thread FP64 square shapes now sustain about 73-84 GFLOP/s
+across 512³ (73-82), 1024³ (77-85), and 2048³ (73-81) instead of falling
+from 48 to ~32 GFLOP/s, and the single-thread FP32 square shapes sustain
+about 155-181 GFLOP/s over the same range rather than decaying; the
+multi-thread square shapes reach 225 GFLOP/s FP32 and 108 FP64 at 1024³
+and 284 and 130 at 2048³, <code class="docutils literal notranslate"><span class="pre">transformer_proj</span></code> holds 135-175 GFLOP/s
+FP32 and 62-87 FP64, and no priority shape regresses. With both the Zen
+and Intel AVX-512 large-matrix regressions now measured as fixed, the
+dedicated-machine ONNX Runtime comparison is the only remaining step
+before the gate can close.</p></td>
 </tr>
 <tr class="row-even"><td><p>Roadmap PR07</p></td>
 <td><p>x86 FP16/BF16 kernel family.</p></td>
@@ -1450,7 +1466,32 @@ epilogues, and ISA gates without full-tensor conversion. F16C converts
 while packing; AVX-512FP16/BF16 use native kernels; CPUID and OS tile
 state safely gate AMX with AVX-512 fallbacks.</p></td>
 <td><p>PR06.6</p></td>
-<td><p>Pending</p></td>
+<td><p>In progress. The first step replaces the FP16/BF16 operator path –
+which widened the whole A and B tensors into float32 scratch buffers
+before calling <code class="docutils literal notranslate"><span class="pre">GemmFloat32</span></code> – with a native <code class="docutils literal notranslate"><span class="pre">GemmHalfWithEpilogue</span></code>
+entry point. For the general blocked algorithm it converts each FP16 or
+BF16 element to float32 <em>while packing</em> it into the micro-kernel panels,
+so the reduction still accumulates in float32 and the epilogue narrows
+only the final output, but no expanded <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">K</span></code>/<code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">x</span> <span class="pre">N</span></code> tensor is
+materialized. The conversion reuses the tuned float32 micro-kernel,
+blocking, and thread grid by generalizing <code class="docutils literal notranslate"><span class="pre">PackAPanel</span></code>/<code class="docutils literal notranslate"><span class="pre">PackBPanel</span></code>
+and the five-loop on the input element type; the float32/float64 paths
+are byte-for-byte unchanged. Skinny, GEMV, and split-K shapes read A and
+B directly rather than through packing, so they keep their existing
+behavior (a one-time widen into the dedicated float32 algorithm), which
+leaves the <code class="docutils literal notranslate"><span class="pre">skinny_m_gemv</span></code>, <code class="docutils literal notranslate"><span class="pre">skinny_n</span></code>, and <code class="docutils literal notranslate"><span class="pre">large_k</span></code> priority
+shapes non-regressed. <code class="docutils literal notranslate"><span class="pre">tools/gemm_throughput.cc</span></code> gains isolated FP16
+and BF16 columns; on a shared AMD EPYC 7763 (Zen 3, AVX2+F16C,
+<code class="docutils literal notranslate"><span class="pre">amd-zen</span></code> profile, six register rows) single-thread runner the native
+path sustains about 63 GFLOP/s FP16 and 82 GFLOP/s BF16 at 1024³ and
+71/84 at 2048³, matching or exceeding the widen path while removing its
+two full-tensor scratch passes. New <code class="docutils literal notranslate"><span class="pre">GemmHalf</span></code> C++ tests validate FP16
+and BF16 against the widen-then-float32 reference across square,
+rectangular, transposed, empty-K, and bias configurations. The
+remaining sub-steps – vectorized F16C <code class="docutils literal notranslate"><span class="pre">cvtph2ps</span></code> conversion in the
+contiguous packing copy, native AVX-512FP16/BF16 dot-product kernels,
+and OS-tile-gated AMX – and the dedicated-machine ONNX Runtime
+comparison are still pending.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Roadmap PR08</p></td>
 <td><p>ARM FP16/BF16 kernel family.</p></td>
