@@ -34,6 +34,14 @@ For each test the measurement protocol is:
 
    A speedup > 1 indicates that ``onnx-light`` is faster than
    ``onnxruntime`` on that test case.
+5. Aggregate two summary averages: ``avg_speedup`` is the unweighted mean
+   of every per-test ``speedup`` ratio, while ``avg_speedup_weighted`` is
+   ``sum(onnxruntime_avg_ms) / sum(onnx_light_avg_ms)`` across those same
+   tests. The unweighted mean treats every kernel equally regardless of
+   its actual cost, so an O(1) kernel (``Shape``, ``Reshape``, ...) counts
+   as much as an O(n) (``Add``) or O(n^2) (``Gemm``) one; the weighted
+   average instead reflects the aggregate wall-clock time saved, giving
+   more importance to the more expensive kernels.
 
 The resulting payload is persisted to
 ``cache_data/onnx-light/benchmark.json``. The dashboard at
@@ -811,6 +819,37 @@ def run_benchmark(
     }
 
 
+def _weighted_avg_speedup(
+    rows: List[Dict[str, Any]], ort_key: str, other_key: str
+) -> Optional[float]:
+    """Return a cost-weighted average speedup, or ``None`` when unavailable.
+
+    ``summary["avg_speedup"]`` is the unweighted mean of the per-test
+    ``speedup`` ratios, so a cheap O(1) kernel (e.g. ``Shape``/``Reshape``)
+    counts exactly as much as an O(n^2) kernel (e.g. ``Gemm``) even though the
+    latter dominates real-world execution time. This helper instead weighs
+    every test by its ``onnxruntime`` execution time (a proxy for its actual
+    computational cost), computing::
+
+        weighted_speedup = sum(onnxruntime_avg_ms) / sum(other_avg_ms)
+
+    which reflects how much wall-clock time would be saved in aggregate,
+    rather than treating every test case as equally important.
+    """
+    ort_total = 0.0
+    other_total = 0.0
+    for row in rows:
+        ort_ms = row.get(ort_key)
+        other_ms = row.get(other_key)
+        if ort_ms is None or other_ms is None or ort_ms <= 0 or other_ms <= 0:
+            continue
+        ort_total += ort_ms
+        other_total += other_ms
+    if other_total <= 0:
+        return None
+    return round(ort_total / other_total, 4)
+
+
 def _row_from_results(
     name: str,
     results: Dict[str, Dict[str, Any]],
@@ -976,6 +1015,11 @@ def build_payload(
         summary["avg_speedup"] = round(sum(speedups) / len(speedups), 4)
         summary["min_speedup"] = round(min(speedups), 4)
         summary["max_speedup"] = round(max(speedups), 4)
+    weighted = _weighted_avg_speedup(
+        both_ok, "onnxruntime_avg_ms", "onnx_light_avg_ms"
+    )
+    if weighted is not None:
+        summary["avg_speedup_weighted"] = weighted
 
     # Summary stats for the onnx-light + onnx-light-cpu kernels backend.
     cpu_ok = [
@@ -989,6 +1033,11 @@ def build_payload(
         summary["avg_speedup_cpu"] = round(sum(speedups_cpu) / len(speedups_cpu), 4)
         summary["min_speedup_cpu"] = round(min(speedups_cpu), 4)
         summary["max_speedup_cpu"] = round(max(speedups_cpu), 4)
+    weighted_cpu = _weighted_avg_speedup(
+        cpu_ok, "onnxruntime_avg_ms", "onnx_light_cpu_avg_ms"
+    )
+    if weighted_cpu is not None:
+        summary["avg_speedup_weighted_cpu"] = weighted_cpu
 
     return {
         "date": now_iso,

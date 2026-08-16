@@ -348,6 +348,47 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
 
+class TestWeightedAvgSpeedup(unittest.TestCase):
+    def test_none_when_no_rows(self):
+        self.assertIsNone(
+            rlb._weighted_avg_speedup([], "onnxruntime_avg_ms", "onnx_light_avg_ms")
+        )
+
+    def test_weighted_average_favors_expensive_tests(self):
+        # A cheap O(1)-like test where onnx-light is much slower, and an
+        # expensive O(n^2)-like test where onnx-light is much faster. The
+        # unweighted mean of the two speedups treats both tests equally
+        # (~5.05x), but the weighted average should track the costly test's
+        # speedup (~10x) much more closely since it consumes almost all of
+        # the aggregate runtime.
+        rows = [
+            {"onnxruntime_avg_ms": 0.001, "onnx_light_avg_ms": 0.01},  # cheap, slower
+            {"onnxruntime_avg_ms": 100.0, "onnx_light_avg_ms": 10.0},  # costly, faster
+        ]
+        unweighted = sum(
+            r["onnxruntime_avg_ms"] / r["onnx_light_avg_ms"] for r in rows
+        ) / len(rows)
+        weighted = rlb._weighted_avg_speedup(
+            rows, "onnxruntime_avg_ms", "onnx_light_avg_ms"
+        )
+        self.assertGreater(weighted, 1.0)
+        # The costly test dominates, so the weighted average is much closer
+        # to its ~10x speedup than the unweighted mean of ~5.05x.
+        self.assertGreater(weighted, unweighted)
+        self.assertAlmostEqual(weighted, 100.001 / 10.01, places=4)
+
+    def test_skips_rows_missing_or_zero_values(self):
+        rows = [
+            {"onnxruntime_avg_ms": 1.0, "onnx_light_avg_ms": 0.0},
+            {"onnxruntime_avg_ms": 2.0},
+            {"onnxruntime_avg_ms": 4.0, "onnx_light_avg_ms": 2.0},
+        ]
+        weighted = rlb._weighted_avg_speedup(
+            rows, "onnxruntime_avg_ms", "onnx_light_avg_ms"
+        )
+        self.assertAlmostEqual(weighted, 2.0, places=4)
+
+
 class TestBuildPayload(unittest.TestCase):
     def test_build_payload_with_stub_discover_and_run(self):
         """build_payload wires together discovery and benchmarking correctly."""
@@ -420,10 +461,14 @@ class TestBuildPayload(unittest.TestCase):
         self.assertEqual(summary["total"], 2)
         self.assertEqual(summary["both_succeeded"], 2)
         self.assertIn("avg_speedup", summary)
+        # A cost-weighted average speedup is reported alongside the
+        # unweighted mean of per-test ratios.
+        self.assertIn("avg_speedup_weighted", summary)
         # The onnx-light-cpu backend is timed as well, so its summary and
         # per-row speedup are present too.
         self.assertEqual(summary["cpu_succeeded"], 2)
         self.assertIn("avg_speedup_cpu", summary)
+        self.assertIn("avg_speedup_weighted_cpu", summary)
         for row in payload["tests"]:
             self.assertIn("speedup_cpu", row, msg=row["name"])
 
