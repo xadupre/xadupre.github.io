@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 15, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 16, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -615,6 +615,17 @@ logical-core thread counts. Hybrid P/E-core machines need their own results.</p>
 <li><p>For attention, report time to first token, per-token decode latency,
 tokens/second, peak temporary memory, and effective KV-cache bandwidth.</p></li>
 </ul>
+<p>Two committed instruments implement this contract. <code class="docutils literal notranslate"><span class="pre">tools/benchmark_gemm_parity.py</span></code>
+is the end-to-end FP32/FP64 parity runner (PR06.0): it alternates the registered
+operator against ONNX Runtime and prints a simple side-by-side comparison table
+(<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> GFLOP/s, ONNX Runtime GFLOP/s, and the speed-up ratio per
+priority shape), writing the same table next to the raw JSON results so the two
+engines can be compared directly. <code class="docutils literal notranslate"><span class="pre">tools/gemm_throughput.cc</span></code> is the isolated
+<code class="docutils literal notranslate"><span class="pre">GemmPlan</span></code> throughput driver, built with
+<code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON</span></code>; it reports GFLOP/s per priority shape
+for the blocked multiplication alone, without ONNX Runtime or onnx-light, so a
+kernel-level regression is visible independently of the operator dispatch and
+reference-evaluator overhead that the parity runner also measures.</p>
 </section>
 <section id="target-computation-algorithm">
 <h2>Target computation algorithm<a class="headerlink" href="#target-computation-algorithm" title="Link to this heading">#</a></h2>
@@ -745,9 +756,10 @@ the baseline AVX path remains available on CPUs without FMA.</p></li>
 variants. Zen, Skylake, Ice Lake, and hybrid Intel CPUs can require different
 MR/NR and cache blocks even when they expose the same ISA.</p></li>
 <li><p>Generate several MR x NR micro-kernels instead of fixing <code class="docutils literal notranslate"><span class="pre">MR</span> <span class="pre">==</span> <span class="pre">4</span></code>.
-AVX2+FMA emits compile-time <code class="docutils literal notranslate"><span class="pre">MR=1..4</span></code> variants and AVX-512 emits
-<code class="docutils literal notranslate"><span class="pre">MR=1..6</span></code>, both for NR=1 and NR=2. The detected ISA selects MR=4 for
-AVX2/SSE and MR=6 for AVX-512, and the choice is propagated through cache
+AVX2+FMA emits compile-time <code class="docutils literal notranslate"><span class="pre">MR=1..6</span></code> variants and AVX-512 emits
+<code class="docutils literal notranslate"><span class="pre">MR=1..8</span></code>, both for NR=1 and NR=2. The detected microarchitecture selects
+MR=4 for generic AVX2/SSE, MR=5 for modern Intel Core AVX2, MR=6 for AMD Zen
+AVX2, and MR=6 for AVX-512, and the choice is propagated through cache
 blocking, packing, algorithm selection, and execution. Per-model tuning
 within an ISA remains.</p></li>
 <li><p>Unroll K enough to maintain independent FMA chains without spilling
@@ -1187,9 +1199,12 @@ implemented; 0.8x MLAS gate pending.</p></td>
 performance with no priority shape below 0.9x.</p></td>
 <td><p>P3.</p></td>
 <td><p>Scheduler PR01, epilogue PR02, x86 tuning PR03, thread runtime PR04,
-ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, and
-vectorized skinny-N selection PR06.2 are implemented or in review;
-measured fixes PR06.3 through PR06.5 and final gate PR06.6 remain.</p></td>
+ARM kernels PR05, parity runner PR06.0, diagnosis PR06.1, vectorized
+skinny-N selection PR06.2, the dedicated GEMV/skinny-M kernel PR06.3,
+immutable operator plans PR06.4, and the measured Zen/Intel register
+tiles PR06.5 are implemented; the final gate PR06.6 is in progress with
+isolated-driver measurements pending dedicated-machine ONNX Runtime
+evidence.</p></td>
 <td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/133">onnx-light-cpu #133</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/141">onnx-light-cpu #141</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/142">onnx-light-cpu #142</a>,
@@ -1205,7 +1220,8 @@ measured fixes PR06.3 through PR06.5 and final gate PR06.6 remain.</p></td>
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/159">onnx-light-cpu #159</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/160">onnx-light-cpu #160</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/162">onnx-light-cpu #162</a>,
-<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/167">onnx-light-cpu #167</a></p></td>
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/167">onnx-light-cpu #167</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/176">onnx-light-cpu #176</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>P5</p></td>
 <td><p>Native/panel-converted FP16, BF16, and integer paths.</p></td>
@@ -1347,7 +1363,13 @@ still pending.</p></td>
 output columns, vectorize the useful dimension, and improve every
 priority GEMV case without regressing general GEMM.</p></td>
 <td><p>PR06.2</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/170">Implemented in #170</a>. <code class="docutils literal notranslate"><span class="pre">GemmSkinnyM</span></code>
+now streams each B row once per K, reuses it across the few output
+rows through a broadcast axpy that vectorizes over N for non-transposed
+B, and applies the alpha/beta epilogue from a small per-panel
+accumulator instead of packing an almost-empty A panel through the
+five-loop tile kernel. Dedicated-hardware speed-up measurements are
+still pending.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Roadmap PR06.4</p></td>
 <td><p>Use immutable plans on operator paths.</p></td>
@@ -1358,7 +1380,15 @@ panels are no longer re-derived on every run; dynamic shapes rebuild or
 retrieve a correctly keyed plan, and dynamic B retains the ordinary
 per-call packing path.</p></td>
 <td><p>PR06.3</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/176">Implemented in #176</a>. The registered
+<code class="docutils literal notranslate"><span class="pre">Gemm</span></code> kernel now caches a keyed immutable <code class="docutils literal notranslate"><span class="pre">GemmPlan</span></code> per node for
+FP32/FP64 and executes it through a new epilogue-aware
+<code class="docutils literal notranslate"><span class="pre">GemmPlan::Execute</span></code> overload, so the algorithm, blocking, and thread
+count are prepared once and only rebuilt when the dtype, shape, or
+attributes change. Dynamic B keeps the ordinary per-call packing path.
+FP16/BF16 stay on the widening path pending the P5 low-precision
+kernels. <code class="docutils literal notranslate"><span class="pre">MatMul</span></code> has no registered operator yet, so its plan wiring
+arrives with that kernel.</p></td>
 </tr>
 <tr class="row-even"><td><p>Roadmap PR06.5</p></td>
 <td><p>Sustain large-matrix throughput on Zen and generic x86.</p></td>
@@ -1367,7 +1397,17 @@ enough independent FMA chains and parallel panels active. The 1024³ and
 2048³ priority cases no longer regress from 512³, and the complete
 corpus shows no priority-shape regression.</p></td>
 <td><p>PR06.4</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/180">Implemented in #180</a>. AMD Zen AVX2+FMA
+now selects the measured six-row register tile
+(<code class="docutils literal notranslate"><span class="pre">SelectGemmRegisterRowsForMicroarchitecture</span></code> returns
+<code class="docutils literal notranslate"><span class="pre">kGemmZenAVX2MR</span></code>) so Zen’s two FMA pipelines keep enough independent
+FP32/FP64 accumulator chains in flight; modern Intel Core keeps the
+five-row tile and generic x86 keeps the conservative four-row tile. The
+tuned register rows propagate through MC alignment, row packing,
+algorithm selection, and the parallel task grid, so the large-matrix
+blocking is both microarchitecture- and shape-aware. Dedicated-hardware
+speed-up measurements for the 1024³/2048³ priority cases are still
+pending.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Roadmap PR06.6</p></td>
 <td><p>Final FP32/FP64 parity gate.</p></td>
@@ -1376,7 +1416,32 @@ every priority platform, and both types; median speed-up is at least
 1.0x ONNX Runtime and no priority case is below 0.9x. The PR remains
 open while any target fails.</p></td>
 <td><p>PR06.2 through PR06.5</p></td>
-<td><p>Pending</p></td>
+<td><p>In progress. The new isolated <code class="docutils literal notranslate"><span class="pre">tools/gemm_throughput.cc</span></code> driver adds
+kernel-level evidence between merges: on a shared CI runner (Intel Xeon
+Platinum 8370C, Ice Lake-SP, AVX-512, <code class="docutils literal notranslate"><span class="pre">intel-core</span></code> profile, six
+register rows, four vCPU) the single-thread square-matrix throughput is
+104 GFLOP/s FP32 and 48 GFLOP/s FP64 at 512³, and stays at 99-100
+GFLOP/s FP32 through 1024³ and 2048³, confirming that PR06.5 removed the
+FP32 large-matrix regression on Intel AVX-512. The single-thread FP64
+path still drops from 48 to ~32 GFLOP/s (~33%) at 1024³ and 2048³ while
+the multi-thread FP64 path recovers (48 to 58 GFLOP/s). The remaining
+skinny-N weakness is now fixed: the <code class="docutils literal notranslate"><span class="pre">GemmSkinnyN</span></code> unit-stride dot
+product carried only four partial sums, which the SLP vectorizer packed
+into a single 128-bit SSE accumulator instead of full-width AVX, so the
+<code class="docutils literal notranslate"><span class="pre">skinny_n</span></code> (M=1024, N=1, K=1024) column-vector shape stalled at a
+scalar-class rate. Carrying sixteen independent partial sums lets the
+vectorizer fill two full-width AVX accumulators; on a shared AMD EPYC
+7763 (Zen 3, AVX2, <code class="docutils literal notranslate"><span class="pre">amd-zen</span></code> profile, six register rows, four vCPU)
+runner <code class="docutils literal notranslate"><span class="pre">skinny_n</span></code> rises from 3.3 to 22 GFLOP/s FP32 (about 6.7x) and
+8.7 to 12.4 GFLOP/s FP64, with no regression on the square, skinny-M,
+large-K, transpose, or transformer-projection priority shapes. Against
+the plan’s predictions this matches the measured-fix step that vectorizes
+the skinny-N K reduction, including <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">==</span> <span class="pre">1</span></code>. The plan makes no
+absolute-GFLOP/s prediction: every quantitative target is a ratio versus
+ONNX Runtime, which this isolated driver cannot measure. These are
+diagnostic shared-runner numbers, not the dedicated-machine ONNX Runtime
+evidence the gate requires, so the FP64 large-matrix single-thread
+blocking is the next measured priority before the gate can close.</p></td>
 </tr>
 <tr class="row-even"><td><p>Roadmap PR07</p></td>
 <td><p>x86 FP16/BF16 kernel family.</p></td>
@@ -1571,7 +1636,7 @@ priority case below 0.9x. The PR remains open while any target fails.</p></td>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 15, 2026.
+  Last updated on Aug 16, 2026.
   <br/>
 </p></div>
       

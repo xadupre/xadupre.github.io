@@ -24,8 +24,15 @@ probe)::
     SelectGemmKernelKind<T>()
     │
     ├─ Is this a non-x86 build (ONNX_LIGHT_CPU_X86 == 0)?
-    │  └─ yes → GemmKernelKind::kScalar
-    │           (portable C++ fallback; also the tail handler on x86)
+    │  └─ yes → ARM (or portable) path:
+    │           ├─ NEON compiled in (ONNX_LIGHT_CPU_HAVE_NEON) and, once probed
+    │           │  by DetectArmGemmProfile():
+    │           │  ├─ profile == kSve  (ONNX_LIGHT_CPU_HAVE_SVE, scalable
+    │           │  │                    vectors) → GemmKernelKind::kSve
+    │           │  └─ profile == kNeon (128-bit Advanced SIMD)
+    │           │                       → GemmKernelKind::kNeon
+    │           └─ otherwise → GemmKernelKind::kScalar
+    │                          (portable C++ fallback; also the tail handler on x86)
     │
     └─ x86 build: read the *runtime* SIMD level once (DetectSimdLevel(), cached)
        │
@@ -41,10 +48,18 @@ probe)::
        │  │
        │  └─ no, or runtime level < kAVX512 → fall through
        │
+       ├─ Was gemm_kernel_avx2_fma.cc compiled in
+       │  (ONNX_LIGHT_CPU_HAVE_AVX2_FMA) AND runtime level >= SimdLevel::kAVX2
+       │  AND CpuSupportsFma()?
+       │  └─ yes → GemmKernelKind::kAVX2FMA
+       │           (fused multiply-add AVX2 kernel: 256-bit vectors with a
+       │            single rounding per multiply-add, faster and more accurate
+       │            than the plain-AVX path below)
+       │
        ├─ runtime level >= SimdLevel::kAVX
        │  └─ GemmKernelKind::kAVX
-       │     (256-bit vectors, NR=2: 16 float / 8 double lanes per step;
-       │      always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
+       │     (256-bit vectors without FMA, NR=2: 16 float / 8 double lanes per
+       │      step; always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
        │      default -mavx2, so it is present in every build)
        │
        ├─ runtime level >= SimdLevel::kSSE2
@@ -53,6 +68,12 @@ probe)::
        │      the safe baseline for any x86-64 CPU, which guarantees SSE2)
        │
        └─ otherwise → GemmKernelKind::kScalar
+
+The same decision tree as an interactive SVG (hover a box for the rationale
+behind each branch):
+
+.. raw:: html
+   :file: _static/gemm/kernel_tree.svg
 
 Two independent axes are worth calling out:
 
@@ -199,7 +220,26 @@ partial accumulators over a unit-stride ``K`` body with an exact scalar tail,
 so single-column and small-N shapes vectorize the reduction instead of walking
 it with a serial dependency chain. A single output column (``N == 1``) is kept
 on this path rather than split-K, whose partition and partial-reduction
-overhead would dominate the tiny output.
+overhead would dominate the tiny output. The skinny-M path is the dual GEMV
+kernel for the few-row shapes (``M == 1`` matvec or a short batch): it streams
+each ``B`` row once per ``k``, reuses it across the output rows with a
+broadcast axpy over the output columns, and keeps one column panel's
+accumulators in a small ``M x nb`` buffer. The axpy is unit-stride for
+non-transposed ``B``, so it vectorizes over ``N`` -- the useful dimension when
+``M`` is tiny -- while work is parallelized over ``N`` column panels.
+
+``detail::SelectGemmAlgorithm()`` (``gemm_plan.cc``) picks one of these five
+strategies from ``m``, ``n``, ``k``, ``trans_a``/``trans_b``, and the
+target's ``vector_lanes``/``register_rows``. Split-K is checked first (it only
+applies to a narrow, tiny-output/long-``K`` corner); the direct path follows
+for small ``k`` with natural (non-transposed) layouts; everything else is
+decided by comparing ``m`` to ``register_rows`` and ``n`` to ``vector_lanes``.
+The interactive SVG below maps these thresholds onto the ``M`` x ``N`` output
+plane, with the ``K``/transpose-gated Direct and Split-K overlays called out
+separately (hover a zone for the exact condition):
+
+.. raw:: html
+   :file: _static/gemm/strategy_zones.svg
 
 Platform support
 ----------------
@@ -360,9 +400,11 @@ Implemented optimizations (for reference)
    * - ISA-specific register blocking
      - Implemented -- candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
        are compiled. CPUID family/model dispatch uses the measured MR=5
-       profile on modern Intel Core AVX2 processors and conservative MR=4
-       AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
-       algorithm selection, MC alignment, row packing, and execution.
+       profile on modern Intel Core AVX2 processors, the measured MR=6 profile
+       on AMD Zen AVX2 processors (whose two FMA pipelines need the wider
+       six-row tile), and the conservative MR=4 AVX2 / MR=6 AVX-512 profiles
+       elsewhere. The selected value drives algorithm selection, MC alignment,
+       row packing, and execution.
    * - Aligned packed panels
      - Implemented -- A and B workspaces are 64-byte aligned. B row strides
        are padded to the active vector width, keeping AVX2 and AVX-512 loads

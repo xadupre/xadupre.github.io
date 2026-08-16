@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 15, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 16, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -489,8 +489,15 @@ probe):</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>SelectGemmKernelKind&lt;T&gt;()
 │
 ├─ Is this a non-x86 build (ONNX_LIGHT_CPU_X86 == 0)?
-│  └─ yes → GemmKernelKind::kScalar
-│           (portable C++ fallback; also the tail handler on x86)
+│  └─ yes → ARM (or portable) path:
+│           ├─ NEON compiled in (ONNX_LIGHT_CPU_HAVE_NEON) and, once probed
+│           │  by DetectArmGemmProfile():
+│           │  ├─ profile == kSve  (ONNX_LIGHT_CPU_HAVE_SVE, scalable
+│           │  │                    vectors) → GemmKernelKind::kSve
+│           │  └─ profile == kNeon (128-bit Advanced SIMD)
+│           │                       → GemmKernelKind::kNeon
+│           └─ otherwise → GemmKernelKind::kScalar
+│                          (portable C++ fallback; also the tail handler on x86)
 │
 └─ x86 build: read the *runtime* SIMD level once (DetectSimdLevel(), cached)
    │
@@ -506,10 +513,18 @@ probe):</p>
    │  │
    │  └─ no, or runtime level &lt; kAVX512 → fall through
    │
+   ├─ Was gemm_kernel_avx2_fma.cc compiled in
+   │  (ONNX_LIGHT_CPU_HAVE_AVX2_FMA) AND runtime level &gt;= SimdLevel::kAVX2
+   │  AND CpuSupportsFma()?
+   │  └─ yes → GemmKernelKind::kAVX2FMA
+   │           (fused multiply-add AVX2 kernel: 256-bit vectors with a
+   │            single rounding per multiply-add, faster and more accurate
+   │            than the plain-AVX path below)
+   │
    ├─ runtime level &gt;= SimdLevel::kAVX
    │  └─ GemmKernelKind::kAVX
-   │     (256-bit vectors, NR=2: 16 float / 8 double lanes per step;
-   │      always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
+   │     (256-bit vectors without FMA, NR=2: 16 float / 8 double lanes per
+   │      step; always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS,
    │      default -mavx2, so it is present in every build)
    │
    ├─ runtime level &gt;= SimdLevel::kSSE2
@@ -520,6 +535,81 @@ probe):</p>
    └─ otherwise → GemmKernelKind::kScalar
 </pre></div>
 </div>
+<p>The same decision tree as an interactive SVG (hover a box for the rationale
+behind each branch):</p>
+<svg viewBox="0 0 1150 660" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="gemm-kernel-tree-title">
+<title id="gemm-kernel-tree-title">SelectGemmKernelKind decision tree</title>
+<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#666666"/></marker></defs>
+<text x="575.0" y="26" text-anchor="middle" font-size="16" font-weight="bold" fill="#1a1a1a">SelectGemmKernelKind&lt;T&gt;() decision tree (hover a box for details)</text>
+<text x="575.0" y="48" text-anchor="middle" font-size="12" font-style="italic" fill="#666666">selected once per (element type, process), then reused for every Gemm call; compile-time gate AND runtime CPUID gate both apply</text>
+<g class="node" id="decision-root"><title>The very first split: on a non-x86 target no x86 vector intrinsics are compiled, so SelectGemmKernelKind picks from the ARM (NEON/SVE) kernels or the portable scalar kernel; on an x86 build it reads DetectSimdLevel() once and walks the AVX-512 &gt; AVX2+FMA &gt; AVX &gt; SSE2 ladder.</title><rect x="430" y="66" width="260" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="560.0" y="90.0" text-anchor="middle" font-size="13" fill="#1a1a1a">Non-x86 build?</text><text x="560.0" y="106.0" text-anchor="middle" font-size="13" fill="#1a1a1a">(ONNX_LIGHT_CPU_X86 == 0)</text></g>
+<g class="node" id="decision-avx512"><title>Compile-time gate ONNX_LIGHT_CPU_HAVE_AVX512 (toolchain accepted -mavx512f, so gemm_kernel_avx512.cc is in the binary) AND runtime gate DetectSimdLevel() &gt;= kAVX512. 512-bit vectors, NR=2: 32 float / 16 double lanes per step.</title><rect x="40" y="170" width="300" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="190.0" y="194.0" text-anchor="middle" font-size="13" fill="#1a1a1a">AVX-512 compiled in AND</text><text x="190.0" y="210.0" text-anchor="middle" font-size="13" fill="#1a1a1a">DetectSimdLevel() &gt;= kAVX512?</text></g>
+<g class="node" id="decision-avx2fma"><title>Compile-time gate ONNX_LIGHT_CPU_HAVE_AVX2_FMA AND runtime DetectSimdLevel() &gt;= kAVX2 AND CpuSupportsFma(). The fused-multiply-add AVX2 micro-kernel: 256-bit vectors with a single rounding per multiply-add, faster and more accurate than plain AVX.</title><rect x="40" y="260" width="300" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="190.0" y="284.0" text-anchor="middle" font-size="13" fill="#1a1a1a">AVX2+FMA compiled in AND level</text><text x="190.0" y="300.0" text-anchor="middle" font-size="13" fill="#1a1a1a">&gt;= kAVX2 AND CpuSupportsFma()?</text></g>
+<g class="node" id="decision-avx"><title>Plain AVX (no FMA) is always compiled in at the baseline ONNX_LIGHT_CPU_SIMD_FLAGS (default -mavx2), so only the runtime CPUID probe gates it: 256-bit vectors, NR=2, 16 float / 8 double lanes per step.</title><rect x="40" y="350" width="300" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="190.0" y="374.0" text-anchor="middle" font-size="13" fill="#1a1a1a">DetectSimdLevel()</text><text x="190.0" y="390.0" text-anchor="middle" font-size="13" fill="#1a1a1a">&gt;= kAVX?</text></g>
+<g class="node" id="decision-sse2"><title>SSE2 is guaranteed on every x86-64 CPU, so this is the safe baseline: 128-bit vectors, NR=2, 8 float / 4 double lanes per step.</title><rect x="40" y="440" width="300" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="190.0" y="464.0" text-anchor="middle" font-size="13" fill="#1a1a1a">DetectSimdLevel()</text><text x="190.0" y="480.0" text-anchor="middle" font-size="13" fill="#1a1a1a">&gt;= kSSE2?</text></g>
+<g class="node" id="leaf-avx512"><title>GemmKernelKind::kAVX512 -- separate translation unit compiled only with -mavx512f.</title><rect x="400" y="170" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="475.0" y="203.0" text-anchor="middle" font-size="13" fill="#1a1a1a">AVX-512</text></g>
+<g class="node" id="leaf-avx2fma"><title>GemmKernelKind::kAVX2FMA -- fused multiply-add AVX2 kernel (gemm_kernel_avx2_fma.cc).</title><rect x="400" y="260" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="475.0" y="293.0" text-anchor="middle" font-size="13" fill="#1a1a1a">AVX2+FMA</text></g>
+<g class="node" id="leaf-avx"><title>GemmKernelKind::kAVX -- 256-bit AVX path without FMA, present in every x86 build.</title><rect x="400" y="350" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="475.0" y="383.0" text-anchor="middle" font-size="13" fill="#1a1a1a">AVX</text></g>
+<g class="node" id="leaf-sse2"><title>GemmKernelKind::kSSE2 -- 128-bit baseline path guaranteed on x86-64.</title><rect x="400" y="440" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="475.0" y="473.0" text-anchor="middle" font-size="13" fill="#1a1a1a">SSE2</text></g>
+<g class="node" id="leaf-x86-scalar"><title>GemmKernelKind::kScalar -- reached only if runtime detection reports below SSE2, which does not happen on real x86-64 hardware; also the per-tile tail handler.</title><rect x="400" y="530" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="475.0" y="563.0" text-anchor="middle" font-size="13" fill="#1a1a1a">Scalar</text></g>
+<line x1="560" y1="122" x2="560" y2="146" stroke="#666666" stroke-width="1.5"/>
+<path d="M560,146 L190,146 L190,170" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="300" y="138" width="60" height="16" fill="white" opacity="0.85"/>
+<text x="330" y="150" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no / x86</text>
+<line x1="340" y1="198" x2="400" y2="198" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="356.0" y="190" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="370.0" y="202" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="340" y1="288" x2="400" y2="288" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="356.0" y="280" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="370.0" y="292" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="340" y1="378" x2="400" y2="378" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="356.0" y="370" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="370.0" y="382" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="340" y1="468" x2="400" y2="468" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="356.0" y="460" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="370.0" y="472" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="190.0" y1="226" x2="190.0" y2="260" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="176.0" y="235.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="190.0" y="247.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<line x1="190.0" y1="316" x2="190.0" y2="350" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="176.0" y="325.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="190.0" y="337.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<line x1="190.0" y1="406" x2="190.0" y2="440" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="176.0" y="415.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="190.0" y="427.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<path d="M190.0,496 L190.0,558 L400,558" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="176.0" y="519.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="190.0" y="531.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<g class="node" id="decision-neon"><title>Compile-time gate ONNX_LIGHT_CPU_HAVE_NEON. When absent (e.g. a portable non-SIMD target), the scalar kernel is the only implementation.</title><rect x="620" y="170" width="280" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="760.0" y="194.0" text-anchor="middle" font-size="13" fill="#1a1a1a">ARM NEON compiled in?</text><text x="760.0" y="210.0" text-anchor="middle" font-size="13" fill="#1a1a1a">(ONNX_LIGHT_CPU_HAVE_NEON)</text></g>
+<g class="node" id="decision-sve"><title>Compile-time gate ONNX_LIGHT_CPU_HAVE_SVE AND DetectArmGemmProfile().kind == kSve. Scalable Vector Extension: length-agnostic vectors selected ahead of fixed-width NEON.</title><rect x="620" y="300" width="280" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="760.0" y="324.0" text-anchor="middle" font-size="13" fill="#1a1a1a">SVE compiled in AND runtime</text><text x="760.0" y="340.0" text-anchor="middle" font-size="13" fill="#1a1a1a">profile == kSve?</text></g>
+<g class="node" id="decision-neon-rt"><title>Runtime ARM profile reports NEON (Advanced SIMD): 128-bit fixed-width vectors, the baseline vector kernel on AArch64.</title><rect x="620" y="430" width="280" height="56" rx="8" ry="8" fill="#eaf1fb" stroke="#4472c4" stroke-width="1.5"/><text x="760.0" y="454.0" text-anchor="middle" font-size="13" fill="#1a1a1a">DetectArmGemmProfile()</text><text x="760.0" y="470.0" text-anchor="middle" font-size="13" fill="#1a1a1a">kind == kNeon?</text></g>
+<g class="node" id="leaf-arm-scalar"><title>GemmKernelKind::kScalar -- portable C++ fallback used when no ARM vector kernel is compiled in.</title><rect x="970" y="170" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="1045.0" y="203.0" text-anchor="middle" font-size="13" fill="#1a1a1a">Scalar</text></g>
+<g class="node" id="leaf-sve"><title>GemmKernelKind::kSve -- scalable-vector ARM kernel (gemm_kernel_arm.cc).</title><rect x="970" y="300" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="1045.0" y="333.0" text-anchor="middle" font-size="13" fill="#1a1a1a">SVE</text></g>
+<g class="node" id="leaf-neon"><title>GemmKernelKind::kNeon -- 128-bit Advanced SIMD ARM kernel.</title><rect x="970" y="430" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="1045.0" y="463.0" text-anchor="middle" font-size="13" fill="#1a1a1a">NEON</text></g>
+<g class="node" id="leaf-arm-scalar2"><title>GemmKernelKind::kScalar -- reached when neither SVE nor NEON is available at runtime.</title><rect x="970" y="550" width="150" height="56" rx="8" ry="8" fill="#e5f3e0" stroke="#548235" stroke-width="1.5"/><text x="1045.0" y="583.0" text-anchor="middle" font-size="13" fill="#1a1a1a">Scalar</text></g>
+<path d="M560,146 L760,146 L760,170" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="746" y="138" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="760" y="150" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="900" y1="198" x2="970" y2="198" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="921.0" y="190" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="935.0" y="202" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<line x1="900" y1="328" x2="970" y2="328" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="921.0" y="320" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="935.0" y="332" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="900" y1="458" x2="970" y2="458" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="921.0" y="450" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="935.0" y="462" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="760.0" y1="226" x2="760.0" y2="300" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="746.0" y="255.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="760.0" y="267.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">yes</text>
+<line x1="760.0" y1="356" x2="760.0" y2="430" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="746.0" y="385.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="760.0" y="397.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<path d="M760.0,486 L760.0,578 L970,578" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="746.0" y="524.0" width="28" height="16" fill="white" opacity="0.85"/>
+<text x="760.0" y="536.0" text-anchor="middle" font-size="12" font-weight="bold" fill="#666666">no</text>
+<text x="20" y="644" font-size="11" fill="#666666">Legend: blue = compile-time / runtime gate, green = selected GemmKernelKind. Left = x86 SIMD ladder, right = ARM (NEON/SVE) subtree.</text>
+</svg>
 <p>Two independent axes are worth calling out:</p>
 <ul class="simple">
 <li><p><strong>Compile-time gate</strong> (<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_HAVE_AVX512</span></code>): decided once, at
@@ -652,8 +742,86 @@ partial accumulators over a unit-stride <code class="docutils literal notranslat
 so single-column and small-N shapes vectorize the reduction instead of walking
 it with a serial dependency chain. A single output column (<code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">==</span> <span class="pre">1</span></code>) is kept
 on this path rather than split-K, whose partition and partial-reduction
-overhead would dominate the tiny output.</p>
-</section>
+overhead would dominate the tiny output. The skinny-M path is the dual GEMV
+kernel for the few-row shapes (<code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">==</span> <span class="pre">1</span></code> matvec or a short batch): it streams
+each <code class="docutils literal notranslate"><span class="pre">B</span></code> row once per <code class="docutils literal notranslate"><span class="pre">k</span></code>, reuses it across the output rows with a
+broadcast axpy over the output columns, and keeps one column panel’s
+accumulators in a small <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">nb</span></code> buffer. The axpy is unit-stride for
+non-transposed <code class="docutils literal notranslate"><span class="pre">B</span></code>, so it vectorizes over <code class="docutils literal notranslate"><span class="pre">N</span></code> – the useful dimension when
+<code class="docutils literal notranslate"><span class="pre">M</span></code> is tiny – while work is parallelized over <code class="docutils literal notranslate"><span class="pre">N</span></code> column panels.</p>
+<p><code class="docutils literal notranslate"><span class="pre">detail::SelectGemmAlgorithm()</span></code> (<code class="docutils literal notranslate"><span class="pre">gemm_plan.cc</span></code>) picks one of these five
+strategies from <code class="docutils literal notranslate"><span class="pre">m</span></code>, <code class="docutils literal notranslate"><span class="pre">n</span></code>, <code class="docutils literal notranslate"><span class="pre">k</span></code>, <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>/<code class="docutils literal notranslate"><span class="pre">trans_b</span></code>, and the
+target’s <code class="docutils literal notranslate"><span class="pre">vector_lanes</span></code>/<code class="docutils literal notranslate"><span class="pre">register_rows</span></code>. Split-K is checked first (it only
+applies to a narrow, tiny-output/long-<code class="docutils literal notranslate"><span class="pre">K</span></code> corner); the direct path follows
+for small <code class="docutils literal notranslate"><span class="pre">k</span></code> with natural (non-transposed) layouts; everything else is
+decided by comparing <code class="docutils literal notranslate"><span class="pre">m</span></code> to <code class="docutils literal notranslate"><span class="pre">register_rows</span></code> and <code class="docutils literal notranslate"><span class="pre">n</span></code> to <code class="docutils literal notranslate"><span class="pre">vector_lanes</span></code>.
+The interactive SVG below maps these thresholds onto the <code class="docutils literal notranslate"><span class="pre">M</span></code> x <code class="docutils literal notranslate"><span class="pre">N</span></code> output
+plane, with the <code class="docutils literal notranslate"><span class="pre">K</span></code>/transpose-gated Direct and Split-K overlays called out
+separately (hover a zone for the exact condition):</p>
+<svg viewBox="0 0 900 620" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica, Arial, sans-serif" role="img" aria-labelledby="gemm-strategy-zones-title">
+<title id="gemm-strategy-zones-title">SelectGemmAlgorithm strategy zones</title>
+<defs><marker id="axis-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#1a1a1a"/></marker></defs>
+<text x="450.0" y="26" text-anchor="middle" font-size="16" font-weight="bold" fill="#1a1a1a">SelectGemmAlgorithm strategy zones (hover a zone for details)</text>
+<text x="450.0" y="46" text-anchor="middle" font-size="12" font-style="italic" fill="#666666">M x N output plane, split at m == register_rows and n == vector_lanes; Direct and Split-K are extra conditions layered on top</text>
+<g id="zone-both-skinny-n"><title>skinny_m &amp;&amp; skinny_n, tie-break n &lt;= m: few output rows AND few output columns. Vectorizing the K reduction (skinny-N) wins when columns are the scarcer dimension (n &lt;= m), including the m == n == 1 corner.</title><polygon points="140,90 340,90 140,230" fill="#e2f0d9" stroke="#548235" stroke-width="1.5"/></g>
+<g id="zone-both-skinny-m"><title>skinny_m &amp;&amp; skinny_n, tie-break n &gt; m: few output rows AND few output columns, but with more columns than rows, so vectorizing over N (skinny-M, the dual GEMV kernel) wins.</title><polygon points="340,90 340,230 140,230" fill="#fde9d9" stroke="#e07b1f" stroke-width="1.5"/></g>
+<text x="164" y="114" font-size="11" fill="#1a1a1a">n&lt;=m</text>
+<text x="164" y="128" font-size="11" fill="#1a1a1a">Skinny-N</text>
+<text x="270" y="200" font-size="11" fill="#1a1a1a">n&gt;m</text>
+<text x="270" y="214" font-size="11" fill="#1a1a1a">Skinny-M</text>
+<g class="zone" id="zone-skinny-m">
+<title>skinny_m only: few output rows, many output columns. The dual GEMV kernel streams each B row once per k, broadcasts it across the output rows, and vectorizes the axpy over N.</title>
+<rect x="340" y="90" width="360" height="140" fill="#fde9d9" stroke="#e07b1f" stroke-width="1.5"/>
+<text x="520.0" y="156.33333333333334" text-anchor="middle" font-size="13" fill="#1a1a1a">Skinny-M</text>
+<text x="520.0" y="172.33333333333334" text-anchor="middle" font-size="13" fill="#1a1a1a">(m &lt;= register_rows, n &gt; vector_lanes)</text>
+</g>
+<g class="zone" id="zone-skinny-n">
+<title>skinny_n only: few output columns, many output rows. Each output element is reduced through several partial accumulators over a unit-stride K body with an exact scalar tail.</title>
+<rect x="140" y="230" width="200" height="280" fill="#e2f0d9" stroke="#548235" stroke-width="1.5"/>
+<text x="240.0" y="366.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">Skinny-N</text>
+<text x="240.0" y="382.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">(n &lt;= vector_lanes, m &gt; register_rows)</text>
+</g>
+<g class="zone" id="zone-general">
+<title>General five-loop path: neither m nor n is skinny. Row/column panels of A and B are packed and scheduled across independent output zones in bounded column waves.</title>
+<rect x="340" y="230" width="360" height="280" fill="#dbe7f6" stroke="#4472c4" stroke-width="1.5"/>
+<text x="520.0" y="366.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">General (five-loop)</text>
+<text x="520.0" y="382.3333333333333" text-anchor="middle" font-size="13" fill="#1a1a1a">m &gt; register_rows, n &gt; vector_lanes</text>
+</g>
+<g class="zone" id="zone-direct">
+<title>Direct path (checked first, before the skinny split): !trans_a &amp;&amp; !trans_b &amp;&amp; k &lt;= 32. Small-K products with natural (non-transposed) layouts skip cache blocking and packing entirely.</title>
+<rect x="364" y="254" width="190" height="60" fill="#fff2cc" stroke="#bf9000" stroke-width="1.5" stroke-dasharray="6,4"/>
+<text x="459.0" y="280.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">Direct</text>
+<text x="459.0" y="294.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">!trans_a &amp;&amp; !trans_b &amp;&amp; k&lt;=32</text>
+</g>
+<g class="zone" id="zone-split-k">
+<title>Split-K overlay: k &gt;= 4096 &amp;&amp; m != 0 &amp;&amp; m &lt;= 64 &amp;&amp; n &gt;= 2 &amp;&amp; n &lt;= 64 / m. Tiny outputs with a very long K and not enough M/N parallelism instead partition K into independent packed products, combined by a parallel tolerance-preserving reduction.</title>
+<rect x="364" y="330" width="230" height="60" fill="#f4d9e8" stroke="#b03a7a" stroke-width="1.5" stroke-dasharray="6,4"/>
+<text x="479.0" y="356.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">Split-K</text>
+<text x="479.0" y="370.6666666666667" text-anchor="middle" font-size="11" fill="#1a1a1a">k&gt;=4096 &amp;&amp; m&lt;=64 &amp;&amp; n&lt;=64/m</text>
+</g>
+<line x1="140" y1="510" x2="140" y2="90" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#axis-arrow)"/>
+<line x1="140" y1="510" x2="700" y2="510" stroke="#1a1a1a" stroke-width="1.5" marker-end="url(#axis-arrow)"/>
+<text x="106" y="98" font-size="12" fill="#1a1a1a">M (rows)</text>
+<text x="680" y="532" font-size="12" fill="#1a1a1a">N (cols)</text>
+<text x="132" y="234" text-anchor="end" font-size="11" fill="#666666">register_rows</text>
+<text x="340" y="546" text-anchor="middle" font-size="11" fill="#666666">vector_lanes</text>
+<line x1="340" y1="90" x2="340" y2="510" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
+<line x1="140" y1="230" x2="700" y2="230" stroke="#666666" stroke-width="1" stroke-dasharray="3,3"/>
+<text x="20" y="604" font-size="11" fill="#666666">Legend: green = Skinny-N, orange = Skinny-M, blue = General, dashed yellow = Direct overlay, dashed pink = Split-K overlay.</text>
+<g id="eval-order">
+<rect x="712" y="108" width="180" height="186" rx="6" ry="6" fill="#f7f7f7" stroke="#999999" stroke-width="1"/>
+<text x="722" y="128" font-size="12" font-weight="bold" fill="#1a1a1a">Evaluation order</text>
+<text x="722" y="142" font-size="10" font-style="italic" fill="#666666">(first match wins)</text>
+<text x="722" y="164" font-size="11" fill="#1a1a1a">1. Split-K (k&gt;=4096, tiny M/N)</text>
+<text x="722" y="184" font-size="11" fill="#1a1a1a">2. Direct (!trans_a &amp;&amp; !trans_b</text>
+<text x="734" y="198" font-size="11" fill="#1a1a1a">&amp;&amp; k&lt;=32)</text>
+<text x="722" y="218" font-size="11" fill="#1a1a1a">3. Skinny-N / Skinny-M when</text>
+<text x="734" y="232" font-size="11" fill="#1a1a1a">both skinny (tie: n&lt;=m)</text>
+<text x="722" y="252" font-size="11" fill="#1a1a1a">4. Skinny-M (m&lt;=register_rows)</text>
+<text x="722" y="272" font-size="11" fill="#1a1a1a">5. Skinny-N (n&lt;=vector_lanes)</text>
+<text x="722" y="288" font-size="11" fill="#1a1a1a">6. General (five-loop)</text>
+</g>
+</svg></section>
 <section id="platform-support">
 <h2>Platform support<a class="headerlink" href="#platform-support" title="Link to this heading">#</a></h2>
 <section id="x86-64">
@@ -853,9 +1021,11 @@ both NR=1 and NR=2.</p></td>
 <tr class="row-odd"><td><p>ISA-specific register blocking</p></td>
 <td><p>Implemented – candidate AVX2 MR=4/5/6 and AVX-512 MR=6/7/8 kernels
 are compiled. CPUID family/model dispatch uses the measured MR=5
-profile on modern Intel Core AVX2 processors and conservative MR=4
-AVX2 / MR=6 AVX-512 profiles elsewhere. The selected value drives
-algorithm selection, MC alignment, row packing, and execution.</p></td>
+profile on modern Intel Core AVX2 processors, the measured MR=6 profile
+on AMD Zen AVX2 processors (whose two FMA pipelines need the wider
+six-row tile), and the conservative MR=4 AVX2 / MR=6 AVX-512 profiles
+elsewhere. The selected value drives algorithm selection, MC alignment,
+row packing, and execution.</p></td>
 </tr>
 <tr class="row-even"><td><p>Aligned packed panels</p></td>
 <td><p>Implemented – A and B workspaces are 64-byte aligned. B row strides
@@ -1082,7 +1252,7 @@ dispatch.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 15, 2026.
+  Last updated on Aug 16, 2026.
   <br/>
 </p></div>
       
