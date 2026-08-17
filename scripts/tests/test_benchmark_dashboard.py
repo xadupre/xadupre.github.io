@@ -19,6 +19,15 @@ class TestBenchmarkDashboard(unittest.TestCase):
     def test_page_exists(self):
         self.assertTrue(os.path.isfile(PAGE), f"missing page: {PAGE}")
 
+    def test_input_type_column_present(self):
+        text = _read(PAGE)
+        # The table exposes a sortable "input type" column bound to the
+        # ``input_type`` field recorded per test.
+        self.assertIn('data-key="input_type"', text)
+        self.assertIn("input type", text)
+        # Rows render the recorded input type inside the new cell.
+        self.assertIn("r.input_type", text)
+
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
         # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,

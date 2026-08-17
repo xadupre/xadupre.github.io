@@ -825,6 +825,33 @@ def run_benchmark(
     }
 
 
+def _first_input_type(data_sets: List[Tuple[List[Any], List[Any]]]) -> str:
+    """Return the element type of a test's first input, e.g. ``"float32"``.
+
+    The type is read from the first input of the first data set. Sequence and
+    map inputs (represented as Python lists/tuples of arrays) are descended
+    into until an array-like value with a ``dtype`` is found. Returns an empty
+    string when no typed input is available.
+    """
+    if not data_sets:
+        return ""
+    try:
+        inputs, _ = data_sets[0]
+    except (ValueError, TypeError):
+        return ""
+    if not inputs:
+        return ""
+    value: Any = inputs[0]
+    while isinstance(value, (list, tuple)):
+        if not value:
+            return ""
+        value = value[0]
+    dtype = getattr(value, "dtype", None)
+    if dtype is None:
+        return ""
+    return str(getattr(dtype, "name", dtype))
+
+
 def _count_elements(value: Any) -> int:
     """Return a rough element count for ``value``, used by :func:`_symbolic_cost`."""
     size = getattr(value, "size", None)
@@ -936,6 +963,7 @@ def _row_from_results(
     graph: Optional[Dict[str, Any]] = None,
     cost_n: Optional[int] = None,
     operator: str = "",
+    input_type: str = "",
 ) -> Dict[str, Any]:
     """Build a dashboard row from per-backend benchmark results."""
     row: Dict[str, Any] = {"name": name}
@@ -947,6 +975,8 @@ def _row_from_results(
         row["cost_n"] = cost_n
     if operator:
         row["operator"] = operator
+    if input_type:
+        row["input_type"] = input_type
 
     for backend in BENCHMARK_BACKENDS:
         info = results.get(backend, {})
@@ -1064,6 +1094,7 @@ def build_payload(
 
         cost_n = _symbolic_cost(data_sets)
         operator = _operator_name(model)
+        input_type = _first_input_type(data_sets)
 
         results: Dict[str, Dict[str, Any]] = {}
         for backend in first_pass_backends:
@@ -1077,6 +1108,7 @@ def build_payload(
                 "results": results,
                 "cost_n": cost_n,
                 "operator": operator,
+                "input_type": input_type,
             }
         )
 
@@ -1101,6 +1133,7 @@ def build_payload(
             graph=entry["graph"],
             cost_n=entry["cost_n"],
             operator=entry["operator"],
+            input_type=entry["input_type"],
         )
         for entry in per_test
     ]
