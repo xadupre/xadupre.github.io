@@ -28,6 +28,22 @@ class TestBenchmarkDashboard(unittest.TestCase):
         # Rows render the recorded input type inside the new cell.
         self.assertIn("r.input_type", text)
 
+    def test_input_type_selector_present(self):
+        text = _read(PAGE)
+        # A dropdown selector lets the user filter rows by their input type.
+        self.assertIn('id="inputTypeFilter"', text)
+        self.assertIn("renderInputTypeFilter", text)
+        # The selector filters rows through the shared rowMatches predicate.
+        self.assertIn("state.inputTypeFilter", text)
+        self.assertIn("(row.input_type || \"\") !== state.inputTypeFilter", text)
+
+    def test_table_fits_without_horizontal_scrolling(self):
+        text = _read(PAGE)
+        # A fixed layout with explicit column widths keeps the table within
+        # the page width so it does not require horizontal scrolling.
+        self.assertIn("table-layout: fixed;", text)
+        self.assertIn("<colgroup>", text)
+
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
         # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,
