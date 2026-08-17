@@ -173,6 +173,16 @@ class TestRowFromResults(unittest.TestCase):
         row = rlb._row_from_results("test_relu", results, graph=None)
         self.assertNotIn("graph", row)
 
+    def test_input_type_included_when_provided(self):
+        results = self._make_results()
+        row = rlb._row_from_results("test_relu", results, input_type="float32")
+        self.assertEqual(row["input_type"], "float32")
+
+    def test_input_type_absent_when_empty(self):
+        results = self._make_results()
+        row = rlb._row_from_results("test_relu", results, input_type="")
+        self.assertNotIn("input_type", row)
+
     def test_error_step_absent_when_success(self):
         results = self._make_results(ort_ok=True, light_ok=True)
         row = rlb._row_from_results("test_relu", results)
@@ -363,6 +373,31 @@ class TestSymbolicCost(unittest.TestCase):
         small = ([np.zeros((1,))], [np.zeros((1,))])
         big = ([np.zeros((100,))], [np.zeros((100,))])
         self.assertEqual(rlb._symbolic_cost([small, big]), 2)
+
+
+class TestFirstInputType(unittest.TestCase):
+    def test_empty_when_no_data_sets(self):
+        self.assertEqual(rlb._first_input_type([]), "")
+
+    def test_empty_when_no_inputs(self):
+        self.assertEqual(rlb._first_input_type([([], [])]), "")
+
+    def test_dtype_name_of_first_input(self):
+        data_sets = [([np.zeros((2, 3), dtype=np.float32), np.zeros(4)], [])]
+        self.assertEqual(rlb._first_input_type(data_sets), "float32")
+
+    def test_uses_first_input_and_first_data_set(self):
+        first = ([np.zeros((1,), dtype=np.int64)], [])
+        second = ([np.zeros((1,), dtype=np.float32)], [])
+        self.assertEqual(rlb._first_input_type([first, second]), "int64")
+
+    def test_descends_into_sequence_input(self):
+        data_sets = [([[np.zeros((1,), dtype=np.float64)]], [])]
+        self.assertEqual(rlb._first_input_type(data_sets), "float64")
+
+    def test_empty_when_no_dtype(self):
+        data_sets = [([object()], [])]
+        self.assertEqual(rlb._first_input_type(data_sets), "")
 
 
 class TestOperatorName(unittest.TestCase):
@@ -558,6 +593,12 @@ class TestBuildPayload(unittest.TestCase):
         # operator that feeds into avg_speedup_weighted.
         operators = {row["name"]: row.get("operator") for row in payload["tests"]}
         self.assertEqual(operators, {"test_abs": "Abs", "test_relu": "Relu"})
+
+        # Each row records the type of its first input.
+        input_types = {row["name"]: row.get("input_type") for row in payload["tests"]}
+        self.assertEqual(
+            input_types, {"test_abs": "float64", "test_relu": "float64"}
+        )
         self.assertIn("operator_weights", summary)
         weighted_operators = {w["operator"] for w in summary["operator_weights"]}
         self.assertEqual(weighted_operators, {"Abs", "Relu"})
