@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 
 import numpy as np
@@ -1783,6 +1784,98 @@ class TestDiscoverNodeTests(unittest.TestCase):
         names = [d["name"] for d in discovered]
         self.assertIn("test_a", names)
         self.assertNotIn("test_b", names)
+
+
+class TestParseMaxSupportedIrVersion(unittest.TestCase):
+    def test_parses_advertised_maximum(self):
+        message = (
+            "[ONNXRuntimeError] : 1 : FAIL : Unsupported model IR version: 14, "
+            "max supported IR version: 13"
+        )
+        self.assertEqual(rlb._parse_max_supported_ir_version(message), 13)
+
+    def test_returns_none_for_unrelated_error(self):
+        self.assertIsNone(rlb._parse_max_supported_ir_version("some other error"))
+
+
+class TestMakeOnnxruntimeRunner(unittest.TestCase):
+    class _FakeModel:
+        def __init__(self, ir_version):
+            self.ir_version = ir_version
+
+        def SerializeToString(self):  # noqa: N802 - mirror protobuf API
+            return b""
+
+    class _FakeSession:
+        def __init__(self, payload, providers=None):
+            del payload, providers
+
+        def get_inputs(self):
+            return []
+
+        def run(self, output_names, feeds):  # noqa: ARG002
+            return []
+
+    def _patch_onnxruntime(self, factory):
+        fake = types.ModuleType("onnxruntime")
+        fake.InferenceSession = factory
+        saved = sys.modules.get("onnxruntime")
+        sys.modules["onnxruntime"] = fake
+        self.addCleanup(
+            lambda: sys.modules.__setitem__("onnxruntime", saved)
+            if saved is not None
+            else sys.modules.pop("onnxruntime", None)
+        )
+
+    def test_downgrades_ir_version_when_unsupported(self):
+        attempts = []
+
+        def _factory(payload, providers=None):
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise RuntimeError(
+                    "Unsupported model IR version: 14, max supported IR version: 13"
+                )
+            return self._FakeSession(payload, providers)
+
+        self._patch_onnxruntime(_factory)
+
+        captured = {}
+
+        def _fake_model_with_ir_version(model, ir_version):
+            captured["ir_version"] = ir_version
+            return self._FakeModel(ir_version)
+
+        saved = rlb._model_with_ir_version
+        rlb._model_with_ir_version = _fake_model_with_ir_version
+        try:
+            runner = rlb._make_onnxruntime_runner(self._FakeModel(14))
+        finally:
+            rlb._model_with_ir_version = saved
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(captured["ir_version"], 13)
+        self.assertEqual(runner([]), [])
+
+    def test_reraises_when_error_is_not_ir_version(self):
+        def _factory(payload, providers=None):
+            raise RuntimeError("some unrelated failure")
+
+        self._patch_onnxruntime(_factory)
+
+        with self.assertRaises(RuntimeError):
+            rlb._make_onnxruntime_runner(self._FakeModel(14))
+
+    def test_reraises_when_model_ir_version_not_newer(self):
+        def _factory(payload, providers=None):
+            raise RuntimeError(
+                "Unsupported model IR version: 13, max supported IR version: 13"
+            )
+
+        self._patch_onnxruntime(_factory)
+
+        with self.assertRaises(RuntimeError):
+            rlb._make_onnxruntime_runner(self._FakeModel(13))
 
 
 if __name__ == "__main__":
