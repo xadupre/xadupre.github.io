@@ -1,0 +1,159 @@
+name: DATA onnx-light-cpu build durations
+
+# Periodically records the duration of the GitHub Actions workflow runs of
+# ``xadupre/onnx-light-cpu`` and caches the data as CSV files under
+# ``cache_data/onnx-light-cpu/build_durations.csv`` (plus per-job rows under
+# ``cache_data/onnx-light-cpu/jobs/<job_name>.csv``). These feed the
+# ``dashboard/onnx-light-cpu/build-durations.html`` page.
+#
+# ``record_build_durations.py`` also tracks onnx-light-cpu as part of its
+# multi-repository ``DATA build durations`` run, but that shared workflow
+# processes the very large ``onnx/onnx`` repository first and can exhaust its
+# time budget before reaching onnx-light-cpu. This dedicated workflow scopes
+# the fetch to onnx-light-cpu so its data is always gathered, mirroring the
+# other dedicated onnx-light-cpu recording workflows.
+#
+# Only the repository owner is allowed to actually perform the recording so
+# that runs triggered by other actors will see the job skipped.
+
+on:
+  schedule:
+    # Run once a week, Monday at 05:23 UTC. The odd minute avoids the load
+    # spikes that happen exactly on the hour, and the hour/minute is offset
+    # from the other weekly recording workflows so they do not compete for
+    # the same runner slot.
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      months:
+        description: "Number of months to look back when the cache is empty."
+        required: false
+        default: "24"
+      since:
+        description: "Explicit start date for backfill (ISO 8601, e.g. 2024-01-01). Overrides cache and months when set."
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    # Scoped to a single repository, the bootstrap fetch is far smaller than
+    # the multi-repository ``DATA build durations`` workflow, but the first
+    # run still needs to walk the full history of onnx-light-cpu. Give it a
+    # generous budget; subsequent runs only fetch the incremental delta and
+    # complete in a few minutes.
+    timeout-minutes: 180
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          # Use a dedicated bot token (when available) so that the push
+          # below is allowed to bypass branch protection rules. Falls
+          # back to the default ``GITHUB_TOKEN`` when ``BOT_TOKEN`` is
+          # not configured.
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Record onnx-light-cpu build durations
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_SINCE: ${{ inputs.since }}
+        run: |
+          echo "=== Gathering onnx-light-cpu CI durations ==="
+          echo "Repository : xadupre/onnx-light-cpu"
+          echo "Triggered  : ${{ github.event_name }} (actor=${{ github.actor }})"
+          echo "Months     : ${{ inputs.months || '24' }}"
+          echo "Since      : ${INPUT_SINCE:-(not set, using cache or months)}"
+          echo "This step queries the GitHub Actions API for onnx-light-cpu,"
+          echo "downloads the workflow runs created since the most recent entry"
+          echo "in cache_data/onnx-light-cpu/build_durations.csv, and appends"
+          echo "the new rows (plus per-job rows under"
+          echo "cache_data/onnx-light-cpu/jobs/<job_name>.csv)."
+          echo "============================================="
+          SINCE_ARG=()
+          if [ -n "${INPUT_SINCE}" ]; then
+            SINCE_ARG=(--since "${INPUT_SINCE}")
+          fi
+          python -u scripts/record_build_durations.py \
+            --repo xadupre/onnx-light-cpu \
+            --months "${{ inputs.months || '24' }}" \
+            "${SINCE_ARG[@]}"
+
+      - name: Commit and push cache data
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update onnx-light-cpu build duration cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+              echo "Push succeeded on attempt ${i}."
+              rm -f "$push_err"
+              exit 0
+            fi
+            # A permission error (HTTP 403) is not a transient race and will not be
+            # fixed by retrying. Fail fast with a pointer to the README section that
+            # explains which GitHub setting needs to be changed.
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "" >&2
+              echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+              echo "Retrying will not help: the authenticated user shown above is" >&2
+              echo "not allowed to push to ${branch}." >&2
+              echo "" >&2
+              echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+              echo "setting to change:" >&2
+              echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+              exit 1
+            fi
+            rm -f "$push_err"
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            # When the previous step was cancelled by a timeout, the Python
+            # process may still be flushing CSV files to ``cache_data`` while
+            # this step runs. Fold any such late writes into the existing
+            # commit (so they are not lost) and then make sure the working
+            # tree is clean before rebasing, otherwise ``git rebase`` aborts
+            # with "cannot rebase: You have unstaged changes." and the
+            # partial cache data is never pushed.
+            git add cache_data || true
+            if ! git diff --cached --quiet; then
+              git commit --amend --no-edit || true
+            fi
+            git stash push --include-untracked --quiet || true
+            # Belt-and-braces: discard anything the stash could not capture
+            # (for example files written after the stash returned) so that
+            # the rebase below always starts from a clean working tree.
+            git checkout -- . || true
+            git clean -fd cache_data || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
