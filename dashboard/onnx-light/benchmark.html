@@ -129,12 +129,16 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 table.benchmark {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.9em;
+  font-size: 0.82em;
+  table-layout: fixed;
 }
 table.benchmark th, table.benchmark td {
   text-align: left;
-  padding: 0.4em 0.6em;
+  padding: 0.3em 0.4em;
   border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
 }
 table.benchmark th {
   color: #8b949e;
@@ -144,7 +148,7 @@ table.benchmark th {
   position: sticky;
   top: 0;
   background: rgba(22, 27, 34, 0.95);
-  white-space: nowrap;
+  white-space: normal;
 }
 table.benchmark th.center { text-align: center; }
 table.benchmark td.center { text-align: center; }
@@ -327,6 +331,11 @@ table.benchmark tr.graph-row > td {
   <div id="tabs" class="tabs" style="display:none;"></div>
   <div class="controls">
     <input id="search" type="search" placeholder="Filter tests (regular expression, e.g. ^test_relu)…" autocomplete="off" />
+    <label style="display:inline-flex;align-items:center;gap:0.4em;font-size:0.85em;" for="inputTypeFilter">input type:
+      <select id="inputTypeFilter">
+        <option value="">all types</option>
+      </select>
+    </label>
     <label style="display:inline-flex;align-items:center;gap:0.4em;font-size:0.85em;" for="statusFilter">show:
       <select id="statusFilter">
         <option value="">all tests</option>
@@ -350,6 +359,16 @@ table.benchmark tr.graph-row > td {
   </div>
   <div class="table-wrap">
     <table class="benchmark">
+      <colgroup>
+        <col style="width:22%" />
+        <col style="width:9%" />
+        <col style="width:11%" />
+        <col style="width:11%" />
+        <col style="width:11%" />
+        <col style="width:9%" />
+        <col style="width:9%" />
+        <col style="width:18%" />
+      </colgroup>
       <thead>
         <tr>
           <th data-key="name">Test <span class="arrow"></span></th>
@@ -379,6 +398,7 @@ const state = {
   tags: [],
   activeTag: "__all__",
   statusFilter: "",
+  inputTypeFilter: "",
 };
 
 function showMessage(text, kind) {
@@ -532,6 +552,9 @@ function rowMatches(row) {
   if (state.activeTag !== "__all__") {
     if ((row.tag || "") !== state.activeTag) return false;
   }
+  if (state.inputTypeFilter) {
+    if ((row.input_type || "") !== state.inputTypeFilter) return false;
+  }
   const status = rowStatus(row);
   if (state.statusFilter) {
     if (state.statusFilter === "both_ok" && status !== "both_ok") return false;
@@ -546,8 +569,27 @@ function rowMatches(row) {
   return state.regex.test(row.name);
 }
 
-function collectTags(rows) {
-  const counts = new Map();
+function renderInputTypeFilter(rows) {
+  const select = document.getElementById("inputTypeFilter");
+  if (!select) return;
+  const types = Array.from(
+    new Set(rows.map(r => r.input_type).filter(t => t))
+  ).sort((a, b) => a.localeCompare(b));
+  select.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "all types";
+  select.appendChild(allOpt);
+  for (const t of types) {
+    const opt = document.createElement("option");
+    opt.value = t;
+    opt.textContent = t;
+    select.appendChild(opt);
+  }
+  select.value = state.inputTypeFilter;
+}
+
+function collectTags(rows) {  const counts = new Map();
   for (const r of rows) {
     const tag = r.tag || "";
     if (!tag) continue;
@@ -872,6 +914,10 @@ function bindSearch() {
   if (statusFilter) {
     statusFilter.addEventListener("change", () => { state.statusFilter = statusFilter.value; renderRows(); });
   }
+  const inputTypeFilter = document.getElementById("inputTypeFilter");
+  if (inputTypeFilter) {
+    inputTypeFilter.addEventListener("change", () => { state.inputTypeFilter = inputTypeFilter.value; renderRows(); });
+  }
 }
 
 fetch(JSON_URL, { cache: "no-store" })
@@ -906,6 +952,7 @@ fetch(JSON_URL, { cache: "no-store" })
     document.getElementById("mainPanel").style.display = "block";
     bindHeaderSorting();
     bindSearch();
+    renderInputTypeFilter(rows);
     renderTabs();
     renderRows();
   })
