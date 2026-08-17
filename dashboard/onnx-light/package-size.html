@@ -118,7 +118,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time</h2>
   <div id="message" class="message info"></div>
   <div id="chartContainer" class="chart-container"><canvas id="chart"></canvas></div>
-  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers.</div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset. Binaries prefixed with <code>_onnxpy</code> use cross markers; others use circle markers. Binaries that are no longer produced by the latest build are omitted.</div>
 </div>
 <div class="chart-wrap" style="margin-top:1em;">
   <h2 style="margin:0 0 0.5em;font-size:1em;color:#c9d1d9;text-align:center;">Binary size over time (excluding lib, backend and kernel)</h2>
@@ -144,6 +144,7 @@ const SOURCES = [
     messageId: "message",
     url: "../../cache_data/onnx-light/so_sizes.csv",
     dashed: true,
+    dropRemoved: true,
     emptyMessage:
       "No shared library (.so/.dylib/.pyd) size data is available yet. " +
       "The CSV file will appear once the build pipeline publishes its first measurements.",
@@ -155,6 +156,7 @@ const SOURCES = [
     messageId: "messageExcl",
     url: "../../cache_data/onnx-light/so_sizes.csv",
     dashed: true,
+    dropRemoved: true,
     filter: (r) => !isExcludedBinary(r.name),
     skipObservations: true,
     emptyMessage:
@@ -289,7 +291,28 @@ function fetchSource(src) {
   });
 }
 
+function currentNames(rows) {
+  // Names present in the most recent observation. Shared libraries that were
+  // renamed or removed still linger in the historical CSV; only those seen in
+  // the latest build are considered to still exist.
+  let latest = null;
+  for (const r of rows) {
+    if (latest === null || new Date(r.date) > new Date(latest)) latest = r.date;
+  }
+  const names = new Set();
+  for (const r of rows) {
+    if (r.date === latest) names.add(r.name);
+  }
+  return names;
+}
+
 function renderSizeChart(src, rows) {
+  if (src.dropRemoved && rows.length) {
+    // Drop shared libraries that no longer exist in the latest build so the
+    // chart only shows the components that are still produced.
+    const current = currentNames(rows);
+    rows = rows.filter(r => current.has(r.name));
+  }
   const groups = groupByName(rows, src.kind === "wheel");
   const datasets = [];
   let i = 0;
