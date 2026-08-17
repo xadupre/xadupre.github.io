@@ -66,6 +66,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -525,12 +526,50 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _parse_max_supported_ir_version(message: str) -> Optional[int]:
+    """Return the max IR version onnxruntime advertises in an error message.
+
+    onnxruntime refuses models whose ``ir_version`` is newer than it supports
+    with a message such as ``Unsupported model IR version: 14, max supported IR
+    version: 13``. The benchmarks pull models straight from the ``onnx-light``
+    backend test cases, which may target a newer IR version than the installed
+    ``onnxruntime`` understands; parsing the advertised maximum lets us retry
+    with a compatible ``ir_version`` instead of failing every test case.
+    """
+    match = re.search(r"max supported IR version:\s*(\d+)", message)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _model_with_ir_version(model, ir_version: int):
+    """Return a copy of ``model`` with its ``ir_version`` set to ``ir_version``."""
+    import onnx
+
+    downgraded = onnx.ModelProto()
+    downgraded.CopyFrom(model)
+    downgraded.ir_version = ir_version
+    return downgraded
+
+
 def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
-    sess = onnxruntime.InferenceSession(
-        model.SerializeToString(), providers=["CPUExecutionProvider"]
-    )
+    try:
+        sess = onnxruntime.InferenceSession(
+            model.SerializeToString(), providers=["CPUExecutionProvider"]
+        )
+    except Exception as exc:  # noqa: BLE001
+        max_ir_version = _parse_max_supported_ir_version(str(exc))
+        current_ir_version = getattr(model, "ir_version", None)
+        if max_ir_version is None or (
+            current_ir_version is not None and max_ir_version >= current_ir_version
+        ):
+            raise
+        model = _model_with_ir_version(model, max_ir_version)
+        sess = onnxruntime.InferenceSession(
+            model.SerializeToString(), providers=["CPUExecutionProvider"]
+        )
     input_names = [i.name for i in sess.get_inputs()]
 
     def _run(inputs: List[Any]) -> List[Any]:
