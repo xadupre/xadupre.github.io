@@ -592,6 +592,9 @@ class TestRecordBuildDurations(unittest.TestCase):
             os.path.join(root, "dashboard", "onnx", "build-durations.html"),
             os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
             os.path.join(
+                root, "dashboard", "onnx-light-cpu", "build-durations.html"
+            ),
+            os.path.join(
                 root,
                 "dashboard",
                 "yet-another-onnx-builder",
@@ -616,6 +619,9 @@ class TestRecordBuildDurations(unittest.TestCase):
         pages = [
             os.path.join(root, "dashboard", "onnx", "build-durations.html"),
             os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
+            os.path.join(
+                root, "dashboard", "onnx-light-cpu", "build-durations.html"
+            ),
             os.path.join(
                 root,
                 "dashboard",
@@ -670,6 +676,12 @@ class TestRecordBuildDurations(unittest.TestCase):
         # dashboard page (``dashboard/onnx/build-durations.html``) has data
         # to render. Without this, the dashboard silently displays nothing.
         self.assertIn("onnx/onnx", rbd.DEFAULT_REPOS)
+
+    def test_default_repos_includes_onnx_light_cpu(self):
+        # ``xadupre/onnx-light-cpu`` must be tracked so the corresponding
+        # dashboard page (``dashboard/onnx-light-cpu/build-durations.html``)
+        # has data to render.
+        self.assertIn("xadupre/onnx-light-cpu", rbd.DEFAULT_REPOS)
 
 
 if __name__ == "__main__":
