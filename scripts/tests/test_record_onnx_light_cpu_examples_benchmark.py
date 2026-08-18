@@ -210,6 +210,98 @@ class TestReferenceRunner(unittest.TestCase):
         self.assertIs(calls["feeds"], feeds)
 
 
+class TestOnnxruntimeRunnerIrVersion(unittest.TestCase):
+    """``_make_onnxruntime_session`` clamps too-new IR versions and retries."""
+
+    class _FakeModel:
+        def __init__(self, ir_version=0):
+            self.ir_version = ir_version
+
+        def SerializeToString(self):
+            return json.dumps({"ir_version": self.ir_version}).encode("utf-8")
+
+        def ParseFromString(self, data):
+            self.ir_version = json.loads(data.decode("utf-8"))["ir_version"]
+
+    def _install_fakes(self, max_ir):
+        created = []
+
+        class _Session:
+            def __init__(self, serialized, providers=None):
+                ir = json.loads(serialized.decode("utf-8"))["ir_version"]
+                created.append(ir)
+                if ir > max_ir:
+                    raise RuntimeError(
+                        f"Unsupported model IR version: {ir}, "
+                        f"max supported IR version: {max_ir}"
+                    )
+                self.ir_version = ir
+
+            def run(self, output_names, feeds):
+                return ["output"]
+
+        onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.InferenceSession = _Session
+
+        onnx = types.ModuleType("onnx_light.onnx")
+        onnx.ModelProto = TestOnnxruntimeRunnerIrVersion._FakeModel
+        onnx_light = types.ModuleType("onnx_light")
+        onnx_light.onnx = onnx
+
+        modules = {
+            "onnxruntime": onnxruntime,
+            "onnx_light": onnx_light,
+            "onnx_light.onnx": onnx,
+        }
+        return modules, created
+
+    def _with_modules(self, modules, fn):
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            return fn()
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+    def test_supported_ir_version_loads_directly(self):
+        modules, created = self._install_fakes(max_ir=13)
+        model = self._FakeModel(ir_version=10)
+        runner = self._with_modules(
+            modules, lambda: rce._make_onnxruntime_runner(model)
+        )
+        self.assertEqual(created, [10])
+        self.assertEqual(runner({"X": 1}), ["output"])
+
+    def test_too_new_ir_version_is_clamped_and_retried(self):
+        modules, created = self._install_fakes(max_ir=13)
+        model = self._FakeModel(ir_version=14)
+        runner = self._with_modules(
+            modules, lambda: rce._make_onnxruntime_runner(model)
+        )
+        # First attempt with IR 14 fails, retried at the max supported IR 13.
+        self.assertEqual(created, [14, 13])
+        self.assertEqual(runner({"X": 1}), ["output"])
+
+    def test_unrelated_error_is_not_swallowed(self):
+        modules, _ = self._install_fakes(max_ir=13)
+
+        class _BrokenSession:
+            def __init__(self, serialized, providers=None):
+                raise RuntimeError("some other failure")
+
+        modules["onnxruntime"].InferenceSession = _BrokenSession
+        model = self._FakeModel(ir_version=14)
+        with self.assertRaises(RuntimeError) as ctx:
+            self._with_modules(
+                modules, lambda: rce._make_onnxruntime_runner(model)
+            )
+        self.assertIn("some other failure", str(ctx.exception))
+
+
 class TestBuildPayload(unittest.TestCase):
     def _fake_run(self, examples, n_warmup, n_measure):
         rows = [rce._row_from_times(1, {"onnx_light_cpu": 1.0, "onnxruntime": 2.0})]
