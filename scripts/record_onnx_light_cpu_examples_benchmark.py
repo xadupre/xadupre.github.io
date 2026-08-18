@@ -513,9 +513,9 @@ def discover_big_models(
     own. ``max_big_models`` optionally caps how many models are kept (useful for
     debugging / CI time budgets).
     """
-    import record_onnx_light_benchmark as rlb
-
     try:
+        import record_onnx_light_benchmark as rlb
+
         tests = rlb.discover_node_tests(kind)
     except Exception as exc:  # noqa: BLE001
         _log(f"Could not discover onnx-light big models: {exc}")
