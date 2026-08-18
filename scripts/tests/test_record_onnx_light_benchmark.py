@@ -20,14 +20,19 @@ class TestOnnxruntimeSessionIrVersion(unittest.TestCase):
     """``_make_onnxruntime_session`` clamps too-new IR versions and retries."""
 
     class _FakeModel:
-        def __init__(self, ir_version=0):
+        def __init__(self, ir_version=0, producer_name=""):
             self.ir_version = ir_version
+            self.producer_name = producer_name
 
         def SerializeToString(self):
-            return json.dumps({"ir_version": self.ir_version}).encode("utf-8")
+            return json.dumps(
+                {"ir_version": self.ir_version, "producer_name": self.producer_name}
+            ).encode("utf-8")
 
         def ParseFromString(self, data):
-            self.ir_version = json.loads(data.decode("utf-8"))["ir_version"]
+            payload = json.loads(data.decode("utf-8"))
+            self.ir_version = payload["ir_version"]
+            self.producer_name = payload.get("producer_name", "")
 
     def _install_fakes(self, max_ir):
         import types
@@ -87,11 +92,23 @@ class TestOnnxruntimeSessionIrVersion(unittest.TestCase):
 
     def test_too_new_ir_version_is_clamped_and_retried(self):
         modules, created = self._install_fakes(max_ir=13)
-        model = self._FakeModel(ir_version=14)
+        model = self._FakeModel(ir_version=14, producer_name=rlb._PRODUCER_NAME)
         self._with_modules(
             modules, lambda: rlb._make_onnxruntime_session(model.SerializeToString())
         )
         self.assertEqual(created, [14, 13])
+
+    def test_too_new_ir_version_from_foreign_model_is_not_clamped(self):
+        modules, created = self._install_fakes(max_ir=13)
+        model = self._FakeModel(ir_version=14, producer_name="somebody-else")
+        with self.assertRaises(RuntimeError) as ctx:
+            self._with_modules(
+                modules,
+                lambda: rlb._make_onnxruntime_session(model.SerializeToString()),
+            )
+        # Only the first (unmodified) attempt is made; no clamp/retry.
+        self.assertEqual(created, [14])
+        self.assertIn("Unsupported model IR version", str(ctx.exception))
 
     def test_unrelated_error_is_not_swallowed(self):
         modules, _ = self._install_fakes(max_ir=13)
