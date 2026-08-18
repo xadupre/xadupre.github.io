@@ -43,11 +43,20 @@ The resulting payload is persisted to
 ``cache_data/onnx-light-cpu/examples_benchmark.json`` and rendered by
 ``dashboard/onnx-light-cpu/examples-benchmark.html``.
 
+In addition to the gallery examples, the benchmark-sized "big models" exposed by
+``onnx-light`` (the same ``*_benchmark`` corpus rendered by the onnx-light
+benchmark dashboard) are appended to the payload. Each big model that dispatches
+to an onnx-light-cpu kernel is benchmarked with ``onnxruntime`` and
+``onnx-light-cpu`` and rendered as an extra example; models that use none of the
+operators onnx-light-cpu overrides are skipped. Pass ``--no-big-models`` to
+publish only the gallery examples.
+
 Usage::
 
     python scripts/record_onnx_light_cpu_examples_benchmark.py [--cache-dir DIR]
         [--n-warmup N] [--n-measure N] [--max-abs-size N]
         [--max-unary-size N] [--max-gemm-size N]
+        [--no-big-models] [--max-big-models N]
 """
 
 from __future__ import annotations
@@ -484,6 +493,115 @@ def run_examples(
 
 
 # ---------------------------------------------------------------------------
+# Big models from onnx-light (benchmark-sized backend test corpus)
+# ---------------------------------------------------------------------------
+
+
+def discover_big_models(
+    kind: str = "node", max_big_models: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Return onnx-light's benchmark-sized backend test models ("big models").
+
+    Delegates to
+    :func:`record_onnx_light_benchmark.discover_node_tests`, which discovers the
+    large ``*_benchmark`` node models bundled with the installed ``onnx-light``
+    package (the same corpus rendered by the onnx-light benchmark dashboard).
+    Each entry is a ``{"name", "model", "data_sets", "tag"}`` mapping.
+
+    Returns ``[]`` when ``onnx-light`` does not expose a benchmark corpus, so a
+    plain ``onnx-light`` build simply publishes the gallery examples on their
+    own. ``max_big_models`` optionally caps how many models are kept (useful for
+    debugging / CI time budgets).
+    """
+    import record_onnx_light_benchmark as rlb
+
+    try:
+        tests = rlb.discover_node_tests(kind)
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Could not discover onnx-light big models: {exc}")
+        return []
+    if max_big_models is not None and max_big_models >= 0:
+        tests = tests[:max_big_models]
+    return tests
+
+
+def run_big_models(
+    tests: List[Dict[str, Any]],
+    n_warmup: int = N_WARMUP,
+    n_measure: int = N_MEASURE,
+    run_benchmark: Optional[Callable[..., Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Benchmark onnx-light "big models" with onnxruntime and onnx-light-cpu.
+
+    Every model that dispatches to an onnx-light-cpu kernel becomes a
+    single-row ``example`` entry shaped exactly like the gallery examples, so
+    the dashboard renders it without any change. The measurement reuses
+    :func:`record_onnx_light_benchmark.run_benchmark`, which — for the
+    ``onnx_light_cpu`` backend — verifies that the onnx-light-cpu SIMD kernels
+    actually ran; a model that uses none of the operators onnx-light-cpu
+    overrides fails that check and is skipped, since it is not meaningful on the
+    onnx-light-cpu dashboard.
+    """
+    import record_onnx_light_benchmark as rlb
+
+    if run_benchmark is None:
+        run_benchmark = rlb.run_benchmark
+
+    results: List[Dict[str, Any]] = []
+    for test in tests:
+        name = str(test.get("name") or "")
+        model = test.get("model")
+        data_sets = test.get("data_sets") or []
+        if model is None or not data_sets:
+            continue
+
+        # ``onnx_light_cpu`` first: if the model uses none of the operators
+        # onnx-light-cpu overrides, ``run_benchmark`` reports a failure and the
+        # model is skipped (it would only re-run the built-in kernels).
+        cpu = run_benchmark(
+            model, data_sets, "onnx_light_cpu", n_warmup=n_warmup, n_measure=n_measure
+        )
+        if not cpu.get("success"):
+            _log(
+                f"Skipping big model {name!r}: onnx-light-cpu did not run "
+                f"({cpu.get('error') or 'no onnx-light-cpu kernel'})."
+            )
+            continue
+
+        ort = run_benchmark(
+            model, data_sets, "onnxruntime", n_warmup=n_warmup, n_measure=n_measure
+        )
+        times: Dict[str, Optional[float]] = {
+            "onnx_light_cpu": cpu.get("avg_ms"),
+            "onnxruntime": ort.get("avg_ms") if ort.get("success") else None,
+        }
+
+        cost = rlb._symbolic_cost(data_sets)
+        size = int(cost) if cost else 1
+        operator = rlb._operator_name(model) or "?"
+        rows = [_row_from_times(size, times)]
+        results.append(
+            {
+                "name": name,
+                "title": (
+                    f"{operator}: onnxruntime vs onnx-light-cpu "
+                    f"(onnx-light benchmark model {name})"
+                ),
+                "op": operator,
+                "source": f"onnx-light benchmark corpus ({name})",
+                "xlabel": "elements (symbolic cost N)",
+                "size_key": "elements",
+                "backends": ["onnx_light_cpu", "onnxruntime"],
+                "rows": rows,
+                "summary": _summarize_example(rows),
+            }
+        )
+        _log(f"Benchmarked big model {name!r} (operator {operator}).")
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Row / summary builders (pure, unit-tested)
 # ---------------------------------------------------------------------------
 
@@ -534,10 +652,22 @@ def build_payload(
     max_unary_size: Optional[int] = None,
     examples: Optional[List[Dict[str, Any]]] = None,
     run: Callable[..., Tuple[List[Dict[str, Any]], Dict[str, Any]]] = run_examples,
+    include_big_models: bool = True,
+    max_big_models: Optional[int] = None,
+    big_models_kind: str = "node",
+    discover_big: Callable[..., List[Dict[str, Any]]] = discover_big_models,
+    run_big: Callable[..., List[Dict[str, Any]]] = run_big_models,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
 ) -> Dict[str, Any]:
-    """Run every example benchmark and return the dashboard payload."""
+    """Run every example benchmark and return the dashboard payload.
+
+    When ``include_big_models`` is true, the benchmark-sized "big models"
+    exposed by ``onnx-light`` are discovered and appended to the gallery
+    examples (:func:`discover_big_models` / :func:`run_big_models`), so the
+    onnx-light-cpu dashboard also reports onnxruntime vs onnx-light-cpu on those
+    larger models.
+    """
     if versions is None:
         versions = collect_versions
     if examples is None:
@@ -549,6 +679,11 @@ def build_payload(
     example_results, meta = run(
         examples, n_warmup=n_warmup, n_measure=n_measure
     )
+
+    if include_big_models:
+        big_tests = discover_big(kind=big_models_kind, max_big_models=max_big_models)
+        big_results = run_big(big_tests, n_warmup=n_warmup, n_measure=n_measure)
+        example_results = list(example_results) + list(big_results)
 
     payload: Dict[str, Any] = {
         "date": now_iso,
@@ -611,6 +746,22 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=None,
         help="Optionally cap the largest Exp, Log and Not array size benchmarked.",
     )
+    parser.add_argument(
+        "--no-big-models",
+        dest="include_big_models",
+        action="store_false",
+        help=(
+            "Do not append onnx-light's benchmark-sized big models to the "
+            "dashboard (only benchmark the gallery examples)."
+        ),
+    )
+    parser.add_argument(
+        "--max-big-models",
+        type=int,
+        default=None,
+        help="Optionally cap how many onnx-light big models are benchmarked.",
+    )
+    parser.set_defaults(include_big_models=True)
     return parser.parse_args(argv)
 
 
@@ -626,6 +777,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             max_abs_size=args.max_abs_size,
             max_gemm_size=args.max_gemm_size,
             max_unary_size=args.max_unary_size,
+            include_big_models=args.include_big_models,
+            max_big_models=args.max_big_models,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record examples benchmark: {exc}")

@@ -266,6 +266,159 @@ class TestBuildPayload(unittest.TestCase):
         self.assertEqual(captured["n_measure"], 2)
 
 
+class TestDiscoverBigModels(unittest.TestCase):
+    def _patch_rlb(self, fake):
+        saved = sys.modules.get("record_onnx_light_benchmark")
+        sys.modules["record_onnx_light_benchmark"] = fake
+        return saved
+
+    def _restore_rlb(self, saved):
+        if saved is None:
+            sys.modules.pop("record_onnx_light_benchmark", None)
+        else:
+            sys.modules["record_onnx_light_benchmark"] = saved
+
+    def test_delegates_and_caps(self):
+        fake = types.ModuleType("record_onnx_light_benchmark")
+        fake.discover_node_tests = lambda kind: [
+            {"name": f"m{i}"} for i in range(5)
+        ]
+        saved = self._patch_rlb(fake)
+        try:
+            tests = rce.discover_big_models(max_big_models=2)
+        finally:
+            self._restore_rlb(saved)
+        self.assertEqual([t["name"] for t in tests], ["m0", "m1"])
+
+    def test_returns_empty_on_error(self):
+        fake = types.ModuleType("record_onnx_light_benchmark")
+
+        def _raise(kind):
+            raise ImportError("onnx_light missing")
+
+        fake.discover_node_tests = _raise
+        saved = self._patch_rlb(fake)
+        try:
+            tests = rce.discover_big_models()
+        finally:
+            self._restore_rlb(saved)
+        self.assertEqual(tests, [])
+
+
+class TestRunBigModels(unittest.TestCase):
+    def test_skips_models_without_cpu_kernel(self):
+        import numpy as np
+
+        class _Node:
+            def __init__(self, op_type):
+                self.op_type = op_type
+
+        class _Graph:
+            def __init__(self, ops):
+                self.node = [_Node(op) for op in ops]
+
+        class _Model:
+            def __init__(self, ops):
+                self.graph = _Graph(ops)
+
+        data_sets = [([np.zeros(4, dtype=np.float32)], [np.zeros(4, dtype=np.float32)])]
+        tests = [
+            {"name": "abs_benchmark", "model": _Model(["Abs"]), "data_sets": data_sets},
+            {"name": "add_benchmark", "model": _Model(["Add"]), "data_sets": data_sets},
+            {"name": "no_data", "model": _Model(["Abs"]), "data_sets": []},
+        ]
+
+        def fake_run_benchmark(model, ds, backend, n_warmup, n_measure):
+            op = model.graph.node[0].op_type
+            if backend == "onnx_light_cpu":
+                if op == "Abs":
+                    return {"success": True, "avg_ms": 1.0}
+                return {"success": False, "error": "no onnx-light-cpu kernel ran"}
+            return {"success": True, "avg_ms": 2.0}
+
+        results = rce.run_big_models(tests, run_benchmark=fake_run_benchmark)
+        self.assertEqual(len(results), 1)
+        example = results[0]
+        self.assertEqual(example["name"], "abs_benchmark")
+        self.assertEqual(example["op"], "Abs")
+        self.assertEqual(example["backends"], ["onnx_light_cpu", "onnxruntime"])
+        row = example["rows"][0]
+        # symbolic cost = 4 inputs + 4 outputs = 8 elements.
+        self.assertEqual(row["size"], 8)
+        self.assertEqual(row["onnx_light_cpu_ms"], 1.0)
+        self.assertEqual(row["onnxruntime_ms"], 2.0)
+        self.assertEqual(row["speedup_cpu"], 2.0)
+        self.assertNotIn("numpy_ms", row)
+
+    def test_missing_onnxruntime_still_reports_cpu(self):
+        import numpy as np
+
+        class _Model:
+            class graph:  # noqa: N801
+                node = [type("N", (), {"op_type": "Gemm"})()]
+
+        data_sets = [([np.zeros((2, 2), dtype=np.float32)], [])]
+        tests = [{"name": "gemm_benchmark", "model": _Model(), "data_sets": data_sets}]
+
+        def fake_run_benchmark(model, ds, backend, n_warmup, n_measure):
+            if backend == "onnx_light_cpu":
+                return {"success": True, "avg_ms": 3.0}
+            return {"success": False, "error": "unsupported"}
+
+        results = rce.run_big_models(tests, run_benchmark=fake_run_benchmark)
+        self.assertEqual(len(results), 1)
+        row = results[0]["rows"][0]
+        self.assertEqual(row["onnx_light_cpu_ms"], 3.0)
+        self.assertNotIn("onnxruntime_ms", row)
+        self.assertNotIn("speedup_cpu", row)
+
+
+class TestBuildPayloadBigModels(unittest.TestCase):
+    def test_big_models_appended_to_examples(self):
+        def fake_run(examples, n_warmup, n_measure):
+            rows = [rce._row_from_times(1, {"onnx_light_cpu": 1.0, "onnxruntime": 2.0})]
+            return [{"name": "abs", "rows": rows, "summary": {}}], {}
+
+        captured = {}
+
+        def fake_discover(kind, max_big_models):
+            captured["kind"] = kind
+            captured["max"] = max_big_models
+            return [{"name": "big"}]
+
+        def fake_run_big(tests, n_warmup, n_measure):
+            captured["tests"] = tests
+            return [{"name": "gemm_benchmark", "rows": [], "summary": {}}]
+
+        payload = rce.build_payload(
+            run=fake_run,
+            discover_big=fake_discover,
+            run_big=fake_run_big,
+            max_big_models=7,
+            versions=lambda: {},
+        )
+        names = [e["name"] for e in payload["examples"]]
+        self.assertEqual(names, ["abs", "gemm_benchmark"])
+        self.assertEqual(captured["max"], 7)
+        self.assertEqual(captured["kind"], "node")
+        self.assertEqual(captured["tests"], [{"name": "big"}])
+
+    def test_big_models_can_be_disabled(self):
+        def fake_run(examples, n_warmup, n_measure):
+            return [{"name": "abs", "rows": [], "summary": {}}], {}
+
+        def fake_discover(kind, max_big_models):
+            raise AssertionError("discover should not be called when disabled")
+
+        payload = rce.build_payload(
+            run=fake_run,
+            include_big_models=False,
+            discover_big=fake_discover,
+            versions=lambda: {},
+        )
+        self.assertEqual([e["name"] for e in payload["examples"]], ["abs"])
+
+
 class TestWritePayload(unittest.TestCase):
     def test_roundtrip(self):
         payload = {"date": "2024-01-01T00:00:00Z", "examples": []}
@@ -287,6 +440,13 @@ class TestParseArgs(unittest.TestCase):
         self.assertIsNone(args.max_abs_size)
         self.assertIsNone(args.max_gemm_size)
         self.assertIsNone(args.max_unary_size)
+        self.assertTrue(args.include_big_models)
+        self.assertIsNone(args.max_big_models)
+
+    def test_big_model_overrides(self):
+        args = rce.parse_args(["--no-big-models", "--max-big-models", "3"])
+        self.assertFalse(args.include_big_models)
+        self.assertEqual(args.max_big_models, 3)
 
     def test_overrides(self):
         args = rce.parse_args(
