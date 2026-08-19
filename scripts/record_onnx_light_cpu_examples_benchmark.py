@@ -595,7 +595,7 @@ def run_big_models(
         operator = rlb._operator_name(model) or "?"
         try:
             inputs, _ = data_sets[0]
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, IndexError):
             inputs = []
         input_type = _format_input_type(inputs) or (
             f"symbolic cost N={int(cost)}" if cost else "?"
@@ -647,7 +647,7 @@ def _format_input_type(arrays: Any) -> str:
             continue
         name = str(getattr(dtype, "name", dtype))
         shape = getattr(value, "shape", None)
-        if shape:
+        if shape is not None and len(shape) > 0:
             dims = "x".join(str(int(d)) for d in shape)
             parts.append(f"{name}[{dims}]")
         else:
