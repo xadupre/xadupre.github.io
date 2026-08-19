@@ -180,7 +180,16 @@ def _make_abs_model():
         [helper.make_tensor_value_info("X", TensorProto.FLOAT, ["N"])],
         [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["N"])],
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    # Build the model exactly like the onnx-light-cpu gallery example this
+    # benchmark reproduces (``plot_abs_benchmark.py``): opset 18 and
+    # ``ir_version=13``. Matching the package example is what onnxruntime is fed;
+    # letting onnx-light stamp its newest IR version would produce a model the
+    # installed onnxruntime may refuse to load.
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 18)],
+        ir_version=13,
+    )
     checker.check_model(model)
     return model
 
@@ -196,7 +205,11 @@ def _make_unary_model(op_type: str, boolean: bool = False):
         [helper.make_tensor_value_info("X", dtype, ["N"])],
         [helper.make_tensor_value_info("Y", dtype, ["N"])],
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 18)],
+        ir_version=13,
+    )
     checker.check_model(model)
     return model
 
@@ -214,7 +227,11 @@ def _make_gemm_model():
         ],
         [helper.make_tensor_value_info("Y", TensorProto.FLOAT, ["M", "N"])],
     )
-    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 18)])
+    model = helper.make_model(
+        graph,
+        opset_imports=[helper.make_opsetid("", 18)],
+        ir_version=13,
+    )
     checker.check_model(model)
     return model
 

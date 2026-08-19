@@ -16,6 +16,77 @@ sys.path.insert(0, os.path.dirname(HERE))
 import record_onnx_light_benchmark as rlb  # noqa: E402
 
 
+class TestOnnxruntimeRunner(unittest.TestCase):
+    """``_make_onnxruntime_runner`` builds a plain CPU session and never edits the model.
+
+    Models come as-is from the packages the benchmark measures, so the runner
+    must pass the serialized model through unchanged and let any session-build
+    error propagate.
+    """
+
+    class _FakeModel:
+        def __init__(self, serialized=b"model-bytes"):
+            self._serialized = serialized
+
+        def SerializeToString(self):
+            return self._serialized
+
+    def _with_modules(self, modules, fn):
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            return fn()
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+    def test_session_built_from_model_bytes_as_is(self):
+        import types
+
+        created = []
+
+        class _Session:
+            def __init__(self, serialized, providers=None):
+                created.append((serialized, providers))
+
+            def get_inputs(self):
+                return []
+
+            def run(self, output_names, feeds):
+                return ["output"]
+
+        onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.InferenceSession = _Session
+        model = self._FakeModel(serialized=b"corpus-model")
+        runner = self._with_modules(
+            {"onnxruntime": onnxruntime},
+            lambda: rlb._make_onnxruntime_runner(model),
+        )
+        # The serialized model is passed through unchanged on the CPU provider.
+        self.assertEqual(created, [(b"corpus-model", ["CPUExecutionProvider"])])
+        self.assertEqual(runner([]), ["output"])
+
+    def test_session_error_propagates(self):
+        import types
+
+        class _BrokenSession:
+            def __init__(self, serialized, providers=None):
+                raise RuntimeError("Unsupported model IR version: 14")
+
+        onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.InferenceSession = _BrokenSession
+        model = self._FakeModel()
+        with self.assertRaises(RuntimeError) as ctx:
+            self._with_modules(
+                {"onnxruntime": onnxruntime},
+                lambda: rlb._make_onnxruntime_runner(model),
+            )
+        self.assertIn("Unsupported model IR version", str(ctx.exception))
+
+
 class TestStringifyError(unittest.TestCase):
     def test_none(self):
         self.assertEqual(rlb._stringify_error(None), "")

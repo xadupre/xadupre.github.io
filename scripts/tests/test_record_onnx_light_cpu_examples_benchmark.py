@@ -210,6 +210,70 @@ class TestReferenceRunner(unittest.TestCase):
         self.assertIs(calls["feeds"], feeds)
 
 
+class TestOnnxruntimeRunner(unittest.TestCase):
+    """``_make_onnxruntime_runner`` builds a plain CPU session and never edits the model.
+
+    Models are taken as-is from the packages the benchmark measures, so the
+    runner must not modify (e.g. clamp the IR version of) the model it is given;
+    any error building the session propagates unchanged.
+    """
+
+    class _FakeModel:
+        def __init__(self, serialized=b"model-bytes"):
+            self._serialized = serialized
+
+        def SerializeToString(self):
+            return self._serialized
+
+    def _with_modules(self, modules, fn):
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            return fn()
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+    def test_session_built_from_model_bytes_as_is(self):
+        created = []
+
+        class _Session:
+            def __init__(self, serialized, providers=None):
+                created.append((serialized, providers))
+
+            def run(self, output_names, feeds):
+                return ["output"]
+
+        onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.InferenceSession = _Session
+        model = self._FakeModel(serialized=b"abs-model")
+        runner = self._with_modules(
+            {"onnxruntime": onnxruntime},
+            lambda: rce._make_onnxruntime_runner(model),
+        )
+        # The serialized model is passed through unchanged on the CPU provider.
+        self.assertEqual(created, [(b"abs-model", ["CPUExecutionProvider"])])
+        self.assertEqual(runner({"X": 1}), ["output"])
+
+    def test_session_error_propagates(self):
+        class _BrokenSession:
+            def __init__(self, serialized, providers=None):
+                raise RuntimeError("Unsupported model IR version: 14")
+
+        onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.InferenceSession = _BrokenSession
+        model = self._FakeModel()
+        with self.assertRaises(RuntimeError) as ctx:
+            self._with_modules(
+                {"onnxruntime": onnxruntime},
+                lambda: rce._make_onnxruntime_runner(model),
+            )
+        self.assertIn("Unsupported model IR version", str(ctx.exception))
+
+
 class TestBuildPayload(unittest.TestCase):
     def _fake_run(self, examples, n_warmup, n_measure):
         rows = [rce._row_from_times(1, {"onnx_light_cpu": 1.0, "onnxruntime": 2.0})]
