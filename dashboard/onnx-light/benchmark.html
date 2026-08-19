@@ -449,13 +449,27 @@ const QUADRATIC_COST_OPERATORS = new Set([
   "QAttention", "QLinearMatMul"
 ]);
 
+// Operators pinned to the minimum weight of 1: metadata-only kernels
+// (Size, Reshape) and the ai.onnx.training optimizer operators, whose
+// importance in the weighted average is intentionally reduced.
+const UNIT_WEIGHT_OPERATORS = new Set([
+  "Size", "Reshape",
+  "Adagrad", "Adam", "Momentum", "Gradient"
+]);
+
 function rowWeight(row) {
   if (row.cost_n === undefined || row.cost_n === null) return null;
-  if (row.cost_complexity) return row.cost_n;
   const operators = String(row.operator || "").split("+");
-  return operators.some(op => QUADRATIC_COST_OPERATORS.has(op))
-    ? row.cost_n * row.cost_n
-    : row.cost_n;
+  if (operators.some(op => UNIT_WEIGHT_OPERATORS.has(op))) return 1;
+  let weight;
+  if (row.cost_complexity) {
+    weight = row.cost_n;
+  } else {
+    weight = operators.some(op => QUADRATIC_COST_OPERATORS.has(op))
+      ? row.cost_n * row.cost_n
+      : row.cost_n;
+  }
+  return Math.max(Math.floor(weight / 1000000), 1);
 }
 
 function renderOperatorWeights(summary, rows) {
