@@ -19,14 +19,14 @@ import record_onnx_light_cpu_examples_benchmark as rce  # noqa: E402
 class TestRowFromTimes(unittest.TestCase):
     def test_all_backends_and_speedup(self):
         row = rce._row_from_times(
-            100,
+            "float32[100]",
             {
                 "numpy": 0.001,
                 "onnx_light_cpu": 0.025,
                 "onnxruntime": 0.05,
             },
         )
-        self.assertEqual(row["size"], 100)
+        self.assertEqual(row["input_type"], "float32[100]")
         self.assertEqual(row["numpy_ms"], 0.001)
         self.assertNotIn("onnx_light_ms", row)
         self.assertEqual(row["onnx_light_cpu_ms"], 0.025)
@@ -36,43 +36,81 @@ class TestRowFromTimes(unittest.TestCase):
 
     def test_missing_backend_is_omitted(self):
         row = rce._row_from_times(
-            100, {"onnx_light_cpu": 1.0, "onnxruntime": 2.0}
+            "float32[100]", {"onnx_light_cpu": 1.0, "onnxruntime": 2.0}
         )
         self.assertNotIn("numpy_ms", row)
         self.assertNotIn("onnx_light_ms", row)
         self.assertEqual(row["speedup_cpu"], 2.0)
 
     def test_no_speedup_without_both_sides(self):
-        row = rce._row_from_times(100, {"onnxruntime": 2.0})
+        row = rce._row_from_times("float32[100]", {"onnxruntime": 2.0})
         self.assertNotIn("speedup_cpu", row)
 
     def test_no_speedup_when_cpu_zero(self):
-        row = rce._row_from_times(100, {"onnx_light_cpu": 0.0, "onnxruntime": 2.0})
+        row = rce._row_from_times(
+            "float32[100]", {"onnx_light_cpu": 0.0, "onnxruntime": 2.0}
+        )
         self.assertNotIn("speedup_cpu", row)
 
-    def test_size_is_int(self):
-        row = rce._row_from_times(10**8, {"onnx_light_cpu": 1.0, "onnxruntime": 1.0})
-        self.assertIsInstance(row["size"], int)
-        self.assertEqual(row["size"], 10**8)
+    def test_input_type_is_string(self):
+        row = rce._row_from_times("bool[8]", {"onnx_light_cpu": 1.0, "onnxruntime": 1.0})
+        self.assertIsInstance(row["input_type"], str)
+        self.assertEqual(row["input_type"], "bool[8]")
+
+
+class TestFormatInputType(unittest.TestCase):
+    def test_single_input_with_shape(self):
+        import numpy as np
+
+        self.assertEqual(
+            rce._format_input_type([np.zeros(100, dtype=np.float32)]),
+            "float32[100]",
+        )
+
+    def test_multiple_inputs_joined(self):
+        import numpy as np
+
+        signature = rce._format_input_type(
+            [
+                np.zeros((16, 16), dtype=np.float32),
+                np.zeros((16, 16), dtype=np.float32),
+            ]
+        )
+        self.assertEqual(signature, "float32[16x16], float32[16x16]")
+
+    def test_bool_input(self):
+        import numpy as np
+
+        self.assertEqual(
+            rce._format_input_type([np.zeros(4, dtype=np.bool_)]), "bool[4]"
+        )
+
+    def test_untyped_values_are_skipped(self):
+        import numpy as np
+
+        self.assertEqual(
+            rce._format_input_type([[1, 2, 3], np.zeros(2, dtype=np.float32)]),
+            "float32[2]",
+        )
 
 
 class TestSummarizeExample(unittest.TestCase):
     def test_summary_stats(self):
         rows = [
-            rce._row_from_times(1, {"onnx_light_cpu": 1.0, "onnxruntime": 2.0}),
-            rce._row_from_times(2, {"onnx_light_cpu": 4.0, "onnxruntime": 2.0}),
+            rce._row_from_times("float32[1]", {"onnx_light_cpu": 1.0, "onnxruntime": 2.0}),
+            rce._row_from_times("float32[2]", {"onnx_light_cpu": 4.0, "onnxruntime": 2.0}),
         ]
         summary = rce._summarize_example(rows)
-        self.assertEqual(summary["sizes"], 2)
+        self.assertEqual(summary["input_types"], 2)
         self.assertEqual(summary["cpu_succeeded"], 2)
         self.assertEqual(summary["max_speedup_cpu"], 2.0)
         self.assertEqual(summary["min_speedup_cpu"], 0.5)
         self.assertEqual(summary["avg_speedup_cpu"], round((2.0 + 0.5) / 2, 4))
 
     def test_summary_without_speedups(self):
-        rows = [rce._row_from_times(1, {"numpy": 1.0})]
+        rows = [rce._row_from_times("float32[1]", {"numpy": 1.0})]
         summary = rce._summarize_example(rows)
-        self.assertEqual(summary["sizes"], 1)
+        self.assertEqual(summary["input_types"], 1)
         self.assertEqual(summary["cpu_succeeded"], 0)
         self.assertNotIn("avg_speedup_cpu", summary)
 
@@ -407,8 +445,8 @@ class TestRunBigModels(unittest.TestCase):
         self.assertEqual(example["op"], "Abs")
         self.assertEqual(example["backends"], ["onnx_light_cpu", "onnxruntime"])
         row = example["rows"][0]
-        # symbolic cost = 4 inputs + 4 outputs = 8 elements.
-        self.assertEqual(row["size"], 8)
+        # input type of the first data set: a single float32[4] input.
+        self.assertEqual(row["input_type"], "float32[4]")
         self.assertEqual(row["onnx_light_cpu_ms"], 1.0)
         self.assertEqual(row["onnxruntime_ms"], 2.0)
         self.assertEqual(row["speedup_cpu"], 2.0)

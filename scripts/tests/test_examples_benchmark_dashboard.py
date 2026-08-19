@@ -51,7 +51,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('summaryRow.className = "operator-summary"', text)
         self.assertIn('details.className = "operator-details"', text)
         self.assertNotIn("panel.open = true", text)
-        for label in ("input sizes", "average speed-up", "best speed-up", "worst speed-up"):
+        for label in ("input types", "average speed-up", "best speed-up", "worst speed-up"):
             self.assertIn(label, text)
 
     def test_page_has_footer_pointing_at_cache(self):
@@ -125,7 +125,7 @@ class TestWorkflow(unittest.TestCase):
 
     def test_workflow_builds_from_source_and_runs_script(self):
         text = _read(WORKFLOW)
-        self.assertIn("name: DATA onnx-light-cpu examples benchmark", text)
+        self.assertIn("name: DATA onnx-light-cpu benchmark", text)
         # Both dependencies are built from source, as required by the issue.
         self.assertIn("repository: xadupre/onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
