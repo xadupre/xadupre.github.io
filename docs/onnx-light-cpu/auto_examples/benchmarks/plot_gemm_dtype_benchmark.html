@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 19, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -499,22 +499,26 @@ baseline. It only supports <code class="docutils literal notranslate"><span clas
 <strong>single-tile</strong> and <strong>K-chunked</strong> shapes: it is dramatically slower on the
 <strong>multi-panel</strong> and <strong>skinny-M/wide-N</strong> shapes, to the point that including it
 there would dwarf every other curve and defeat the purpose of the comparison.</p>
-<p>Why measure it before <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code>: <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.register_kernels()</span></code>
+<p>Why resolve it before <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code>: <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.register_kernels()</span></code>
 permanently overrides the process-wide <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> kernel entry for the default
 domain, and a session only resolves/caches which kernel it uses on its
-<em>first</em> run. So the built-in baseline is measured with its own model/session,
-run once to prime it, <strong>before</strong> <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> is called; every other
-session used below is created and first run <em>after</em> registration, so it picks
-up the SIMD-accelerated kernel instead.</p>
+<em>first</em> run. The built-in session is therefore primed before registration but
+measured later, after the accelerated phase. Every accelerated session is
+created and first run after registration.</p>
 <section id="setup">
 <h2>Setup<a class="headerlink" href="#setup" title="Link to this heading">#</a></h2>
 <p>Report which SIMD level the current CPU provides. The mapping is <code class="docutils literal notranslate"><span class="pre">0=None</span></code>,
 <code class="docutils literal notranslate"><span class="pre">1=SSE2</span></code>, <code class="docutils literal notranslate"><span class="pre">2=AVX</span></code>, <code class="docutils literal notranslate"><span class="pre">3=AVX2</span></code> and <code class="docutils literal notranslate"><span class="pre">4=AVX512</span></code>.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">ml_dtypes</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
+
+<span class="c1"># ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller shapes) so the</span>
+<span class="c1"># example runs quickly as a unit test while still exercising every code path.</span>
+<span class="n">unit_test_going</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"UNITTEST_GOING"</span><span class="p">,</span> <span class="s2">"0"</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"1"</span><span class="p">,</span> <span class="s2">"true"</span><span class="p">,</span> <span class="s2">"True"</span><span class="p">)</span>
 
 <span class="c1"># ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the</span>
 <span class="c1"># ``onnx`` package; use it to build the models so the example depends on</span>
@@ -539,7 +543,7 @@ up the SIMD-accelerated kernel instead.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CPU kernels available, SIMD level: </span><span class="si">{</span><span class="n">level</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">simd_name</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 4 (AVX-512)
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 3 (AVX2)
 </pre></div>
 </div>
 </section>
@@ -588,20 +592,6 @@ times (at least seven) and the median wall-clock time is retained.</p>
         <span class="n">func</span><span class="p">()</span>
         <span class="n">timings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
     <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">timings</span><span class="p">))</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">measure_together</span><span class="p">(</span><span class="o">*</span><span class="n">funcs</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
-    <span class="n">timings</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">([]</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">funcs</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">iteration</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)):</span>
-            <span class="n">funcs</span><span class="p">[(</span><span class="n">iteration</span> <span class="o">+</span> <span class="n">index</span><span class="p">)</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)]()</span>
-    <span class="k">for</span> <span class="n">iteration</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">offset</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)):</span>
-            <span class="n">index</span> <span class="o">=</span> <span class="p">(</span><span class="n">iteration</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)</span>
-            <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-            <span class="n">funcs</span><span class="p">[</span><span class="n">index</span><span class="p">]()</span>
-            <span class="n">timings</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
-    <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">values</span><span class="p">))</span> <span class="k">for</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">timings</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -610,12 +600,21 @@ times (at least seven) and the median wall-clock time is retained.</p>
 <p><code class="docutils literal notranslate"><span class="pre">kGemmTileM</span> <span class="pre">==</span> <span class="pre">64</span></code>, <code class="docutils literal notranslate"><span class="pre">kGemmTileN</span> <span class="pre">==</span> <span class="pre">256</span></code> and <code class="docutils literal notranslate"><span class="pre">kGemmTileK</span> <span class="pre">==</span> <span class="pre">256</span></code> (see
 <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/math/gemm_kernel.cc</span></code>); every shape below is picked to
 sit clearly on one side of those thresholds.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">SHAPES</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="p">(</span><span class="s2">"single-tile</span><span class="se">\n</span><span class="s2">(64x64x64)"</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
-    <span class="p">(</span><span class="s2">"K-chunked</span><span class="se">\n</span><span class="s2">(32x32x2048)"</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">2048</span><span class="p">),</span>
-    <span class="p">(</span><span class="s2">"multi-panel</span><span class="se">\n</span><span class="s2">(512x512x128)"</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
-    <span class="p">(</span><span class="s2">"skinny-M/wide-N</span><span class="se">\n</span><span class="s2">(4x4096x128)"</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
-<span class="p">]</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">SHAPES</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="p">[</span>
+        <span class="p">(</span><span class="s2">"single-tile</span><span class="se">\n</span><span class="s2">(64x64x64)"</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"K-chunked</span><span class="se">\n</span><span class="s2">(32x32x512)"</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">512</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"multi-panel</span><span class="se">\n</span><span class="s2">(128x128x128)"</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"skinny-M/wide-N</span><span class="se">\n</span><span class="s2">(4x1024x128)"</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">1024</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
+    <span class="p">]</span>
+    <span class="k">if</span> <span class="n">unit_test_going</span>
+    <span class="k">else</span> <span class="p">[</span>
+        <span class="p">(</span><span class="s2">"single-tile</span><span class="se">\n</span><span class="s2">(64x64x64)"</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"K-chunked</span><span class="se">\n</span><span class="s2">(32x32x2048)"</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">2048</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"multi-panel</span><span class="se">\n</span><span class="s2">(512x512x128)"</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">512</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"skinny-M/wide-N</span><span class="se">\n</span><span class="s2">(4x4096x128)"</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">4096</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span>
+    <span class="p">]</span>
+<span class="p">)</span>
 
 <span class="c1"># Only the two "light" shapes get an ``onnx-light (built-in)`` baseline; the</span>
 <span class="c1"># reference kernel is far too slow on the multi-panel / skinny-M-wide-N shapes</span>
@@ -628,38 +627,21 @@ sit clearly on one side of those thresholds.</p>
 <h2>Prime the built-in baseline before registering the accelerated kernels<a class="headerlink" href="#prime-the-built-in-baseline-before-registering-the-accelerated-kernels" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> permanently replaces the process-wide <code class="docutils literal notranslate"><span class="pre">Gemm</span></code>
 kernel; a session only picks up whichever kernel is registered at the time
-of its <em>first</em> <code class="docutils literal notranslate"><span class="pre">run()</span></code> call. So a dedicated <code class="docutils literal notranslate"><span class="pre">float32</span></code> session is built
-and run here, once per included shape, before <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> runs.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">alone_rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">alone_session</span> <span class="o">=</span> <span class="n">make_session</span><span class="p">(</span><span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">)</span>
+of its <em>first</em> <code class="docutils literal notranslate"><span class="pre">run()</span></code> call. A dedicated <code class="docutils literal notranslate"><span class="pre">float32</span></code> session is therefore
+built and primed with a tiny input before <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> runs.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">alone_session</span> <span class="o">=</span> <span class="n">make_session</span><span class="p">(</span><span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">)</span>
 <span class="n">alone_results</span> <span class="o">=</span> <span class="p">{}</span>
-<span class="k">for</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="ow">in</span> <span class="n">SHAPES</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">shape_label</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALONE_SHAPE_LABELS</span><span class="p">:</span>
-        <span class="k">continue</span>
-    <span class="n">a</span> <span class="o">=</span> <span class="n">alone_rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">b</span> <span class="o">=</span> <span class="n">alone_rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">session</span><span class="o">=</span><span class="n">alone_session</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">):</span>
-        <span class="k">return</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
-
-    <span class="n">elapsed</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">repeat</span><span class="p">)</span>
-    <span class="n">alone_results</span><span class="p">[</span><span class="n">shape_label</span><span class="p">]</span> <span class="o">=</span> <span class="n">elapsed</span>
-    <span class="nb">print</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">"onnx-light (built-in) | shape=</span><span class="si">{</span><span class="n">shape_label</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;24</span><span class="si">}</span><span class="s2"> "</span>
-        <span class="sa">f</span><span class="s2">"| </span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span>
-    <span class="p">)</span>
+<span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
+    <span class="kc">None</span><span class="p">,</span>
+    <span class="p">{</span>
+        <span class="s2">"A"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+        <span class="s2">"B"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+    <span class="p">},</span>
+<span class="p">)</span>
 
 <span class="n">register_kernels</span><span class="p">()</span>
 
 <span class="n">sessions</span> <span class="o">=</span> <span class="p">{</span><span class="n">label</span><span class="p">:</span> <span class="n">make_session</span><span class="p">(</span><span class="n">tp</span><span class="p">)</span> <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="p">(</span><span class="n">tp</span><span class="p">,</span> <span class="n">_</span><span class="p">)</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
-<span class="n">ort_sessions</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="n">label</span><span class="p">:</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
-        <span class="n">make_model</span><span class="p">(</span><span class="n">DTYPES</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">(),</span>
-        <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">],</span>
-    <span class="p">)</span>
-    <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"float32"</span><span class="p">,</span> <span class="s2">"float16"</span><span class="p">)</span>
-<span class="p">}</span>
 
 <span class="n">accelerated_kernel_name</span> <span class="o">=</span> <span class="n">registered_kernel_names</span><span class="p">()[</span><span class="s2">"Gemm"</span><span class="p">]</span>
 <span class="c1"># onnx-light-cpu kernels record their name on every run (a mutex per call);</span>
@@ -669,27 +651,20 @@ and run here, once per included shape, before <code class="docutils literal notr
 <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light (built-in) | shape=single-tile              |      24.02 us
-onnx-light (built-in) | shape=K-chunked                |      72.18 us
-</pre></div>
-</div>
 </section>
 <section id="run-the-benchmark">
 <h2>Run the benchmark<a class="headerlink" href="#run-the-benchmark" title="Link to this heading">#</a></h2>
-<p>For every shape and dtype, random <code class="docutils literal notranslate"><span class="pre">float32</span></code> inputs are rounded to the
-target dtype and fed through the matching session. The dtype variants for each
-backend are measured together, rotating their order so the overhead ratios are
-not skewed by cache or scheduling changes. Results are checked against
-<code class="docutils literal notranslate"><span class="pre">float32</span></code> numpy matmul (with a wider tolerance for the lower precision
-dtypes) so every combination agrees on the answer.</p>
+<p>For every shape and dtype, random <code class="docutils literal notranslate"><span class="pre">float32</span></code> inputs are rounded to the target
+dtype and fed through the matching session. All accelerated measurements
+finish before the built-in kernel is timed and before ONNX Runtime sessions
+are constructed. Results are validated after every timed phase has finished.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 <span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">label</span><span class="p">:</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="p">}</span>
-<span class="n">ort_results</span> <span class="o">=</span> <span class="p">{</span><span class="n">label</span><span class="p">:</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">ort_sessions</span><span class="p">}</span>
+<span class="n">benchmark_inputs</span> <span class="o">=</span> <span class="p">[]</span>
 
 <span class="k">for</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span> <span class="ow">in</span> <span class="n">SHAPES</span><span class="p">:</span>
     <span class="n">a32</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">M</span><span class="p">,</span> <span class="n">K</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
     <span class="n">b32</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">K</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">expected</span> <span class="o">=</span> <span class="n">a32</span> <span class="o">@</span> <span class="n">b32</span>
     <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">50</span><span class="p">,</span> <span class="mi">200_000_000</span> <span class="o">//</span> <span class="p">(</span><span class="n">M</span> <span class="o">*</span> <span class="n">N</span> <span class="o">*</span> <span class="n">K</span> <span class="o">+</span> <span class="mi">1</span><span class="p">)))</span>
 
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">shape=</span><span class="si">{</span><span class="n">shape_label</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;24</span><span class="si">}</span><span class="s2"> M=</span><span class="si">{</span><span class="n">M</span><span class="si">}</span><span class="s2"> N=</span><span class="si">{</span><span class="n">N</span><span class="si">}</span><span class="s2"> K=</span><span class="si">{</span><span class="n">K</span><span class="si">}</span><span class="s2"> repeat=</span><span class="si">{</span><span class="n">repeat</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -697,89 +672,116 @@ dtypes) so every combination agrees on the answer.</p>
         <span class="n">label</span><span class="p">:</span> <span class="p">(</span><span class="n">a32</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np_dtype</span><span class="p">),</span> <span class="n">b32</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np_dtype</span><span class="p">))</span>
         <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="p">(</span><span class="n">_</span><span class="p">,</span> <span class="n">np_dtype</span><span class="p">)</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
     <span class="p">}</span>
-    <span class="n">runs</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
-        <span class="p">(</span>
-            <span class="k">lambda</span> <span class="n">session</span><span class="o">=</span><span class="n">sessions</span><span class="p">[</span><span class="n">label</span><span class="p">],</span> <span class="n">a</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">b</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">1</span><span class="p">]:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span>
-                <span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">}</span>
-            <span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">DTYPES</span>
-    <span class="p">)</span>
-    <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">run</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">DTYPES</span><span class="p">,</span> <span class="n">runs</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">benchmark_inputs</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">shape_label</span><span class="p">,</span> <span class="n">M</span><span class="p">,</span> <span class="n">N</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">a32</span><span class="p">,</span> <span class="n">b32</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">repeat</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="p">:</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">]</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">(</span><span class="n">session</span><span class="o">=</span><span class="n">sessions</span><span class="p">[</span><span class="n">label</span><span class="p">],</span> <span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">):</span>
+            <span class="k">return</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+
         <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
         <span class="n">clear_used_kernel_names</span><span class="p">()</span>
         <span class="n">run</span><span class="p">()</span>
         <span class="n">kernel_names</span> <span class="o">=</span> <span class="n">used_kernel_names</span><span class="p">()</span>
         <span class="k">assert</span> <span class="n">accelerated_kernel_name</span> <span class="ow">in</span> <span class="n">kernel_names</span><span class="p">,</span> <span class="p">(</span><span class="n">label</span><span class="p">,</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">kernel_names</span><span class="p">)</span>
         <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
+        <span class="n">elapsed</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">repeat</span><span class="p">)</span>
+        <span class="n">results</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">elapsed</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> | onnx-light-cpu=</span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span><span class="p">)</span>
 
-    <span class="n">elapsed_by_label</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span>
-        <span class="nb">zip</span><span class="p">(</span>
-            <span class="n">DTYPES</span><span class="p">,</span>
-            <span class="n">measure_together</span><span class="p">(</span><span class="o">*</span><span class="n">runs</span><span class="p">,</span> <span class="n">repeat</span><span class="o">=</span><span class="n">repeat</span><span class="p">),</span>
-            <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="p">)</span>
+<span class="k">for</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">_M</span><span class="p">,</span> <span class="n">_N</span><span class="p">,</span> <span class="n">_K</span><span class="p">,</span> <span class="n">a32</span><span class="p">,</span> <span class="n">b32</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">repeat</span> <span class="ow">in</span> <span class="n">benchmark_inputs</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">shape_label</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">ALONE_SHAPE_LABELS</span><span class="p">:</span>
+        <span class="k">continue</span>
+    <span class="n">elapsed</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span>
+        <span class="k">lambda</span> <span class="n">a</span><span class="o">=</span><span class="n">a32</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b32</span><span class="p">:</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span>
+        <span class="n">repeat</span><span class="p">,</span>
     <span class="p">)</span>
-    <span class="n">ort_runs</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span>
-        <span class="p">(</span>
-            <span class="k">lambda</span> <span class="n">session</span><span class="o">=</span><span class="n">ort_sessions</span><span class="p">[</span><span class="n">label</span><span class="p">],</span> <span class="n">a</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">b</span><span class="o">=</span><span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">1</span><span class="p">]:</span> <span class="p">(</span>
-                <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
-            <span class="p">)</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">ort_sessions</span>
-    <span class="p">)</span>
-    <span class="n">ort_elapsed_by_label</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span>
-        <span class="nb">zip</span><span class="p">(</span>
-            <span class="n">ort_sessions</span><span class="p">,</span>
-            <span class="n">measure_together</span><span class="p">(</span><span class="o">*</span><span class="n">ort_runs</span><span class="p">,</span> <span class="n">repeat</span><span class="o">=</span><span class="n">repeat</span><span class="p">),</span>
-            <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="p">)</span>
+    <span class="n">alone_results</span><span class="p">[</span><span class="n">shape_label</span><span class="p">]</span> <span class="o">=</span> <span class="n">elapsed</span>
+    <span class="nb">print</span><span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"onnx-light (built-in) | shape=</span><span class="si">{</span><span class="n">shape_label</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;24</span><span class="si">}</span><span class="s2"> "</span>
+        <span class="sa">f</span><span class="s2">"| </span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span>
     <span class="p">)</span>
 
+<span class="n">ort_sessions</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="n">label</span><span class="p">:</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
+        <span class="n">make_model</span><span class="p">(</span><span class="n">DTYPES</span><span class="p">[</span><span class="n">label</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">(),</span>
+        <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"float32"</span><span class="p">,</span> <span class="s2">"float16"</span><span class="p">)</span>
+<span class="p">}</span>
+<span class="n">ort_results</span> <span class="o">=</span> <span class="p">{</span><span class="n">label</span><span class="p">:</span> <span class="p">[]</span> <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">ort_sessions</span><span class="p">}</span>
+<span class="k">for</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">repeat</span> <span class="ow">in</span> <span class="n">benchmark_inputs</span><span class="p">:</span>
+    <span class="k">for</span> <span class="n">label</span><span class="p">,</span> <span class="n">session</span> <span class="ow">in</span> <span class="n">ort_sessions</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+        <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">]</span>
+        <span class="n">elapsed</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span>
+            <span class="k">lambda</span> <span class="n">session</span><span class="o">=</span><span class="n">session</span><span class="p">,</span> <span class="n">a</span><span class="o">=</span><span class="n">a</span><span class="p">,</span> <span class="n">b</span><span class="o">=</span><span class="n">b</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="n">repeat</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">ort_results</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">elapsed</span><span class="p">)</span>
+        <span class="nb">print</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">shape_label</span><span class="o">.</span><span class="n">splitlines</span><span class="p">()[</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">&lt;24</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> | "</span>
+            <span class="sa">f</span><span class="s2">"onnxruntime=</span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span>
+        <span class="p">)</span>
+
+<span class="k">for</span> <span class="n">shape_label</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">a32</span><span class="p">,</span> <span class="n">b32</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">benchmark_inputs</span><span class="p">:</span>
+    <span class="n">expected</span> <span class="o">=</span> <span class="n">a32</span> <span class="o">@</span> <span class="n">b32</span>
+    <span class="k">if</span> <span class="n">shape_label</span> <span class="ow">in</span> <span class="n">ALONE_SHAPE_LABELS</span><span class="p">:</span>
+        <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span>
+            <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a32</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b32</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span>
+            <span class="n">expected</span><span class="p">,</span>
+            <span class="n">rtol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span>
+            <span class="n">atol</span><span class="o">=</span><span class="mf">1e-3</span><span class="p">,</span>
+        <span class="p">)</span>
     <span class="k">for</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">DTYPES</span><span class="p">:</span>
         <span class="n">a</span><span class="p">,</span> <span class="n">b</span> <span class="o">=</span> <span class="n">inputs</span><span class="p">[</span><span class="n">label</span><span class="p">]</span>
-        <span class="n">elapsed</span> <span class="o">=</span> <span class="n">elapsed_by_label</span><span class="p">[</span><span class="n">label</span><span class="p">]</span>
-        <span class="n">results</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">elapsed</span><span class="p">)</span>
-
         <span class="n">tol</span> <span class="o">=</span> <span class="mf">1e-3</span> <span class="k">if</span> <span class="n">label</span> <span class="o">==</span> <span class="s2">"float32"</span> <span class="k">else</span> <span class="p">(</span><span class="mf">5e-2</span> <span class="k">if</span> <span class="n">label</span> <span class="o">==</span> <span class="s2">"float16"</span> <span class="k">else</span> <span class="mf">5e-1</span><span class="p">)</span>
         <span class="n">output</span> <span class="o">=</span> <span class="n">sessions</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
         <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span><span class="n">output</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">expected</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">tol</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="n">tol</span><span class="p">)</span>
 
         <span class="k">if</span> <span class="n">label</span> <span class="ow">in</span> <span class="n">ort_sessions</span><span class="p">:</span>
-            <span class="n">ort_elapsed</span> <span class="o">=</span> <span class="n">ort_elapsed_by_label</span><span class="p">[</span><span class="n">label</span><span class="p">]</span>
-            <span class="n">ort_results</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">ort_elapsed</span><span class="p">)</span>
             <span class="n">ort_output</span> <span class="o">=</span> <span class="n">ort_sessions</span><span class="p">[</span><span class="n">label</span><span class="p">]</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"A"</span><span class="p">:</span> <span class="n">a</span><span class="p">,</span> <span class="s2">"B"</span><span class="p">:</span> <span class="n">b</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="c1"># onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas</span>
+            <span class="c1"># onnx-light-cpu widens to ``float32`` (see the module docstring), so</span>
+            <span class="c1"># onnxruntime's rounding error grows with the reduction length ``K``</span>
+            <span class="c1"># and needs a wider tolerance than the onnx-light-cpu comparison.</span>
+            <span class="n">ort_tol</span> <span class="o">=</span> <span class="mf">5e-1</span> <span class="k">if</span> <span class="n">label</span> <span class="o">==</span> <span class="s2">"float16"</span> <span class="k">else</span> <span class="n">tol</span>
             <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span>
-                <span class="n">ort_output</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">expected</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">tol</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="n">tol</span>
+                <span class="n">ort_output</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span> <span class="n">expected</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="n">ort_tol</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="n">ort_tol</span>
             <span class="p">)</span>
-            <span class="n">ort_text</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">ort_elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">ort_text</span> <span class="o">=</span> <span class="s2">"not supported"</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">label</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> | onnx-light-cpu=</span><span class="si">{</span><span class="n">elapsed</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | onnxruntime=</span><span class="si">{</span><span class="n">ort_text</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
 
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"verified </span><span class="si">{</span><span class="n">accelerated_kernel_name</span><span class="si">}</span><span class="s2"> for every benchmark shape and dtype"</span><span class="p">)</span>
 <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>shape=single-tile              M=64 N=64 K=64 repeat=50
-  float32   | onnx-light-cpu=     23.95 us | onnxruntime=      9.14 us
-  float16   | onnx-light-cpu=     81.35 us | onnxruntime=     15.89 us
-  bfloat16  | onnx-light-cpu=     21.66 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=     37.94 us
+  float16   | onnx-light-cpu=     55.39 us
+  bfloat16  | onnx-light-cpu=     49.21 us
 
 shape=K-chunked                M=32 N=32 K=2048 repeat=50
-  float32   | onnx-light-cpu=    114.67 us | onnxruntime=     29.20 us
-  float16   | onnx-light-cpu=    542.45 us | onnxruntime=     74.79 us
-  bfloat16  | onnx-light-cpu=    119.20 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=     98.42 us
+  float16   | onnx-light-cpu=     98.77 us
+  bfloat16  | onnx-light-cpu=    102.18 us
 
 shape=multi-panel              M=512 N=512 K=128 repeat=7
-  float32   | onnx-light-cpu=   2323.60 us | onnxruntime=    209.08 us
-  float16   | onnx-light-cpu=   8161.45 us | onnxruntime=    262.09 us
-  bfloat16  | onnx-light-cpu=   1328.52 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    898.09 us
+  float16   | onnx-light-cpu=   2146.09 us
+  bfloat16  | onnx-light-cpu=   1427.72 us
 
 shape=skinny-M/wide-N          M=4 N=4096 K=128 repeat=50
-  float32   | onnx-light-cpu=    333.06 us | onnxruntime=    101.50 us
-  float16   | onnx-light-cpu=   2722.92 us | onnxruntime=    140.50 us
-  bfloat16  | onnx-light-cpu=    270.62 us | onnxruntime=not supported
+  float32   | onnx-light-cpu=    156.03 us
+  float16   | onnx-light-cpu=   3418.25 us
+  bfloat16  | onnx-light-cpu=    215.63 us
+onnx-light (built-in) | shape=single-tile              |      42.10 us
+onnx-light (built-in) | shape=K-chunked                |     100.49 us
+  single-tile              float32   | onnxruntime=     20.34 us
+  single-tile              float16   | onnxruntime=   3136.03 us
+  K-chunked                float32   | onnxruntime=     58.23 us
+  K-chunked                float16   | onnxruntime=  14736.92 us
+  multi-panel              float32   | onnxruntime=    375.31 us
+  multi-panel              float16   | onnxruntime= 237109.75 us
+  skinny-M/wide-N          float32   | onnxruntime=    203.23 us
+  skinny-M/wide-N          float16   | onnxruntime=  16914.66 us
 verified onnx_light_cpu::Gemm for every benchmark shape and dtype
 </pre></div>
 </div>
@@ -863,7 +865,7 @@ onnxruntime for the same shape and dtype.</p>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX-512)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.843 seconds)</p>
+<img src="../../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" srcset="../../_images/sphx_glr_plot_gemm_dtype_benchmark_001.png" alt="Gemm execution time by code path (SIMD: AVX2)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.503 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-benchmarks-plot-gemm-dtype-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/68ed8b29ac69ccdf3b434784b77b6b1b/plot_gemm_dtype_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_gemm_dtype_benchmark.ipynb</span></code></a></p>
@@ -967,7 +969,7 @@ onnxruntime for the same shape and dtype.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 17, 2026.
+  Last updated on Aug 19, 2026.
   <br/>
 </p></div>
       

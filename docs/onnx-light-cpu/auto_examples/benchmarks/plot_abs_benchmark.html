@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 19, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -472,9 +472,9 @@ evaluated by an <code class="docutils literal notranslate"><span class="pre">onn
 <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel has been registered
 (<a class="reference internal" href="../../api/index.html#onnx_light_cpu.register_kernels" title="onnx_light_cpu.register_kernels"><code class="xref py py-func docutils literal notranslate"><span class="pre">onnx_light_cpu.register_kernels()</span></code></a>); the kernel provides runtime
 AVX-512/AVX2/AVX/SSE2 dispatch.</p></li>
-<li><p><strong>onnx-light (built-in)</strong> - <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s own un-accelerated (pure
-reference) <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel, as a baseline for what <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> buys on
-top of it. It is measured across the complete size grid.</p></li>
+<li><p><strong>onnx-light (built-in)</strong> - <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s portable <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel, as a
+baseline for what <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> buys on top of it. It is measured across
+the complete size grid.</p></li>
 <li><p><strong>numpy</strong> - <code class="xref py py-func docutils literal notranslate"><span class="pre">numpy.abs()</span></code>, used as a reference baseline.</p></li>
 </ul>
 <p>The back-ends compute the same result; the goal here is to see how their
@@ -484,11 +484,16 @@ elements.</p>
 <h2>Setup<a class="headerlink" href="#setup" title="Link to this heading">#</a></h2>
 <p>Report which SIMD level the current CPU provides. The mapping is <code class="docutils literal notranslate"><span class="pre">0=None</span></code>,
 <code class="docutils literal notranslate"><span class="pre">1=SSE2</span></code>, <code class="docutils literal notranslate"><span class="pre">2=AVX</span></code>, <code class="docutils literal notranslate"><span class="pre">3=AVX2</span></code> and <code class="docutils literal notranslate"><span class="pre">4=AVX512</span></code>.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">gc</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
+
+<span class="c1"># ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example</span>
+<span class="c1"># runs quickly as a unit test while still exercising every code path.</span>
+<span class="n">unit_test_going</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"UNITTEST_GOING"</span><span class="p">,</span> <span class="s2">"0"</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"1"</span><span class="p">,</span> <span class="s2">"true"</span><span class="p">,</span> <span class="s2">"True"</span><span class="p">)</span>
 
 <span class="c1"># ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the</span>
 <span class="c1"># ``onnx`` package; use it to build the model so the example depends on</span>
@@ -501,7 +506,11 @@ elements.</p>
     <span class="n">register_kernels</span><span class="p">,</span>
     <span class="n">used_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">detect_simd_level</span><span class="p">,</span> <span class="n">has_cpu_kernels</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpukernels</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">detect_simd_level</span><span class="p">,</span>
+    <span class="n">has_cpu_kernels</span><span class="p">,</span>
+    <span class="n">parallel_for_thread_count</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu.onnx_py._cpuregister</span><span class="w"> </span><span class="kn">import</span> <span class="n">set_kernel_usage_recording</span>
 
 <span class="n">_SIMD_NAMES</span> <span class="o">=</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="s2">"scalar"</span><span class="p">,</span> <span class="mi">1</span><span class="p">:</span> <span class="s2">"SSE2"</span><span class="p">,</span> <span class="mi">2</span><span class="p">:</span> <span class="s2">"AVX"</span><span class="p">,</span> <span class="mi">3</span><span class="p">:</span> <span class="s2">"AVX2"</span><span class="p">,</span> <span class="mi">4</span><span class="p">:</span> <span class="s2">"AVX-512"</span><span class="p">}</span>
@@ -512,7 +521,7 @@ elements.</p>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"CPU kernels available, SIMD level: </span><span class="si">{</span><span class="n">level</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">simd_name</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 4 (AVX-512)
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>CPU kernels available, SIMD level: 3 (AVX2)
 </pre></div>
 </div>
 </section>
@@ -539,40 +548,28 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.</p>
 <span class="c1"># only the session construction and not the protobuf serialization.</span>
 <span class="n">model_bytes</span> <span class="o">=</span> <span class="n">model</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">()</span>
 
-<span class="n">_ort_setup_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-<span class="n">session</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span><span class="n">model_bytes</span><span class="p">,</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">])</span>
-<span class="n">ort_setup_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">_ort_setup_start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"onnx-light-cpu thread count: </span><span class="si">{</span><span class="n">parallel_for_thread_count</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>onnx-light-cpu thread count: 2
 </pre></div>
 </div>
 </section>
 <section id="sizes-benchmarked">
 <h2>Sizes benchmarked<a class="headerlink" href="#sizes-benchmarked" title="Link to this heading">#</a></h2>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">size_grid</span> <span class="o">=</span> <span class="p">[</span><span class="mi">10</span><span class="o">**</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">9</span><span class="p">)]</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">size_grid</span> <span class="o">=</span> <span class="p">[</span><span class="mi">100</span><span class="p">,</span> <span class="mi">1000</span><span class="p">]</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="p">[</span><span class="mi">10</span><span class="o">**</span><span class="n">k</span> <span class="k">for</span> <span class="n">k</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">9</span><span class="p">)]</span>
 
 
-<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">func</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">number</span><span class="o">=</span><span class="mi">1</span><span class="p">):</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup</span><span class="p">):</span>
         <span class="n">func</span><span class="p">()</span>
     <span class="n">timings</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
         <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-        <span class="n">func</span><span class="p">()</span>
-        <span class="n">timings</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">number</span><span class="p">):</span>
+            <span class="n">func</span><span class="p">()</span>
+        <span class="n">timings</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span> <span class="o">/</span> <span class="n">number</span><span class="p">)</span>
     <span class="k">return</span> <span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">timings</span><span class="p">))</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">measure_together</span><span class="p">(</span><span class="o">*</span><span class="n">funcs</span><span class="p">,</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">warmup</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
-    <span class="n">timings</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">([]</span> <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">funcs</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">iteration</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">warmup</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)):</span>
-            <span class="n">funcs</span><span class="p">[(</span><span class="n">iteration</span> <span class="o">+</span> <span class="n">index</span><span class="p">)</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)]()</span>
-    <span class="k">for</span> <span class="n">iteration</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">repeat</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">offset</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)):</span>
-            <span class="n">index</span> <span class="o">=</span> <span class="p">(</span><span class="n">iteration</span> <span class="o">+</span> <span class="n">offset</span><span class="p">)</span> <span class="o">%</span> <span class="nb">len</span><span class="p">(</span><span class="n">funcs</span><span class="p">)</span>
-            <span class="n">start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-            <span class="n">funcs</span><span class="p">[</span><span class="n">index</span><span class="p">]()</span>
-            <span class="n">timings</span><span class="p">[</span><span class="n">index</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">start</span><span class="p">)</span>
-    <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="nb">float</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">values</span><span class="p">))</span> <span class="k">for</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">timings</span><span class="p">)</span>
 </pre></div>
 </div>
 </section>
@@ -582,8 +579,7 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.</p>
 <code class="docutils literal notranslate"><span class="pre">Abs</span></code> kernel entry, and a session only resolves/caches which kernel it
 uses on its <em>first</em> run. This baseline therefore uses its own model/session
 and runs once <strong>before</strong> <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> is called below. Its cached
-built-in kernel can then be timed alongside the accelerated session, on the
-same inputs and with alternating measurement order.</p>
+built-in kernel can then be timed in a separate phase on the same inputs.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">alone_model</span> <span class="o">=</span> <span class="n">make_abs_model</span><span class="p">()</span>
 <span class="n">alone_session</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">alone_model</span><span class="p">)</span>
 <span class="n">alone_label</span> <span class="o">=</span> <span class="s2">"onnx-light (built-in)"</span>
@@ -618,6 +614,34 @@ the model dispatches to the SIMD-accelerated kernel.</p>
 <span class="n">clear_used_kernel_names</span><span class="p">()</span>
 <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)})</span>
 <span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"onnx_light_cpu::Abs"</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
+
+<span class="c1"># Verify the two lifetime domains directly. The NumPy input must remain a</span>
+<span class="c1"># zero-copy borrowed tensor and consume no ExecutionArena slot, while the</span>
+<span class="c1"># declared output is leased from the IOArena. Once the NumPy output is</span>
+<span class="c1"># destroyed, a second run of the same shape must reuse the exact same retained</span>
+<span class="c1"># output storage.</span>
+<span class="n">execution_arena</span> <span class="o">=</span> <span class="n">light_session</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">execution_allocator</span>
+<span class="n">io_arena</span> <span class="o">=</span> <span class="n">light_session</span><span class="o">.</span><span class="n">_ctx</span><span class="o">.</span><span class="n">io_allocator</span>
+<span class="k">assert</span> <span class="n">execution_arena</span> <span class="ow">is</span> <span class="ow">not</span> <span class="n">io_arena</span>
+<span class="n">arena_probe</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">4096</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">probe_output</span> <span class="o">=</span> <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">arena_probe</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">probe_address</span> <span class="o">=</span> <span class="n">probe_output</span><span class="o">.</span><span class="n">__array_interface__</span><span class="p">[</span><span class="s2">"data"</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+<span class="k">assert</span> <span class="n">io_arena</span><span class="o">.</span><span class="n">leased_count</span> <span class="o">==</span> <span class="mi">1</span>
+<span class="k">assert</span> <span class="n">execution_arena</span><span class="o">.</span><span class="n">allocated_count</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">execution_arena</span><span class="o">.</span><span class="n">total_allocated_size</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">del</span> <span class="n">probe_output</span>
+<span class="n">gc</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="k">assert</span> <span class="n">io_arena</span><span class="o">.</span><span class="n">leased_count</span> <span class="o">==</span> <span class="mi">0</span>
+<span class="k">assert</span> <span class="n">io_arena</span><span class="o">.</span><span class="n">retained_size</span> <span class="o">&gt;=</span> <span class="n">arena_probe</span><span class="o">.</span><span class="n">nbytes</span>
+<span class="n">probe_output</span> <span class="o">=</span> <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">arena_probe</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+<span class="k">assert</span> <span class="n">probe_output</span><span class="o">.</span><span class="n">__array_interface__</span><span class="p">[</span><span class="s2">"data"</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">probe_address</span>
+<span class="k">del</span> <span class="n">probe_output</span>
+<span class="n">gc</span><span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span>
+    <span class="s2">"verified onnx-light arenas: distinct ExecutionArena/IOArena, "</span>
+    <span class="sa">f</span><span class="s2">"IO buffer reused at 0x</span><span class="si">{</span><span class="n">probe_address</span><span class="si">:</span><span class="s2">x</span><span class="si">}</span><span class="s2">; NumPy input is zero-copy"</span>
+<span class="p">)</span>
+
 <span class="c1"># Usage recording is diagnostic instrumentation, not part of inference. It</span>
 <span class="c1"># takes a mutex and appends to a process-wide log on every invocation, so leave</span>
 <span class="c1"># it out of the timed region after confirming the expected kernel was selected.</span>
@@ -626,6 +650,9 @@ the model dispatches to the SIMD-accelerated kernel.</p>
 
 <span class="k">def</span><span class="w"> </span><span class="nf">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">):</span>
     <span class="k">return</span> <span class="n">light_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">]</span>
+</pre></div>
+</div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>verified onnx-light arenas: distinct ExecutionArena/IOArena, IO buffer reused at 0x5578f43ef740; NumPy input is zero-copy
 </pre></div>
 </div>
 </section>
@@ -643,96 +670,67 @@ resolution remain lazy and are cached by the first <code class="xref py py-meth 
 <p>Kernel registration is process-wide and independent of evaluator construction,
 so it is timed separately rather than incorrectly attributing its first-import
 cost to <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code>.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"setup: onnxruntime InferenceSession = </span><span class="si">{</span><span class="n">ort_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"setup: onnx-light ReferenceEvaluator = </span><span class="si">{</span><span class="n">light_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"setup: onnx-light ReferenceEvaluator = </span><span class="si">{</span><span class="n">light_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
 <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"setup: onnx-light-cpu kernel registration = </span><span class="si">{</span><span class="n">registration_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>setup: onnxruntime InferenceSession = 0.50 ms
-setup: onnx-light ReferenceEvaluator = 0.27 ms
-setup: onnx-light-cpu kernel registration = 0.01 ms
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>setup: onnx-light ReferenceEvaluator = 0.29 ms
+setup: onnx-light-cpu kernel registration = 0.02 ms
 </pre></div>
 </div>
 </section>
 <section id="run-the-benchmark">
 <h2>Run the benchmark<a class="headerlink" href="#run-the-benchmark" title="Link to this heading">#</a></h2>
-<p>For every size the same input is fed to the four back-ends. Each measurement
-starts with three untimed warm-up calls, then retains the median of the timed
-repetitions. The two onnx-light variants and onnxruntime are measured together,
-rotating which one runs first to reduce cache and scheduling bias. This is
-especially important for the smallest size, whose few-microsecond timings would
-otherwise produce unstable speed-up ratios. At least seven timed repetitions are
-used, including for the largest arrays. The results are checked against
-<code class="xref py py-func docutils literal notranslate"><span class="pre">numpy.abs()</span></code> to make sure every implementation agrees.</p>
-<p>At the smallest size the absolute timings are only a few microseconds, so a
-single noisy CI run (e.g. a scheduling hiccup on a shared runner) can flip the
-<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> vs <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> ordering even though the SIMD kernel is
-faster on average. The comparison is therefore re-measured a few times and, if
-every attempt still disagrees, only emits a warning rather than failing the
-build: at a few microseconds the difference is within measurement noise.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">_SMALL_SIZE_SPEEDUP_ATTEMPTS</span> <span class="o">=</span> <span class="mi">5</span>
+<p>Every backend is measured in its own phase. Constructing ORT only after both
+onnx-light phases prevents its persistent worker pool from perturbing them.
+Likewise, the accelerated phase finishes before the built-in onnx-light pool
+is first used. Batched samples report steady-state time per inference.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">rows_by_size</span> <span class="o">=</span> <span class="p">{</span><span class="n">size</span><span class="p">:</span> <span class="p">[</span><span class="n">size</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span> <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">size_grid</span><span class="p">}</span>
 
-<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-<span class="n">rows</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">size_grid</span><span class="p">:</span>
-    <span class="n">inp</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">-</span><span class="mf">100.0</span><span class="p">,</span> <span class="mf">100.0</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">size</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-    <span class="n">expected</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">)</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">benchmark_phase</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">column</span><span class="p">,</span> <span class="n">validate</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+    <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">size_grid</span><span class="p">:</span>
+        <span class="n">inp</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="o">-</span><span class="mf">100.0</span><span class="p">,</span> <span class="mf">100.0</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">size</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+        <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span> <span class="mi">2_000_000</span> <span class="o">//</span> <span class="n">size</span><span class="p">))</span>
+        <span class="n">number</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span> <span class="mi">10_000_000</span> <span class="o">//</span> <span class="n">size</span><span class="p">))</span>
+        <span class="n">rows_by_size</span><span class="p">[</span><span class="n">size</span><span class="p">][</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">run</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">repeat</span><span class="p">,</span> <span class="n">number</span><span class="o">=</span><span class="n">number</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">validate</span><span class="p">:</span>
+            <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">run</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">)),</span> <span class="n">size</span>
 
-    <span class="n">repeat</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">7</span><span class="p">,</span> <span class="nb">min</span><span class="p">(</span><span class="mi">200</span><span class="p">,</span> <span class="mi">2_000_000</span> <span class="o">//</span> <span class="n">size</span><span class="p">))</span>
 
-    <span class="n">numpy_time</span> <span class="o">=</span> <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">repeat</span><span class="p">)</span>
+<span class="n">benchmark_phase</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">abs</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">validate</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">benchmark_phase</span><span class="p">(</span><span class="n">run_light</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">light_session</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">alone_time</span><span class="p">,</span> <span class="n">cpu_time</span><span class="p">,</span> <span class="n">ort_time</span> <span class="o">=</span> <span class="n">measure_together</span><span class="p">(</span>
-            <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-            <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span>
-            <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-            <span class="n">repeat</span><span class="o">=</span><span class="n">repeat</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
-        <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
-        <span class="k">if</span> <span class="n">size</span> <span class="o">==</span> <span class="n">size_grid</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
-            <span class="k">for</span> <span class="n">attempt</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">_SMALL_SIZE_SPEEDUP_ATTEMPTS</span><span class="p">):</span>
-                <span class="k">if</span> <span class="n">alone_time</span> <span class="o">/</span> <span class="n">cpu_time</span> <span class="o">&gt;</span> <span class="mf">1.0</span><span class="p">:</span>
-                    <span class="k">break</span>
-                <span class="k">if</span> <span class="n">attempt</span> <span class="o">&lt;</span> <span class="n">_SMALL_SIZE_SPEEDUP_ATTEMPTS</span> <span class="o">-</span> <span class="mi">1</span><span class="p">:</span>
-                    <span class="n">alone_time</span><span class="p">,</span> <span class="n">cpu_time</span><span class="p">,</span> <span class="n">ort_time</span> <span class="o">=</span> <span class="n">measure_together</span><span class="p">(</span>
-                        <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-                        <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">run_light</span><span class="p">(</span><span class="n">inp</span><span class="p">),</span>
-                        <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-                        <span class="n">repeat</span><span class="o">=</span><span class="n">repeat</span><span class="p">,</span>
-                    <span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-                    <span class="s2">"onnx-light-cpu (SIMD) Abs kernel was not faster than the onnx-light "</span>
-                    <span class="sa">f</span><span class="s2">"built-in kernel at size=</span><span class="si">{</span><span class="n">size</span><span class="si">}</span><span class="s2"> after </span><span class="si">{</span><span class="n">_SMALL_SIZE_SPEEDUP_ATTEMPTS</span><span class="si">}</span><span class="s2"> "</span>
-                    <span class="sa">f</span><span class="s2">"attempts: onnx-light=</span><span class="si">{</span><span class="n">alone_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> us, "</span>
-                    <span class="sa">f</span><span class="s2">"onnx-light-cpu=</span><span class="si">{</span><span class="n">cpu_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> us. At a few microseconds the "</span>
-                    <span class="s2">"difference is within measurement noise on shared CI runners."</span><span class="p">,</span>
-                    <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
-                <span class="p">)</span>
-    <span class="k">else</span><span class="p">:</span>
-        <span class="n">alone_time</span><span class="p">,</span> <span class="n">ort_time</span> <span class="o">=</span> <span class="n">measure_together</span><span class="p">(</span>
-            <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-            <span class="k">lambda</span> <span class="n">inp</span><span class="o">=</span><span class="n">inp</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">}),</span>
-            <span class="n">repeat</span><span class="o">=</span><span class="n">repeat</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="n">cpu_time</span> <span class="o">=</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">clear_used_kernel_names</span><span class="p">()</span>
+<span class="n">run_light</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+<span class="k">assert</span> <span class="n">used_kernel_names</span><span class="p">()</span> <span class="o">==</span> <span class="p">[</span><span class="s2">"onnx_light_cpu::Abs"</span><span class="p">],</span> <span class="n">used_kernel_names</span><span class="p">()</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">False</span><span class="p">)</span>
 
-    <span class="k">assert</span> <span class="n">np</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span> <span class="n">expected</span><span class="p">),</span> <span class="n">size</span>
+<span class="n">benchmark_phase</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="p">:</span> <span class="n">alone_session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">2</span><span class="p">)</span>
 
+<span class="n">_ort_setup_start</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
+<span class="n">session</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span><span class="n">model_bytes</span><span class="p">,</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">])</span>
+<span class="n">ort_setup_time</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">_ort_setup_start</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"setup: onnxruntime InferenceSession = </span><span class="si">{</span><span class="n">ort_setup_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e3</span><span class="si">:</span><span class="s2">.2f</span><span class="si">}</span><span class="s2"> ms"</span><span class="p">)</span>
+<span class="n">benchmark_phase</span><span class="p">(</span><span class="k">lambda</span> <span class="n">inp</span><span class="p">:</span> <span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"X"</span><span class="p">:</span> <span class="n">inp</span><span class="p">})[</span><span class="mi">0</span><span class="p">],</span> <span class="mi">4</span><span class="p">)</span>
+
+<span class="n">rows</span> <span class="o">=</span> <span class="p">[</span><span class="nb">tuple</span><span class="p">(</span><span class="n">rows_by_size</span><span class="p">[</span><span class="n">size</span><span class="p">])</span> <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">size_grid</span><span class="p">]</span>
+<span class="k">for</span> <span class="n">size</span><span class="p">,</span> <span class="n">numpy_time</span><span class="p">,</span> <span class="n">alone_time</span><span class="p">,</span> <span class="n">cpu_time</span><span class="p">,</span> <span class="n">ort_time</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">:</span>
     <span class="n">cpu_speedup</span> <span class="o">=</span> <span class="n">alone_time</span> <span class="o">/</span> <span class="n">cpu_time</span>
-    <span class="n">rows</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="n">numpy_time</span><span class="p">,</span> <span class="n">alone_time</span><span class="p">,</span> <span class="n">cpu_time</span><span class="p">,</span> <span class="n">ort_time</span><span class="p">))</span>
+    <span class="n">ort_speedup</span> <span class="o">=</span> <span class="n">ort_time</span> <span class="o">/</span> <span class="n">cpu_time</span>
     <span class="nb">print</span><span class="p">(</span>
         <span class="sa">f</span><span class="s2">"size=</span><span class="si">{</span><span class="n">size</span><span class="si">:</span><span class="s2">&gt;9</span><span class="si">}</span><span class="s2"> | numpy=</span><span class="si">{</span><span class="n">numpy_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | "</span>
         <span class="sa">f</span><span class="s2">"onnx-light=</span><span class="si">{</span><span class="n">alone_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | "</span>
         <span class="sa">f</span><span class="s2">"onnx-light-cpu=</span><span class="si">{</span><span class="n">cpu_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | "</span>
-        <span class="sa">f</span><span class="s2">"cpu speed-up=</span><span class="si">{</span><span class="n">cpu_speedup</span><span class="si">:</span><span class="s2">5.2f</span><span class="si">}</span><span class="s2">x | "</span>
-        <span class="sa">f</span><span class="s2">"onnxruntime=</span><span class="si">{</span><span class="n">ort_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us"</span>
+        <span class="sa">f</span><span class="s2">"cpu vs built-in=</span><span class="si">{</span><span class="n">cpu_speedup</span><span class="si">:</span><span class="s2">5.2f</span><span class="si">}</span><span class="s2">x | "</span>
+        <span class="sa">f</span><span class="s2">"onnxruntime=</span><span class="si">{</span><span class="n">ort_time</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mf">1e6</span><span class="si">:</span><span class="s2">10.2f</span><span class="si">}</span><span class="s2"> us | "</span>
+        <span class="sa">f</span><span class="s2">"cpu vs onnxruntime=</span><span class="si">{</span><span class="n">ort_speedup</span><span class="si">:</span><span class="s2">5.2f</span><span class="si">}</span><span class="s2">x"</span>
     <span class="p">)</span>
 
 <span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"verified onnx-light-cpu Abs dispatch"</span><span class="p">)</span>
 
 <span class="n">sizes</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 <span class="n">numpy_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
@@ -741,13 +739,15 @@ build: at a few microseconds the difference is within measurement noise.</p>
 <span class="n">ort_times</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">r</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">])</span>
 </pre></div>
 </div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>size=      100 | numpy=      0.44 us | onnx-light=      1.82 us | onnx-light-cpu=      1.73 us | cpu speed-up= 1.05x | onnxruntime=      3.91 us
-size=     1000 | numpy=      0.60 us | onnx-light=      1.94 us | onnx-light-cpu=      1.85 us | cpu speed-up= 1.05x | onnxruntime=      4.01 us
-size=    10000 | numpy=      1.38 us | onnx-light=      3.51 us | onnx-light-cpu=      3.53 us | cpu speed-up= 0.99x | onnxruntime=      4.70 us
-size=   100000 | numpy=      8.61 us | onnx-light=     29.14 us | onnx-light-cpu=     25.53 us | cpu speed-up= 1.14x | onnxruntime=     19.82 us
-size=  1000000 | numpy=    323.86 us | onnx-light=    540.08 us | onnx-light-cpu=    561.69 us | cpu speed-up= 0.96x | onnxruntime=    167.10 us
-size= 10000000 | numpy=   4223.94 us | onnx-light=   5476.63 us | onnx-light-cpu=   5378.82 us | cpu speed-up= 1.02x | onnxruntime=   2311.77 us
-size=100000000 | numpy=  81286.50 us | onnx-light=  64704.73 us | onnx-light-cpu=  64481.02 us | cpu speed-up= 1.00x | onnxruntime=  30806.20 us
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>setup: onnxruntime InferenceSession = 0.82 ms
+size=      100 | numpy=      0.55 us | onnx-light=      2.32 us | onnx-light-cpu=      2.33 us | cpu vs built-in= 0.99x | onnxruntime=      8.53 us | cpu vs onnxruntime= 3.66x
+size=     1000 | numpy=      0.81 us | onnx-light=      2.39 us | onnx-light-cpu=      2.38 us | cpu vs built-in= 1.00x | onnxruntime=      8.65 us | cpu vs onnxruntime= 3.64x
+size=    10000 | numpy=      1.56 us | onnx-light=      3.22 us | onnx-light-cpu=      3.19 us | cpu vs built-in= 1.01x | onnxruntime=      6.50 us | cpu vs onnxruntime= 2.04x
+size=   100000 | numpy=     16.93 us | onnx-light=     18.92 us | onnx-light-cpu=     18.77 us | cpu vs built-in= 1.01x | onnxruntime=     20.15 us | cpu vs onnxruntime= 1.07x
+size=  1000000 | numpy=    138.65 us | onnx-light=    144.14 us | onnx-light-cpu=    141.50 us | cpu vs built-in= 1.02x | onnxruntime=    128.91 us | cpu vs onnxruntime= 0.91x
+size= 10000000 | numpy=   4746.97 us | onnx-light=   2301.47 us | onnx-light-cpu=   2038.36 us | cpu vs built-in= 1.13x | onnxruntime=   1772.42 us | cpu vs onnxruntime= 0.87x
+size=100000000 | numpy=  41989.76 us | onnx-light=  29048.68 us | onnx-light-cpu=  28147.50 us | cpu vs built-in= 1.03x | onnxruntime=  24471.72 us | cpu vs onnxruntime= 0.87x
+verified onnx-light-cpu Abs dispatch
 </pre></div>
 </div>
 </section>
@@ -832,7 +832,7 @@ y-axis so that a given ratio and its reciprocal are equidistant from the
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX-512), Abs speed-up (onnxruntime = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 4.481 seconds)</p>
+<img src="../../_images/sphx_glr_plot_abs_benchmark_001.png" srcset="../../_images/sphx_glr_plot_abs_benchmark_001.png" alt="Abs execution time (SIMD: AVX2), Abs speed-up (onnxruntime = 1)" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 5.182 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-benchmarks-plot-abs-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/7a3e48a2c38847c5363ef74a6e40b790/plot_abs_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_abs_benchmark.ipynb</span></code></a></p>
@@ -937,7 +937,7 @@ y-axis so that a given ratio and its reciprocal are equidistant from the
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 17, 2026.
+  Last updated on Aug 19, 2026.
   <br/>
 </p></div>
       
