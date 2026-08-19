@@ -440,6 +440,18 @@ class TestSymbolicCost(unittest.TestCase):
         # 2*3 + 4 + 5*5 = 6 + 4 + 25 = 35
         self.assertEqual(rlb._symbolic_cost(data_sets), 35)
 
+    def test_matrix_multiplication_and_attention_are_quadratic(self):
+        data_sets = [([np.zeros((2, 3)), np.zeros((3, 4))], [np.zeros((2, 4))])]
+        size = 6 + 12 + 8
+        for operator in ("MatMul", "Gemm", "Attention", "QLinearMatMul"):
+            with self.subTest(operator=operator):
+                self.assertEqual(rlb._symbolic_cost(data_sets, operator), size**2)
+
+    def test_unary_and_binary_operators_are_linear(self):
+        data_sets = [([np.zeros((8,)), np.zeros((8,))], [np.zeros((8,))])]
+        self.assertEqual(rlb._symbolic_cost(data_sets, "Abs"), 24)
+        self.assertEqual(rlb._symbolic_cost(data_sets, "Add"), 24)
+
     def test_only_uses_first_data_set(self):
         small = ([np.zeros((1,))], [np.zeros((1,))])
         big = ([np.zeros((100,))], [np.zeros((100,))])
@@ -558,6 +570,23 @@ class TestWeightedAvgSpeedup(unittest.TestCase):
         self.assertAlmostEqual(weighted, 4.0, places=4)
 
 
+class TestSumLatencySpeedup(unittest.TestCase):
+    def test_ratio_uses_sums_of_latencies(self):
+        rows = [
+            {"onnxruntime_avg_ms": 2.0, "onnx_light_avg_ms": 1.0},
+            {"onnxruntime_avg_ms": 8.0, "onnx_light_avg_ms": 4.0},
+        ]
+        self.assertEqual(rlb._sum_latency_speedup(rows, "onnx_light_avg_ms"), 2.0)
+
+    def test_skips_missing_and_invalid_latencies(self):
+        rows = [
+            {"onnxruntime_avg_ms": 2.0, "onnx_light_avg_ms": 0.0},
+            {"onnxruntime_avg_ms": 3.0},
+            {"onnxruntime_avg_ms": 8.0, "onnx_light_avg_ms": 4.0},
+        ]
+        self.assertEqual(rlb._sum_latency_speedup(rows, "onnx_light_avg_ms"), 2.0)
+
+
 def _stub_model(op_type):
     """Return a minimal object exposing ``model.graph.node[i].op_type``."""
 
@@ -651,13 +680,17 @@ class TestBuildPayload(unittest.TestCase):
         # A cost-weighted average speedup is reported alongside the
         # unweighted mean of per-test ratios.
         self.assertIn("avg_speedup_weighted", summary)
+        self.assertIn("speedup_sum_latency", summary)
         # The onnx-light-cpu backend is timed as well, so its summary and
         # per-row speedup are present too.
         self.assertEqual(summary["cpu_succeeded"], 2)
         self.assertIn("avg_speedup_cpu", summary)
         self.assertIn("avg_speedup_weighted_cpu", summary)
+        self.assertIn("speedup_sum_latency_cpu", summary)
         for row in payload["tests"]:
             self.assertIn("speedup_cpu", row, msg=row["name"])
+            self.assertIn("cost_n", row, msg=row["name"])
+            self.assertEqual(row["cost_complexity"], "linear")
 
         # Each row's operator is derived from its model's node op_type, and
         # the summary exposes the symbolic weight attributed to each

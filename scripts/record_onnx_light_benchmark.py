@@ -34,11 +34,13 @@ For each test the measurement protocol is:
 
    A speedup > 1 indicates that ``onnx-light`` is faster than
    ``onnxruntime`` on that test case.
-5. Aggregate two summary averages: ``avg_speedup`` is the unweighted mean
+5. Aggregate three summary averages: ``avg_speedup`` is the unweighted mean
    of every per-test ``speedup`` ratio, while ``avg_speedup_weighted`` is
    ``sum(N_i * speedup_i) / sum(N_i)`` across those same tests, where
-   ``N_i`` is a symbolic per-test cost estimate (the number of scalar
-   elements in the test's input/output tensors, see ``_symbolic_cost``).
+   ``N_i`` is a symbolic per-test cost estimate (linear in tensor size for
+   ordinary unary/binary kernels and quadratic for matrix multiplication and
+   attention, see ``_symbolic_cost``). ``speedup_sum_latency`` is
+   ``sum(onnxruntime_avg_ms) / sum(onnx_light_avg_ms)``.
    The unweighted mean treats every kernel equally regardless of its
    actual cost, so an O(1) kernel (``Shape``, ``Reshape``, ...) counts as
    much as an O(n) (``Add``) or O(n^2) (``Gemm``) one; the weighted
@@ -862,18 +864,35 @@ def _count_elements(value: Any) -> int:
     return 1
 
 
-def _symbolic_cost(data_sets: List[Tuple[List[Any], List[Any]]]) -> Optional[int]:
+QUADRATIC_COST_OPERATORS = frozenset(
+    {
+        "Attention",
+        "Gemm",
+        "MatMul",
+        "MatMulInteger",
+        "MultiHeadAttention",
+        "QAttention",
+        "QLinearMatMul",
+    }
+)
+
+
+def _cost_complexity(operator: str) -> str:
+    """Return the complexity class used to weight ``operator``."""
+    operators = set(operator.split("+"))
+    return "quadratic" if operators & QUADRATIC_COST_OPERATORS else "linear"
+
+
+def _symbolic_cost(
+    data_sets: List[Tuple[List[Any], List[Any]]], operator: str = ""
+) -> Optional[int]:
     """Return a symbolic complexity estimate ``N`` for a test's first data set.
 
-    ``N`` is the total number of scalar elements across the test's input and
-    output tensors (or, for sequence/map values, the sum of the element
-    counts of their nested values). It is a *symbolic* size, derived purely
-    from the shapes of the data used by the test, not from any measured
-    execution time — an O(1) kernel (e.g. ``Shape``/``Reshape``) applied to a
-    huge tensor still touches every element of that tensor and gets a large
-    ``N`` here, but the point is only to approximate how much data a kernel
-    processes so bigger kernels are weighed more than trivial ones, without
-    depending on how fast any particular backend happens to run.
+    The base size is the total number of scalar input/output elements. Unary,
+    binary, and other ordinary kernels receive that linear weight. Matrix
+    multiplication and attention kernels receive its square, reflecting the
+    requested quadratic cost model. The estimate depends only on test shapes,
+    never on a backend's measured execution time.
     """
     if not data_sets:
         return None
@@ -881,8 +900,10 @@ def _symbolic_cost(data_sets: List[Tuple[List[Any], List[Any]]]) -> Optional[int
         inputs, outputs = data_sets[0]
     except (ValueError, TypeError):
         return None
-    total = _count_elements(list(inputs)) + _count_elements(list(outputs))
-    return total or None
+    size = _count_elements(list(inputs)) + _count_elements(list(outputs))
+    if not size:
+        return None
+    return size**2 if _cost_complexity(operator) == "quadratic" else size
 
 
 def _operator_name(model: Any) -> str:
@@ -956,12 +977,31 @@ def _weighted_avg_speedup(
     return round(weighted_total / weight_total, 4)
 
 
+def _sum_latency_speedup(
+    rows: List[Dict[str, Any]], backend_key: str
+) -> Optional[float]:
+    """Return ``sum(baseline latency) / sum(backend latency)``."""
+    baseline_total = 0.0
+    backend_total = 0.0
+    for row in rows:
+        baseline = row.get("onnxruntime_avg_ms")
+        backend = row.get(backend_key)
+        if baseline is None or backend is None or backend <= 0:
+            continue
+        baseline_total += baseline
+        backend_total += backend
+    if backend_total <= 0:
+        return None
+    return round(baseline_total / backend_total, 4)
+
+
 def _row_from_results(
     name: str,
     results: Dict[str, Dict[str, Any]],
     tag: str = "",
     graph: Optional[Dict[str, Any]] = None,
     cost_n: Optional[int] = None,
+    cost_complexity: str = "",
     operator: str = "",
     input_type: str = "",
 ) -> Dict[str, Any]:
@@ -973,6 +1013,8 @@ def _row_from_results(
         row["graph"] = graph
     if cost_n is not None:
         row["cost_n"] = cost_n
+    if cost_complexity:
+        row["cost_complexity"] = cost_complexity
     if operator:
         row["operator"] = operator
     if input_type:
@@ -1092,8 +1134,9 @@ def build_payload(
         except Exception:  # noqa: BLE001
             graph = None
 
-        cost_n = _symbolic_cost(data_sets)
         operator = _operator_name(model)
+        cost_complexity = _cost_complexity(operator)
+        cost_n = _symbolic_cost(data_sets, operator)
         input_type = _first_input_type(data_sets)
 
         results: Dict[str, Dict[str, Any]] = {}
@@ -1107,6 +1150,7 @@ def build_payload(
                 "graph": graph,
                 "results": results,
                 "cost_n": cost_n,
+                "cost_complexity": cost_complexity,
                 "operator": operator,
                 "input_type": input_type,
             }
@@ -1132,6 +1176,7 @@ def build_payload(
             tag=entry["tag"],
             graph=entry["graph"],
             cost_n=entry["cost_n"],
+            cost_complexity=entry["cost_complexity"],
             operator=entry["operator"],
             input_type=entry["input_type"],
         )
@@ -1152,6 +1197,9 @@ def build_payload(
     weighted = _weighted_avg_speedup(both_ok, "speedup")
     if weighted is not None:
         summary["avg_speedup_weighted"] = weighted
+    sum_latency = _sum_latency_speedup(both_ok, "onnx_light_avg_ms")
+    if sum_latency is not None:
+        summary["speedup_sum_latency"] = sum_latency
     operator_weights = _operator_weights(both_ok)
     if operator_weights:
         summary["operator_weights"] = operator_weights
@@ -1171,6 +1219,9 @@ def build_payload(
     weighted_cpu = _weighted_avg_speedup(cpu_ok, "speedup_cpu")
     if weighted_cpu is not None:
         summary["avg_speedup_weighted_cpu"] = weighted_cpu
+    sum_latency_cpu = _sum_latency_speedup(cpu_ok, "onnx_light_cpu_avg_ms")
+    if sum_latency_cpu is not None:
+        summary["speedup_sum_latency_cpu"] = sum_latency_cpu
 
     return {
         "date": now_iso,
