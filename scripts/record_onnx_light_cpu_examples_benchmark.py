@@ -22,7 +22,7 @@ The dashboard records five ``onnxruntime`` vs ``onnx-light-cpu`` benchmarks:
     ``Log`` uses strictly positive ``float32`` values and ``Not`` uses boolean
     values.
 
-For every example and every input size the script measures the wall-clock
+For every example and every input type the script measures the wall-clock
 time of:
 
 * **onnxruntime** - the same single-node ONNX model run through an
@@ -487,7 +487,7 @@ def run_examples(
                 "onnx_light_cpu": cpu_ms,
                 "onnxruntime": ort_ms,
             }
-            rows.append(_row_from_times(size, times))
+            rows.append(_row_from_times(_format_input_type(feeds.values()), times))
 
         set_kernel_usage_recording(True)
 
@@ -497,14 +497,12 @@ def run_examples(
                 "title": example["title"],
                 "op": example["op"],
                 "source": example["source"],
-                "xlabel": example["xlabel"],
-                "size_key": example["size_key"],
                 "backends": list(BENCHMARK_BACKENDS),
                 "rows": rows,
                 "summary": _summarize_example(rows),
             }
         )
-        _log(f"Benchmarked example {name!r} on {len(rows)} sizes.")
+        _log(f"Benchmarked example {name!r} on {len(rows)} input types.")
 
     return results, meta
 
@@ -594,9 +592,15 @@ def run_big_models(
         }
 
         cost = rlb._symbolic_cost(data_sets)
-        size = int(cost) if cost else 1
         operator = rlb._operator_name(model) or "?"
-        rows = [_row_from_times(size, times)]
+        try:
+            inputs, _ = data_sets[0]
+        except (ValueError, TypeError):
+            inputs = []
+        input_type = _format_input_type(inputs) or (
+            f"symbolic cost N={int(cost)}" if cost else "?"
+        )
+        rows = [_row_from_times(input_type, times)]
         results.append(
             {
                 "name": name,
@@ -606,8 +610,6 @@ def run_big_models(
                 ),
                 "op": operator,
                 "source": f"onnx-light benchmark corpus ({name})",
-                "xlabel": "elements (symbolic cost N)",
-                "size_key": "elements",
                 "backends": ["onnx_light_cpu", "onnxruntime"],
                 "rows": rows,
                 "summary": _summarize_example(rows),
@@ -629,9 +631,35 @@ def _round_ms(value: Optional[float]) -> Optional[float]:
     return round(float(value), 6)
 
 
-def _row_from_times(size: int, times: Dict[str, Optional[float]]) -> Dict[str, Any]:
-    """Build a dashboard row from per-backend millisecond timings for one size."""
-    row: Dict[str, Any] = {"size": int(size)}
+def _format_input_type(arrays: Any) -> str:
+    """Return a human-readable ``dtype[shape]`` signature for the model inputs.
+
+    ``arrays`` is an iterable of array-like feeds (for the gallery examples the
+    ``make_inputs`` values, for the big models the first data set's inputs).
+    Each typed input is rendered as ``"<dtype>[<d0>x<d1>...]"`` (scalars as
+    ``"<dtype>"``) and the inputs are joined with ``", "``. Values without a
+    ``dtype`` (e.g. nested sequence/map inputs) are skipped.
+    """
+    parts: List[str] = []
+    for value in arrays:
+        dtype = getattr(value, "dtype", None)
+        if dtype is None:
+            continue
+        name = str(getattr(dtype, "name", dtype))
+        shape = getattr(value, "shape", None)
+        if shape:
+            dims = "x".join(str(int(d)) for d in shape)
+            parts.append(f"{name}[{dims}]")
+        else:
+            parts.append(name)
+    return ", ".join(parts)
+
+
+def _row_from_times(
+    input_type: str, times: Dict[str, Optional[float]]
+) -> Dict[str, Any]:
+    """Build a dashboard row from per-backend timings for one input type."""
+    row: Dict[str, Any] = {"input_type": str(input_type)}
     for backend in BENCHMARK_BACKENDS:
         value = times.get(backend)
         if value is not None:
@@ -646,9 +674,9 @@ def _row_from_times(size: int, times: Dict[str, Optional[float]]) -> Dict[str, A
 
 
 def _summarize_example(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Summarise the onnxruntime vs onnx-light-cpu speed-ups across sizes."""
+    """Summarise the onnxruntime vs onnx-light-cpu speed-ups across input types."""
     speedups = [r["speedup_cpu"] for r in rows if r.get("speedup_cpu") is not None]
-    summary: Dict[str, Any] = {"sizes": len(rows), "cpu_succeeded": len(speedups)}
+    summary: Dict[str, Any] = {"input_types": len(rows), "cpu_succeeded": len(speedups)}
     if speedups:
         summary["avg_speedup_cpu"] = round(sum(speedups) / len(speedups), 4)
         summary["min_speedup_cpu"] = round(min(speedups), 4)
