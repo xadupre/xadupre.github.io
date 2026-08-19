@@ -53,6 +53,12 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn("sum(onnxruntime latency) / sum(onnx-light latency)", text)
         self.assertIn('"Attention", "Gemm", "MatMul"', text)
 
+    def test_weight_is_scaled_down_and_floored_to_one(self):
+        text = _read(PAGE)
+        # Raw symbolic weights are divided by 1_000_000 and floored to a
+        # minimum of 1 so that huge (quadratic) costs stay readable.
+        self.assertIn("Math.max(Math.floor(weight / 1000000), 1)", text)
+
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
         # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,
