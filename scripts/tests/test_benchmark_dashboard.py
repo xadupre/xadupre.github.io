@@ -44,6 +44,15 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn("table-layout: fixed;", text)
         self.assertIn("<colgroup>", text)
 
+    def test_weight_and_three_speedup_averages_are_present(self):
+        text = _read(PAGE)
+        self.assertIn('data-key="cost_n"', text)
+        self.assertIn("rowWeight(r)", text)
+        self.assertIn("weighted avg speedup (ort / light)", text)
+        self.assertIn("sum latency speedup (ort / light)", text)
+        self.assertIn("sum(onnxruntime latency) / sum(onnx-light latency)", text)
+        self.assertIn('"Attention", "Gemm", "MatMul"', text)
+
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
         # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,

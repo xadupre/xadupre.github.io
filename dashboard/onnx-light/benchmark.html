@@ -280,8 +280,17 @@ table.benchmark tr.graph-row > td {
     <a href="../../docs/onnx-light-cpu/index.html"><code>onnx&#8209;light&#8209;cpu</code></a>
     SIMD kernels layered on top, and its speedup uses the same
     <code>onnxruntime&nbsp;avg</code> baseline.
-    The <em>avg speedup</em> card is the unweighted mean of every
-    per-test speedup.
+    Three averages are reported. <em>Avg speedup</em> is the unweighted mean of every
+    per-test speedup, so an O(1) kernel (e.g.
+    <code>Shape</code>/<code>Reshape</code>) counts as much as an O(n)
+    (<code>Add</code>) or O(n&sup2;) (<code>Gemm</code>) one; the
+    <em>weighted avg speedup</em> card instead weighs each test by a
+    symbolic kernel cost: linear in tensor size for ordinary unary/binary
+    operators and quadratic for matrix multiplication and attention
+    (<code>sum(N&nbsp;&times;&nbsp;speedup)&nbsp;/&nbsp;sum(N)</code>),
+    while <em>sum latency speedup</em> is
+    <code>sum(baseline latency)&nbsp;/&nbsp;sum(backend latency)</code>.
+    Each row shows its symbolic weight.
   </p>
 </header>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -295,6 +304,26 @@ table.benchmark tr.graph-row > td {
     <span id="metaProtocol"></span>
   </div>
   <div class="summary-cards" id="summaryCards" style="margin-top:0.8em;"></div>
+  <div id="operatorWeightsPanel" style="display:none;margin-top:0.8em;">
+    <details>
+      <summary style="cursor:pointer;color:#8b949e;font-size:0.85em;">
+        symbolic weight used per operator in <em>weighted avg speedup</em>
+      </summary>
+      <div class="table-wrap" style="margin-top:0.5em;">
+        <table class="benchmark" id="operatorWeightsTable">
+          <thead>
+            <tr>
+              <th>operator</th>
+              <th class="center">tests</th>
+              <th class="center">total weight</th>
+              <th class="center">share</th>
+            </tr>
+          </thead>
+          <tbody id="operatorWeightsBody"></tbody>
+        </table>
+      </div>
+    </details>
+  </div>
 </div>
 
 <div id="mainPanel" class="panel" style="display:none;">
@@ -330,19 +359,21 @@ table.benchmark tr.graph-row > td {
   <div class="table-wrap">
     <table class="benchmark">
       <colgroup>
-        <col style="width:22%" />
+        <col style="width:19%" />
+        <col style="width:8%" />
         <col style="width:9%" />
-        <col style="width:11%" />
-        <col style="width:11%" />
-        <col style="width:11%" />
-        <col style="width:9%" />
-        <col style="width:9%" />
+        <col style="width:10%" />
+        <col style="width:10%" />
+        <col style="width:10%" />
+        <col style="width:8%" />
+        <col style="width:8%" />
         <col style="width:18%" />
       </colgroup>
       <thead>
         <tr>
           <th data-key="name">Test <span class="arrow"></span></th>
           <th data-key="input_type" class="center">input type <span class="arrow"></span></th>
+          <th data-key="cost_n" class="center">weight <span class="arrow"></span></th>
           <th data-key="onnxruntime_avg_ms" class="center"><code>onnxruntime</code> avg <span class="arrow"></span></th>
           <th data-key="onnx_light_avg_ms" class="center"><code>onnx-light</code> avg <span class="arrow"></span></th>
           <th data-key="onnx_light_cpu_avg_ms" class="center"><code>onnx-light + cpu</code> avg <span class="arrow"></span></th>
@@ -410,6 +441,69 @@ function renderMeta(payload) {
     (payload.n_measure || 10) + " timed iteration(s) per test.";
 
   renderSummaryCards(payload.summary || {}, payload.tests || [], payload.n_warmup, payload.n_measure);
+  renderOperatorWeights(payload.summary || {}, payload.tests || []);
+}
+
+const QUADRATIC_COST_OPERATORS = new Set([
+  "Attention", "Gemm", "MatMul", "MatMulInteger", "MultiHeadAttention",
+  "QAttention", "QLinearMatMul"
+]);
+
+function rowWeight(row) {
+  if (row.cost_n === undefined || row.cost_n === null) return null;
+  if (row.cost_complexity) return row.cost_n;
+  const operators = String(row.operator || "").split("+");
+  return operators.some(op => QUADRATIC_COST_OPERATORS.has(op))
+    ? row.cost_n * row.cost_n
+    : row.cost_n;
+}
+
+function renderOperatorWeights(summary, rows) {
+  const panel = document.getElementById("operatorWeightsPanel");
+  const body = document.getElementById("operatorWeightsBody");
+  const grouped = new Map();
+  for (const row of rows) {
+    const operator = row.operator || "";
+    const weight = rowWeight(row);
+    if (!operator || weight === null || weight <= 0) continue;
+    const entry = grouped.get(operator) || { operator, weight: 0, tests: 0 };
+    entry.weight += weight;
+    entry.tests += 1;
+    grouped.set(operator, entry);
+  }
+  const weights = grouped.size
+    ? Array.from(grouped.values()).sort((a, b) => b.weight - a.weight)
+    : summary.operator_weights;
+  body.innerHTML = "";
+  if (!weights || !weights.length) {
+    panel.style.display = "none";
+    return;
+  }
+  panel.style.display = "";
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  for (const w of weights) {
+    const tr = document.createElement("tr");
+
+    const nameTd = document.createElement("td");
+    const code = document.createElement("code");
+    code.textContent = w.operator;
+    nameTd.appendChild(code);
+
+    const testsTd = document.createElement("td");
+    testsTd.className = "center";
+    testsTd.textContent = String(w.tests);
+
+    const weightTd = document.createElement("td");
+    weightTd.className = "center";
+    weightTd.textContent = w.weight.toLocaleString();
+
+    const shareTd = document.createElement("td");
+    shareTd.className = "center";
+    shareTd.textContent = total > 0 ? ((w.weight / total) * 100).toFixed(1) + "%" : "";
+
+    tr.append(nameTd, testsTd, weightTd, shareTd);
+    body.appendChild(tr);
+  }
 }
 
 
@@ -422,6 +516,32 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   const nFaster = rows.filter(r => r.speedup !== undefined && r.speedup > 1).length;
   const nSlower = rows.filter(r => r.speedup !== undefined && r.speedup < 1).length;
   const avgSpeedup = summary.avg_speedup;
+
+  function weightedAverage(speedupKey) {
+    let weightedTotal = 0;
+    let weightTotal = 0;
+    for (const row of rows) {
+      const speedup = row[speedupKey];
+      const weight = rowWeight(row);
+      if (speedup === undefined || weight === null || weight <= 0) continue;
+      weightedTotal += speedup * weight;
+      weightTotal += weight;
+    }
+    return weightTotal > 0 ? weightedTotal / weightTotal : undefined;
+  }
+
+  function sumLatencySpeedup(backendKey) {
+    let baselineTotal = 0;
+    let backendTotal = 0;
+    for (const row of rows) {
+      const baseline = row.onnxruntime_avg_ms;
+      const backend = row[backendKey];
+      if (baseline === undefined || backend === undefined || backend <= 0) continue;
+      baselineTotal += baseline;
+      backendTotal += backend;
+    }
+    return backendTotal > 0 ? baselineTotal / backendTotal : undefined;
+  }
 
   function addCard(cls, label, value, detail) {
     const card = document.createElement("div");
@@ -439,12 +559,36 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
     const cls = avgSpeedup >= 1 ? "faster" : (avgSpeedup >= 0.9 ? "close" : "slower");
     addCard(cls, "avg speedup (ort / light)", avgSpeedup.toFixed(2) + "×", "unweighted mean of per-test speedups");
   }
+  const avgSpeedupWeighted = weightedAverage("speedup");
+  if (avgSpeedupWeighted !== undefined) {
+    const clsW = avgSpeedupWeighted >= 1 ? "faster" : (avgSpeedupWeighted >= 0.9 ? "close" : "slower");
+    addCard(clsW, "weighted avg speedup (ort / light)", avgSpeedupWeighted.toFixed(2) + "×", "linear cost for ordinary kernels; quadratic for matrix multiplication and attention");
+  }
+  const sumLatency = summary.speedup_sum_latency !== undefined
+    ? summary.speedup_sum_latency
+    : sumLatencySpeedup("onnx_light_avg_ms");
+  if (sumLatency !== undefined) {
+    const clsSum = sumLatency >= 1 ? "faster" : (sumLatency >= 0.9 ? "close" : "slower");
+    addCard(clsSum, "sum latency speedup (ort / light)", sumLatency.toFixed(2) + "×", "sum(onnxruntime latency) / sum(onnx-light latency)");
+  }
   addCard("faster", "onnx-light faster", String(nFaster), "of " + bothOk + " jointly successful");
   addCard("slower", "onnx-light slower", String(nSlower), "of " + bothOk + " jointly successful");
   const avgSpeedupCpu = summary.avg_speedup_cpu;
   if (avgSpeedupCpu !== undefined) {
     const clsCpu = avgSpeedupCpu >= 1 ? "faster" : (avgSpeedupCpu >= 0.9 ? "close" : "slower");
     addCard(clsCpu, "avg speedup (ort / light+cpu)", avgSpeedupCpu.toFixed(2) + "×", "onnx-light with onnx-light-cpu kernels vs onnxruntime");
+  }
+  const avgSpeedupWeightedCpu = weightedAverage("speedup_cpu");
+  if (avgSpeedupWeightedCpu !== undefined) {
+    const clsWCpu = avgSpeedupWeightedCpu >= 1 ? "faster" : (avgSpeedupWeightedCpu >= 0.9 ? "close" : "slower");
+    addCard(clsWCpu, "weighted avg speedup (ort / light+cpu)", avgSpeedupWeightedCpu.toFixed(2) + "×", "linear cost for ordinary kernels; quadratic for matrix multiplication and attention");
+  }
+  const sumLatencyCpu = summary.speedup_sum_latency_cpu !== undefined
+    ? summary.speedup_sum_latency_cpu
+    : sumLatencySpeedup("onnx_light_cpu_avg_ms");
+  if (sumLatencyCpu !== undefined) {
+    const clsSumCpu = sumLatencyCpu >= 1 ? "faster" : (sumLatencyCpu >= 0.9 ? "close" : "slower");
+    addCard(clsSumCpu, "sum latency speedup (ort / light+cpu)", sumLatencyCpu.toFixed(2) + "×", "sum(onnxruntime latency) / sum(onnx-light+cpu latency)");
   }
   if (nWarmup !== undefined) addCard("neutral", "warm-up iterations", String(nWarmup), "not timed");
   if (nMeasure !== undefined) addCard("neutral", "timed iterations", String(nMeasure), "per test");
@@ -556,6 +700,7 @@ function compareRows(a, b) {
   let va = a[key];
   let vb = b[key];
   if (key === "status") { va = rowStatus(a); vb = rowStatus(b); }
+  if (key === "cost_n") { va = rowWeight(a); vb = rowWeight(b); }
   let cmp;
   if (va === undefined || va === null) cmp = (vb === undefined || vb === null) ? 0 : -1;
   else if (vb === undefined || vb === null) cmp = 1;
@@ -676,7 +821,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 8;
+    td.colSpan = 9;
     td.textContent = state.regexError
       ? "Fix the filter regex to see results."
       : state.search ? "No test matches the current filter." : "No test recorded.";
@@ -706,6 +851,21 @@ function renderRows() {
         inputTypeTd.appendChild(code);
       } else {
         inputTypeTd.textContent = "—";
+      }
+
+      /* Symbolic kernel weight */
+      const weightTd = document.createElement("td");
+      weightTd.className = "center";
+      const weight = rowWeight(r);
+      if (weight !== null) {
+        weightTd.textContent = weight.toLocaleString();
+        weightTd.title = (r.cost_complexity || (
+          String(r.operator || "").split("+").some(op => QUADRATIC_COST_OPERATORS.has(op))
+            ? "quadratic"
+            : "linear"
+        )) + " symbolic cost";
+      } else {
+        weightTd.textContent = "—";
       }
 
       /* onnxruntime avg */
@@ -779,6 +939,7 @@ function renderRows() {
 
       tr.appendChild(nameTd);
       tr.appendChild(inputTypeTd);
+      tr.appendChild(weightTd);
       tr.appendChild(ortTd);
       tr.appendChild(lightTd);
       tr.appendChild(cpuTd);
@@ -786,7 +947,7 @@ function renderRows() {
       tr.appendChild(speedupCpuTd);
       tr.appendChild(statusTd);
 
-      const graphRow = appendGraphRow(tr, nameTd, r, 8);
+      const graphRow = appendGraphRow(tr, nameTd, r, 9);
       body.appendChild(tr);
       if (graphRow) body.appendChild(graphRow);
     }
