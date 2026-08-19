@@ -59,6 +59,18 @@ class TestBenchmarkDashboard(unittest.TestCase):
         # minimum of 1 so that huge (quadratic) costs stay readable.
         self.assertIn("Math.max(Math.floor(weight / 1000000), 1)", text)
 
+    def test_size_reshape_and_training_operators_have_unit_weight(self):
+        text = _read(PAGE)
+        # Size/Reshape (metadata-only) and ai.onnx.training optimizer
+        # operators are pinned to a weight of 1 to reduce their importance.
+        self.assertIn("UNIT_WEIGHT_OPERATORS", text)
+        self.assertIn('"Size", "Reshape"', text)
+        self.assertIn('"Adagrad", "Adam", "Momentum", "Gradient"', text)
+        self.assertIn(
+            "if (operators.some(op => UNIT_WEIGHT_OPERATORS.has(op))) return 1;",
+            text,
+        )
+
     def test_speedup_near_one_uses_distinct_color(self):
         text = _read(PAGE)
         # A speed-up in [0.9, 1[ is coloured purple, neither red nor green,
