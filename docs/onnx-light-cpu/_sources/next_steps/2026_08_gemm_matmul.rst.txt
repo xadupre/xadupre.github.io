@@ -234,8 +234,8 @@ core algorithm without conversion overhead.
    currently use the conservative defaults.
 5. Build the immutable execution plan once and benchmark each algorithm both
    single-threaded and multi-threaded. The benchmark corpus includes a
-   shape-forced case for every algorithm and supports process-level thread
-   selection through ``ONNX_LIGHT_CPU_NUM_THREADS``.
+   shape-forced case for every algorithm and selects participants through the
+   ``onnx-light`` session execution policy.
 
 Phase 2: saturate the floating-point units
 ------------------------------------------
@@ -437,7 +437,13 @@ extra full-matrix memory passes.
   ``CpuSupportsNeonDotProd`` capability, keeping the scalar reduction as the
   fallback.)*
 * Treat Float8 and packed 4-bit types as separate packing formats, not as
-  branches in the FP32 inner loop.
+  branches in the FP32 inner loop. *(First landed: Roadmap PR09.5 adds the four
+  ONNX Float8 formats (``E4M3FN``, ``E4M3FNUZ``, ``E5M2``, ``E5M2FNUZ``) as
+  separate packing formats: exact per-format decoders decode each one-byte
+  pattern to float32 while packing -- the contiguous copies gather from an exact
+  256-entry per-format table through an AVX2 ``vgatherdps`` helper with a scalar
+  tail and fallback -- reusing the tuned FP32 algorithms with float32
+  accumulation. Packed 4-bit types are Roadmap PR09.6.)*
 
 Phase 4: complete MatMul
 ------------------------
@@ -1222,13 +1228,41 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        path, exact tail handling, and differential tests. Integer and INT4
        kernels are unchanged.
      - PR07.2
-     - Pending
+     - Implemented. Each of the four ONNX Float8 formats (``E4M3FN``,
+       ``E4M3FNUZ``, ``E5M2``, ``E5M2FNUZ``) is handled as a separate packing
+       format rather than a branch in the FP32 inner loop: new
+       ``impl/math/gemm/float8/float8_conversion.h`` provides exact per-format
+       scalar decoders (validated bit for bit against the ``ml_dtypes`` / ONNX
+       reference for all 256 byte patterns, including the format-specific NaN
+       encodings) and builds an exact 256-entry decode table. A ``Float8Source``
+       view decodes each one-byte pattern to float32 while the operands are
+       packed (general/direct/skinny-M) or reduced (skinny-N), so no full-tensor
+       conversion buffer is allocated; the contiguous packing copies gather from
+       the per-format decode table through the AVX2 ``vgatherdps`` helper
+       ``GemmDecodeFloat8ToFloat32_AVX2`` (exact scalar tail, scalar fallback off
+       x86) while the transposed strided gathers keep the per-element decode.
+       The reduction accumulates in float32, reusing every tuned FP32 algorithm
+       through ``GemmFloat8Planned`` / ``GemmFloat8ToFloat`` and the new public
+       ``GemmFloat8WithEpilogue`` entry point. New ``GemmFloat8`` differential
+       tests in ``test_gemm_kernel`` cover the decode tables, all four formats,
+       transpose combinations, column and K tails, and the skinny-N / skinny-M /
+       split-K / direct / empty-K algorithm variants against a reference computed
+       on the decoded float32 values. Integer and INT4 kernels are unchanged.
    * - Roadmap PR09.6
      - Packed INT4/UINT4 formats.
      - Nibbles unpack into typed panels or a native dot-product path with exact
        odd-length tails and differential tests. Float8 is unchanged.
      - PR09.1
-     - Pending
+     - Implemented. ``IntegerMatMul4Bit2D`` consumes ONNX low-nibble-first
+       row-major packed operands without materializing unpacked source
+       matrices. INT4 two's-complement and UINT4 values are expanded directly
+       into the shared UINT8 x INT8 panels with zero-point corrections and
+       modulo-2^32 INT32 accumulation. The panels dispatch through AVX-512 VNNI
+       or ARM NEON dot product when available and otherwise use the exact scalar
+       sibling; AMX remains an INT8-only path. Differential tests cover all four
+       operand signedness combinations, scalar and per-axis zero points,
+       aligned and odd logical dimensions (including rows that cross nibble
+       boundaries), and ignored final high nibbles. Float8 is unchanged.
    * - Roadmap PR10.1
      - FP16/BF16 correctness gate.
      - The complete FP16/BF16 corpus passes on x86, ARM, and every fallback.
@@ -1244,14 +1278,30 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - The complete integer, Float8, and packed-4-bit corpus passes on every
        available ISA and fallback. This PR contains tests and fixes only.
      - PR09.1 through PR09.6
-     - Pending
+     - Implemented. ``GemmFloat8.Float8CorrectnessGateCorpus`` runs every Float8
+       format through the same transpose, tail, general, direct, skinny-M,
+       skinny-N, split-K, and empty-K cases on each CI architecture. The
+       integer differential target now compiles the native-path checks that
+       match the kernels present in the library and compares byte GEMM through
+       the dispatcher, scalar, AVX-512 VNNI, ARM NEON dot-product, and AMX-INT8
+       paths when available. Its packed INT4/UINT4 corpus checks the dispatcher,
+       scalar, VNNI, and NEON paths across every signedness pairing, zero-point
+       layout, nibble boundary, vector tail, empty-K, and modulo-INT32 case.
+       Native ARM and emulated ARM CI build and run this target explicitly.
+       This gate adds no performance tuning.
    * - Roadmap PR10.3
      - FP16/BF16 performance gate.
      - Dedicated-machine x86 and ARM results reach at least 1.0x ONNX Runtime
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - Pending
+     - `In progress in #267
+       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_. The parity runner
+       now covers FLOAT16. On a pinned AVX2/FMA/F16C i7-13800H thread, the first
+       tuning pass raises the 18-case median from 0.341x to 0.479x ONNX Runtime
+       and the minimum from 0.138x to 0.237x. Skinny-M, skinny-N, and the tiny
+       split-K case reach 1.566x, 2.159x, and 2.174x respectively. The complete
+       gate remains open.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
@@ -1271,3 +1321,47 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
      - Pending
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
+
+Roadmap PR10.3 tuning record
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The first PR10.3 pass adds alternating FLOAT16 measurements to
+``benchmark_gemm_parity.py`` and tunes the AVX2/F16C path without allocating
+expanded FP32 operands. Contiguous A/B packing now widens eight values per
+``vcvtph2ps`` instruction. Dedicated skinny-M and skinny-N kernels reuse each
+widened operand across vector FMAs. Small-K direct GEMM widens B in registers,
+while larger general GEMM deliberately retains shared FP32 B panels: measuring
+the native kernel on all general shapes showed that reconverting B for every
+row tile regressed ``square_1024`` and transformer projection. Tiny ``2 x 2``
+split-K instead bypasses thread-pool partials and uses a two-column,
+K-vectorized kernel; this changes its pinned one-thread result from 0.148x to
+2.174x and its ten-thread result from 0.056x to 2.215x.
+
+The published numbers above are diagnostic WSL measurements, not the
+dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
+not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
+throughput measurement rather than a parity ratio. ARM results are also still
+required.
+
+The remaining PR10.3 tuning order is:
+
+#. Remove the small/direct and operator-plan fixed cost. The current direct
+   minimum is 0.237x even after the F16C micro-kernel, so trace plan creation,
+   dispatch, packing allocation, and output handling separately before changing
+   arithmetic.
+#. Reuse compact B panels across row tasks. For medium and large non-transposed
+   GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
+   inside the micro-kernel, but only dispatch it when B reuse beats the current
+   once-per-panel FP32 widening.
+#. Vectorize transposed packing. Add blocked FP16 transpose/convert kernels for
+   A and B, then tune square and rectangular block sizes against ``trans_a``,
+   ``trans_b``, and ``trans_ab`` independently.
+#. Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
+   0.309x median after the tiny split-K correction, with high variance and a
+   0.040x minimum; partition packed B panels across reusable physical-core
+   tasks and eliminate per-invocation pool and allocation costs before
+   retuning MC/NC/KC.
+#. Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
+   samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
+   PR10.3 open until every supported platform reaches the stated 1.0x median
+   and 0.9x minimum gates.

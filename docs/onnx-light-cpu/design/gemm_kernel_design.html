@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 19, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 20, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -669,29 +669,11 @@ reduction.</p>
 </section>
 <section id="thread-runtime-and-affinity">
 <h2>Thread runtime and affinity<a class="headerlink" href="#thread-runtime-and-affinity" title="Link to this heading">#</a></h2>
-<p>The persistent pool discovers the processors available to the process rather
-than treating <code class="docutils literal notranslate"><span class="pre">std::thread::hardware_concurrency()</span></code> as a physical-core
-count. Linux discovery combines <code class="docutils literal notranslate"><span class="pre">sched_getaffinity</span></code> with sysfs package,
-core, sibling, <code class="docutils literal notranslate"><span class="pre">core_type</span></code>, and capacity data. Windows discovery uses
-<code class="docutils literal notranslate"><span class="pre">GetLogicalProcessorInformationEx</span></code> processor-core records, processor groups,
-SMT flags, and efficiency classes.</p>
-<p>The default participant count uses one logical thread per physical core. A
-positive <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_MAX_THREADS</span></code> build option may impose a ceiling.
-Hybrid machines order P-cores before unknown cores and E-cores; SMT siblings
-are appended only when an explicit <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code> value requires
-them. Worker threads receive the corresponding Linux CPU affinity or Windows
-processor-group affinity once at startup. The caller remains unpinned so
-embedding applications retain control of their main thread.</p>
-<p>After a task, workers spin for a bounded number of CPU-relax iterations before
-parking on the condition variable. <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_SPIN_COUNT</span></code> configures
-this budget, including <code class="docutils literal notranslate"><span class="pre">0</span></code> for immediate parking. A local pinned sweep of
-<code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">500</span></code>, <code class="docutils literal notranslate"><span class="pre">2000</span></code>, and <code class="docutils literal notranslate"><span class="pre">10000</span></code> retained <code class="docutils literal notranslate"><span class="pre">2000</span></code> as the default:
-longer spinning regressed small and medium GEMM while immediate parking added
-wakeup latency.</p>
-<p>Applications that already own a pool construct
-<code class="docutils literal notranslate"><span class="pre">ParallelForExternalRegion</span></code> inside each caller worker before invoking a
-kernel. Nested <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> calls then execute inline on that worker, so the
-global pool is not awakened and cannot oversubscribe the caller’s pool.</p>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> does not own worker threads. Registered GEMM kernels receive
+the session <code class="docutils literal notranslate"><span class="pre">CpuExecutor</span></code> from <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>; that executor owns processor
+discovery, affinity, spin/park behavior, nesting, and diagnostics. Standalone
+GEMM calls execute on the calling thread, allowing embedding applications to
+partition work with their existing scheduler without hidden workers.</p>
 </section>
 <section id="prepared-execution-interfaces">
 <h2>Prepared execution interfaces<a class="headerlink" href="#prepared-execution-interfaces" title="Link to this heading">#</a></h2>
@@ -703,9 +685,9 @@ lifetime is independent of the caller. <code class="docutils literal notranslate
 promotion, batched matrix multiplication, multidirectional batch broadcasting,
 transpose-aware matrix dimensions, empty dimensions, and plan-owned constant B
 tensors. <code class="docutils literal notranslate"><span class="pre">StridedBatchedGemm</span></code> and <code class="docutils literal notranslate"><span class="pre">GroupedGemm</span></code> expose uniform and
-heterogeneous batches respectively. Small independent products are scheduled
-across the persistent pool; products with useful internal M/N parallelism keep
-the batch loop serial to avoid nested pools. Plans derive <code class="docutils literal notranslate"><span class="pre">MC</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, and
+heterogeneous batches respectively. Small independent products can be
+scheduled across the injected session executor; products with useful internal
+M/N parallelism keep the batch loop serial. Plans derive <code class="docutils literal notranslate"><span class="pre">MC</span></code>, <code class="docutils literal notranslate"><span class="pre">NC</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">KC</span></code> from deterministic CPUID cache descriptors on x86, align them to
 register tiles, then reduce <code class="docutils literal notranslate"><span class="pre">MC</span></code>/<code class="docutils literal notranslate"><span class="pre">NC</span></code> when necessary to expose enough work
 for the available threads. The selected values and <code class="docutils literal notranslate"><span class="pre">useful_threads</span></code> estimate
@@ -1248,7 +1230,7 @@ dispatch.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 19, 2026.
+  Last updated on Aug 20, 2026.
   <br/>
 </p></div>
       

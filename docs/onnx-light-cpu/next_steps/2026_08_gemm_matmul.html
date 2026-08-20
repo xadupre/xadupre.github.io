@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 19, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 20, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -385,6 +385,8 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Gemm and MatMul Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_attention.html">Attention Performance Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_exp_log_parity.html">Exp and Log ONNX Runtime Parity Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_qwen3_inference.html">Qwen3 CPU Inference Critical Path</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Discussion</span></p>
 <ul class="nav bd-sidenav">
@@ -392,6 +394,8 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_unary_elementwise.html">Unary Elementwise Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_binary_elementwise.html">Binary Elementwise and Broadcasting Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_elementwise_kernel_tuning.html">Processor-Aware Tuning for Abs, Exp, Log, and Not</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_tree_ensemble.html">Tree Ensemble Classification and Regression Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 </ul>
@@ -710,8 +714,8 @@ implemented for x86 deterministic CPUID cache descriptors; other platforms
 currently use the conservative defaults.</p></li>
 <li><p>Build the immutable execution plan once and benchmark each algorithm both
 single-threaded and multi-threaded. The benchmark corpus includes a
-shape-forced case for every algorithm and supports process-level thread
-selection through <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code>.</p></li>
+shape-forced case for every algorithm and selects participants through the
+<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> session execution policy.</p></li>
 </ol>
 </section>
 <section id="phase-2-saturate-the-floating-point-units">
@@ -899,7 +903,13 @@ for bit modulo 2^32; it is gated on the ``+dotprod`` build flag and the runtime
 ``CpuSupportsNeonDotProd`` capability, keeping the scalar reduction as the
 fallback.)</em></p></li>
 <li><p>Treat Float8 and packed 4-bit types as separate packing formats, not as
-branches in the FP32 inner loop.</p></li>
+branches in the FP32 inner loop. <em>(First landed: Roadmap PR09.5 adds the four
+ONNX Float8 formats (``E4M3FN``, ``E4M3FNUZ``, ``E5M2``, ``E5M2FNUZ``) as
+separate packing formats: exact per-format decoders decode each one-byte
+pattern to float32 while packing – the contiguous copies gather from an exact
+256-entry per-format table through an AVX2 ``vgatherdps`` helper with a scalar
+tail and fallback – reusing the tuned FP32 algorithms with float32
+accumulation. Packed 4-bit types are Roadmap PR09.6.)</em></p></li>
 </ul>
 </section>
 <section id="phase-4-complete-matmul">
@@ -1717,14 +1727,42 @@ case to exercise all AMX tile tails.</p></td>
 path, exact tail handling, and differential tests. Integer and INT4
 kernels are unchanged.</p></td>
 <td><p>PR07.2</p></td>
-<td><p>Pending</p></td>
+<td><p>Implemented. Each of the four ONNX Float8 formats (<code class="docutils literal notranslate"><span class="pre">E4M3FN</span></code>,
+<code class="docutils literal notranslate"><span class="pre">E4M3FNUZ</span></code>, <code class="docutils literal notranslate"><span class="pre">E5M2</span></code>, <code class="docutils literal notranslate"><span class="pre">E5M2FNUZ</span></code>) is handled as a separate packing
+format rather than a branch in the FP32 inner loop: new
+<code class="docutils literal notranslate"><span class="pre">impl/math/gemm/float8/float8_conversion.h</span></code> provides exact per-format
+scalar decoders (validated bit for bit against the <code class="docutils literal notranslate"><span class="pre">ml_dtypes</span></code> / ONNX
+reference for all 256 byte patterns, including the format-specific NaN
+encodings) and builds an exact 256-entry decode table. A <code class="docutils literal notranslate"><span class="pre">Float8Source</span></code>
+view decodes each one-byte pattern to float32 while the operands are
+packed (general/direct/skinny-M) or reduced (skinny-N), so no full-tensor
+conversion buffer is allocated; the contiguous packing copies gather from
+the per-format decode table through the AVX2 <code class="docutils literal notranslate"><span class="pre">vgatherdps</span></code> helper
+<code class="docutils literal notranslate"><span class="pre">GemmDecodeFloat8ToFloat32_AVX2</span></code> (exact scalar tail, scalar fallback off
+x86) while the transposed strided gathers keep the per-element decode.
+The reduction accumulates in float32, reusing every tuned FP32 algorithm
+through <code class="docutils literal notranslate"><span class="pre">GemmFloat8Planned</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFloat8ToFloat</span></code> and the new public
+<code class="docutils literal notranslate"><span class="pre">GemmFloat8WithEpilogue</span></code> entry point. New <code class="docutils literal notranslate"><span class="pre">GemmFloat8</span></code> differential
+tests in <code class="docutils literal notranslate"><span class="pre">test_gemm_kernel</span></code> cover the decode tables, all four formats,
+transpose combinations, column and K tails, and the skinny-N / skinny-M /
+split-K / direct / empty-K algorithm variants against a reference computed
+on the decoded float32 values. Integer and INT4 kernels are unchanged.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Roadmap PR09.6</p></td>
 <td><p>Packed INT4/UINT4 formats.</p></td>
 <td><p>Nibbles unpack into typed panels or a native dot-product path with exact
 odd-length tails and differential tests. Float8 is unchanged.</p></td>
 <td><p>PR09.1</p></td>
-<td><p>Pending</p></td>
+<td><p>Implemented. <code class="docutils literal notranslate"><span class="pre">IntegerMatMul4Bit2D</span></code> consumes ONNX low-nibble-first
+row-major packed operands without materializing unpacked source
+matrices. INT4 two’s-complement and UINT4 values are expanded directly
+into the shared UINT8 x INT8 panels with zero-point corrections and
+modulo-2^32 INT32 accumulation. The panels dispatch through AVX-512 VNNI
+or ARM NEON dot product when available and otherwise use the exact scalar
+sibling; AMX remains an INT8-only path. Differential tests cover all four
+operand signedness combinations, scalar and per-axis zero points,
+aligned and odd logical dimensions (including rows that cross nibble
+boundaries), and ignored final high nibbles. Float8 is unchanged.</p></td>
 </tr>
 <tr class="row-even"><td><p>Roadmap PR10.1</p></td>
 <td><p>FP16/BF16 correctness gate.</p></td>
@@ -1742,7 +1780,17 @@ retaining the PR08.2/PR08.3 ARM-native differential tests for NEON/SVE.</p></td>
 <td><p>The complete integer, Float8, and packed-4-bit corpus passes on every
 available ISA and fallback. This PR contains tests and fixes only.</p></td>
 <td><p>PR09.1 through PR09.6</p></td>
-<td><p>Pending</p></td>
+<td><p>Implemented. <code class="docutils literal notranslate"><span class="pre">GemmFloat8.Float8CorrectnessGateCorpus</span></code> runs every Float8
+format through the same transpose, tail, general, direct, skinny-M,
+skinny-N, split-K, and empty-K cases on each CI architecture. The
+integer differential target now compiles the native-path checks that
+match the kernels present in the library and compares byte GEMM through
+the dispatcher, scalar, AVX-512 VNNI, ARM NEON dot-product, and AMX-INT8
+paths when available. Its packed INT4/UINT4 corpus checks the dispatcher,
+scalar, VNNI, and NEON paths across every signedness pairing, zero-point
+layout, nibble boundary, vector tail, empty-K, and modulo-INT32 case.
+Native ARM and emulated ARM CI build and run this target explicitly.
+This gate adds no performance tuning.</p></td>
 </tr>
 <tr class="row-even"><td><p>Roadmap PR10.3</p></td>
 <td><p>FP16/BF16 performance gate.</p></td>
@@ -1750,7 +1798,12 @@ available ISA and fallback. This PR contains tests and fixes only.</p></td>
 median with no priority case below 0.9x where the type is supported.
 The PR contains measurement-driven tuning only.</p></td>
 <td><p>PR10.1</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/267">In progress in #267</a>. The parity runner
+now covers FLOAT16. On a pinned AVX2/FMA/F16C i7-13800H thread, the first
+tuning pass raises the 18-case median from 0.341x to 0.479x ONNX Runtime
+and the minimum from 0.138x to 0.237x. Skinny-M, skinny-N, and the tiny
+split-K case reach 1.566x, 2.159x, and 2.174x respectively. The complete
+gate remains open.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Roadmap PR10.4</p></td>
 <td><p>Integer and compact-format performance gate.</p></td>
@@ -1775,6 +1828,48 @@ after this gate closes.</p></td>
 </table>
 </div>
 <p>Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.</p>
+</section>
+<section id="roadmap-pr10-3-tuning-record">
+<h3>Roadmap PR10.3 tuning record<a class="headerlink" href="#roadmap-pr10-3-tuning-record" title="Link to this heading">#</a></h3>
+<p>The first PR10.3 pass adds alternating FLOAT16 measurements to
+<code class="docutils literal notranslate"><span class="pre">benchmark_gemm_parity.py</span></code> and tunes the AVX2/F16C path without allocating
+expanded FP32 operands. Contiguous A/B packing now widens eight values per
+<code class="docutils literal notranslate"><span class="pre">vcvtph2ps</span></code> instruction. Dedicated skinny-M and skinny-N kernels reuse each
+widened operand across vector FMAs. Small-K direct GEMM widens B in registers,
+while larger general GEMM deliberately retains shared FP32 B panels: measuring
+the native kernel on all general shapes showed that reconverting B for every
+row tile regressed <code class="docutils literal notranslate"><span class="pre">square_1024</span></code> and transformer projection. Tiny <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">x</span> <span class="pre">2</span></code>
+split-K instead bypasses thread-pool partials and uses a two-column,
+K-vectorized kernel; this changes its pinned one-thread result from 0.148x to
+2.174x and its ten-thread result from 0.056x to 2.215x.</p>
+<p>The published numbers above are diagnostic WSL measurements, not the
+dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
+not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
+throughput measurement rather than a parity ratio. ARM results are also still
+required.</p>
+<p>The remaining PR10.3 tuning order is:</p>
+<ol class="arabic simple">
+<li><p>Remove the small/direct and operator-plan fixed cost. The current direct
+minimum is 0.237x even after the F16C micro-kernel, so trace plan creation,
+dispatch, packing allocation, and output handling separately before changing
+arithmetic.</p></li>
+<li><p>Reuse compact B panels across row tasks. For medium and large non-transposed
+GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
+inside the micro-kernel, but only dispatch it when B reuse beats the current
+once-per-panel FP32 widening.</p></li>
+<li><p>Vectorize transposed packing. Add blocked FP16 transpose/convert kernels for
+A and B, then tune square and rectangular block sizes against <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>,
+<code class="docutils literal notranslate"><span class="pre">trans_b</span></code>, and <code class="docutils literal notranslate"><span class="pre">trans_ab</span></code> independently.</p></li>
+<li><p>Fix physical-core scaling. A ten-thread diagnostic corpus reaches only
+0.309x median after the tiny split-K correction, with high variance and a
+0.040x minimum; partition packed B panels across reusable physical-core
+tasks and eliminate per-invocation pool and allocation costs before
+retuning MC/NC/KC.</p></li>
+<li><p>Run dedicated x86 and ARM sweeps. Publish one-thread and physical-core raw
+samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
+PR10.3 open until every supported platform reaches the stated 1.0x median
+and 0.9x minimum gates.</p></li>
+</ol>
 </section>
 </section>
 </section>
@@ -1846,6 +1941,7 @@ after this gate closes.</p></td>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#acceptance-criteria">Acceptance criteria</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementation-order-and-dependencies">Implementation order and dependencies</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#roadmap-pr10-3-tuning-record">Roadmap PR10.3 tuning record</a></li>
 </ul>
 </li>
 </ul>
@@ -1882,7 +1978,7 @@ after this gate closes.</p></td>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 19, 2026.
+  Last updated on Aug 20, 2026.
   <br/>
 </p></div>
       

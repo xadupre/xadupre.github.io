@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 19, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 20, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -585,7 +585,7 @@ reflect the current state of the project.</p>
 </pre></div>
 </div>
  where <code class="docutils literal notranslate"><span class="pre">op(A)</span></code> is an <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">K</span></code> matrix (<code class="docutils literal notranslate"><span class="pre">A</span></code> transposed when <code class="docutils literal notranslate"><span class="pre">trans_a</span></code> is true) and <code class="docutils literal notranslate"><span class="pre">op(B)</span></code> is a <code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">x</span> <span class="pre">N</span></code> matrix (<code class="docutils literal notranslate"><span class="pre">B</span></code> transposed when <code class="docutils literal notranslate"><span class="pre">trans_b</span></code> is true). All matrices are C-contiguous (row-major). <code class="docutils literal notranslate"><span class="pre">C</span></code> is an optional <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">N</span></code> bias matrix; pass <code class="docutils literal notranslate"><span class="pre">nullptr</span></code> (or <code class="docutils literal notranslate"><span class="pre">beta</span> <span class="pre">==</span> <span class="pre">0</span></code>) to skip the bias term. <code class="docutils literal notranslate"><span class="pre">Y</span></code> is the <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">N</span></code> output and must not alias any input.</p>
-<p>The hot loop is a register-blocked micro-kernel that keeps a tile of output rows by one SIMD vector of columns in registers while it accumulates the whole <code class="docutils literal notranslate"><span class="pre">k</span></code> reduction (reusing each <code class="docutils literal notranslate"><span class="pre">B</span></code> row across the tile), with runtime AVX-512/AVX/SSE2 dispatch and a scalar fallback; the work is split across rows of <code class="docutils literal notranslate"><span class="pre">Y</span></code> using the shared <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> thread pool. </p>
+<p>The hot loop is a register-blocked micro-kernel that keeps a tile of output rows by one SIMD vector of columns in registers while it accumulates the whole <code class="docutils literal notranslate"><span class="pre">k</span></code> reduction (reusing each <code class="docutils literal notranslate"><span class="pre">B</span></code> row across the tile), with runtime AVX-512/AVX/SSE2 dispatch and a scalar fallback; the work is split across rows of <code class="docutils literal notranslate"><span class="pre">Y</span></code> using the executor supplied by the embedding runtime. </p>
 </dd></dl>
 
 <dl class="cpp function">
@@ -606,133 +606,17 @@ are the raw <code class="docutils literal notranslate"><span class="pre">uint8_t
 <p>ONNX <code class="docutils literal notranslate"><span class="pre">bool</span></code> tensors are stored as one byte per element, so the input and output are the raw byte patterns (as <code class="docutils literal notranslate"><span class="pre">uint8_t</span></code>): every zero byte maps to <code class="docutils literal notranslate"><span class="pre">1</span></code> and every non-zero byte maps to <code class="docutils literal notranslate"><span class="pre">0</span></code>, matching <code class="docutils literal notranslate"><span class="pre">numpy.logical_not</span></code>. Dispatches to the best available SIMD path at runtime. </p>
 </dd></dl>
 
-<section id="parallel-iteration-helper">
-<h3>Parallel iteration helper<a class="headerlink" href="#parallel-iteration-helper" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/parallel_for.h</span></code> provides a cost-aware
-<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> built on a persistent thread pool (workers are created once and
-reused). Before dispatching any worker threads it consults a small cost model,
-<code class="docutils literal notranslate"><span class="pre">ParallelForBlockCount</span></code>, that combines the processor (hardware thread count)
-with an estimate of the loop cost (iteration count times <code class="docutils literal notranslate"><span class="pre">cost_per_element</span></code>).
-Ranges that are too small — or whose per-element work is too cheap — run inline
-on the calling thread, because waking worker threads would cost more than the
-work saved. Every block is disjoint and covers the range exactly once, so
-element-wise results are independent of the thread count (bit-exact).</p>
-<p>When a kernel vectorises its inner loop it processes several values per SIMD
-instruction (e.g. AVX handles 8 <code class="docutils literal notranslate"><span class="pre">float</span></code> at a time, AVX-512 handles 16).
-<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> therefore accepts a <code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> argument and rounds every
-block size up to a multiple of it, so each block is a whole number of SIMD
-vectors and the vectorised loop never processes a scalar remainder in the middle
-of the range. <code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes&lt;T&gt;()</span></code> returns the lane count for element
-type <code class="docutils literal notranslate"><span class="pre">T</span></code> at the widest supported register (AVX-512, 64 bytes): 16 for
-<code class="docutils literal notranslate"><span class="pre">float</span></code>, 8 for <code class="docutils literal notranslate"><span class="pre">double</span></code>, 32 for a 2-byte half, 64 for <code class="docutils literal notranslate"><span class="pre">std::int8_t</span></code>.</p>
-<p>The pool discovers physical cores, SMT siblings, and hybrid performance versus
-efficiency cores. It uses one thread per physical core by default, pins workers
-on Linux and Windows, and only consumes SMT siblings when explicitly requested.
-<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_SPIN_COUNT</span></code> controls the bounded spin-before-park budget
-(<code class="docutils literal notranslate"><span class="pre">2000</span></code> by default, <code class="docutils literal notranslate"><span class="pre">0</span></code> to park immediately). Code running kernels from an
-application-owned pool should construct <code class="docutils literal notranslate"><span class="pre">ParallelForExternalRegion</span></code> inside
-each caller worker; nested kernel parallelism then stays inline and cannot
-oversubscribe the caller’s pool.</p>
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N14onnx_light_cpu22ParallelForThreadCountEv">
-<span id="_CPPv3N14onnx_light_cpu22ParallelForThreadCountEv"></span><span id="_CPPv2N14onnx_light_cpu22ParallelForThreadCountEv"></span><span id="onnx_light_cpu::ParallelForThreadCount"></span><span class="target" id="namespaceonnx__light__cpu_1abded57bc6cf0520deb748c5e54f706a6"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelForThreadCount</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14onnx_light_cpu22ParallelForThreadCountEv" title="Link to this definition">#</a><br /></dt>
-<dd><p>Returns the number of participating threads :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> may use. </p>
-<p>Uses one available logical thread per detected physical core by default, caps it at :cpp:var:<code class="docutils literal notranslate"><span class="pre">kParallelForMaxThreads</span></code>, and applies the optional <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code> process environment limit. An explicit limit may consume SMT siblings after physical cores. The result is always <code class="docutils literal notranslate"><span class="pre">&gt;=</span> <span class="pre">1</span></code> and counts the calling thread, which always participates in the work. </p>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N14onnx_light_cpu20ParallelForSpinCountEv">
-<span id="_CPPv3N14onnx_light_cpu20ParallelForSpinCountEv"></span><span id="_CPPv2N14onnx_light_cpu20ParallelForSpinCountEv"></span><span id="onnx_light_cpu::ParallelForSpinCount"></span><span class="target" id="namespaceonnx__light__cpu_1a7fe91a2e1d4372a5ccd048259314bc75"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelForSpinCount</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N14onnx_light_cpu20ParallelForSpinCountEv" title="Link to this definition">#</a><br /></dt>
-<dd></dd></dl>
-
-<dl class="cpp class">
-<dt class="sig sig-object cpp" id="_CPPv4N14onnx_light_cpu25ParallelForExternalRegionE">
-<span id="_CPPv3N14onnx_light_cpu25ParallelForExternalRegionE"></span><span id="_CPPv2N14onnx_light_cpu25ParallelForExternalRegionE"></span><span id="onnx_light_cpu::ParallelForExternalRegion"></span><span class="target" id="classonnx__light__cpu_1_1ParallelForExternalRegion"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">ParallelForExternalRegion</span></span></span><a class="headerlink" href="#_CPPv4N14onnx_light_cpu25ParallelForExternalRegionE" title="Link to this definition">#</a><br /></dt>
-<dd><p>Marks work dispatched by a caller-owned thread pool. </p>
-<p>Construct this guard inside each caller worker before invoking a kernel. Any nested :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> then runs inline on that worker instead of waking the process-wide pool, avoiding nested workers and oversubscription. </p>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I0EN14onnx_light_cpu20ParallelForSimdLanesE7int64_tv">
-<span id="_CPPv3I0EN14onnx_light_cpu20ParallelForSimdLanesEv"></span><span id="_CPPv2I0EN14onnx_light_cpu20ParallelForSimdLanesEv"></span><span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">T</span></span></span><span class="p"><span class="pre">&gt;</span></span><br /><span class="target" id="namespaceonnx__light__cpu_1a172319f1f22462c47737573c696ed8d7"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="k"><span class="pre">constexpr</span></span><span class="w"> </span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelForSimdLanes</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4I0EN14onnx_light_cpu20ParallelForSimdLanesE7int64_tv" title="Link to this definition">#</a><br /></dt>
-<dd><p>Number of <code class="docutils literal notranslate"><span class="pre">T</span></code> elements the widest SIMD register processes at once. </p>
-<p>Used as the <code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> argument of :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> so block boundaries land on SIMD-vector boundaries for element type <code class="docutils literal notranslate"><span class="pre">T</span></code> (e.g. 16 for <code class="docutils literal notranslate"><span class="pre">float</span></code>, 8 for <code class="docutils literal notranslate"><span class="pre">double</span></code>, 32 for a 2-byte half, 64 for <code class="docutils literal notranslate"><span class="pre">int8_t</span></code>). The result is always <code class="docutils literal notranslate"><span class="pre">&gt;=</span> <span class="pre">1</span></code>. </p>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N14onnx_light_cpu21ParallelForBlockCountE7int64_td">
-<span id="_CPPv3N14onnx_light_cpu21ParallelForBlockCountE7int64_td"></span><span id="_CPPv2N14onnx_light_cpu21ParallelForBlockCountE7int64_td"></span><span id="onnx_light_cpu::ParallelForBlockCount__int64_t.double"></span><span class="target" id="namespaceonnx__light__cpu_1a8e53309d3b1886c70e178c6e51fefc6d"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelForBlockCount</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">total</span></span>, <span class="kt"><span class="pre">double</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cost_per_element</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">1.0</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N14onnx_light_cpu21ParallelForBlockCountE7int64_td" title="Link to this definition">#</a><br /></dt>
-<dd><p>Cost model deciding how many blocks :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> should use. </p>
-<p>The decision combines the <em>processor</em> (how many hardware threads are available, via :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelForThreadCount</span></code>) with an <em>estimate of the loop cost</em> (<code class="docutils literal notranslate"><span class="pre">total</span></code> iterations, each costing about <code class="docutils literal notranslate"><span class="pre">cost_per_element</span></code> work units, see :cpp:var:<code class="docutils literal notranslate"><span class="pre">kParallelForGrainSize</span></code>). Parallelising only pays off once the total estimated work exceeds one grain; otherwise the whole range runs inline on the calling thread.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>total</strong> – Number of iterations. Values <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code> yield <code class="docutils literal notranslate"><span class="pre">0</span></code>. </p></li>
-<li><p><strong>cost_per_element</strong> – Relative cost of a single iteration in work units (<code class="docutils literal notranslate"><span class="pre">1.0</span></code> for a trivial element-wise op). Non-positive values are treated as <code class="docutils literal notranslate"><span class="pre">1.0</span></code>. Heavier kernels (e.g. <code class="docutils literal notranslate"><span class="pre">exp</span></code>/<code class="docutils literal notranslate"><span class="pre">log</span></code>) should pass a value <code class="docutils literal notranslate"><span class="pre">&gt;</span> <span class="pre">1</span></code> so that smaller ranges still parallelise. </p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>The number of contiguous blocks to split <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">total)</span></code> into. A return value of <code class="docutils literal notranslate"><span class="pre">1</span></code> means “run inline, do not parallelize”. </p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_t2Fn">
-<span id="_CPPv3I0EN14onnx_light_cpu11ParallelForE7int64_t2Fn"></span><span id="_CPPv2I0EN14onnx_light_cpu11ParallelForE7int64_t2Fn"></span><span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Fn</span></span></span><span class="p"><span class="pre">&gt;</span></span><br /><span class="target" id="namespaceonnx__light__cpu_1a0090cdc8a8e0fee9ebff0faec483322a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelFor</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">total</span></span>, <a class="reference internal" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_t2Fn" title="onnx_light_cpu::ParallelFor::Fn"><span class="n"><span class="pre">Fn</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">fn</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_t2Fn" title="Link to this definition">#</a><br /></dt>
-<dd><p>Convenience overload assuming trivial per-element cost (<code class="docutils literal notranslate"><span class="pre">1</span></code> work unit) and no SIMD-vector block alignment. </p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>total</strong> – Number of iterations. Values <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code> are a no-op. </p></li>
-<li><p><strong>fn</strong> – Callable invoked as <code class="docutils literal notranslate"><span class="pre">fn(int64_t</span> <span class="pre">begin,</span> <span class="pre">int64_t</span> <span class="pre">end)</span></code>. </p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td2Fn">
-<span id="_CPPv3I0EN14onnx_light_cpu11ParallelForE7int64_td2Fn"></span><span id="_CPPv2I0EN14onnx_light_cpu11ParallelForE7int64_td2Fn"></span><span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Fn</span></span></span><span class="p"><span class="pre">&gt;</span></span><br /><span class="target" id="namespaceonnx__light__cpu_1a8338d8fdbcbb905a6e0ee1df79fb57ed"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelFor</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">total</span></span>, <span class="kt"><span class="pre">double</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cost_per_element</span></span>, <a class="reference internal" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td2Fn" title="onnx_light_cpu::ParallelFor::Fn"><span class="n"><span class="pre">Fn</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">fn</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td2Fn" title="Link to this definition">#</a><br /></dt>
-<dd><p>Convenience overload without SIMD-vector block alignment (<code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> of <code class="docutils literal notranslate"><span class="pre">1</span></code>). </p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>total</strong> – Number of iterations. Values <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code> are a no-op. </p></li>
-<li><p><strong>cost_per_element</strong> – Relative cost of a single iteration in work units. </p></li>
-<li><p><strong>fn</strong> – Callable invoked as <code class="docutils literal notranslate"><span class="pre">fn(int64_t</span> <span class="pre">begin,</span> <span class="pre">int64_t</span> <span class="pre">end)</span></code>. </p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td7int64_t2Fn">
-<span id="_CPPv3I0EN14onnx_light_cpu11ParallelForE7int64_td7int64_t2Fn"></span><span id="_CPPv2I0EN14onnx_light_cpu11ParallelForE7int64_td7int64_t2Fn"></span><span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">typename</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Fn</span></span></span><span class="p"><span class="pre">&gt;</span></span><br /><span class="target" id="namespaceonnx__light__cpu_1aa2dbd723113ca7c5279182f25da5f796"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">onnx_light_cpu</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">ParallelFor</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">total</span></span>, <span class="kt"><span class="pre">double</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">cost_per_element</span></span>, <span class="n"><span class="pre">int64_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">block_multiple</span></span>, <a class="reference internal" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td7int64_t2Fn" title="onnx_light_cpu::ParallelFor::Fn"><span class="n"><span class="pre">Fn</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">fn</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td7int64_t2Fn" title="Link to this definition">#</a><br /></dt>
-<dd><p>Splits the half-open range <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">total)</span></code> into contiguous blocks and invokes <code class="docutils literal notranslate"><span class="pre">fn(begin,</span> <span class="pre">end)</span></code> once per block, using the cost model to decide whether parallelising is worthwhile. </p>
-<p>When :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelForBlockCount</span></code> decides the work is too small for the current processor (few iterations and/or cheap <code class="docutils literal notranslate"><span class="pre">cost_per_element</span></code>), or only one thread is available, the whole range is processed inline on the calling thread, so <code class="docutils literal notranslate"><span class="pre">fn</span></code> must be safe to call once with the full range. Every block is disjoint and covers the range exactly once, so the observable result is independent of the number of threads: kernels that only map input elements to output elements (no cross-element accumulation) stay bit-exact.</p>
-<p><code class="docutils literal notranslate"><span class="pre">fn</span></code> is invoked concurrently from several threads and must therefore only touch data disjoint per block (typically writing <code class="docutils literal notranslate"><span class="pre">output[begin,</span> <span class="pre">end)</span></code> from <code class="docutils literal notranslate"><span class="pre">input[begin,</span> <span class="pre">end)</span></code>). It must not throw.</p>
-<p><code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> sizes each block to a whole number of SIMD vectors so a vectorised kernel processes full registers per block instead of a scalar remainder at every block boundary.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>total</strong> – Number of iterations. Values <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">0</span></code> are a no-op. </p></li>
-<li><p><strong>cost_per_element</strong> – Relative cost of a single iteration in work units (see :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelForBlockCount</span></code>). </p></li>
-<li><p><strong>block_multiple</strong> – Round every block size up to a multiple of this many iterations (except the final block, which stops at <code class="docutils literal notranslate"><span class="pre">total</span></code>). Pass the SIMD lane count for the kernel’s element type (see :cpp:func:<code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes</span></code>) so each block is a whole number of SIMD vectors. Values <code class="docutils literal notranslate"><span class="pre">&lt;=</span> <span class="pre">1</span></code> disable alignment. </p></li>
-<li><p><strong>fn</strong> – Callable invoked as <code class="docutils literal notranslate"><span class="pre">fn(int64_t</span> <span class="pre">begin,</span> <span class="pre">int64_t</span> <span class="pre">end)</span></code> for each block, covering the sub-range <code class="docutils literal notranslate"><span class="pre">[begin,</span> <span class="pre">end)</span></code>. </p></li>
-</ul>
-</dd>
-</dl>
-</dd></dl>
-
-<p>Every public kernel (<code class="docutils literal notranslate"><span class="pre">Abs*</span></code>, <code class="docutils literal notranslate"><span class="pre">Exp*</span></code>/<code class="docutils literal notranslate"><span class="pre">Log*</span></code> and <code class="docutils literal notranslate"><span class="pre">NotBool</span></code>) already routes
-its work through <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code>. The memory-bandwidth-bound <code class="docutils literal notranslate"><span class="pre">Abs</span></code>/<code class="docutils literal notranslate"><span class="pre">Not</span></code>
-kernels pass <code class="docutils literal notranslate"><span class="pre">cost_per_element</span> <span class="pre">=</span> <span class="pre">1</span></code> (so they only parallelize on large arrays),
-while the compute-bound <code class="docutils literal notranslate"><span class="pre">Exp</span></code>/<code class="docutils literal notranslate"><span class="pre">Log</span></code> kernels pass a higher cost so the same
-sized ranges parallelize sooner. Each kernel also passes
-<code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes&lt;T&gt;()</span></code> as <code class="docutils literal notranslate"><span class="pre">block_multiple</span></code> so the parallel blocks align
-with its SIMD vectors. Because every block is disjoint the results are
-unchanged relative to the single-threaded kernels.</p>
+<section id="execution-ownership">
+<h3>Execution ownership<a class="headerlink" href="#execution-ownership" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> owns SIMD computation, not thread scheduling. Direct C++
+kernel calls execute synchronously on the calling thread and do not create
+workers. When the kernels are registered with <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, the registration
+adapter injects the session <code class="docutils literal notranslate"><span class="pre">CpuExecutor</span></code>. Large ranges are then split into
+disjoint SIMD-aligned blocks and dispatched by that executor.</p>
+<p>Consequently, participant count, affinity, spin policy, nesting, lifecycle, and
+diagnostics all come from the <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> session policy. There are no
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_NUM_THREADS</span></code> or <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_SPIN_COUNT</span></code> settings and no
+second pool that can oversubscribe the runtime.</p>
 </section>
 <section id="onnx-light-kernel-class">
 <h3>onnx-light kernel class<a class="headerlink" href="#onnx-light-kernel-class" title="Link to this heading">#</a></h3>
@@ -1198,17 +1082,7 @@ test registry (<code class="docutils literal notranslate"><span class="pre">lib_
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu11GemmFloat32EbbNSt6size_tENSt6size_tENSt6size_tEfPKfPKffPKfPf"><code class="docutils literal notranslate"><span class="pre">GemmFloat32()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu11GemmFloat64EbbNSt6size_tENSt6size_tENSt6size_tEdPKdPKddPKdPd"><code class="docutils literal notranslate"><span class="pre">GemmFloat64()</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu7NotBoolEPK7uint8_tP7uint8_tNSt6size_tE"><code class="docutils literal notranslate"><span class="pre">NotBool()</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parallel-iteration-helper">Parallel iteration helper</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu22ParallelForThreadCountEv"><code class="docutils literal notranslate"><span class="pre">ParallelForThreadCount()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu20ParallelForSpinCountEv"><code class="docutils literal notranslate"><span class="pre">ParallelForSpinCount()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu25ParallelForExternalRegionE"><code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::ParallelForExternalRegion</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4I0EN14onnx_light_cpu20ParallelForSimdLanesE7int64_tv"><code class="docutils literal notranslate"><span class="pre">ParallelForSimdLanes()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu21ParallelForBlockCountE7int64_td"><code class="docutils literal notranslate"><span class="pre">ParallelForBlockCount()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_t2Fn"><code class="docutils literal notranslate"><span class="pre">ParallelFor()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td2Fn"><code class="docutils literal notranslate"><span class="pre">ParallelFor()</span></code></a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4I0EN14onnx_light_cpu11ParallelForEv7int64_td7int64_t2Fn"><code class="docutils literal notranslate"><span class="pre">ParallelFor()</span></code></a></li>
-</ul>
-</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#execution-ownership">Execution ownership</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#onnx-light-kernel-class">onnx-light kernel class</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu9AbsKernelE"><code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::AbsKernel</span></code></a><ul class="nav section-nav flex-column">
 <li class="toc-h5 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N14onnx_light_cpu9AbsKernel3RunERN20ONNX_LIGHT_NAMESPACE4core7runtime14RuntimeContextE"><code class="docutils literal notranslate"><span class="pre">Run()</span></code></a></li>
@@ -1309,7 +1183,7 @@ test registry (<code class="docutils literal notranslate"><span class="pre">lib_
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 19, 2026.
+  Last updated on Aug 20, 2026.
   <br/>
 </p></div>
       
