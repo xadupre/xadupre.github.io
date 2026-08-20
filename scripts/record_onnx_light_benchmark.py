@@ -896,8 +896,10 @@ def _declared_output_elements(model: Any) -> int:
         return 0
     total = 0
     for output in outputs:
-        shape = getattr(getattr(getattr(output, "type", None), "tensor_type", None), "shape", None)
-        dims = list(getattr(shape, "dim", []) or [])
+        try:
+            dims = list(output.type.tensor_type.shape.dim)
+        except AttributeError:
+            continue
         if not dims:
             continue
         size = 1
