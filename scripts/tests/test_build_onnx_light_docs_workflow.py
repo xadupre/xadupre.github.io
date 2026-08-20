@@ -11,7 +11,7 @@ class TestBuildOnnxLightDocsWorkflow(unittest.TestCase):
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
         step = content.split("- name: Build documentation", 1)[1].split(
-            "\n\n", 1
+            "\n      - name:", 1
         )[0]
         self.assertIn("run: python -m sphinx docs dist/html", step)
         self.assertNotIn(" -j ", step)
