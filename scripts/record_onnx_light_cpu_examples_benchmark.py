@@ -708,6 +708,17 @@ def _summarize_example(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return summary
 
 
+def sort_examples(examples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the benchmarked examples sorted by operator (then by name)."""
+    return sorted(
+        examples,
+        key=lambda ex: (
+            str(ex.get("op") or ex.get("title") or ex.get("name") or "").lower(),
+            str(ex.get("name") or "").lower(),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level payload builder
 # ---------------------------------------------------------------------------
@@ -753,6 +764,8 @@ def build_payload(
         big_tests = discover_big(kind=big_models_kind, max_big_models=max_big_models)
         big_results = run_big(big_tests, n_warmup=n_warmup, n_measure=n_measure)
         example_results = list(example_results) + list(big_results)
+
+    example_results = sort_examples(example_results)
 
     payload: Dict[str, Any] = {
         "date": now_iso,

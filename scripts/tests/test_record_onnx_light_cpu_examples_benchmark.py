@@ -540,6 +540,45 @@ class TestBuildPayloadBigModels(unittest.TestCase):
         )
         self.assertEqual([e["name"] for e in payload["examples"]], ["abs"])
 
+    def test_examples_are_sorted_by_operator(self):
+        def fake_run(examples, n_warmup, n_measure):
+            return (
+                [
+                    {"name": "gemm", "op": "Gemm", "rows": [], "summary": {}},
+                    {"name": "abs", "op": "Abs", "rows": [], "summary": {}},
+                ],
+                {},
+            )
+
+        def fake_run_big(tests, n_warmup, n_measure):
+            return [
+                {"name": "conv_big", "op": "Conv", "rows": [], "summary": {}},
+                {"name": "abs_big", "op": "Abs", "rows": [], "summary": {}},
+            ]
+
+        payload = rce.build_payload(
+            run=fake_run,
+            discover_big=lambda kind, max_big_models: [{"name": "big"}],
+            run_big=fake_run_big,
+            versions=lambda: {},
+        )
+        self.assertEqual(
+            [(e["op"], e["name"]) for e in payload["examples"]],
+            [("Abs", "abs"), ("Abs", "abs_big"), ("Conv", "conv_big"), ("Gemm", "gemm")],
+        )
+
+
+class TestSortExamples(unittest.TestCase):
+    def test_falls_back_on_title_and_name(self):
+        examples = [
+            {"name": "z", "title": "Relu example"},
+            {"name": "a"},
+            {"name": "b", "op": "Abs"},
+        ]
+        self.assertEqual(
+            [e["name"] for e in rce.sort_examples(examples)], ["a", "b", "z"]
+        )
+
 
 class TestWritePayload(unittest.TestCase):
     def test_roundtrip(self):

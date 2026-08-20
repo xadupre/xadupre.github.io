@@ -65,6 +65,12 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('sizeTh.textContent = "inputs";', text)
         self.assertIn('code.textContent = inputType;', text)
 
+    def test_panels_are_sorted_by_operator(self):
+        text = _read(PAGE)
+        self.assertIn("const sorted = examples.slice().sort(", text)
+        self.assertIn("return opA.localeCompare(opB)", text)
+        self.assertIn("sorted.forEach(ex =>", text)
+
     def test_page_has_footer_pointing_at_cache(self):
         text = _read(PAGE)
         self.assertIn(
