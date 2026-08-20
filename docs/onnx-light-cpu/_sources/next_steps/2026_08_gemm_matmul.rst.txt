@@ -117,17 +117,17 @@ must both be retained.
 * Compare single-thread throughput and scaling at 2, 4, physical-core, and
   logical-core thread counts. Hybrid P/E-core machines need their own results.
 
-Two committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
-is the end-to-end FP32/FP64 parity runner (PR06.0): it alternates the registered
-operator against ONNX Runtime and prints a simple side-by-side comparison table
-(``onnx-light-cpu`` GFLOP/s, ONNX Runtime GFLOP/s, and the speed-up ratio per
-priority shape), writing the same table next to the raw JSON results so the two
-engines can be compared directly. ``tools/gemm_throughput.cc`` is the isolated
-``GemmPlan`` throughput driver, built with
-``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON``; it reports GFLOP/s per priority shape
-for the blocked multiplication alone, without ONNX Runtime or onnx-light, so a
-kernel-level regression is visible independently of the operator dispatch and
-reference-evaluator overhead that the parity runner also measures.
+Four committed instruments implement this contract. ``tools/benchmark_gemm_parity.py``
+is the end-to-end floating-point parity runner (PR06.0/PR10.3): it alternates
+the registered operator against ONNX Runtime and reports GFLOP/s and speed-up
+per priority shape. ``tools/gemm_throughput.cc`` is its isolated ``GemmPlan``
+counterpart, built with ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON``.
+``tools/benchmark_integer_gemm_parity.py`` applies the same alternating,
+raw-sample contract to UINT8 x INT8 ``MatMulInteger``. The opt-in
+``tools/compact_gemm_throughput.cc`` driver publishes isolated INT8, packed
+INT4, E4M3, and E5M2 throughput for the same tiny, direct, square, skinny,
+large-K, and transformer shape families. Together the end-to-end and isolated
+numbers distinguish operator overhead from packing and micro-kernel limits.
 
 Target computation algorithm
 ----------------------------
@@ -1295,20 +1295,31 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
        median with no priority case below 0.9x where the type is supported.
        The PR contains measurement-driven tuning only.
      - PR10.1
-     - `In progress in #267
-       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_. The parity runner
-       now covers FLOAT16. On a pinned AVX2/FMA/F16C i7-13800H thread, the first
-       tuning pass raises the 18-case median from 0.341x to 0.479x ONNX Runtime
-       and the minimum from 0.138x to 0.237x. Skinny-M, skinny-N, and the tiny
-       split-K case reach 1.566x, 2.159x, and 2.174x respectively. The complete
-       gate remains open.
+     - In progress. The `first tuning pass in #267
+       <https://github.com/xadupre/onnx-light-cpu/pull/267>`_ raises the 18-case
+       median from 0.341x to 0.479x ONNX Runtime and the minimum from 0.138x to
+       0.237x on a pinned AVX2/FMA/F16C i7-13800H thread. The `second tuning
+       pass in #273 <https://github.com/xadupre/onnx-light-cpu/pull/273>`_
+       vectorizes FP16/BF16 output narrowing, adds an AVX2 BF16 direct
+       micro-kernel, and routes the operator workspace through the runtime
+       arena. The focused FLOAT16 direct/tiny corpus reaches a 1.178x median
+       and 1.046x minimum. The complete dedicated-machine gate remains open.
    * - Roadmap PR10.4
      - Integer and compact-format performance gate.
      - Dedicated-machine results are published per type and ISA. Types
        supported by ONNX Runtime reach at least 1.0x median with no priority
        case below 0.9x; unsupported types publish correctness and throughput.
      - PR10.2
-     - Pending
+     - In progress. The `first tuning pass in #274
+       <https://github.com/xadupre/onnx-light-cpu/pull/274>`_ adds the integer
+       parity and compact throughput instruments plus an exact AVX2 UINT8 x
+       INT8 dot product used by both byte and packed-4-bit GEMM. On the
+       diagnostic AVX2 host, isolated square-512 throughput rises from 20.66 to
+       58.54 GOPS for INT8 and from 18.64 to 49.97 GOPS for INT4. The full
+       dedicated-machine gate remains open. The second pass replaces the
+       per-output AVX2 reduction with a 2x2 blocked output micro-kernel that
+       reuses loaded A and packed B vectors across outputs while preserving the
+       exact scalar output and reduction tails.
    * - Roadmap PR10.5
      - Final blocking GEMM parity gate.
      - Raw dedicated-machine results cover Gemm, shared MatMul, batched paths,
@@ -1337,6 +1348,23 @@ split-K instead bypasses thread-pool partials and uses a two-column,
 K-vectorized kernel; this changes its pinned one-thread result from 0.148x to
 2.174x and its ten-thread result from 0.056x to 2.215x.
 
+The `second pass in #273
+<https://github.com/xadupre/onnx-light-cpu/pull/273>`_ isolates the
+``32 x 128 x 16`` direct shape and shows that its prepared kernel reaches only
+3.30 GFLOP/s FP16 and 1.97 GFLOP/s BF16 before operator dispatch is included,
+disproving the initial assumption that plan construction is the primary
+bottleneck. The hot epilogue narrows every float32 accumulator through a scalar
+software conversion. AVX2/F16C conversion now narrows eight FP16 outputs at
+once, AVX2 integer rounding narrows eight BF16 outputs at once, and both retain
+the scalar contract for NaNs and tails. The direct BF16 path also keeps its
+compact inputs to the register file through an AVX2 micro-kernel instead of
+using converted FP32 panels. Isolated direct throughput rises to 20.60 GFLOP/s
+FP16 and 23.36 GFLOP/s BF16 on the same host. At the operator level, FLOAT16
+direct falls from 26.54 to 7.45 microseconds and rises from 0.330x to 1.178x
+ONNX Runtime; ``tiny_dynamic`` and ``tiny_constant`` remain above parity at
+1.252x and 1.046x. The float32 workspace now comes from the reusable runtime
+execution arena instead of a new ``std::vector`` allocation on every invocation.
+
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
@@ -1345,10 +1373,6 @@ required.
 
 The remaining PR10.3 tuning order is:
 
-#. Remove the small/direct and operator-plan fixed cost. The current direct
-   minimum is 0.237x even after the F16C micro-kernel, so trace plan creation,
-   dispatch, packing allocation, and output handling separately before changing
-   arithmetic.
 #. Reuse compact B panels across row tasks. For medium and large non-transposed
    GEMM, benchmark a cache-sized FP16 packed-B layout whose conversion happens
    inside the micro-kernel, but only dispatch it when B reuse beats the current
@@ -1365,3 +1389,49 @@ The remaining PR10.3 tuning order is:
    samples, dispersion, FP16 parity, and isolated BF16 throughput per ISA. Keep
    PR10.3 open until every supported platform reaches the stated 1.0x median
    and 0.9x minimum gates.
+
+Roadmap PR10.4 tuning record
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The `first PR10.4 pass in #274
+<https://github.com/xadupre/onnx-light-cpu/pull/274>`_ establishes two
+reproducible instruments. The Python runner alternates registered UINT8 x INT8
+``MatMulInteger`` against ONNX Runtime, verifies exact INT32 output, and stores
+every timing sample plus CPU, ISA, affinity, and thread metadata. The isolated
+C++ driver reports INT8, packed INT4, E4M3, and E5M2 throughput across the
+priority shape families.
+
+The initial AVX2 measurement exposed a scalar fallback below AVX-512 VNNI:
+isolated INT8 reached only 20.66 GOPS for square-512, 14.39 GOPS for large-K,
+and 19.48 GOPS for transformer projection. The new AVX2 dot product splits
+each UINT8 byte into low-seven-bit and high-bit terms before
+``vpmaddubsw``. Each pair therefore remains inside the exact INT16 range,
+including 255 x 127 and 255 x -128 adversarial inputs, before ``vpmaddwd``
+accumulates modulo 2^32. The shared dispatcher uses it for both INT8 and
+expanded packed-4-bit panels when VNNI, AMX, or NEON dot product is unavailable.
+The same isolated shapes reach 58.54, 40.53, and 46.58 GOPS respectively;
+packed INT4 square-512 rises from 18.64 to 49.97 GOPS.
+
+The one-thread end-to-end MatMulInteger median improves from 0.109x to 0.193x
+ONNX Runtime and its minimum from 0.063x to 0.097x on the diagnostic host. This
+does not close PR10.4: the current driver still packs complete matrices for
+every invocation.
+
+The second pass replaces the per-output AVX2 reduction with a register-budgeted
+2x2 micro-kernel for products with at least two rows, two columns, and one
+32-byte reduction vector. On the same host with VNNI and AMX disabled, the
+isolated square-512, large-K, and transformer cases improve from 102.15, 57.46,
+and 80.33 GOPS to 105.12, 69.90, and 91.81 GOPS. Tiny and small-K products keep
+the single-output reduction. These are diagnostic results, not the dedicated
+machine evidence required to close PR10.4.
+
+The remaining PR10.4 tuning order is:
+
+#. Cache constant-B integer panels and partition reusable panel tasks through
+   the session executor before tuning multi-core blocking.
+#. Route contiguous ``QLinearMatMul`` through the shared integer engine and
+   vectorize its requantization epilogue.
+#. Tune packed-4-bit unpacking and Float8 decode/packing independently, keeping
+   exact scalar tails and unsupported-format throughput reports.
+#. Run dedicated x86 and ARM sweeps and keep PR10.4 open until supported types
+   satisfy the 1.0x median and 0.9x minimum gates.
