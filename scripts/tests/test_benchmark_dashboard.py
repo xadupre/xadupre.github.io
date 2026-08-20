@@ -59,6 +59,16 @@ class TestBenchmarkDashboard(unittest.TestCase):
         # minimum of 1 so that huge (quadratic) costs stay readable.
         self.assertIn("Math.max(Math.floor(weight / 1000000), 1)", text)
 
+    def test_weight_is_capped_at_64(self):
+        text = _read(PAGE)
+        # Weights are clipped to 64 so quadratic kernels (Gemm, MatMul, ...)
+        # do not dwarf every other operator in the weighted average.
+        self.assertIn("const MAX_WEIGHT = 64;", text)
+        self.assertIn(
+            "return Math.min(Math.max(Math.floor(weight / 1000000), 1), MAX_WEIGHT);",
+            text,
+        )
+
     def test_size_reshape_and_training_operators_have_unit_weight(self):
         text = _read(PAGE)
         # Size/Reshape (metadata-only) and ai.onnx.training optimizer

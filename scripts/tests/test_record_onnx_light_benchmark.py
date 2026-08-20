@@ -457,6 +457,47 @@ class TestSymbolicCost(unittest.TestCase):
         big = ([np.zeros((100,))], [np.zeros((100,))])
         self.assertEqual(rlb._symbolic_cost([small, big]), 2)
 
+    def _model_with_output_shapes(self, shapes):
+        """Return a minimal model exposing ``graph.output`` shapes.
+
+        ``None`` dimensions stand for dynamic (symbolic) dimensions.
+        """
+
+        from types import SimpleNamespace
+
+        outputs = []
+        for shape in shapes:
+            dims = [SimpleNamespace(dim_value=0 if d is None else d) for d in shape]
+            outputs.append(
+                SimpleNamespace(
+                    type=SimpleNamespace(
+                        tensor_type=SimpleNamespace(shape=SimpleNamespace(dim=dims))
+                    )
+                )
+            )
+        return SimpleNamespace(graph=SimpleNamespace(output=outputs))
+
+    def test_declared_graph_outputs_are_used_when_data_set_has_none(self):
+        # AffineGrid-like test: tiny inputs (1x2x3 + 4 = 10 elements) but a much
+        # larger declared output (1x1448x1448x2 = 4194304 elements).
+        model = self._model_with_output_shapes([[1, 1448, 1448, 2]])
+        data_sets = [([np.zeros((1, 2, 3)), np.zeros((4,), dtype=np.int64)], [])]
+        self.assertEqual(
+            rlb._symbolic_cost(data_sets, "AffineGrid", model), 10 + 1448 * 1448 * 2
+        )
+        # Without the model, only the inputs are counted.
+        self.assertEqual(rlb._symbolic_cost(data_sets, "AffineGrid"), 10)
+
+    def test_declared_graph_outputs_ignore_dynamic_dimensions(self):
+        model = self._model_with_output_shapes([[None, 8]])
+        data_sets = [([np.zeros((4,))], [])]
+        self.assertEqual(rlb._symbolic_cost(data_sets, "Abs", model), 4)
+
+    def test_data_set_outputs_win_over_declared_shapes(self):
+        model = self._model_with_output_shapes([[1000]])
+        data_sets = [([np.zeros((4,))], [np.zeros((4,))])]
+        self.assertEqual(rlb._symbolic_cost(data_sets, "Abs", model), 8)
+
 
 class TestFirstInputType(unittest.TestCase):
     def test_empty_when_no_data_sets(self):

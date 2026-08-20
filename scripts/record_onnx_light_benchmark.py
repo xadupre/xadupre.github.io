@@ -883,16 +883,47 @@ def _cost_complexity(operator: str) -> str:
     return "quadratic" if operators & QUADRATIC_COST_OPERATORS else "linear"
 
 
+def _declared_output_elements(model: Any) -> int:
+    """Return the number of scalar elements declared by ``model``'s graph outputs.
+
+    Benchmark data sets only carry inputs (execution is timed, results are not
+    compared), so :func:`_symbolic_cost` falls back to the statically declared
+    output shapes. Outputs with a dynamic or missing dimension are ignored.
+    """
+    try:
+        outputs = list(model.graph.output)
+    except AttributeError:
+        return 0
+    total = 0
+    for output in outputs:
+        shape = getattr(getattr(getattr(output, "type", None), "tensor_type", None), "shape", None)
+        dims = list(getattr(shape, "dim", []) or [])
+        if not dims:
+            continue
+        size = 1
+        for dim in dims:
+            value = int(getattr(dim, "dim_value", 0) or 0)
+            if value <= 0:
+                size = 0
+                break
+            size *= value
+        total += size
+    return total
+
+
 def _symbolic_cost(
-    data_sets: List[Tuple[List[Any], List[Any]]], operator: str = ""
+    data_sets: List[Tuple[List[Any], List[Any]]], operator: str = "", model: Any = None
 ) -> Optional[int]:
     """Return a symbolic complexity estimate ``N`` for a test's first data set.
 
-    The base size is the total number of scalar input/output elements. Unary,
-    binary, and other ordinary kernels receive that linear weight. Matrix
-    multiplication and attention kernels receive its square, reflecting the
-    requested quadratic cost model. The estimate depends only on test shapes,
-    never on a backend's measured execution time.
+    The base size is the total number of scalar input/output elements. When the
+    data set carries no outputs (benchmark runs only feed inputs), the shapes
+    declared by ``model``'s graph outputs are used instead, so that operators
+    producing far more data than they consume (e.g. ``AffineGrid``) are not
+    under-weighted. Unary, binary, and other ordinary kernels receive that
+    linear weight. Matrix multiplication and attention kernels receive its
+    square, reflecting the requested quadratic cost model. The estimate depends
+    only on test shapes, never on a backend's measured execution time.
     """
     if not data_sets:
         return None
@@ -900,7 +931,11 @@ def _symbolic_cost(
         inputs, outputs = data_sets[0]
     except (ValueError, TypeError):
         return None
-    size = _count_elements(list(inputs)) + _count_elements(list(outputs))
+    size = _count_elements(list(inputs))
+    if outputs:
+        size += _count_elements(list(outputs))
+    elif model is not None:
+        size += _declared_output_elements(model)
     if not size:
         return None
     return size**2 if _cost_complexity(operator) == "quadratic" else size
@@ -1136,7 +1171,7 @@ def build_payload(
 
         operator = _operator_name(model)
         cost_complexity = _cost_complexity(operator)
-        cost_n = _symbolic_cost(data_sets, operator)
+        cost_n = _symbolic_cost(data_sets, operator, model)
         input_type = _first_input_type(data_sets)
 
         results: Dict[str, Dict[str, Any]] = {}
