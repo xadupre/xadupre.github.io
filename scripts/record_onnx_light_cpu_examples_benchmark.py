@@ -22,7 +22,7 @@ The dashboard records five ``onnxruntime`` vs ``onnx-light-cpu`` benchmarks:
     ``Log`` uses strictly positive ``float32`` values and ``Not`` uses boolean
     values.
 
-For every example and every input type the script measures the wall-clock
+For every example and every measured input the script measures the wall-clock
 time of:
 
 * **onnxruntime** - the same single-node ONNX model run through an
@@ -65,6 +65,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 import traceback
@@ -502,7 +503,7 @@ def run_examples(
                 "summary": _summarize_example(rows),
             }
         )
-        _log(f"Benchmarked example {name!r} on {len(rows)} input types.")
+        _log(f"Benchmarked example {name!r} on {len(rows)} inputs.")
 
     return results, meta
 
@@ -597,10 +598,10 @@ def run_big_models(
             inputs, _ = data_sets[0]
         except (ValueError, TypeError, IndexError):
             inputs = []
-        input_type = _format_input_type(inputs) or (
+        signature = _format_input_type(inputs) or (
             f"symbolic cost N={int(cost)}" if cost else "?"
         )
-        rows = [_row_from_times(input_type, times)]
+        rows = [_row_from_times(signature, times)]
         results.append(
             {
                 "name": name,
@@ -631,6 +632,20 @@ def _round_ms(value: Optional[float]) -> Optional[float]:
     return round(float(value), 6)
 
 
+def _first_input_type(signature: Any) -> str:
+    """Return the element type of the first input of an input ``signature``.
+
+    ``signature`` is a string produced by :func:`_format_input_type`, e.g.
+    ``"float32[16x16], float32[16x16]"``. Only the element type of the first
+    input is kept (``"float32"``), which is exactly what the onnx-light
+    benchmark dashboard reports in its ``input type`` column. Returns an empty
+    string when the signature carries no type (e.g. the ``symbolic cost N=...``
+    fallback used for models whose inputs have no ``dtype``).
+    """
+    first = str(signature).split(",")[0].split("[")[0].strip()
+    return first if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", first) else ""
+
+
 def _format_input_type(arrays: Any) -> str:
     """Return a human-readable ``dtype[shape]`` signature for the model inputs.
 
@@ -656,10 +671,19 @@ def _format_input_type(arrays: Any) -> str:
 
 
 def _row_from_times(
-    input_type: str, times: Dict[str, Optional[float]]
+    inputs: str, times: Dict[str, Optional[float]]
 ) -> Dict[str, Any]:
-    """Build a dashboard row from per-backend timings for one input type."""
-    row: Dict[str, Any] = {"input_type": str(input_type)}
+    """Build a dashboard row from per-backend timings for one set of inputs.
+
+    ``inputs`` is the full ``dtype[shape]`` signature of the measured inputs.
+    ``input_type`` holds only the element type of the first input, the same
+    convention as the onnx-light benchmark dashboard, so both pages report the
+    same input type for the same model.
+    """
+    row: Dict[str, Any] = {
+        "input_type": _first_input_type(inputs),
+        "inputs": str(inputs),
+    }
     for backend in BENCHMARK_BACKENDS:
         value = times.get(backend)
         if value is not None:
@@ -674,14 +698,25 @@ def _row_from_times(
 
 
 def _summarize_example(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Summarise the onnxruntime vs onnx-light-cpu speed-ups across input types."""
+    """Summarise the onnxruntime vs onnx-light-cpu speed-ups across the inputs."""
     speedups = [r["speedup_cpu"] for r in rows if r.get("speedup_cpu") is not None]
-    summary: Dict[str, Any] = {"input_types": len(rows), "cpu_succeeded": len(speedups)}
+    summary: Dict[str, Any] = {"inputs": len(rows), "cpu_succeeded": len(speedups)}
     if speedups:
         summary["avg_speedup_cpu"] = round(sum(speedups) / len(speedups), 4)
         summary["min_speedup_cpu"] = round(min(speedups), 4)
         summary["max_speedup_cpu"] = round(max(speedups), 4)
     return summary
+
+
+def sort_examples(examples: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return the benchmarked examples sorted by operator (then by name)."""
+    return sorted(
+        examples,
+        key=lambda ex: (
+            str(ex.get("op") or ex.get("title") or ex.get("name") or "").lower(),
+            str(ex.get("name") or "").lower(),
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -729,6 +764,8 @@ def build_payload(
         big_tests = discover_big(kind=big_models_kind, max_big_models=max_big_models)
         big_results = run_big(big_tests, n_warmup=n_warmup, n_measure=n_measure)
         example_results = list(example_results) + list(big_results)
+
+    example_results = sort_examples(example_results)
 
     payload: Dict[str, Any] = {
         "date": now_iso,

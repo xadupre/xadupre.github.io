@@ -26,7 +26,8 @@ class TestRowFromTimes(unittest.TestCase):
                 "onnxruntime": 0.05,
             },
         )
-        self.assertEqual(row["input_type"], "float32[100]")
+        self.assertEqual(row["input_type"], "float32")
+        self.assertEqual(row["inputs"], "float32[100]")
         self.assertEqual(row["numpy_ms"], 0.001)
         self.assertNotIn("onnx_light_ms", row)
         self.assertEqual(row["onnx_light_cpu_ms"], 0.025)
@@ -55,7 +56,25 @@ class TestRowFromTimes(unittest.TestCase):
     def test_input_type_is_string(self):
         row = rce._row_from_times("bool[8]", {"onnx_light_cpu": 1.0, "onnxruntime": 1.0})
         self.assertIsInstance(row["input_type"], str)
-        self.assertEqual(row["input_type"], "bool[8]")
+        self.assertEqual(row["input_type"], "bool")
+        self.assertEqual(row["inputs"], "bool[8]")
+
+    def test_input_type_is_the_first_input_element_type(self):
+        # Same convention as the onnx-light benchmark dashboard: the element
+        # type of the first input, without any shape.
+        row = rce._row_from_times(
+            "uint8[512x512], float32, uint8",
+            {"onnx_light_cpu": 1.0, "onnxruntime": 1.0},
+        )
+        self.assertEqual(row["input_type"], "uint8")
+        self.assertEqual(row["inputs"], "uint8[512x512], float32, uint8")
+
+    def test_input_type_empty_without_typed_input(self):
+        row = rce._row_from_times(
+            "symbolic cost N=1024", {"onnx_light_cpu": 1.0, "onnxruntime": 1.0}
+        )
+        self.assertEqual(row["input_type"], "")
+        self.assertEqual(row["inputs"], "symbolic cost N=1024")
 
 
 class TestFormatInputType(unittest.TestCase):
@@ -101,7 +120,7 @@ class TestSummarizeExample(unittest.TestCase):
             rce._row_from_times("float32[2]", {"onnx_light_cpu": 4.0, "onnxruntime": 2.0}),
         ]
         summary = rce._summarize_example(rows)
-        self.assertEqual(summary["input_types"], 2)
+        self.assertEqual(summary["inputs"], 2)
         self.assertEqual(summary["cpu_succeeded"], 2)
         self.assertEqual(summary["max_speedup_cpu"], 2.0)
         self.assertEqual(summary["min_speedup_cpu"], 0.5)
@@ -110,7 +129,7 @@ class TestSummarizeExample(unittest.TestCase):
     def test_summary_without_speedups(self):
         rows = [rce._row_from_times("float32[1]", {"numpy": 1.0})]
         summary = rce._summarize_example(rows)
-        self.assertEqual(summary["input_types"], 1)
+        self.assertEqual(summary["inputs"], 1)
         self.assertEqual(summary["cpu_succeeded"], 0)
         self.assertNotIn("avg_speedup_cpu", summary)
 
@@ -446,7 +465,8 @@ class TestRunBigModels(unittest.TestCase):
         self.assertEqual(example["backends"], ["onnx_light_cpu", "onnxruntime"])
         row = example["rows"][0]
         # input type of the first data set: a single float32[4] input.
-        self.assertEqual(row["input_type"], "float32[4]")
+        self.assertEqual(row["input_type"], "float32")
+        self.assertEqual(row["inputs"], "float32[4]")
         self.assertEqual(row["onnx_light_cpu_ms"], 1.0)
         self.assertEqual(row["onnxruntime_ms"], 2.0)
         self.assertEqual(row["speedup_cpu"], 2.0)
@@ -519,6 +539,45 @@ class TestBuildPayloadBigModels(unittest.TestCase):
             versions=lambda: {},
         )
         self.assertEqual([e["name"] for e in payload["examples"]], ["abs"])
+
+    def test_examples_are_sorted_by_operator(self):
+        def fake_run(examples, n_warmup, n_measure):
+            return (
+                [
+                    {"name": "gemm", "op": "Gemm", "rows": [], "summary": {}},
+                    {"name": "abs", "op": "Abs", "rows": [], "summary": {}},
+                ],
+                {},
+            )
+
+        def fake_run_big(tests, n_warmup, n_measure):
+            return [
+                {"name": "conv_big", "op": "Conv", "rows": [], "summary": {}},
+                {"name": "abs_big", "op": "Abs", "rows": [], "summary": {}},
+            ]
+
+        payload = rce.build_payload(
+            run=fake_run,
+            discover_big=lambda kind, max_big_models: [{"name": "big"}],
+            run_big=fake_run_big,
+            versions=lambda: {},
+        )
+        self.assertEqual(
+            [(e["op"], e["name"]) for e in payload["examples"]],
+            [("Abs", "abs"), ("Abs", "abs_big"), ("Conv", "conv_big"), ("Gemm", "gemm")],
+        )
+
+
+class TestSortExamples(unittest.TestCase):
+    def test_falls_back_on_title_and_name(self):
+        examples = [
+            {"name": "z", "title": "Relu example"},
+            {"name": "a"},
+            {"name": "b", "op": "Abs"},
+        ]
+        self.assertEqual(
+            [e["name"] for e in rce.sort_examples(examples)], ["a", "b", "z"]
+        )
 
 
 class TestWritePayload(unittest.TestCase):

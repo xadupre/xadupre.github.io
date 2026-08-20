@@ -51,8 +51,25 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('summaryRow.className = "operator-summary"', text)
         self.assertIn('details.className = "operator-details"', text)
         self.assertNotIn("panel.open = true", text)
-        for label in ("input types", "average speed-up", "best speed-up", "worst speed-up"):
+        for label in ("inputs", "average speed-up", "best speed-up", "worst speed-up"):
             self.assertIn(label, text)
+
+    def test_input_type_column_matches_the_onnx_light_benchmark(self):
+        text = _read(PAGE)
+        # The "input type" column holds the element type of the first input
+        # (e.g. "float32"), exactly like dashboard/onnx-light/benchmark.html;
+        # the full dtype[shape] signature goes to the "inputs" column.
+        self.assertIn("function firstInputType(row)", text)
+        self.assertIn("function inputSignature(row)", text)
+        self.assertIn('typeTh.textContent = "input type";', text)
+        self.assertIn('sizeTh.textContent = "inputs";', text)
+        self.assertIn('code.textContent = inputType;', text)
+
+    def test_panels_are_sorted_by_operator(self):
+        text = _read(PAGE)
+        self.assertIn("const sorted = examples.slice().sort(", text)
+        self.assertIn("return opA.localeCompare(opB)", text)
+        self.assertIn("sorted.forEach(ex =>", text)
 
     def test_page_has_footer_pointing_at_cache(self):
         text = _read(PAGE)
