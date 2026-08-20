@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light-cpu &mdash; onnx-light benchmark</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { min-height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header, main, footer { width: 100%; max-width: 1100px; margin-left: auto; margin-right: auto; }
+header { text-align: center; }
+h1 { font-size: 1.5em; margin: 0.3em 0; }
+.intro { font-size: 0.9em; line-height: 1.5; }
+code { background: rgba(110, 118, 129, 0.25); padding: 0 0.25em; border-radius: 3px; }
+.panel {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  padding: 1em;
+  margin-top: 1em;
+  box-sizing: border-box;
+}
+.summary { display: flex; flex-wrap: wrap; gap: 0.75em; }
+.card {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 0.7em;
+  flex: 1 1 180px;
+}
+.card-label { color: #8b949e; font-size: 0.8em; }
+.card-value { color: #3fb950; font-size: 1.4em; font-weight: bold; margin-top: 0.2em; }
+.meta, .status { color: #8b949e; font-size: 0.85em; }
+.controls { display: flex; gap: 0.6em; align-items: center; margin-bottom: 0.8em; }
+input[type="search"] {
+  flex: 1;
+  min-width: 180px;
+  padding: 0.45em 0.6em;
+  color: #c9d1d9;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+}
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.83em; }
+th, td { padding: 0.45em; border-bottom: 1px solid #30363d; text-align: left; }
+th { color: #8b949e; cursor: pointer; }
+th.number, td.number { text-align: right; }
+td.faster { color: #3fb950; font-weight: bold; }
+td.slower, td.failed { color: #f85149; }
+.message { text-align: center; padding: 1em; color: #8b949e; }
+</style>
+</head>
+<body>
+<header>
+  <div><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light benchmark with onnx-light-cpu kernels</h1>
+  <p class="intro">
+    This page runs the benchmark-sized ONNX backend tests through
+    <code>onnx-light</code> after
+    <code>onnx_light_cpu.register_kernels()</code> installs the optimized
+    <a href="https://github.com/xadupre/onnx-light-cpu">onnx-light-cpu</a>
+    kernels. Processing times are compared with <code>onnxruntime</code>;
+    speedup is <code>onnxruntime / onnx-light-cpu</code>, so values above one
+    mean the CPU kernels are faster.
+  </p>
+</header>
+<main>
+  <div id="message" class="panel message">Loading benchmark data&hellip;</div>
+  <section id="summaryPanel" class="panel" hidden>
+    <div id="meta" class="meta"></div>
+    <div id="summary" class="summary"></div>
+  </section>
+  <section id="resultsPanel" class="panel" hidden>
+    <div class="controls">
+      <input id="search" type="search" placeholder="Filter tests or operators&hellip;" />
+      <span id="count" class="status"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="name">test</th>
+            <th data-key="operator">operator</th>
+            <th data-key="input_type">input type</th>
+            <th data-key="onnxruntime_avg_ms" class="number">onnxruntime avg</th>
+            <th data-key="onnx_light_cpu_avg_ms" class="number">onnx-light-cpu avg</th>
+            <th data-key="speedup_cpu" class="number">speedup</th>
+            <th data-key="status">status</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script>
+const JSON_URL = "../../cache_data/onnx-light/benchmark.json";
+const state = { rows: [], query: "", sortKey: "name", sortDirection: 1 };
+
+function number(value, digits) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(digits)
+    : "\u2014";
+}
+
+function addCard(container, label, value) {
+  const card = document.createElement("div");
+  card.className = "card";
+  const cardLabel = document.createElement("div");
+  cardLabel.className = "card-label";
+  cardLabel.textContent = label;
+  const cardValue = document.createElement("div");
+  cardValue.className = "card-value";
+  cardValue.textContent = number(value, 2) + "\u00d7";
+  card.append(cardLabel, cardValue);
+  container.appendChild(card);
+}
+
+function renderSummary(payload) {
+  const summary = payload.summary || {};
+  document.getElementById("meta").textContent =
+    "Snapshot recorded on " + (payload.date || "unknown date") + ".";
+  const cards = document.getElementById("summary");
+  addCard(cards, "average speedup", summary.avg_speedup_cpu);
+  addCard(cards, "weighted average speedup", summary.avg_speedup_weighted_cpu);
+  addCard(cards, "sum latency speedup", summary.speedup_sum_latency_cpu);
+  document.getElementById("summaryPanel").hidden = false;
+}
+
+function rowStatus(row) {
+  if (row.onnx_light_cpu_success) return "succeeded";
+  return row.onnx_light_cpu_error || "failed";
+}
+
+function valueForSort(row, key) {
+  if (key === "status") return rowStatus(row);
+  const value = row[key];
+  return value === undefined || value === null ? "" : value;
+}
+
+function renderRows() {
+  const query = state.query.toLowerCase();
+  const visible = state.rows.filter(row => {
+    const text = [row.name, row.operator, row.input_type, rowStatus(row)]
+      .filter(Boolean).join(" ").toLowerCase();
+    return text.includes(query);
+  });
+  visible.sort((a, b) => {
+    const av = valueForSort(a, state.sortKey);
+    const bv = valueForSort(b, state.sortKey);
+    return (typeof av === "number" && typeof bv === "number"
+      ? av - bv
+      : String(av).localeCompare(String(bv))) * state.sortDirection;
+  });
+
+  const body = document.getElementById("rows");
+  body.textContent = "";
+  for (const row of visible) {
+    const tr = document.createElement("tr");
+    const hasSpeedup =
+      typeof row.speedup_cpu === "number" && Number.isFinite(row.speedup_cpu);
+    const values = [
+      row.name || "",
+      row.operator || "",
+      row.input_type || "",
+      number(row.onnxruntime_avg_ms, 4),
+      number(row.onnx_light_cpu_avg_ms, 4),
+      number(row.speedup_cpu, 2) + (hasSpeedup ? "\u00d7" : ""),
+      rowStatus(row),
+    ];
+    values.forEach((value, index) => {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (index >= 3 && index <= 5) td.classList.add("number");
+      if (index === 5 && hasSpeedup)
+        td.classList.add(row.speedup_cpu >= 1 ? "faster" : "slower");
+      if (index === 6 && !row.onnx_light_cpu_success) td.classList.add("failed");
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  }
+  document.getElementById("count").textContent =
+    visible.length + " / " + state.rows.length + " tests";
+}
+
+document.getElementById("search").addEventListener("input", event => {
+  state.query = event.target.value;
+  renderRows();
+});
+document.querySelectorAll("th[data-key]").forEach(th => {
+  th.addEventListener("click", () => {
+    const key = th.dataset.key;
+    if (state.sortKey === key) state.sortDirection *= -1;
+    else {
+      state.sortKey = key;
+      state.sortDirection = key === "name" ? 1 : -1;
+    }
+    renderRows();
+  });
+});
+
+fetch(JSON_URL, { cache: "no-store" })
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.json();
+  })
+  .then(payload => {
+    state.rows = Array.isArray(payload.tests) ? payload.tests : [];
+    renderSummary(payload);
+    renderRows();
+    document.getElementById("resultsPanel").hidden = false;
+    document.getElementById("message").hidden = true;
+  })
+  .catch(error => {
+    document.getElementById("message").textContent =
+      "Failed to load benchmark data: " + error.message;
+  });
+</script>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/benchmark.json" style="margin-top:1.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+</body>
+</html>
