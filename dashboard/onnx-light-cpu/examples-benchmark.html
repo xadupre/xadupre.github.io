@@ -125,6 +125,7 @@ table.benchmark th, table.benchmark td {
 }
 table.benchmark th { color: #8b949e; font-weight: normal; }
 table.benchmark th:first-child, table.benchmark td:first-child { text-align: left; }
+table.benchmark th:nth-child(2), table.benchmark td:nth-child(2) { text-align: left; }
 table.benchmark td.faster { color: #3fb950; font-weight: bold; }
 table.benchmark td.slower { color: #f85149; font-weight: bold; }
 table.benchmark td.neutral { color: #bc8cff; font-weight: bold; }
@@ -166,7 +167,7 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
     <a href="../../docs/onnx-light-cpu/auto_examples/index.html">examples</a>
     shipped by <code>onnx&#8209;light&#8209;cpu</code>, plus the benchmark-sized
     <em>big models</em> exposed by <code>onnx&#8209;light</code>. Each gallery
-    example exercises an operator over a range of input types and shows
+    example exercises an operator over a range of inputs and shows
     <code>numpy</code> as a baseline; each big model is a single larger graph
     from onnx&#8209;light's benchmark corpus. Every measurement runs
     <strong id="nWarmupLabel">3</strong> warm-up calls (not timed) and keeps the
@@ -309,6 +310,27 @@ function classifyExample(example) {
   return cats;
 }
 
+function inputSignature(row) {
+  const value = (row.inputs !== undefined && row.inputs !== null)
+    ? row.inputs
+    : (row.input_type !== undefined && row.input_type !== null)
+      ? row.input_type
+      : row.size;
+  return (value === undefined || value === null) ? "" : String(value);
+}
+
+// Element type of the first input, e.g. "float32" for "float32[16x16],
+// float32[16x16]". This is the convention used by the onnx-light benchmark
+// dashboard, so both pages report the same input type for the same model.
+// Older payloads store the whole signature in `input_type`, hence the parsing.
+function firstInputType(row) {
+  const raw = (row.input_type !== undefined && row.input_type !== null)
+    ? String(row.input_type)
+    : inputSignature(row);
+  const first = raw.split(",")[0].split("[")[0].trim();
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(first) ? first : "";
+}
+
 function renderExample(example, cats) {
   const panel = document.createElement("details");
   panel.className = "panel operator-panel";
@@ -318,7 +340,8 @@ function renderExample(example, cats) {
   summaryRow.className = "operator-summary";
   const summaryValues = [
     ["operator", example.op || example.title || example.name, "operator-name"],
-    ["input types", String(summary.input_types || (example.rows || []).length), ""],
+    ["inputs", String(summary.inputs || summary.input_types ||
+      (example.rows || []).length), ""],
     ["average speed-up", fmtSpeedup(summary.avg_speedup_cpu),
       speedupClass(summary.avg_speedup_cpu)],
     ["best speed-up", fmtSpeedup(summary.max_speedup_cpu),
@@ -370,7 +393,7 @@ function renderExample(example, cats) {
   const desc = document.createElement("p");
   desc.className = "example-desc";
   desc.textContent = (example.title || example.name) + " — measured across " +
-    ((example.rows || []).length) + " input types.";
+    ((example.rows || []).length) + " inputs.";
   if (example.source) {
     const source = document.createElement("code");
     source.textContent = example.source;
@@ -391,8 +414,11 @@ function renderExample(example, cats) {
 
   const thead = document.createElement("thead");
   const htr = document.createElement("tr");
+  const typeTh = document.createElement("th");
+  typeTh.textContent = "input type";
+  htr.appendChild(typeTh);
   const sizeTh = document.createElement("th");
-  sizeTh.textContent = "input type";
+  sizeTh.textContent = "inputs";
   htr.appendChild(sizeTh);
   backends.forEach(b => {
     const th = document.createElement("th");
@@ -408,10 +434,20 @@ function renderExample(example, cats) {
   const tbody = document.createElement("tbody");
   (example.rows || []).forEach(row => {
     const tr = document.createElement("tr");
+    const signature = inputSignature(row);
+    /* Input type (first input), same convention as the onnx-light benchmark. */
+    const typeTd = document.createElement("td");
+    const inputType = firstInputType(row);
+    if (inputType) {
+      const code = document.createElement("code");
+      code.textContent = inputType;
+      typeTd.appendChild(code);
+    } else {
+      typeTd.textContent = "—";
+    }
+    tr.appendChild(typeTd);
     const sizeTd = document.createElement("td");
-    sizeTd.textContent = (row.input_type !== undefined && row.input_type !== null)
-      ? row.input_type
-      : row.size;
+    sizeTd.textContent = signature || "—";
     tr.appendChild(sizeTd);
     backends.forEach(b => {
       const td = document.createElement("td");
