@@ -25,10 +25,13 @@ class TestBuildDocsGraphvizWorkflows(unittest.TestCase):
         for path in self._workflows():
             with open(path, encoding="utf-8") as fh:
                 content = fh.read()
-            if "Install graphviz" not in content:
+            # Not every documentation build needs graphviz; only the ones which
+            # do must install it with apt and bound the step in time.
+            if "graphviz" not in content:
                 continue
-            self.assertIn("sudo apt-get install -y graphviz", content, path)
-            self.assertIn("timeout-minutes: 10", content, path)
+            step = content.split("- name: Install graphviz", 1)[1].split("\n\n", 1)[0]
+            self.assertIn("sudo apt-get install -y graphviz", step, path)
+            self.assertIn("timeout-minutes: 10", step, path)
 
 
 if __name__ == "__main__":
