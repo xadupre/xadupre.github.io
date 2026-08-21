@@ -20,6 +20,7 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         for chart_id in ("loadChart", "saveChart", "cppChart"):
             self.assertIn(f'id="{chart_id}"', text)
         self.assertIn('kind === "cpp"', text)
+        self.assertIn('/-cpp(?:-|$)/', text)
         self.assertIn('row.name.startsWith(kind + "/")', text)
         self.assertIn("loadChartJs()", text)
 
