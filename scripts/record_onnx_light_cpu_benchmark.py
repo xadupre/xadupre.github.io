@@ -28,7 +28,10 @@ def collect_versions() -> Dict[str, str]:
     """Return versions of the packages involved in the benchmark."""
     versions: Dict[str, str] = {}
     for name in ("onnx", "onnxruntime", "onnx_light", "onnx_light_cpu", "numpy"):
-        module = __import__(name)
+        try:
+            module = __import__(name)
+        except ImportError:
+            continue
         version = getattr(module, "__version__", None)
         if version:
             versions[name] = str(version)
