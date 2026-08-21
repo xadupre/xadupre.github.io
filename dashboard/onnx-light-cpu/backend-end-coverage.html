@@ -85,13 +85,12 @@ td.slower, td.failed { color: #f85149; }
   <div><a href="../../index.html">&larr; back to home</a></div>
   <h1>onnx-light-cpu &mdash; backend coverage</h1>
   <p class="intro">
-    This page runs the benchmark-sized ONNX backend tests through
+    This page runs every ONNX backend node and model test through
     <code>onnx-light</code> after
     <code>onnx_light_cpu.register_kernels()</code> installs the optimized
     <a href="https://github.com/xadupre/onnx-light-cpu">onnx-light-cpu</a>
-    kernels. Processing times are compared with <code>onnxruntime</code>;
-    speedup is <code>onnxruntime / onnx-light-cpu</code>, so values above one
-    mean the CPU kernels are faster.
+    kernels. A test succeeds only when its outputs match the expected values
+    and at least one <code>onnx-light-cpu</code> kernel ran.
   </p>
 </header>
 <main>
@@ -102,7 +101,7 @@ td.slower, td.failed { color: #f85149; }
   </section>
   <section id="resultsPanel" class="panel" hidden>
     <div class="controls">
-      <input id="search" type="search" placeholder="Filter tests or operators&hellip;" />
+      <input id="search" type="search" placeholder="Filter tests or tags&hellip;" />
       <label for="statusFilter">show:
         <select id="statusFilter">
           <option value="">all tests</option>
@@ -117,11 +116,8 @@ td.slower, td.failed { color: #f85149; }
         <thead>
           <tr>
             <th data-key="name">test</th>
-            <th data-key="operator">operator</th>
-            <th data-key="input_type">input type</th>
-            <th data-key="onnxruntime_avg_ms" class="number">onnxruntime avg</th>
-            <th data-key="onnx_light_cpu_avg_ms" class="number">onnx-light-cpu avg</th>
-            <th data-key="speedup_cpu" class="number">speedup</th>
+            <th data-key="tag">tag</th>
+            <th data-key="onnx_light_cpu_elapsed_s" class="number">elapsed (s)</th>
             <th data-key="status">status</th>
           </tr>
         </thead>
@@ -131,7 +127,7 @@ td.slower, td.failed { color: #f85149; }
   </section>
 </main>
 <script>
-const JSON_URL = "../../cache_data/onnx-light/benchmark.json";
+const JSON_URL = "../../cache_data/onnx-light/backend_test_coverage.json";
 const state = {
   rows: [],
   query: "",
@@ -146,7 +142,7 @@ function number(value, digits) {
     : "\u2014";
 }
 
-function addCard(container, label, value) {
+function addCard(container, label, value, suffix) {
   const card = document.createElement("div");
   card.className = "card";
   const cardLabel = document.createElement("div");
@@ -154,24 +150,28 @@ function addCard(container, label, value) {
   cardLabel.textContent = label;
   const cardValue = document.createElement("div");
   cardValue.className = "card-value";
-  cardValue.textContent = number(value, 2) + "\u00d7";
+  cardValue.textContent = String(value) + (suffix || "");
   card.append(cardLabel, cardValue);
   container.appendChild(card);
 }
 
 function renderSummary(payload) {
-  const summary = payload.summary || {};
+  const totals = (payload.totals || {}).onnx_light_cpu || {};
+  const passed = totals.pass || 0;
+  const failed = totals.fail || 0;
+  const total = passed + failed;
   document.getElementById("meta").textContent =
     "Snapshot recorded on " + (payload.date || "unknown date") + ".";
   const cards = document.getElementById("summary");
-  addCard(cards, "average speedup", summary.avg_speedup_cpu);
-  addCard(cards, "weighted average speedup", summary.avg_speedup_weighted_cpu);
-  addCard(cards, "sum latency speedup", summary.speedup_sum_latency_cpu);
+  addCard(cards, "tests", total);
+  addCard(cards, "passed", passed);
+  addCard(cards, "failed", failed);
+  addCard(cards, "pass ratio", total ? (100 * passed / total).toFixed(1) : "0.0", "%");
   document.getElementById("summaryPanel").hidden = false;
 }
 
 function rowStatus(row) {
-  if (row.onnx_light_cpu_success) return "succeeded";
+  if (row.onnx_light_cpu) return "succeeded";
   if ((row.onnx_light_cpu_error || "").startsWith("no onnx-light-cpu kernel ran"))
     return "no kernel";
   return row.onnx_light_cpu_error || "failed";
@@ -186,9 +186,9 @@ function valueForSort(row, key) {
 function renderRows() {
   const query = state.query.toLowerCase();
   const visible = state.rows.filter(row => {
-    if (state.statusFilter === "failing" && row.onnx_light_cpu_success) return false;
-    if (state.statusFilter === "succeeding" && !row.onnx_light_cpu_success) return false;
-    const text = [row.name, row.operator, row.input_type, rowStatus(row)]
+    if (state.statusFilter === "failing" && row.onnx_light_cpu) return false;
+    if (state.statusFilter === "succeeding" && !row.onnx_light_cpu) return false;
+    const text = [row.name, row.tag, rowStatus(row)]
       .filter(Boolean).join(" ").toLowerCase();
     return text.includes(query);
   });
@@ -204,24 +204,17 @@ function renderRows() {
   body.textContent = "";
   for (const row of visible) {
     const tr = document.createElement("tr");
-    const hasSpeedup =
-      typeof row.speedup_cpu === "number" && Number.isFinite(row.speedup_cpu);
     const values = [
       row.name || "",
-      row.operator || "",
-      row.input_type || "",
-      number(row.onnxruntime_avg_ms, 4),
-      number(row.onnx_light_cpu_avg_ms, 4),
-      number(row.speedup_cpu, 2) + (hasSpeedup ? "\u00d7" : ""),
+      row.tag || "",
+      number(row.onnx_light_cpu_elapsed_s, 6),
       rowStatus(row),
     ];
     values.forEach((value, index) => {
       const td = document.createElement("td");
       td.textContent = value;
-      if (index >= 3 && index <= 5) td.classList.add("number");
-      if (index === 5 && hasSpeedup)
-        td.classList.add(row.speedup_cpu >= 1 ? "faster" : "slower");
-      if (index === 6 && !row.onnx_light_cpu_success) td.classList.add("failed");
+      if (index === 2) td.classList.add("number");
+      if (index === 3 && !row.onnx_light_cpu) td.classList.add("failed");
       tr.appendChild(td);
     });
     body.appendChild(tr);
@@ -264,10 +257,10 @@ fetch(JSON_URL, { cache: "no-store" })
   })
   .catch(error => {
     document.getElementById("message").textContent =
-      "Failed to load benchmark data: " + error.message;
+      "Failed to load backend coverage data: " + error.message;
   });
 </script>
-<footer class="data-updated" data-source="../../cache_data/onnx-light/benchmark.json" style="margin-top:1.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<footer class="data-updated" data-source="../../cache_data/onnx-light/backend_test_coverage.json" style="margin-top:1.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
 <script src="../../assets/last-updated.js"></script>
 </body>
 </html>

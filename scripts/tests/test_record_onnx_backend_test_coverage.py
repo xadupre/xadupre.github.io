@@ -211,6 +211,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             ("model_a", "onnxruntime"): ok,
             ("model_a", "reference"): ok,
             ("model_a", "onnx_light"): ok,
+            ("model_a", "onnx_light_cpu"): ok,
             ("model_b", "onnxruntime"): ok,
             ("model_b", "reference"): {
                 "success": False,
@@ -218,6 +219,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "error_step": "run",
             },
             ("model_b", "onnx_light"): ok,
+            ("model_b", "onnx_light_cpu"): ok,
             ("model_c", "onnxruntime"): {
                 "success": False,
                 "error": "kernel missing",
@@ -227,6 +229,11 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             ("model_c", "onnx_light"): {
                 "success": False,
                 "error": "kernel missing in onnx-light",
+                "error_step": "run",
+            },
+            ("model_c", "onnx_light_cpu"): {
+                "success": False,
+                "error": "no onnx-light-cpu kernel ran",
                 "error_step": "run",
             },
         }
@@ -249,6 +256,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "onnxruntime": {"pass": 2, "fail": 1},
                 "reference": {"pass": 2, "fail": 1},
                 "onnx_light": {"pass": 2, "fail": 1},
+                "onnx_light_cpu": {"pass": 2, "fail": 1},
             },
         )
         names = [row["name"] for row in payload["tests"]]
@@ -291,7 +299,38 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "onnxruntime": {"pass": 2, "fail": 0},
                 "reference": {"pass": 2, "fail": 0},
                 "onnx_light": {"pass": 2, "fail": 0},
+                "onnx_light_cpu": {"pass": 2, "fail": 0},
             },
+        )
+
+    def test_build_payload_defers_cpu_until_after_all_baselines(self):
+        tests = [
+            {"name": "test_a", "model": "model_a", "data_sets": []},
+            {"name": "test_b", "model": "model_b", "data_sets": []},
+        ]
+        calls = []
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            calls.append((model, backend))
+            return {"success": True, "error": "", "error_step": ""}
+
+        rbc.build_payload(
+            discover=lambda kind: tests,
+            run=fake_run,
+            versions=lambda: {},
+        )
+
+        first_cpu = next(i for i, (_, backend) in enumerate(calls)
+                         if backend == "onnx_light_cpu")
+        self.assertTrue(
+            all(backend != "onnx_light_cpu" for _, backend in calls[:first_cpu])
+        )
+        self.assertEqual(
+            calls[first_cpu:],
+            [
+                ("model_a", "onnx_light_cpu"),
+                ("model_b", "onnx_light_cpu"),
+            ],
         )
 
     def test_build_payload_captures_unhandled_runner_exceptions(self):
@@ -310,6 +349,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertFalse(row["onnxruntime"])
         self.assertFalse(row["reference"])
         self.assertFalse(row["onnx_light"])
+        self.assertFalse(row["onnx_light_cpu"])
         self.assertEqual(row["onnxruntime_error"], "unexpected")
         self.assertEqual(row["reference_error_step"], "run")
         self.assertEqual(row["onnx_light_error_step"], "run")
@@ -319,6 +359,7 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
                 "onnxruntime": {"pass": 0, "fail": 1},
                 "reference": {"pass": 0, "fail": 1},
                 "onnx_light": {"pass": 0, "fail": 1},
+                "onnx_light_cpu": {"pass": 0, "fail": 1},
             },
         )
 
@@ -398,6 +439,13 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIn("onnx_light", rbc.BACKENDS)
         self.assertIn("onnx_light", rbc._BACKEND_FACTORIES)
         self.assertEqual(rbc.BACKEND_PACKAGE["onnx_light"], "onnx_light")
+
+    def test_backends_include_onnx_light_cpu(self):
+        self.assertIn("onnx_light_cpu", rbc.BACKENDS)
+        self.assertIn("onnx_light_cpu", rbc._BACKEND_FACTORIES)
+        self.assertEqual(
+            rbc.BACKEND_PACKAGE["onnx_light_cpu"], "onnx_light_cpu"
+        )
 
     def test_run_with_onnx_light_uses_onnx_light_reference_evaluator(self):
         """``_run_with_onnx_light`` builds and drives the onnx-light evaluator.

@@ -9,7 +9,8 @@ against:
 * ``onnxruntime`` (CPU execution provider),
 * the ONNX Python reference implementation (``onnx.reference``) and
 * the ``onnx-light`` reference implementation backed by the C++
-  ``KernelDispatchTable`` (``onnx_light.onnx.reference``),
+  ``KernelDispatchTable`` (``onnx_light.onnx.reference``), and
+  * ``onnx-light`` with the optimized ``onnx-light-cpu`` kernels registered,
 
 and records whether the produced outputs match the expected ones. By
 default both the ``node`` (single-operator) and ``model`` (multi-node,
@@ -37,7 +38,12 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-BACKENDS: Tuple[str, ...] = ("onnxruntime", "reference", "onnx_light")
+BACKENDS: Tuple[str, ...] = (
+    "onnxruntime",
+    "reference",
+    "onnx_light",
+    "onnx_light_cpu",
+)
 
 # Package whose version is recorded alongside the ``last_pass`` date for
 # each backend. ``onnxruntime`` runs the model with the ``onnxruntime``
@@ -47,6 +53,7 @@ BACKEND_PACKAGE: Dict[str, str] = {
     "onnxruntime": "onnxruntime",
     "reference": "onnx",
     "onnx_light": "onnx_light",
+    "onnx_light_cpu": "onnx_light_cpu",
 }
 
 # Default numerical tolerances when comparing produced outputs with the
@@ -109,7 +116,7 @@ def _format_iso(value: dt.datetime) -> str:
 def collect_versions() -> Dict[str, str]:
     """Return the versions of the relevant packages, if importable."""
     versions: Dict[str, str] = {}
-    for name in ("onnx", "onnxruntime", "onnx_light", "numpy"):
+    for name in ("onnx", "onnxruntime", "onnx_light", "onnx_light_cpu", "numpy"):
         try:
             module = __import__(name)
         except Exception:  # noqa: BLE001 - best effort, optional packages
@@ -620,10 +627,39 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
     return _run
 
 
+_CPU_KERNELS_REGISTERED = False
+
+
+def _run_with_onnx_light_cpu(model) -> Callable[[List[Any]], List[Any]]:
+    """Run with onnx-light-cpu and require an optimized kernel to be used."""
+    global _CPU_KERNELS_REGISTERED
+
+    from onnx_light_cpu import (
+        clear_used_kernel_names,
+        register_kernels,
+        used_kernel_names,
+    )
+
+    if not _CPU_KERNELS_REGISTERED:
+        register_kernels()
+        _CPU_KERNELS_REGISTERED = True
+    run = _run_with_onnx_light(model)
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        clear_used_kernel_names()
+        outputs = run(inputs)
+        if not used_kernel_names():
+            raise RuntimeError("no onnx-light-cpu kernel ran")
+        return outputs
+
+    return _run
+
+
 _BACKEND_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
     "onnxruntime": _run_with_onnxruntime,
     "reference": _run_with_reference,
     "onnx_light": _run_with_onnx_light,
+    "onnx_light_cpu": _run_with_onnx_light_cpu,
 }
 
 
@@ -820,10 +856,11 @@ def build_payload(
     version_map = versions()
     previous_rows = _index_previous_rows(previous or {})
 
-    rows: List[Dict[str, Any]] = []
+    entries: List[Dict[str, Any]] = []
     totals: Dict[str, Dict[str, int]] = {
         backend: {"pass": 0, "fail": 0} for backend in BACKENDS
     }
+    baseline_backends = tuple(b for b in BACKENDS if b != "onnx_light_cpu")
     for idx, test in enumerate(tests):
         name = test["name"]
         model = test["model"]
@@ -833,7 +870,7 @@ def build_payload(
             graph = build_graph(model)
         except Exception:  # noqa: BLE001 - graph is a best-effort annotation
             graph = None
-        for backend in BACKENDS:
+        for backend in baseline_backends:
             try:
                 info = run(model, data_sets, backend, rtol=rtol, atol=atol)
             except Exception as exc:  # noqa: BLE001
@@ -852,19 +889,59 @@ def build_payload(
             results[backend] = info
             bucket = "pass" if info.get("success") else "fail"
             totals[backend][bucket] += 1
+        entries.append(
+            {
+                "test": test,
+                "results": results,
+                "graph": graph,
+            }
+        )
+        if (idx + 1) % 50 == 0:
+            _log(f"Ran {idx + 1}/{len(tests)} tests on baseline backends.")
+
+    # Kernel registration is process-wide and irreversible. Run every
+    # unmodified onnx-light baseline first, then install onnx-light-cpu once
+    # and execute its complete pass so the baseline remains trustworthy.
+    for idx, entry in enumerate(entries):
+        test = entry["test"]
+        try:
+            info = run(
+                test["model"],
+                test["data_sets"],
+                "onnx_light_cpu",
+                rtol=rtol,
+                atol=atol,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log(
+                f"Unhandled error for {test['name']} on onnx_light_cpu: {exc}\n"
+                f"{traceback.format_exc()}"
+            )
+            info = {
+                "success": False,
+                "error": _stringify_error(exc),
+                "error_step": "run",
+            }
+        entry["results"]["onnx_light_cpu"] = info
+        bucket = "pass" if info.get("success") else "fail"
+        totals["onnx_light_cpu"][bucket] += 1
+        if (idx + 1) % 50 == 0:
+            _log(f"Ran {idx + 1}/{len(tests)} tests on onnx-light-cpu.")
+
+    rows: List[Dict[str, Any]] = []
+    for entry in entries:
+        test = entry["test"]
         rows.append(
             _row_from_results(
-                name,
-                results,
-                previous=previous_rows.get(name),
+                test["name"],
+                entry["results"],
+                previous=previous_rows.get(test["name"]),
                 versions=version_map,
                 now_iso=now_iso,
                 tag=str(test.get("tag", "") or ""),
-                graph=graph,
+                graph=entry["graph"],
             )
         )
-        if (idx + 1) % 50 == 0:
-            _log(f"Ran {idx + 1}/{len(tests)} tests.")
 
     slowest = sorted(
         (r for r in rows if r.get("elapsed_s")),
