@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -15,8 +16,9 @@ WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
 )
 SCRIPT = os.path.join(
-    REPO_ROOT, "scripts", "record_onnx_light_cpu_examples_benchmark.py"
+    REPO_ROOT, "scripts", "record_onnx_light_cpu_benchmark.py"
 )
+sys.path.insert(0, os.path.dirname(SCRIPT))
 
 
 def _read(path: str) -> str:
@@ -61,8 +63,12 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         # the full dtype[shape] signature goes to the "inputs" column.
         self.assertIn("function firstInputType(row)", text)
         self.assertIn("function inputSignature(row)", text)
-        self.assertIn('typeTh.textContent = "input type";', text)
         self.assertIn('sizeTh.textContent = "inputs";', text)
+        self.assertIn('typeTh.textContent = "input type";', text)
+        self.assertLess(
+            text.index('sizeTh.textContent = "inputs";'),
+            text.index('typeTh.textContent = "input type";'),
+        )
         self.assertIn('code.textContent = inputType;', text)
 
     def test_panels_are_sorted_by_operator(self):
@@ -148,7 +154,7 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
         self.assertIn(
-            "python -u scripts/record_onnx_light_cpu_examples_benchmark.py", text
+            "python -u scripts/record_onnx_light_cpu_benchmark.py", text
         )
         self.assertIn(
             "cache_data/onnx-light-cpu/examples_benchmark.json", text
@@ -161,7 +167,7 @@ class TestScriptCLI(unittest.TestCase):
         # errors and exposes its public entry points.
         import importlib
 
-        module = importlib.import_module("record_onnx_light_cpu_examples_benchmark")
+        module = importlib.import_module("record_onnx_light_cpu_benchmark")
         for name in ("build_payload", "write_payload", "main", "parse_args"):
             self.assertTrue(hasattr(module, name), f"missing {name}")
 
