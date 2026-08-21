@@ -4,10 +4,11 @@ name: DATA onnx-light backend test coverage
 # ``onnx-light`` (``onnx_light.onnx_lib.backend.test.case.collect_test_case``)
 # against ``onnxruntime``, the Python reference implementation shipped
 # with ``onnx`` and the ``onnx-light`` C++ reference evaluator
-# (``onnx_light.onnx.reference``), and caches the pass/fail status as JSON
+# (``onnx_light.onnx.reference``), both before and after registering
+# ``onnx-light-cpu`` kernels, and caches the pass/fail status as JSON
 # under ``cache_data/onnx-light/backend_test_coverage.json``. The
-# dashboard at ``dashboard/onnx-light/backend-test-coverage.html``
-# consumes that file.
+# dashboards at ``dashboard/onnx-light/backend-test-coverage.html`` and
+# ``dashboard/onnx-light-cpu/backend-end-coverage.html`` consume that file.
 
 on:
   schedule:
@@ -29,7 +30,7 @@ jobs:
   record:
     if: github.event_name == 'schedule' || github.actor == github.repository_owner || github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout xadupre.github.io
         uses: actions/checkout@v6
@@ -54,6 +55,15 @@ jobs:
           repository: xadupre/onnx-light
           path: onnx-light
 
+      - name: Checkout onnx-light-cpu
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light-cpu
+          path: onnx-light-cpu
+
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
       - name: Detect CPU cores
         run: |
           # Expose the number of available CPU cores as
@@ -63,11 +73,42 @@ jobs:
           echo "Detected ${cores} CPU cores."
           echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
 
-      - name: Install onnx, onnxruntime and onnx-light
+      - name: Build and install onnx-light from source
+        env:
+          SCCACHE_GHA_ENABLED: "true"
         run: |
           python -m pip install --upgrade pip
           pip install onnx onnxruntime numpy scikit-build-core nanobind
-          pip install -e ./onnx-light -v
+          cmake -S ./onnx-light -B ./onnx-light/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=./onnx-light/install \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          cmake --build ./onnx-light/build --config Release --parallel
+          cmake --install ./onnx-light/build --config Release
+          pip install ./onnx-light
+          onnx_light_install="$(cd ./onnx-light/install && pwd)"
+          echo "CMAKE_PREFIX_PATH=${onnx_light_install}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          onnx_light_lib="$(find "${onnx_light_install}" -name 'liblib_onnx_core.so' | head -1)"
+          if [ -z "${onnx_light_lib}" ]; then
+            echo "liblib_onnx_core.so not found under ${onnx_light_install}" >&2
+            exit 1
+          fi
+          onnx_light_libdir="$(dirname "${onnx_light_lib}")"
+          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Build and install onnx-light-cpu
+        working-directory: onnx-light-cpu
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          pip install \
+            -C build-dir=build \
+            -C cmake.build-type=Release \
+            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            -e . -v
 
       - name: pip freeze
         run: pip freeze

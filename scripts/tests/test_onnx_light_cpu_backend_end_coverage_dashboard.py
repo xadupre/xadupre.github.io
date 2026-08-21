@@ -12,7 +12,7 @@ PAGE = os.path.join(
 )
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
-    REPO_ROOT, ".github", "workflows", "record_onnx_light_benchmark.yml"
+    REPO_ROOT, ".github", "workflows", "record_onnx_backend_test_coverage.yml"
 )
 
 
@@ -22,18 +22,20 @@ def _read(path: str) -> str:
 
 
 class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
-    def test_page_uses_onnx_light_benchmark_data(self):
+    def test_page_uses_complete_backend_coverage_data(self):
         text = _read(PAGE)
         self.assertIn(
-            'const JSON_URL = "../../cache_data/onnx-light/benchmark.json";', text
+            'const JSON_URL = '
+            '"../../cache_data/onnx-light/backend_test_coverage.json";',
+            text,
         )
         for field in (
-            "onnx_light_cpu_avg_ms",
-            "onnx_light_cpu_success",
-            "speedup_cpu",
-            "avg_speedup_cpu",
-            "avg_speedup_weighted_cpu",
-            "speedup_sum_latency_cpu",
+            "onnx_light_cpu_elapsed_s",
+            "payload.totals",
+            '"tests"',
+            '"passed"',
+            '"failed"',
+            '"pass ratio"',
         ):
             self.assertIn(field, text)
 
@@ -57,7 +59,8 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
     def test_page_has_last_updated_footer(self):
         text = _read(PAGE)
         self.assertIn(
-            'data-source="../../cache_data/onnx-light/benchmark.json"', text
+            'data-source="../../cache_data/onnx-light/backend_test_coverage.json"',
+            text,
         )
         self.assertIn('<script src="../../assets/last-updated.js">', text)
 
@@ -68,9 +71,10 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
 
     def test_recording_workflow_links_page_and_data(self):
         text = _read(WORKFLOW)
-        self.assertIn("name: DATA onnx-light and onnx-light-cpu benchmark", text)
+        self.assertIn("name: DATA onnx-light backend test coverage", text)
         self.assertIn("dashboard/onnx-light-cpu/backend-end-coverage.html", text)
-        self.assertIn("cache_data/onnx-light/benchmark.json", text)
+        self.assertIn("cache_data/onnx-light/backend_test_coverage.json", text)
+        self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
 
 
 if __name__ == "__main__":
