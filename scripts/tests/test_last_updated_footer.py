@@ -29,7 +29,7 @@ PAGES = [
     ("dashboard/onnx-light/constant-info-coverage.html", 2),
     ("dashboard/onnx-light/cgen-comparison.html", 2),
     ("dashboard/onnx-light/lost-compute.html", 2),
-    ("dashboard/onnx-light-cpu/benchmark.html", 2),
+    ("dashboard/onnx-light-cpu/backend-end-coverage.html", 2),
     ("dashboard/onnx-light-cpu/examples-benchmark.html", 2),
     ("dashboard/onnx-light-cpu/package-size.html", 2),
     ("dashboard/yet-another-onnx-builder/build-durations.html", 2),
