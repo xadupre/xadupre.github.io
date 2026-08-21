@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 20, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -1838,6 +1838,14 @@ after this gate closes.</p></td>
 </table>
 </div>
 <p>Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.</p>
+<p>The reproducible gate command is <code class="docutils literal notranslate"><span class="pre">tools/benchmark_gemm_parity.py</span>
+<span class="pre">--operator</span> <span class="pre">all</span> <span class="pre">--dtype</span> <span class="pre">all</span> <span class="pre">--threads</span> <span class="pre">1</span> <span class="pre">--output</span> <span class="pre">gemm_matmul_parity_results.json</span></code>.
+It alternates the registered CPU kernel with ONNX Runtime, records every raw
+sample and environment field, and includes dynamic and constant <code class="docutils literal notranslate"><span class="pre">Gemm</span></code>,
+shared <code class="docutils literal notranslate"><span class="pre">MatMul</span></code>, batched/broadcast, vector, transpose, bias, skinny,
+large-K, split-K, and transformer cases. Repeat the command with the
+physical-core affinity and thread count for each priority machine; pass
+<code class="docutils literal notranslate"><span class="pre">--enforce</span></code> only when publishing a completed dedicated-machine result.</p>
 </section>
 <section id="roadmap-pr10-3-tuning-record">
 <h3>Roadmap PR10.3 tuning record<a class="headerlink" href="#roadmap-pr10-3-tuning-record" title="Link to this heading">#</a></h3>
@@ -1867,6 +1875,14 @@ direct falls from 26.54 to 7.45 microseconds and rises from 0.330x to 1.178x
 ONNX Runtime; <code class="docutils literal notranslate"><span class="pre">tiny_dynamic</span></code> and <code class="docutils literal notranslate"><span class="pre">tiny_constant</span></code> remain above parity at
 1.252x and 1.046x. The float32 workspace now comes from the reusable runtime
 execution arena instead of a new <code class="docutils literal notranslate"><span class="pre">std::vector</span></code> allocation on every invocation.</p>
+<p>The third pass replaces scalar transposed FP16/BF16 gathers on AVX2 with blocked
+<code class="docutils literal notranslate"><span class="pre">8</span> <span class="pre">x</span> <span class="pre">8</span></code> 16-bit register transposes followed by eight-lane F16C or AVX2 BF16
+widening. Both transposed A and B packing use the same kernel, while arbitrary
+row and column tails retain the scalar conversion contract, including NaNs.
+The compact throughput driver now reports isolated FP16 and BF16 throughput
+alongside the other compact formats. Parity reports retain every timing sample
+and dispersion and additionally record affinity policy, compiler, and NumPy,
+onnx-light, onnx-light-cpu, and ONNX Runtime versions.</p>
 <p>The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
 not implement CPU BFLOAT16 Gemm on this host, so BFLOAT16 remains an isolated
@@ -1921,17 +1937,17 @@ isolated square-512, large-K, and transformer cases improve from 102.15, 57.46,
 and 80.33 GOPS to 105.12, 69.90, and 91.81 GOPS. Tiny and small-K products keep
 the single-output reduction. These are diagnostic results, not the dedicated
 machine evidence required to close PR10.4.</p>
-<p>The remaining PR10.4 tuning order is:</p>
-<ol class="arabic simple">
-<li><p>Cache constant-B integer panels and partition reusable panel tasks through
-the session executor before tuning multi-core blocking.</p></li>
-<li><p>Route contiguous <code class="docutils literal notranslate"><span class="pre">QLinearMatMul</span></code> through the shared integer engine and
-vectorize its requantization epilogue.</p></li>
-<li><p>Tune packed-4-bit unpacking and Float8 decode/packing independently, keeping
-exact scalar tails and unsupported-format throughput reports.</p></li>
-<li><p>Run dedicated x86 and ARM sweeps and keep PR10.4 open until supported types
-satisfy the 1.0x median and 0.9x minimum gates.</p></li>
-</ol>
+<p>The current pass keeps the shared integer panels reusable across row work by
+partitioning contiguous matrix batches through <code class="docutils literal notranslate"><span class="pre">ExecuteRanges</span></code> under the
+session executor. <code class="docutils literal notranslate"><span class="pre">QLinearMatMul</span></code> now routes contiguous rank-2+ products
+through <code class="docutils literal notranslate"><span class="pre">IntegerMatMul2D</span></code> and applies a vectorized AVX2 requantization
+epilogue for INT8/UINT8 outputs while retaining the scalar fallback and exact
+tail behavior for non-AVX2 and rank-1 promotion paths.</p>
+<p>The final PR10.4 closure step is the dedicated machine evidence: run pinned
+x86 and ARM one-thread and physical-core sweeps, publish raw samples and
+dispersion with complete environment metadata, and keep the implementation PR
+open until ORT-supported integer/compact formats satisfy the 1.0x median and
+0.9x minimum parity gates.</p>
 </section>
 </section>
 </section>
@@ -2041,7 +2057,7 @@ satisfy the 1.0x median and 0.9x minimum gates.</p></li>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 20, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p></div>
       

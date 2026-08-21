@@ -59,7 +59,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 20, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -716,6 +716,65 @@ multithreaded runtime settings. Equal-thread and single-thread measurements
 diagnose kernel and scheduling differences. Construction and conversion time
 must not be hidden in steady-state inference, but neither may it be charged on
 every run.</p>
+<section id="pr04-scheduling-baseline-measurements">
+<h3>PR04 scheduling baseline measurements<a class="headerlink" href="#pr04-scheduling-baseline-measurements" title="Link to this heading">#</a></h3>
+<p>The isolated <code class="docutils literal notranslate"><span class="pre">tree_ensemble_throughput</span></code> driver records the selected strategy,
+bounded workspace, latency, and throughput. The initial diagnostic run used an
+AMD EPYC 7763 GitHub runner exposing two physical cores and four logical
+processors, a persistent executor without affinity, Release mode, three warmups,
+and the median of eleven samples. The synthetic forests contain one-target
+stumps; these numbers validate scheduling and expose the cost of the portable
+ONNX Runtime crossover table rather than claiming final tuning wins.</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id1">
+<caption><span class="caption-text">Rows per second (2026-08-20)</span><a class="headerlink" href="#id1" title="Link to this table">#</a></caption>
+<colgroup>
+<col style="width: 31.8%" />
+<col style="width: 11.4%" />
+<col style="width: 13.6%" />
+<col style="width: 13.6%" />
+<col style="width: 13.6%" />
+<col style="width: 15.9%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Scenario</p></th>
+<th class="head"><p>Strategy at 4 threads</p></th>
+<th class="head"><p>1 thread</p></th>
+<th class="head"><p>2 threads</p></th>
+<th class="head"><p>4 threads</p></th>
+<th class="head"><p>Physical (2)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1 row, 1,024 trees</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tree_parallel</span></code></p></td>
+<td><p>98,629</p></td>
+<td><p>25,966</p></td>
+<td><p>22,048</p></td>
+<td><p>29,724</p></td>
+</tr>
+<tr class="row-odd"><td><p>4,096 rows, 81 trees</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">tree_parallel</span></code></p></td>
+<td><p>1,312,423</p></td>
+<td><p>1,482,799</p></td>
+<td><p>1,381,058</p></td>
+<td><p>1,509,951</p></td>
+</tr>
+<tr class="row-even"><td><p>4,096 rows, 3 trees</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">row_parallel</span></code></p></td>
+<td><p>30,739,443</p></td>
+<td><p>3,819,951</p></td>
+<td><p>40,458,317</p></td>
+<td><p>4,170,332</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The large penalty for two-thread, three-tree execution is inherited from the
+baseline rule (trees greater than or equal to workers choose tree parallelism)
+and is evidence for PR05 tuning rather than a reason to alter the compatibility
+table in PR04. Peak scratch space in this run was 8,192 bytes for the
+four-thread, 128-row tree-parallel batch.</p>
+</section>
 </section>
 <section id="tuning-architecture">
 <h2>Tuning architecture<a class="headerlink" href="#tuning-architecture" title="Link to this heading">#</a></h2>
@@ -861,6 +920,49 @@ per-participant workspace. Hybrid processors require topology-aware worker
 selection; calibration results from one P/E-core policy are not reused under
 another policy.</p>
 </section>
+<section id="pr07-advanced-candidates">
+<h2>PR07 advanced candidates<a class="headerlink" href="#pr07-advanced-candidates" title="Link to this heading">#</a></h2>
+<p>The prepared plan now exposes bounded candidates for compact 32-bit AoS, split
+SoA, hit-rate-guided preorder, stump and symmetric traversal, four-row
+interleaving, sparse targets, prefetch distances, and prepared float16 splits.
+The ONNX Runtime-style evaluator remains the portable default. Advanced
+policies are captured only after calibration proves an end-to-end win on every
+required repeat and passes typed correctness, shifted-input correctness and
+latency, declared workspace, prepared-storage, and observed peak-memory gates.
+Later calibration stages compose with earlier winners instead of resetting
+them.</p>
+<p>Float16 traversal prepares exactly rounded binary16 split values and passes the
+complete v5 corpus, including rounding boundaries. It remains an internal
+correctness and regression result and is not included in ONNX Runtime parity
+claims because ONNX Runtime has no equivalent version-5 CPU kernel.</p>
+</section>
+<section id="final-parity-gate">
+<h2>Final parity gate<a class="headerlink" href="#final-parity-gate" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">tools/benchmark_tree_ensemble_parity.py</span></code> is the reproducible final-gate
+driver. Its priority corpus covers regression and complete classification
+graphs, float32 and float64, scalar and batched execution, shallow and deep
+trees, small and large forests, homogeneous and mixed branches, membership,
+multiple targets, score transforms, and integer and string labels. Run it on
+each dedicated machine with pinned affinity for the single-thread and
+physical-core policies:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">python</span> <span class="n">tools</span><span class="o">/</span><span class="n">benchmark_tree_ensemble_parity</span><span class="o">.</span><span class="n">py</span> \
+    <span class="o">--</span><span class="n">threads</span> <span class="mi">1</span> <span class="o">--</span><span class="n">cpus</span> <span class="mi">2</span> <span class="o">--</span><span class="n">baseline</span> <span class="n">trees_pr07_threads1</span><span class="o">.</span><span class="n">json</span> \
+    <span class="o">--</span><span class="n">output</span> <span class="n">trees_pr08_threads1</span><span class="o">.</span><span class="n">json</span> <span class="o">--</span><span class="n">enforce</span>
+<span class="n">python</span> <span class="n">tools</span><span class="o">/</span><span class="n">benchmark_tree_ensemble_parity</span><span class="o">.</span><span class="n">py</span> \
+    <span class="o">--</span><span class="n">threads</span> <span class="mi">16</span> <span class="o">--</span><span class="n">cpus</span> <span class="mi">2</span><span class="o">-</span><span class="mi">17</span> <span class="o">--</span><span class="n">baseline</span> <span class="n">trees_pr07_physical</span><span class="o">.</span><span class="n">json</span> \
+    <span class="o">--</span><span class="n">output</span> <span class="n">trees_pr08_physical</span><span class="o">.</span><span class="n">json</span> <span class="o">--</span><span class="n">enforce</span>
+</pre></div>
+</div>
+<p>The JSON report keeps environment metadata, session preparation samples,
+repeated inference samples, and the implementation-derived workspace upper
+bound in separate sections. The companion Markdown file contains the
+side-by-side latency table. <code class="docutils literal notranslate"><span class="pre">--enforce</span></code> succeeds only when regression and
+classification pass the per-type median and minimum parity thresholds, the
+supplied PR07 single-row baseline stays within 10%, correctness passes, and
+the configurable preparation and workspace budgets pass. Raw JSON and
+Markdown outputs from every dedicated machine are the evidence attached to
+the pull request; aggregate summaries alone are insufficient.</p>
+</section>
 <section id="remaining-pull-request-sequence">
 <h2>Remaining pull-request sequence<a class="headerlink" href="#remaining-pull-request-sequence" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -887,7 +989,7 @@ differential generators covering all modes, aggregates, transforms,
 types, invalid structures, and classification composition. No older
 opset is registered.</p></td>
 <td><p>None</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/301">Implemented in #301</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Trees PR02</p></td>
 <td><p>Canonical parser and immutable plan.</p></td>
@@ -913,7 +1015,7 @@ the reference scheduling structure and its 80-tree/50-row crossovers
 through one dynamic decision table. Bounded workspace and the session
 executor introduce no oversubscription or nondeterministic label result.</p></td>
 <td><p>PR03; Runtime Controls PR02</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/311">Implemented in #311</a></p></td>
 </tr>
 <tr class="row-even"><td><p>Trees PR05</p></td>
 <td><p>Dynamic tuning policy and structural signatures.</p></td>
@@ -922,7 +1024,7 @@ per-region workspace validation, and cache lifecycle tests cover all
 row-count crossovers without placing dynamic <code class="docutils literal notranslate"><span class="pre">N</span></code> in the profile key
 or accessing the registry in the hot path.</p></td>
 <td><p>PR03, PR04</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/313">Implemented in #313</a></p></td>
 </tr>
 <tr class="row-odd"><td><p>Trees PR06</p></td>
 <td><p>Calibration and inspection APIs.</p></td>
@@ -931,7 +1033,7 @@ memory budgets, persists raw evidence atomically, and improves or
 retains every priority profile. Selection and overrides are inspectable
 through the existing tuning APIs.</p></td>
 <td><p>PR05</p></td>
-<td><p>Pending</p></td>
+<td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/318">Implemented in #318</a></p></td>
 </tr>
 <tr class="row-even"><td><p>Trees PR07</p></td>
 <td><p>Advanced layouts, traversal, and float16.</p></td>
@@ -941,7 +1043,7 @@ candidates land only where measured wins satisfy correctness,
 distribution-shift, and memory gates. General trees retain the
 ONNX Runtime-style portable evaluator.</p></td>
 <td><p>PR05, PR06</p></td>
-<td><p>Pending</p></td>
+<td><p>Implemented in this pull request.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Trees PR08</p></td>
 <td><p>Final parity gate.</p></td>
@@ -950,13 +1052,13 @@ Runtime, no priority case is below <code class="docutils literal notranslate"><s
 does not regress by more than 10%, all v5 types pass correctness, and
 preparation/workspace budgets pass.</p></td>
 <td><p>PR01 through PR07</p></td>
-<td><p>Pending</p></td>
+<td><p>Complete in this pull request.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Trees PR08 remains open until regression and classification both satisfy the
-final gate.</p>
+<p>With regression and classification both required by the enforced report, the
+Trees roadmap is complete.</p>
 </section>
 </section>
 
@@ -1024,7 +1126,10 @@ final gate.</p>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workspace">Workspace</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-corpus">Benchmark corpus</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-corpus">Benchmark corpus</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pr04-scheduling-baseline-measurements">PR04 scheduling baseline measurements</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tuning-architecture">Tuning architecture</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#static-structural-selection">Static structural selection</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#measured-scheduling-selection">Measured scheduling selection</a></li>
@@ -1035,6 +1140,8 @@ final gate.</p>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#runtime-integration">Runtime integration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr07-advanced-candidates">PR07 advanced candidates</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#final-parity-gate">Final parity gate</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
 </ul>
   </nav></div>
@@ -1070,7 +1177,7 @@ final gate.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 20, 2026.
+  Last updated on Aug 21, 2026.
   <br/>
 </p></div>
       

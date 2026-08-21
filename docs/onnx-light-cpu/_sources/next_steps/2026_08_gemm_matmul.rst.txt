@@ -1333,6 +1333,15 @@ fallbacks are ordered. Completed rows remain visible so scope is not lost.
 
 Roadmap PR10.5 is the final Gemm and MatMul roadmap PR.
 
+The reproducible gate command is ``tools/benchmark_gemm_parity.py
+--operator all --dtype all --threads 1 --output gemm_matmul_parity_results.json``.
+It alternates the registered CPU kernel with ONNX Runtime, records every raw
+sample and environment field, and includes dynamic and constant ``Gemm``,
+shared ``MatMul``, batched/broadcast, vector, transpose, bias, skinny,
+large-K, split-K, and transformer cases. Repeat the command with the
+physical-core affinity and thread count for each priority machine; pass
+``--enforce`` only when publishing a completed dedicated-machine result.
+
 Roadmap PR10.3 tuning record
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -1364,6 +1373,15 @@ direct falls from 26.54 to 7.45 microseconds and rises from 0.330x to 1.178x
 ONNX Runtime; ``tiny_dynamic`` and ``tiny_constant`` remain above parity at
 1.252x and 1.046x. The float32 workspace now comes from the reusable runtime
 execution arena instead of a new ``std::vector`` allocation on every invocation.
+
+The third pass replaces scalar transposed FP16/BF16 gathers on AVX2 with blocked
+``8 x 8`` 16-bit register transposes followed by eight-lane F16C or AVX2 BF16
+widening. Both transposed A and B packing use the same kernel, while arbitrary
+row and column tails retain the scalar conversion contract, including NaNs.
+The compact throughput driver now reports isolated FP16 and BF16 throughput
+alongside the other compact formats. Parity reports retain every timing sample
+and dispersion and additionally record affinity policy, compiler, and NumPy,
+onnx-light, onnx-light-cpu, and ONNX Runtime versions.
 
 The published numbers above are diagnostic WSL measurements, not the
 dedicated-machine evidence required to close PR10.3. ONNX Runtime 1.28.0 does
@@ -1425,13 +1443,15 @@ and 80.33 GOPS to 105.12, 69.90, and 91.81 GOPS. Tiny and small-K products keep
 the single-output reduction. These are diagnostic results, not the dedicated
 machine evidence required to close PR10.4.
 
-The remaining PR10.4 tuning order is:
+The current pass keeps the shared integer panels reusable across row work by
+partitioning contiguous matrix batches through ``ExecuteRanges`` under the
+session executor. ``QLinearMatMul`` now routes contiguous rank-2+ products
+through ``IntegerMatMul2D`` and applies a vectorized AVX2 requantization
+epilogue for INT8/UINT8 outputs while retaining the scalar fallback and exact
+tail behavior for non-AVX2 and rank-1 promotion paths.
 
-#. Cache constant-B integer panels and partition reusable panel tasks through
-   the session executor before tuning multi-core blocking.
-#. Route contiguous ``QLinearMatMul`` through the shared integer engine and
-   vectorize its requantization epilogue.
-#. Tune packed-4-bit unpacking and Float8 decode/packing independently, keeping
-   exact scalar tails and unsupported-format throughput reports.
-#. Run dedicated x86 and ARM sweeps and keep PR10.4 open until supported types
-   satisfy the 1.0x median and 0.9x minimum gates.
+The final PR10.4 closure step is the dedicated machine evidence: run pinned
+x86 and ARM one-thread and physical-core sweeps, publish raw samples and
+dispersion with complete environment metadata, and keep the implementation PR
+open until ORT-supported integer/compact formats satisfy the 1.0x median and
+0.9x minimum parity gates.
