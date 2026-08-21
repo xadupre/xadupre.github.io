@@ -59,16 +59,13 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
     def test_input_type_column_matches_the_onnx_light_benchmark(self):
         text = _read(PAGE)
         # The "input type" column holds the element type of the first input
-        # (e.g. "float32"), exactly like dashboard/onnx-light/benchmark.html;
-        # the full dtype[shape] signature goes to the "inputs" column.
+        # (e.g. "float32"), exactly like dashboard/onnx-light/benchmark.html.
         self.assertIn("function firstInputType(row)", text)
-        self.assertIn("function inputSignature(row)", text)
-        self.assertIn('sizeTh.textContent = "inputs";', text)
         self.assertIn('typeTh.textContent = "input type";', text)
-        self.assertLess(
-            text.index('sizeTh.textContent = "inputs";'),
-            text.index('typeTh.textContent = "input type";'),
-        )
+        self.assertNotIn('sizeTh.textContent = "inputs";', text)
+        self.assertIn("? row.input_type", text)
+        self.assertIn("? row.inputs", text)
+        self.assertIn('raw.split(",")[0].split("[")[0].trim()', text)
         self.assertIn('code.textContent = inputType;', text)
 
     def test_panels_are_sorted_by_operator(self):
