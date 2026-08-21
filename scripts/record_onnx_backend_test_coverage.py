@@ -639,6 +639,7 @@ def _run_with_onnx_light_cpu(model) -> Callable[[List[Any]], List[Any]]:
         register_kernels,
         used_kernel_names,
     )
+    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     if not _CPU_KERNELS_REGISTERED:
         register_kernels()
@@ -646,9 +647,14 @@ def _run_with_onnx_light_cpu(model) -> Callable[[List[Any]], List[Any]]:
     run = _run_with_onnx_light(model)
 
     def _run(inputs: List[Any]) -> List[Any]:
+        set_kernel_usage_recording(True)
         clear_used_kernel_names()
-        outputs = run(inputs)
-        if not used_kernel_names():
+        try:
+            outputs = run(inputs)
+            used = used_kernel_names()
+        finally:
+            set_kernel_usage_recording(False)
+        if not used:
             raise RuntimeError("no onnx-light-cpu kernel ran")
         return outputs
 

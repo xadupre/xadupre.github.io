@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -445,6 +446,60 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertIn("onnx_light_cpu", rbc._BACKEND_FACTORIES)
         self.assertEqual(
             rbc.BACKEND_PACKAGE["onnx_light_cpu"], "onnx_light_cpu"
+        )
+
+    def test_cpu_runner_enables_kernel_usage_recording(self):
+        import types
+
+        events = []
+        cpu = types.ModuleType("onnx_light_cpu")
+        cpu.__path__ = []
+        cpu.register_kernels = lambda: events.append("register")
+        cpu.clear_used_kernel_names = lambda: events.append("clear")
+        cpu.used_kernel_names = lambda: (
+            events.append("used") or ["onnx_light_cpu::Abs"]
+        )
+        cpu_py = types.ModuleType("onnx_light_cpu.onnx_py")
+        cpu_py.__path__ = []
+        cpu_register = types.ModuleType("onnx_light_cpu.onnx_py._cpuregister")
+        cpu_register.set_kernel_usage_recording = (
+            lambda enabled: events.append(("recording", enabled))
+        )
+        modules = {
+            "onnx_light_cpu": cpu,
+            "onnx_light_cpu.onnx_py": cpu_py,
+            "onnx_light_cpu.onnx_py._cpuregister": cpu_register,
+        }
+        saved = {name: sys.modules.get(name) for name in modules}
+        was_registered = rbc._CPU_KERNELS_REGISTERED
+        try:
+            sys.modules.update(modules)
+            rbc._CPU_KERNELS_REGISTERED = False
+            with mock.patch.object(
+                rbc,
+                "_run_with_onnx_light",
+                return_value=lambda inputs: events.append("run") or inputs,
+            ):
+                runner = rbc._run_with_onnx_light_cpu("abs-model")
+                self.assertEqual(runner(["input"]), ["input"])
+        finally:
+            rbc._CPU_KERNELS_REGISTERED = was_registered
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        self.assertEqual(
+            events,
+            [
+                "register",
+                ("recording", True),
+                "clear",
+                "run",
+                "used",
+                ("recording", False),
+            ],
         )
 
     def test_run_with_onnx_light_uses_onnx_light_reference_evaluator(self):
