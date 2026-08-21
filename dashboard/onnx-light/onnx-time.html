@@ -11,12 +11,13 @@ body { background:#0d1117; color:#c9d1d9; font-family:sans-serif; padding:1.5em;
 a { color:#58a6ff; text-decoration:none; }
 header { text-align:center; }
 h1 { font-size:1.4em; margin:.3em; }
-.controls, .chart-wrap { max-width:1100px; margin:1em auto; box-sizing:border-box; }
+.controls, .chart-wrap, #message { max-width:1100px; margin:1em auto; box-sizing:border-box; }
 .controls { display:flex; gap:1em; justify-content:center; flex-wrap:wrap; }
 label { color:#8b949e; }
 select { margin-left:.4em; background:#161b22; color:#c9d1d9; border:1px solid #30363d; padding:.35em; }
 .chart-wrap { background:rgba(22,27,34,.85); border-radius:12px; padding:1em; }
-.chart-container { position:relative; height:68vh; min-height:360px; }
+.chart-wrap h2 { text-align:center; font-size:1.1em; margin:.2em 0 .8em; }
+.chart-container { position:relative; height:38vh; min-height:280px; }
 .message { text-align:center; color:#d29922; padding:2em; }
 .hint { color:#8b949e; text-align:center; font-size:.85em; margin-top:.7em; }
 </style>
@@ -31,7 +32,7 @@ select { margin-left:.4em; background:#161b22; color:#c9d1d9; border:1px solid #
   </div>
 </header>
 <div class="controls">
-  <label>scenario <select id="scenario"></select></label>
+  <label>scenario <select id="scenario"><option value="All">All</option></select></label>
   <label>metric
     <select id="metric">
       <option value="avg">average</option>
@@ -41,15 +42,27 @@ select { margin-left:.4em; background:#161b22; color:#c9d1d9; border:1px solid #
     </select>
   </label>
 </div>
+<div id="message" class="message">Loading measurements&hellip;</div>
+<div id="charts" style="display:none">
 <div class="chart-wrap">
-  <div id="message" class="message">Loading measurements&hellip;</div>
-  <div id="chartContainer" class="chart-container" style="display:none"><canvas id="chart"></canvas></div>
+  <h2>Load</h2>
+  <div class="chart-container"><canvas id="loadChart"></canvas></div>
   <div class="hint">Lower is better. Drag to pan, use the mouse wheel or pinch to zoom, and double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2>Save</h2>
+  <div class="chart-container"><canvas id="saveChart"></canvas></div>
+</div>
+<div class="chart-wrap">
+  <h2>C++</h2>
+  <div class="chart-container"><canvas id="cppChart"></canvas></div>
+</div>
 </div>
 <script>
 const DATA_URL = "../../cache_data/onnx-light/onnx_time.csv";
+const COLORS = ["#ffa657", "#58a6ff", "#3fb950", "#d2a8ff", "#f85149", "#39c5cf", "#dbab09"];
 let rows = [];
-let chart = null;
+const charts = {};
 
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
@@ -60,22 +73,34 @@ function parseCSV(text) {
   }).filter(row => row.date && row.name);
 }
 
-function render() {
+function rowsFor(kind) {
   const scenario = document.getElementById("scenario").value;
+  return rows.filter(row => {
+    const isCpp = row.name.includes("-cpp");
+    const matchesKind = kind === "cpp"
+      ? isCpp
+      : !isCpp && row.name.startsWith(kind + "/");
+    return matchesKind && (scenario === "All" || row.name === scenario);
+  });
+}
+
+function renderChart(kind) {
   const metric = document.getElementById("metric").value;
-  const data = rows.filter(row => row.name === scenario).map(row => ({
-    x: row.date, y: Number(row[metric]),
+  const chartRows = rowsFor(kind);
+  const names = [...new Set(chartRows.map(row => row.name))].sort();
+  const datasets = names.map((name, index) => ({
+    label: name,
+    data: chartRows.filter(row => row.name === name).map(row => ({
+      x: row.date, y: Number(row[metric]),
+    })),
+    borderColor: COLORS[index % COLORS.length],
+    backgroundColor: COLORS[index % COLORS.length],
+    tension: 0.15,
   }));
-  if (chart) chart.destroy();
-  chart = new Chart(document.getElementById("chart"), {
+  if (charts[kind]) charts[kind].destroy();
+  charts[kind] = new Chart(document.getElementById(kind + "Chart"), {
     type: "line",
-    data: { datasets: [{
-      label: scenario + " — " + metric,
-      data,
-      borderColor: "#ffa657",
-      backgroundColor: "#ffa657",
-      tension: 0.15,
-    }] },
+    data: { datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -92,6 +117,10 @@ function render() {
   });
 }
 
+function render() {
+  ["load", "save", "cpp"].forEach(renderChart);
+}
+
 loadChartJs().then(() => fetch(DATA_URL)).then(response => {
   if (!response.ok) throw new Error("No timing history has been recorded yet.");
   return response.text();
@@ -105,10 +134,12 @@ loadChartJs().then(() => fetch(DATA_URL)).then(response => {
     select.appendChild(option);
   });
   document.getElementById("message").style.display = "none";
-  document.getElementById("chartContainer").style.display = "block";
+  document.getElementById("charts").style.display = "block";
   select.addEventListener("change", render);
   document.getElementById("metric").addEventListener("change", render);
-  document.getElementById("chart").addEventListener("dblclick", () => chart.resetZoom());
+  ["load", "save", "cpp"].forEach(kind => {
+    document.getElementById(kind + "Chart").addEventListener("dblclick", () => charts[kind].resetZoom());
+  });
   render();
 }).catch(error => {
   document.getElementById("message").textContent = error.message;
