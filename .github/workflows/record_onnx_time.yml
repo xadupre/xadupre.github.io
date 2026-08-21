@@ -1,0 +1,120 @@
+name: DATA onnx-light load/save timings
+
+# Weekly job that runs the plot_onnx_time benchmark and appends its results to
+# the history consumed by dashboard/onnx-light/onnx-time.html.
+
+on:
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (branch, tag or SHA) of xadupre/onnx-light to benchmark"
+        required: false
+        default: "main"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Checkout onnx-light
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/onnx-light
+          ref: ${{ inputs.ref || 'main' }}
+          path: onnx-light
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Detect CPU cores
+        run: |
+          cores="$(nproc)"
+          echo "Detected ${cores} CPU cores."
+          echo "CMAKE_BUILD_PARALLEL_LEVEL=${cores}" >> "$GITHUB_ENV"
+
+      - name: Install onnx-light with documentation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e "./onnx-light[docs]" -v
+
+      - name: pip freeze
+        run: pip freeze
+
+      - name: Run plot_onnx_time benchmark
+        env:
+          MPLBACKEND: Agg
+        run: |
+          python -u onnx-light/docs/examples/proto/plot_onnx_time.py \
+            > "${RUNNER_TEMP}/plot_onnx_time.txt"
+          cat "${RUNNER_TEMP}/plot_onnx_time.txt"
+
+      - name: Record timing snapshot
+        run: |
+          python scripts/record_onnx_time.py \
+            "${RUNNER_TEMP}/plot_onnx_time.txt" \
+            --output cache_data/onnx-light/onnx_time.csv \
+            --commit "$(git -C onnx-light rev-parse HEAD)" \
+            --run-id "${{ github.run_id }}"
+
+      - name: Commit and push cache data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/onnx-light/onnx_time.csv
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update onnx-light timing cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+              echo "Push succeeded on attempt ${i}."
+              rm -f "$push_err"
+              exit 0
+            fi
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "" >&2
+              echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
+              echo "Retrying will not help: the authenticated user shown above is" >&2
+              echo "not allowed to push to ${branch}." >&2
+              echo "" >&2
+              echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
+              echo "setting to change:" >&2
+              echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
+              exit 1
+            fi
+            rm -f "$push_err"
+            echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
+            git stash push --include-untracked --quiet -- || true
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              echo "Rebase failed; aborting."
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
