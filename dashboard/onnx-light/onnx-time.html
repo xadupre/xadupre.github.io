@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>onnx-light load/save timing history</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body { background:#0d1117; color:#c9d1d9; font-family:sans-serif; padding:1.5em; box-sizing:border-box; }
+a { color:#58a6ff; text-decoration:none; }
+header { text-align:center; }
+h1 { font-size:1.4em; margin:.3em; }
+.controls, .chart-wrap { max-width:1100px; margin:1em auto; box-sizing:border-box; }
+.controls { display:flex; gap:1em; justify-content:center; flex-wrap:wrap; }
+label { color:#8b949e; }
+select { margin-left:.4em; background:#161b22; color:#c9d1d9; border:1px solid #30363d; padding:.35em; }
+.chart-wrap { background:rgba(22,27,34,.85); border-radius:12px; padding:1em; }
+.chart-container { position:relative; height:68vh; min-height:360px; }
+.message { text-align:center; color:#d29922; padding:2em; }
+.hint { color:#8b949e; text-align:center; font-size:.85em; margin-top:.7em; }
+</style>
+<script src="../../assets/chart-loader.js"></script>
+</head>
+<body>
+<header>
+  <div><a href="../../index.html">&larr; back to home</a></div>
+  <h1>onnx-light &mdash; load/save timing history</h1>
+  <div>Historical results from
+    <a href="../../docs/onnx-light/auto_examples_proto/plot_onnx_time.html">plot_onnx_time</a>
+  </div>
+</header>
+<div class="controls">
+  <label>scenario <select id="scenario"></select></label>
+  <label>metric
+    <select id="metric">
+      <option value="avg">average</option>
+      <option value="median">median</option>
+      <option value="max">maximum</option>
+      <option value="std">standard deviation</option>
+    </select>
+  </label>
+</div>
+<div class="chart-wrap">
+  <div id="message" class="message">Loading measurements&hellip;</div>
+  <div id="chartContainer" class="chart-container" style="display:none"><canvas id="chart"></canvas></div>
+  <div class="hint">Lower is better. Drag to pan, use the mouse wheel or pinch to zoom, and double-click to reset.</div>
+</div>
+<script>
+const DATA_URL = "../../cache_data/onnx-light/onnx_time.csv";
+let rows = [];
+let chart = null;
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const header = lines.shift().split(",");
+  return lines.map(line => {
+    const values = line.split(",");
+    return Object.fromEntries(header.map((name, i) => [name, values[i]]));
+  }).filter(row => row.date && row.name);
+}
+
+function render() {
+  const scenario = document.getElementById("scenario").value;
+  const metric = document.getElementById("metric").value;
+  const data = rows.filter(row => row.name === scenario).map(row => ({
+    x: row.date, y: Number(row[metric]),
+  }));
+  if (chart) chart.destroy();
+  chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: { datasets: [{
+      label: scenario + " — " + metric,
+      data,
+      borderColor: "#ffa657",
+      backgroundColor: "#ffa657",
+      tension: 0.15,
+    }] },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      parsing: false,
+      scales: {
+        x: { type:"time", ticks:{color:"#8b949e"}, grid:{color:"rgba(139,148,158,.15)"} },
+        y: { title:{display:true,text:"seconds",color:"#8b949e"}, ticks:{color:"#8b949e"}, grid:{color:"rgba(139,148,158,.15)"} },
+      },
+      plugins: {
+        legend: { labels:{color:"#c9d1d9"} },
+        zoom: { pan:{enabled:true,mode:"x"}, zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:"x"} },
+      },
+    },
+  });
+}
+
+loadChartJs().then(() => fetch(DATA_URL)).then(response => {
+  if (!response.ok) throw new Error("No timing history has been recorded yet.");
+  return response.text();
+}).then(text => {
+  rows = parseCSV(text);
+  if (!rows.length) throw new Error("No timing history has been recorded yet.");
+  const select = document.getElementById("scenario");
+  [...new Set(rows.map(row => row.name))].sort().forEach(name => {
+    const option = document.createElement("option");
+    option.value = option.textContent = name;
+    select.appendChild(option);
+  });
+  document.getElementById("message").style.display = "none";
+  document.getElementById("chartContainer").style.display = "block";
+  select.addEventListener("change", render);
+  document.getElementById("metric").addEventListener("change", render);
+  document.getElementById("chart").addEventListener("dblclick", () => chart.resetZoom());
+  render();
+}).catch(error => {
+  document.getElementById("message").textContent = error.message;
+});
+</script>
+</body>
+</html>
