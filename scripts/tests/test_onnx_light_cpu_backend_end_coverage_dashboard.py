@@ -11,6 +11,9 @@ PAGE = os.path.join(
     REPO_ROOT, "dashboard", "onnx-light-cpu", "backend-end-coverage.html"
 )
 INDEX = os.path.join(REPO_ROOT, "index.html")
+WORKFLOW = os.path.join(
+    REPO_ROOT, ".github", "workflows", "record_onnx_light_benchmark.yml"
+)
 
 
 def _read(path: str) -> str:
@@ -62,6 +65,12 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
         self.assertIn(
             'href="dashboard/onnx-light-cpu/backend-end-coverage.html"', _read(INDEX)
         )
+
+    def test_recording_workflow_links_page_and_data(self):
+        text = _read(WORKFLOW)
+        self.assertIn("name: DATA onnx-light and onnx-light-cpu benchmark", text)
+        self.assertIn("dashboard/onnx-light-cpu/backend-end-coverage.html", text)
+        self.assertIn("cache_data/onnx-light/benchmark.json", text)
 
 
 if __name__ == "__main__":
