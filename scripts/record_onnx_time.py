@@ -65,7 +65,9 @@ def append_snapshot(
     if not rows:
         raise ValueError(f"No benchmark timings found in {html_path!r}.")
 
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    output_dir = os.path.dirname(csv_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     exists = os.path.exists(csv_path)
     with open(csv_path, "a", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=CSV_FIELDS)

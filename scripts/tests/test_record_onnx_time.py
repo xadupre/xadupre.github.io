@@ -63,6 +63,25 @@ load/1filex1/onnxlight avg=4.0 ms median=3.9 ms max=4.2 ms std=0.1 ms</pre>"""
                     html_path, os.path.join(temp, "out.csv"), "date", "abc", "123"
                 )
 
+    def test_output_may_be_a_bare_filename(self):
+        html = (
+            "<pre>load/1filex1/onnx avg=1.0 ms median=1.0 ms "
+            "max=1.0 ms std=0.0 ms</pre>"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            html_path = os.path.join(temp, "plot_onnx_time.html")
+            with open(html_path, "w", encoding="utf-8") as stream:
+                stream.write(html)
+            previous = os.getcwd()
+            try:
+                os.chdir(temp)
+                self.assertEqual(
+                    rot.append_snapshot(html_path, "out.csv", "date", "abc", "123"),
+                    1,
+                )
+            finally:
+                os.chdir(previous)
+
 
 if __name__ == "__main__":
     unittest.main()
