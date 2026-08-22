@@ -11,7 +11,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
-import record_onnx_light_cpu_benchmark as rcb  # noqa: E402
+import record_onnx_light_cpu_benchmark as rcb
 
 
 class TestDiscovery(unittest.TestCase):
@@ -46,9 +46,7 @@ class TestRows(unittest.TestCase):
                 self.dtype = types.SimpleNamespace(name=dtype)
                 self.shape = shape
 
-        inputs = rcb._format_inputs(
-            [Array("float32", (2, 3)), Array("int64", (3,))]
-        )
+        inputs = rcb._format_inputs([Array("float32", (2, 3)), Array("int64", (3,))])
         row = rcb._row(
             inputs,
             {"success": True, "avg_ms": 1.0},
@@ -57,6 +55,55 @@ class TestRows(unittest.TestCase):
         self.assertEqual(row["inputs"], "float32[2x3], int64[3]")
         self.assertEqual(row["input_type"], "float32")
         self.assertEqual(row["speedup_cpu"], 2.0)
+
+    def test_groups_dimensions_by_operator_and_first_input_type(self):
+        measurements = [
+            {
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n65536_benchmark",
+                "row": {
+                    "inputs": "float32[65536]",
+                    "input_type": "float32",
+                    "input_elements": 65536,
+                    "speedup_cpu": 2.0,
+                },
+            },
+            {
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n1024_benchmark",
+                "row": {
+                    "inputs": "float32[1024]",
+                    "input_type": "float32",
+                    "input_elements": 1024,
+                    "speedup_cpu": 1.0,
+                },
+            },
+            {
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_float64_benchmark",
+                "row": {
+                    "inputs": "float64[1024]",
+                    "input_type": "float64",
+                    "input_elements": 1024,
+                    "speedup_cpu": 0.5,
+                },
+            },
+        ]
+
+        examples = rcb._group_measurements(measurements)
+
+        self.assertEqual(len(examples), 2)
+        float32 = examples[0]
+        self.assertEqual(float32["name"], "Abs_float32_benchmark")
+        self.assertEqual(
+            [row["inputs"] for row in float32["rows"]],
+            ["float32[1024]", "float32[65536]"],
+        )
+        self.assertEqual(float32["summary"]["inputs"], 2)
+        self.assertEqual(float32["summary"]["avg_speedup_cpu"], 1.5)
+        self.assertEqual(float32["summary"]["min_speedup_cpu"], 1.0)
+        self.assertEqual(float32["summary"]["max_speedup_cpu"], 2.0)
+        self.assertEqual(examples[1]["rows"][0]["input_type"], "float64")
 
 
 class TestPayload(unittest.TestCase):
@@ -75,7 +122,7 @@ class TestPayload(unittest.TestCase):
             payload = rcb.build_payload(
                 discover=lambda kind: [{"name": "test_cpu_abs_benchmark"}],
                 run=run,
-                versions=lambda: {},
+                versions=dict,
                 now=dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
             )
         finally:
