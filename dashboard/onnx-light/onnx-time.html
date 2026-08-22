@@ -45,22 +45,32 @@ select { margin-left:.4em; background:#161b22; color:#c9d1d9; border:1px solid #
 <div id="message" class="message">Loading measurements&hellip;</div>
 <div id="charts" style="display:none">
 <div class="chart-wrap">
-  <h2>Load</h2>
-  <div class="chart-container"><canvas id="loadChart"></canvas></div>
+  <h2>Load / 1 file</h2>
+  <div class="chart-container"><canvas id="load1FileChart"></canvas></div>
 </div>
 <div class="chart-wrap">
-  <h2>Save</h2>
-  <div class="chart-container"><canvas id="saveChart"></canvas></div>
+  <h2>Load / 2 files</h2>
+  <div class="chart-container"><canvas id="load2FileChart"></canvas></div>
 </div>
 <div class="chart-wrap">
-  <h2>C++</h2>
-  <div class="chart-container"><canvas id="cppChart"></canvas></div>
+  <h2>Save / 1 file</h2>
+  <div class="chart-container"><canvas id="save1FileChart"></canvas></div>
+</div>
+<div class="chart-wrap">
+  <h2>Save / 2 files</h2>
+  <div class="chart-container"><canvas id="save2FileChart"></canvas></div>
 </div>
 <div class="hint">Lower is better. Drag any graph to pan, use the mouse wheel or pinch to zoom, and double-click to reset.</div>
 </div>
 <script>
 const DATA_URL = "../../cache_data/onnx-light/onnx_time.csv";
 const COLORS = ["#ffa657", "#58a6ff", "#3fb950", "#d2a8ff", "#f85149", "#39c5cf", "#dbab09"];
+const CHARTS = [
+  { key: "load1File", prefix: "load/1file" },
+  { key: "load2File", prefix: "load/2file" },
+  { key: "save1File", prefix: "save/1file" },
+  { key: "save2File", prefix: "save/2file" },
+];
 let rows = [];
 const charts = {};
 
@@ -73,20 +83,16 @@ function parseCSV(text) {
   }).filter(row => row.date && row.name);
 }
 
-function rowsFor(kind) {
+function rowsFor(prefix) {
   const scenario = document.getElementById("scenario").value;
-  return rows.filter(row => {
-    const isCpp = /-cpp(?:-|$)/.test(row.name);
-    const matchesKind = kind === "cpp"
-      ? isCpp
-      : !isCpp && row.name.startsWith(kind + "/");
-    return matchesKind && (scenario === "All" || row.name === scenario);
-  });
+  return rows.filter(row =>
+    row.name.startsWith(prefix + "x") &&
+    (scenario === "All" || row.name === scenario));
 }
 
-function renderChart(kind) {
+function renderChart({ key, prefix }) {
   const metric = document.getElementById("metric").value;
-  const chartRows = rowsFor(kind);
+  const chartRows = rowsFor(prefix);
   const names = [...new Set(chartRows.map(row => row.name))].sort();
   const datasets = names.map((name, index) => ({
     label: name,
@@ -97,8 +103,8 @@ function renderChart(kind) {
     backgroundColor: COLORS[index % COLORS.length],
     tension: 0.15,
   }));
-  if (charts[kind]) charts[kind].destroy();
-  charts[kind] = new Chart(document.getElementById(kind + "Chart"), {
+  if (charts[key]) charts[key].destroy();
+  charts[key] = new Chart(document.getElementById(key + "Chart"), {
     type: "line",
     data: { datasets },
     options: {
@@ -118,7 +124,7 @@ function renderChart(kind) {
 }
 
 function render() {
-  ["load", "save", "cpp"].forEach(renderChart);
+  CHARTS.forEach(renderChart);
 }
 
 loadChartJs().then(() => fetch(DATA_URL)).then(response => {
@@ -137,8 +143,8 @@ loadChartJs().then(() => fetch(DATA_URL)).then(response => {
   document.getElementById("charts").style.display = "block";
   select.addEventListener("change", render);
   document.getElementById("metric").addEventListener("change", render);
-  ["load", "save", "cpp"].forEach(kind => {
-    document.getElementById(kind + "Chart").addEventListener("dblclick", () => charts[kind].resetZoom());
+  CHARTS.forEach(({ key }) => {
+    document.getElementById(key + "Chart").addEventListener("dblclick", () => charts[key].resetZoom());
   });
   render();
 }).catch(error => {
