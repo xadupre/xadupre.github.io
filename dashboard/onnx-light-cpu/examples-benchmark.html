@@ -309,19 +309,21 @@ function classifyExample(example) {
   return cats;
 }
 
-// Element type of the first input, e.g. "float32" for "float32[16x16],
-// float32[16x16]". This is the convention used by the onnx-light benchmark
-// dashboard, so both pages report the same input type for the same model.
-// Older payloads store the whole signature in `input_type`; parsing the first
-// token handles both layouts.
-function firstInputType(row) {
-  const value = (row.input_type !== undefined && row.input_type !== null)
-    ? row.input_type
-    : (row.inputs !== undefined && row.inputs !== null)
-      ? row.inputs
+function firstInputTensor(row) {
+  const value = (row.inputs !== undefined && row.inputs !== null)
+    ? row.inputs
+    : (row.input_type !== undefined && row.input_type !== null)
+      ? row.input_type
       : row.size;
   const raw = (value === undefined || value === null) ? "" : String(value);
-  const first = raw.split(",")[0].split("[")[0].trim();
+  return raw.split(",")[0].trim();
+}
+
+// Element type of the first input, e.g. "float32" for "float32[16x16],
+// float32[16x16]". Older payloads store the whole signature in `input_type`;
+// firstInputTensor handles both layouts.
+function firstInputType(row) {
+  const first = firstInputTensor(row).split("[")[0].trim();
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(first) ? first : "";
 }
 
@@ -330,12 +332,14 @@ function renderExample(example, cats) {
   panel.className = "panel operator-panel";
 
   const summary = example.summary || {};
+  const inputTypes = [...new Set(
+    (example.rows || []).map(firstInputType).filter(Boolean)
+  )].join(", ");
   const summaryRow = document.createElement("summary");
   summaryRow.className = "operator-summary";
   const summaryValues = [
     ["operator", example.op || example.title || example.name, "operator-name"],
-    ["inputs", String(summary.inputs || summary.input_types ||
-      (example.rows || []).length), ""],
+    ["input types", inputTypes || "—", ""],
     ["average speed-up", fmtSpeedup(summary.avg_speedup_cpu),
       speedupClass(summary.avg_speedup_cpu)],
     ["best speed-up", fmtSpeedup(summary.max_speedup_cpu),
@@ -409,7 +413,7 @@ function renderExample(example, cats) {
   const thead = document.createElement("thead");
   const htr = document.createElement("tr");
   const typeTh = document.createElement("th");
-  typeTh.textContent = "input type";
+  typeTh.textContent = "first input tensor";
   htr.appendChild(typeTh);
   backends.forEach(b => {
     const th = document.createElement("th");
@@ -426,10 +430,10 @@ function renderExample(example, cats) {
   (example.rows || []).forEach(row => {
     const tr = document.createElement("tr");
     const typeTd = document.createElement("td");
-    const inputType = firstInputType(row);
-    if (inputType) {
+    const inputTensor = firstInputTensor(row);
+    if (inputTensor) {
       const code = document.createElement("code");
-      code.textContent = inputType;
+      code.textContent = inputTensor;
       typeTd.appendChild(code);
     } else {
       typeTd.textContent = "—";
