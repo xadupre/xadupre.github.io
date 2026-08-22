@@ -64,17 +64,19 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("(example.rows || []).map(firstInputType).filter(Boolean)", text)
         self.assertIn('["input types", inputTypes || "—", ""]', text)
 
-    def test_input_type_column_matches_the_onnx_light_benchmark(self):
+    def test_expanded_table_shows_the_first_input_tensor_shape(self):
         text = _read(PAGE)
-        # The "input type" column holds the element type of the first input
-        # (e.g. "float32"), exactly like dashboard/onnx-light/benchmark.html.
+        # The summary groups rows by first-input type, while the expanded table
+        # shows the first tensor's type and dimensions (e.g. "float32[16x16]").
+        self.assertIn("function firstInputTensor(row)", text)
         self.assertIn("function firstInputType(row)", text)
-        self.assertIn('typeTh.textContent = "input type";', text)
+        self.assertIn('typeTh.textContent = "first input tensor";', text)
         self.assertNotIn('sizeTh.textContent = "inputs";', text)
-        self.assertIn("? row.input_type", text)
         self.assertIn("? row.inputs", text)
-        self.assertIn('raw.split(",")[0].split("[")[0].trim()', text)
-        self.assertIn('code.textContent = inputType;', text)
+        self.assertIn("? row.input_type", text)
+        self.assertIn('return raw.split(",")[0].trim();', text)
+        self.assertIn('firstInputTensor(row).split("[")[0].trim()', text)
+        self.assertIn("code.textContent = inputTensor;", text)
 
     def test_panels_are_sorted_by_operator(self):
         text = _read(PAGE)
