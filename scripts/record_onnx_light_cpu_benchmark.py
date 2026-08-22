@@ -11,10 +11,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from collections.abc import Callable
+from typing import Any
 
 import record_onnx_light_benchmark as rlb
 
@@ -24,9 +26,9 @@ N_MEASURE = 10
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
 
-def collect_versions() -> Dict[str, str]:
+def collect_versions() -> dict[str, str]:
     """Return versions of the packages involved in the benchmark."""
-    versions: Dict[str, str] = {}
+    versions: dict[str, str] = {}
     for name in ("onnx", "onnxruntime", "onnx_light", "onnx_light_cpu", "numpy"):
         try:
             module = __import__(name)
@@ -38,7 +40,7 @@ def collect_versions() -> Dict[str, str]:
     return versions
 
 
-def discover_benchmark_tests(kind: str = "node") -> List[Dict[str, Any]]:
+def discover_benchmark_tests(kind: str = "node") -> list[dict[str, Any]]:
     """Return only benchmark-tagged cases registered by onnx-light-cpu."""
     from onnx_light_cpu import register_backend_test_cases
 
@@ -59,7 +61,7 @@ def _first_input_type(signature: Any) -> str:
 
 def _format_inputs(inputs: Any) -> str:
     """Return a readable dtype/shape signature for typed inputs."""
-    parts: List[str] = []
+    parts: list[str] = []
     for value in inputs:
         dtype = getattr(value, "dtype", None)
         if dtype is None:
@@ -73,8 +75,8 @@ def _format_inputs(inputs: Any) -> str:
     return ", ".join(parts)
 
 
-def _row(inputs: str, cpu: Dict[str, Any], ort: Dict[str, Any]) -> Dict[str, Any]:
-    row: Dict[str, Any] = {
+def _row(inputs: str, cpu: dict[str, Any], ort: dict[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {
         "inputs": inputs,
         "input_type": _first_input_type(inputs),
     }
@@ -87,14 +89,81 @@ def _row(inputs: str, cpu: Dict[str, Any], ort: Dict[str, Any]) -> Dict[str, Any
     return row
 
 
+def _first_input_element_count(inputs: Any) -> int:
+    """Returns the element count of the first typed input."""
+    for value in inputs:
+        if getattr(value, "dtype", None) is None:
+            continue
+        shape = getattr(value, "shape", None)
+        return math.prod(int(dim) for dim in shape) if shape is not None else 0
+    return 0
+
+
+def _group_measurements(
+    measurements: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Groups measured dimensions by operator and first-input element type."""
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for measurement in measurements:
+        row = measurement["row"]
+        operator = measurement["operator"]
+        input_type = row["input_type"]
+        key = (operator, input_type)
+        group = groups.setdefault(
+            key,
+            {
+                "name": f"{operator}_{input_type}_benchmark",
+                "title": f"{operator} ({input_type}): onnxruntime vs onnx-light-cpu",
+                "op": operator,
+                "backends": list(BENCHMARK_BACKENDS),
+                "rows": [],
+                "test_names": [],
+            },
+        )
+        group["rows"].append(row)
+        group["test_names"].append(measurement["test_name"])
+
+    examples: list[dict[str, Any]] = []
+    for group in groups.values():
+        rows = sorted(
+            group.pop("rows"),
+            key=lambda row: (row.get("input_elements", 0), row["inputs"]),
+        )
+        test_names = group.pop("test_names")
+        speedups = [row["speedup_cpu"] for row in rows if "speedup_cpu" in row]
+        group["rows"] = rows
+        group["source"] = f"{len(test_names)} onnx-light-cpu benchmark tests"
+        group["summary"] = {
+            "inputs": len(rows),
+            "cpu_succeeded": len(speedups),
+            **(
+                {
+                    "avg_speedup_cpu": round(sum(speedups) / len(speedups), 4),
+                    "min_speedup_cpu": min(speedups),
+                    "max_speedup_cpu": max(speedups),
+                }
+                if speedups
+                else {}
+            ),
+        }
+        examples.append(group)
+    return sorted(
+        examples,
+        key=lambda example: (
+            example["op"].lower(),
+            example["rows"][0]["input_type"].lower(),
+        ),
+    )
+
+
 def run_tests(
-    tests: List[Dict[str, Any]],
+    tests: list[dict[str, Any]],
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
-    run: Callable[..., Dict[str, Any]] = rlb.run_benchmark,
-) -> List[Dict[str, Any]]:
+    run: Callable[..., dict[str, Any]] = rlb.run_benchmark,
+) -> list[dict[str, Any]]:
     """Benchmark the supplied onnx-light-cpu cases."""
-    examples: List[Dict[str, Any]] = []
+    measurements: list[dict[str, Any]] = []
     for test in tests:
         model = test["model"]
         data_sets = test["data_sets"]
@@ -112,46 +181,31 @@ def run_tests(
             n_warmup=n_warmup,
             n_measure=n_measure,
         )
-        inputs = _format_inputs(data_sets[0][0])
+        first_inputs = data_sets[0][0]
+        inputs = _format_inputs(first_inputs)
         row = _row(inputs, cpu, ort)
-        speedups = [row["speedup_cpu"]] if "speedup_cpu" in row else []
+        row["input_elements"] = _first_input_element_count(first_inputs)
         operator = rlb._operator_name(model) or "?"
-        examples.append(
+        measurements.append(
             {
-                "name": test["name"],
-                "title": f"{operator}: onnxruntime vs onnx-light-cpu",
-                "op": operator,
-                "source": f"onnx-light-cpu benchmark test ({test['name']})",
-                "backends": list(BENCHMARK_BACKENDS),
-                "rows": [row],
-                "summary": {
-                    "inputs": 1,
-                    "cpu_succeeded": len(speedups),
-                    **(
-                        {
-                            "avg_speedup_cpu": speedups[0],
-                            "min_speedup_cpu": speedups[0],
-                            "max_speedup_cpu": speedups[0],
-                        }
-                        if speedups
-                        else {}
-                    ),
-                },
+                "operator": operator,
+                "test_name": test["name"],
+                "row": row,
             }
         )
-    return sorted(examples, key=lambda ex: (ex["op"].lower(), ex["name"].lower()))
+    return _group_measurements(measurements)
 
 
 def build_payload(
     kind: str = "node",
-    limit: Optional[int] = None,
+    limit: int | None = None,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
-    discover: Callable[[str], List[Dict[str, Any]]] = discover_benchmark_tests,
-    run: Callable[..., List[Dict[str, Any]]] = run_tests,
-    versions: Callable[[], Dict[str, str]] = collect_versions,
-    now: Optional[dt.datetime] = None,
-) -> Dict[str, Any]:
+    discover: Callable[[str], list[dict[str, Any]]] = discover_benchmark_tests,
+    run: Callable[..., list[dict[str, Any]]] = run_tests,
+    versions: Callable[[], dict[str, str]] = collect_versions,
+    now: dt.datetime | None = None,
+) -> dict[str, Any]:
     """Discover, run, and format the onnx-light-cpu benchmark tests."""
     tests = discover(kind)
     if limit is not None:
@@ -171,14 +225,14 @@ def build_payload(
     }
 
 
-def write_payload(path: str, payload: Dict[str, Any]) -> None:
+def write_payload(path: str, payload: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as stream:
         json.dump(payload, stream, indent=2, sort_keys=True)
         stream.write("\n")
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", default="cache_data")
     parser.add_argument("--kind", default="node")
@@ -188,7 +242,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     payload = build_payload(
         kind=args.kind,
