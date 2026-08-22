@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -397,6 +397,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
 </ul>
 </div>
 </nav></div>
@@ -473,11 +474,12 @@ x86 and ARM. The priority corpus must reach at least <code class="docutils liter
 median performance, with no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. Correctness includes
 all supported data types, attributes, special values, empty tensors, tails,
 aliasing rules, and opset-specific behavior.</p>
-<p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> currently registers optimized kernels for <code class="docutils literal notranslate"><span class="pre">Abs</span></code>, <code class="docutils literal notranslate"><span class="pre">Exp</span></code>,
-<code class="docutils literal notranslate"><span class="pre">Log</span></code>, and <code class="docutils literal notranslate"><span class="pre">Not</span></code>. They already provide useful SIMD, dispatch, and thread
-pool components, but each operator has its own entry points. The next
-implementation should retain these kernels while moving selection, traversal,
-type conversion, accuracy policy, and scheduling into a common unary plan.</p>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> already registers optimized kernels for <code class="docutils literal notranslate"><span class="pre">Abs</span></code>, <code class="docutils literal notranslate"><span class="pre">Exp</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Log</span></code>, and <code class="docutils literal notranslate"><span class="pre">Not</span></code>. These operators exist today; the roadmap extends their
+shared architecture and adds the remaining operators rather than replacing
+their working entry points. The common unary plan should retain their kernels
+while moving selection, traversal, type conversion, accuracy policy, and
+scheduling policy into shared preparation.</p>
 </section>
 <section id="scope">
 <h2>Scope<a class="headerlink" href="#scope" title="Link to this heading">#</a></h2>
@@ -666,8 +668,10 @@ may parallelize independent strings without entering numeric SIMD code.</p></td>
 <section id="parallel-scheduling">
 <h2>Parallel scheduling<a class="headerlink" href="#parallel-scheduling" title="Link to this heading">#</a></h2>
 <p>Unary arithmetic is usually memory-bandwidth-bound, while transcendental
-operators are compute-bound. The shared scheduler therefore uses measured
-thresholds by operator family, type, and ISA:</p>
+operators are compute-bound. Registered kernels already execute through the
+onnx-light session executor, with no private <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> scheduler.
+Prepared kernels therefore select measured limits for the session-owned
+executor by operator family, type, processor profile, and ISA:</p>
 <ul class="simple">
 <li><p>cheap kernels stay single-threaded until enough bytes amortize dispatch;</p></li>
 <li><p>expensive functions may parallelize at much smaller element counts;</p></li>
@@ -701,6 +705,22 @@ against ONNX Runtime. It covers:</p>
 <p>Shared CI enforces correctness. Tight performance and numerical-search gates
 run on pinned machines and preserve raw samples and environment metadata.</p>
 </section>
+<section id="completed-foundations">
+<h2>Completed foundations<a class="headerlink" href="#completed-foundations" title="Link to this heading">#</a></h2>
+<p>The dedicated <a class="reference internal" href="2026_08_exp_log_parity.html"><span class="doc">Exp and Log ONNX Runtime Parity Roadmap</span></a> is complete through
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/315">onnx-light-cpu #315</a>. Its numerical gates,
+AVX2+FMA and AVX-512 kernels, benchmark corpus, operator-specific scheduling,
+and preserved evidence are inputs to this roadmap. Unary PR03 reuses those
+<code class="docutils literal notranslate"><span class="pre">Exp</span></code>/<code class="docutils literal notranslate"><span class="pre">Log</span></code> implementations and primitives; it does not reimplement their
+parity work.</p>
+<p>The <a class="reference internal" href="2026_08_runtime_execution_controls.html"><span class="doc">Runtime Execution Controls Roadmap</span></a> is also complete through
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/271">onnx-light-cpu #271</a> and
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/314">#314</a>. Registered
+kernels use the session-owned executor, and the existing onnx-light
+processor-aware tuning registry supplies the profile-resolution foundation.
+The remaining unary PRs build on these completed foundations; they do not add
+a private scheduler.</p>
+</section>
 <section id="remaining-pull-request-sequence">
 <h2>Remaining pull-request sequence<a class="headerlink" href="#remaining-pull-request-sequence" title="Link to this heading">#</a></h2>
 <p>The following table is the single source of truth for the unary roadmap.</p>
@@ -725,8 +745,9 @@ run on pinned machines and preserve raw samples and environment metadata.</p>
 <td><p>Corpus, plan, registry, and scalar semantics.</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">UnaryElementwisePlan</span></code> and common adapters cover every in-scope
 operator/type/opset with guarded scalar fallbacks. Differential cases
-include attributes, special values, empty tensors, tails, and aliasing.</p></td>
-<td><p>None</p></td>
+include attributes, special values, empty tensors, tails, and aliasing,
+while existing <code class="docutils literal notranslate"><span class="pre">Abs</span></code>/<code class="docutils literal notranslate"><span class="pre">Exp</span></code>/<code class="docutils literal notranslate"><span class="pre">Log</span></code>/<code class="docutils literal notranslate"><span class="pre">Not</span></code> kernels remain usable.</p></td>
+<td><p>Completed runtime foundation</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Unary PR02</p></td>
@@ -738,10 +759,13 @@ include attributes, special values, empty tensors, tails, and aliasing.</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Unary PR03</p></td>
-<td><p>Shared exponential primitives and composite activations.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Exp</span></code>, <code class="docutils literal notranslate"><span class="pre">Log</span></code>, reciprocal, sqrt, sigmoid, softplus, softsign,
-hard activations, swish, mish, GELU, Elu/Celu/Selu, shrink, and clip use
-fused vector kernels with documented special-value and error contracts.</p></td>
+<td><p>Reuse Exp/Log primitives for reciprocal, sqrt, and composite
+activations.</p></td>
+<td><p>The merged <code class="docutils literal notranslate"><span class="pre">Exp</span></code>/<code class="docutils literal notranslate"><span class="pre">Log</span></code> kernels, numerical gates, corpus, and
+scheduling evidence remain authoritative. Reciprocal, sqrt, sigmoid,
+softplus, softsign, hard activations, swish, mish, GELU, Elu/Celu/Selu,
+shrink, and clip use fused vector kernels with documented special-value
+and error contracts.</p></td>
 <td><p>PR01, PR02</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -763,11 +787,11 @@ unary compute.</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Unary PR06</p></td>
-<td><p>Scheduler and fusion integration.</p></td>
-<td><p>Cost-aware scheduling scales compute-bound kernels and caps
-bandwidth-bound kernels without small-tensor regressions. Unary
-functions integrate with <code class="docutils literal notranslate"><span class="pre">ElementwisePlan</span></code> without indirect calls in
-hot loops.</p></td>
+<td><p>Session-executor tuning and fusion integration.</p></td>
+<td><p>Processor-aware limits submitted to the session executor scale
+compute-bound kernels and cap bandwidth-bound kernels without
+small-tensor regressions or a private scheduler. Unary functions
+integrate with <code class="docutils literal notranslate"><span class="pre">ElementwisePlan</span></code> without indirect calls in hot loops.</p></td>
 <td><p>PR02 through PR05; Binary PR06</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -846,6 +870,7 @@ performance is at least 1.0x ONNX Runtime with no priority case below
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parallel-scheduling">Parallel scheduling</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fusion">Fusion</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-corpus">Benchmark corpus</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#completed-foundations">Completed foundations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
 </ul>
   </nav></div>
@@ -881,7 +906,7 @@ performance is at least 1.0x ONNX Runtime with no priority case below
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 21, 2026.
+  Last updated on Aug 22, 2026.
   <br/>
 </p></div>
       

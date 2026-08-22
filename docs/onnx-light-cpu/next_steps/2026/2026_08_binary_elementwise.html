@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 21, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -397,6 +397,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
 </ul>
 </div>
 </nav></div>
@@ -473,10 +474,12 @@ corpus must reach at least <code class="docutils literal notranslate"><span clas
 priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. The engine should exceed ONNX Runtime where a
 prepared broadcast plan, a shape-specific loop, or fusion across several
 elementwise operators removes indexing and memory traffic.</p>
-<p>The correctness implementation in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already centralizes broadcast
-validation in <code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> and provides equal-shape, scalar, and generic
-rank-aware loops through <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code>. The generic loop computes both
-input offsets from every dimension for every output element. That is an
+<p>The correctness implementation in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already provides
+<code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> validation and equal-shape, scalar, and
+generic rank-aware traversal through <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code>. The roadmap builds
+<code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> and optimized loop selection on top of that baseline;
+it does not recreate broadcast validation. The generic loop computes both
+input offsets from every dimension for every output element. That remains an
 appropriate fallback, but not an optimized implementation for large tensors or
 repeated inference.</p>
 </section>
@@ -683,7 +686,10 @@ exponent types according to its opset.</p></td>
 <section id="parallel-scheduling">
 <h2>Parallel scheduling<a class="headerlink" href="#parallel-scheduling" title="Link to this heading">#</a></h2>
 <p>Binary elementwise kernels are normally bandwidth-bound. Parallel execution
-should therefore be conservative:</p>
+should therefore be conservative. Registered kernels use the existing
+onnx-light session executor and processor-aware tuning foundation; this
+roadmap adds plan-selected work partitioning and limits, not a private
+scheduler:</p>
 <ul class="simple">
 <li><p>remain single-threaded below a measured byte-count threshold;</p></li>
 <li><p>split contiguous output ranges into cache-line-aligned chunks;</p></li>
@@ -754,6 +760,22 @@ family, selected ISA, and thread count. For broadcasting, a bandwidth metric
 must count reused input values according to actual loads rather than output
 elements alone.</p>
 </section>
+<section id="completed-foundations">
+<h2>Completed foundations<a class="headerlink" href="#completed-foundations" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already supplies <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> validation
+and the correctness-first <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code> traversal used as the portable
+fallback. Binary PR01 starts after that baseline and concentrates on reusable
+plan preparation, dimension coalescing, cached traversal, and loop
+classification.</p>
+<p>The <a class="reference internal" href="2026_08_runtime_execution_controls.html"><span class="doc">Runtime Execution Controls Roadmap</span></a> is complete through
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/271">onnx-light-cpu #271</a> and
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/314">#314</a>. Registered
+kernels execute through the session-owned executor, while the onnx-light
+processor-aware tuning registry completed in
+<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4428">onnx-light #4428</a>
+provides immutable processor and effective-thread profiles. The remaining
+binary PRs consume these foundations and add no private scheduler.</p>
+</section>
 <section id="remaining-pull-request-sequence">
 <h2>Remaining pull-request sequence<a class="headerlink" href="#remaining-pull-request-sequence" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -774,12 +796,13 @@ elements alone.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Binary PR01</p></td>
-<td><p>Corpus, plan, dimension coalescing, and scalar fallback.</p></td>
+<td><p>Corpus, prepared plan, dimension coalescing, and cached traversal.</p></td>
 <td><p>Every in-scope operator/type/opset and broadcast family has differential
-cases. <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> validates and coalesces shapes, selects a
-loop, and advances general offsets per inner block rather than per
-element.</p></td>
-<td><p>None</p></td>
+cases against the existing validated fallback. <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code>
+consumes <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> results, coalesces shapes,
+caches guarded traversal metadata, selects a loop, and advances general
+offsets per inner block rather than per element.</p></td>
+<td><p>Existing onnx-light broadcast validation and traversal</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Binary PR02</p></td>
@@ -791,11 +814,13 @@ order, special values, and tails.</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Binary PR03</p></td>
-<td><p>Broadcast loop families and scheduler.</p></td>
+<td><p>Broadcast loop families and session-executor integration.</p></td>
 <td><p>Repeated block, inner-vector, outer, and general strided patterns use
-vector inner loops. Cost-aware scheduling scales expensive operations,
-caps bandwidth-bound operations, and does not regress small tensors.</p></td>
-<td><p>PR02</p></td>
+vector inner loops. Processor-aware plan limits submitted to the
+session executor scale expensive operations, cap bandwidth-bound
+operations, and do not regress small tensors or introduce another
+scheduler.</p></td>
+<td><p>PR01, PR02; completed runtime foundation</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Binary PR04</p></td>
@@ -819,9 +844,9 @@ conversion without full-tensor conversion.</p></td>
 <td><p>Shared <code class="docutils literal notranslate"><span class="pre">ElementwisePlan</span></code> fusion.</p></td>
 <td><p>Bounded unary/binary expressions retain intermediates in registers,
 preserve broadcasting, types, evaluation order, aliasing, and graph
-lifetimes, and show at least 1.20x ONNX Runtime on two representative
-model expressions.</p></td>
-<td><p>PR05; Unary PR01 through PR05</p></td>
+lifetimes, reuse prepared traversal and the session executor, and show
+at least 1.20x ONNX Runtime on two representative model expressions.</p></td>
+<td><p>PR01 through PR05; Unary PR01 through PR05</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Binary PR07</p></td>
@@ -1010,6 +1035,7 @@ regressions. Tight performance gates require pinned, dedicated machines.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-plans-and-dynamic-shapes">Prepared plans and dynamic shapes</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fusion">Fusion</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-contract">Benchmark contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#completed-foundations">Completed foundations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#expected-gains">Expected gains</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#acceptance-criteria">Acceptance criteria</a></li>
@@ -1047,7 +1073,7 @@ regressions. Tight performance gates require pinned, dedicated machines.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 21, 2026.
+  Last updated on Aug 22, 2026.
   <br/>
 </p></div>
       
