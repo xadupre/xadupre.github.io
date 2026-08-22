@@ -5,7 +5,7 @@ ParallelFor profiling and hardware counters
 
 :Date: 2026-08
 
-**portable profiling foundation complete**
+**Linux grouped hardware counters complete**
 
 Objective
 +++++++++
@@ -109,6 +109,9 @@ An opt-in collector receives one bounded event per region:
 
     struct ParallelRegionEvent {
       uint64_t region_id;
+      uint64_t parent_region_id;
+      uint64_t run_id;
+      std::thread::id calling_thread_id;
       std::string_view label;
       std::source_location location;
       int64_t total_iterations;
@@ -116,8 +119,8 @@ An opt-in collector receives one bounded event per region:
       int32_t requested_threads;
       int32_t admitted_threads;
       int32_t observed_threads;
-      uint64_t wall_time_ns;
-      uint64_t process_cpu_time_ns;
+      std::optional<uint64_t> wall_time_ns;
+      std::optional<uint64_t> process_cpu_time_ns;
       std::optional<double> cpu_utilization;
       HardwareCounterSample counters;
     };
@@ -148,20 +151,25 @@ must never block inference or grow without a configured bound.
 Hardware-counter backend
 ++++++++++++++++++++++++
 
-Linux support should use ``perf_event_open`` with one grouped collector for
-cycles, retired instructions, LLC references, and LLC misses. It records
-``time_enabled`` and ``time_running`` and either scales multiplexed counts or
-marks them unsuitable according to an explicit policy.
+Linux support uses ``perf_event_open`` with one grouped collector for cycles,
+retired instructions, LLC references, and LLC misses. It records
+``time_enabled`` and ``time_running`` and marks a sample ``multiplexed`` unless
+those values are equal; counts are never scaled. The thread-bound group is valid
+only for isolated single-thread regions. Multi-thread regions are marked
+unsuitable rather than presenting partial caller-thread counts as aggregate
+measurements.
 
 Windows and macOS need separate backends. Until implemented, they return
 ``unsupported`` while portable timing remains available. Counter collection is
 disabled by default because permissions, system configuration, and
 virtualization commonly prevent reliable access.
 
-Process CPU time is portable only as an aggregate across process threads. It is
-acceptable for isolated diagnostic runs but can include unrelated concurrent
-work. A later worker-level collector may sum per-thread CPU clocks when the
-thread pool can identify every participant without adding steady-state cost.
+Process CPU time is portable only as an aggregate across process threads, and an
+unavailable or invalid clock sample is represented by no value rather than
+zero. It is acceptable for isolated diagnostic runs but can include unrelated
+concurrent process work. A later worker-level collector may sum per-thread CPU
+clocks when the thread pool can identify every participant without adding
+steady-state cost.
 
 Integration with runtime events and tuning
 ++++++++++++++++++++++++++++++++++++++++++
@@ -171,10 +179,12 @@ existing runtime run/node identifiers. The current tensor-mutation
 ``RuntimeEvent`` remains unchanged; embedding high-frequency loop records in
 that payload would mix value lifetime with scheduler telemetry.
 
-Calibration may request the collector and include the resulting metrics in its
-diagnostics. Candidate selection remains based on validated outputs and stable
-elapsed-time wins. IPC or LLC misses can explain a choice but cannot override a
-slower candidate automatically.
+Calibration requests a bounded collector with ``profiling_capacity`` and may
+enable Linux counters with ``profiling_hardware_counters``. Candidate
+diagnostics retain the event validity fields and dropped-event count. Candidate
+profiling uses separate untimed, validated executions, so selection remains
+based on validated outputs and stable elapsed-time wins. IPC or LLC misses
+explain a choice but cannot override a slower candidate automatically.
 
 Benchmark and acceptance criteria
 +++++++++++++++++++++++++++++++++
@@ -218,7 +228,7 @@ Implementation sequence
      - Run/parent identity, process CPU time, and normalized utilization.
      - Nested and concurrent regions retain identity and report explicit metric
        validity.
-     - Planned
+     - Complete
    * - `Profile PR03 (#4637)
        <https://github.com/xadupre/onnx-light/issues/4637>`_
      - C++ report API, Python inspection, and runnable documentation examples
@@ -226,7 +236,7 @@ Implementation sequence
      - Bounded events and dropped counts are inspectable without exposing
        mutable collector storage. The examples enable profiling explicitly,
        inspect portable metrics, and handle unavailable optional metrics.
-     - Planned
+     - Complete
    * - `Profile PR04 (#4638)
        <https://github.com/xadupre/onnx-light/issues/4638>`_
      - Linux grouped ``perf_event_open`` collector and counter-specific
@@ -235,13 +245,13 @@ Implementation sequence
        distinguishable and agree with ``perf stat`` within tolerance. The C++
        and Python examples document permissions and degrade to portable timing
        when counters are unavailable.
-     - Planned
+     - Complete
    * - `Profile PR05 (#4639)
        <https://github.com/xadupre/onnx-light/issues/4639>`_
      - Calibration diagnostics integration.
      - Metrics explain candidates but never override correctness or elapsed
        time selection.
-     - Planned
+     - Complete
    * - `Profile PR06 (#4640)
        <https://github.com/xadupre/onnx-light/issues/4640>`_
      - Additional platform backends.

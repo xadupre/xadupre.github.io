@@ -513,7 +513,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>portable profiling foundation complete</strong></p>
+<p><strong>Linux grouped hardware counters complete</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>The objective is to make parallel-loop under-utilization observable without
@@ -603,6 +603,9 @@ measurements.</p>
 <p>An opt-in collector receives one bounded event per region:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="nc">ParallelRegionEvent</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">region_id</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">parent_region_id</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">run_id</span><span class="p">;</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="kr">thread</span><span class="o">::</span><span class="n">id</span><span class="w"> </span><span class="n">calling_thread_id</span><span class="p">;</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">string_view</span><span class="w"> </span><span class="n">label</span><span class="p">;</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">source_location</span><span class="w"> </span><span class="n">location</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">total_iterations</span><span class="p">;</span>
@@ -610,8 +613,8 @@ measurements.</p>
 <span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">requested_threads</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">admitted_threads</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">int32_t</span><span class="w"> </span><span class="n">observed_threads</span><span class="p">;</span>
-<span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">wall_time_ns</span><span class="p">;</span>
-<span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="n">process_cpu_time_ns</span><span class="p">;</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">wall_time_ns</span><span class="p">;</span>
+<span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">process_cpu_time_ns</span><span class="p">;</span>
 <span class="w">  </span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="kt">double</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cpu_utilization</span><span class="p">;</span>
 <span class="w">  </span><span class="n">HardwareCounterSample</span><span class="w"> </span><span class="n">counters</span><span class="p">;</span>
 <span class="p">};</span>
@@ -639,18 +642,23 @@ must never block inference or grow without a configured bound.</p>
 </section>
 <section id="hardware-counter-backend">
 <h2>Hardware-counter backend<a class="headerlink" href="#hardware-counter-backend" title="Link to this heading">#</a></h2>
-<p>Linux support should use <code class="docutils literal notranslate"><span class="pre">perf_event_open</span></code> with one grouped collector for
-cycles, retired instructions, LLC references, and LLC misses. It records
-<code class="docutils literal notranslate"><span class="pre">time_enabled</span></code> and <code class="docutils literal notranslate"><span class="pre">time_running</span></code> and either scales multiplexed counts or
-marks them unsuitable according to an explicit policy.</p>
+<p>Linux support uses <code class="docutils literal notranslate"><span class="pre">perf_event_open</span></code> with one grouped collector for cycles,
+retired instructions, LLC references, and LLC misses. It records
+<code class="docutils literal notranslate"><span class="pre">time_enabled</span></code> and <code class="docutils literal notranslate"><span class="pre">time_running</span></code> and marks a sample <code class="docutils literal notranslate"><span class="pre">multiplexed</span></code> unless
+those values are equal; counts are never scaled. The thread-bound group is valid
+only for isolated single-thread regions. Multi-thread regions are marked
+unsuitable rather than presenting partial caller-thread counts as aggregate
+measurements.</p>
 <p>Windows and macOS need separate backends. Until implemented, they return
 <code class="docutils literal notranslate"><span class="pre">unsupported</span></code> while portable timing remains available. Counter collection is
 disabled by default because permissions, system configuration, and
 virtualization commonly prevent reliable access.</p>
-<p>Process CPU time is portable only as an aggregate across process threads. It is
-acceptable for isolated diagnostic runs but can include unrelated concurrent
-work. A later worker-level collector may sum per-thread CPU clocks when the
-thread pool can identify every participant without adding steady-state cost.</p>
+<p>Process CPU time is portable only as an aggregate across process threads, and an
+unavailable or invalid clock sample is represented by no value rather than
+zero. It is acceptable for isolated diagnostic runs but can include unrelated
+concurrent process work. A later worker-level collector may sum per-thread CPU
+clocks when the thread pool can identify every participant without adding
+steady-state cost.</p>
 </section>
 <section id="integration-with-runtime-events-and-tuning">
 <h2>Integration with runtime events and tuning<a class="headerlink" href="#integration-with-runtime-events-and-tuning" title="Link to this heading">#</a></h2>
@@ -658,10 +666,12 @@ thread pool can identify every participant without adding steady-state cost.</p>
 existing runtime run/node identifiers. The current tensor-mutation
 <code class="docutils literal notranslate"><span class="pre">RuntimeEvent</span></code> remains unchanged; embedding high-frequency loop records in
 that payload would mix value lifetime with scheduler telemetry.</p>
-<p>Calibration may request the collector and include the resulting metrics in its
-diagnostics. Candidate selection remains based on validated outputs and stable
-elapsed-time wins. IPC or LLC misses can explain a choice but cannot override a
-slower candidate automatically.</p>
+<p>Calibration requests a bounded collector with <code class="docutils literal notranslate"><span class="pre">profiling_capacity</span></code> and may
+enable Linux counters with <code class="docutils literal notranslate"><span class="pre">profiling_hardware_counters</span></code>. Candidate
+diagnostics retain the event validity fields and dropped-event count. Candidate
+profiling uses separate untimed, validated executions, so selection remains
+based on validated outputs and stable elapsed-time wins. IPC or LLC misses
+explain a choice but cannot override a slower candidate automatically.</p>
 </section>
 <section id="benchmark-and-acceptance-criteria">
 <h2>Benchmark and acceptance criteria<a class="headerlink" href="#benchmark-and-acceptance-criteria" title="Link to this heading">#</a></h2>
@@ -709,7 +719,7 @@ parallel, limited, and nested regions emit truthful bounded events.</p></td>
 <td><p>Run/parent identity, process CPU time, and normalized utilization.</p></td>
 <td><p>Nested and concurrent regions retain identity and report explicit metric
 validity.</p></td>
-<td><p>Planned</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/issues/4637">Profile PR03 (#4637)</a></p></td>
 <td><p>C++ report API, Python inspection, and runnable documentation examples
@@ -717,7 +727,7 @@ for both APIs.</p></td>
 <td><p>Bounded events and dropped counts are inspectable without exposing
 mutable collector storage. The examples enable profiling explicitly,
 inspect portable metrics, and handle unavailable optional metrics.</p></td>
-<td><p>Planned</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/issues/4638">Profile PR04 (#4638)</a></p></td>
 <td><p>Linux grouped <code class="docutils literal notranslate"><span class="pre">perf_event_open</span></code> collector and counter-specific
@@ -726,13 +736,13 @@ documentation.</p></td>
 distinguishable and agree with <code class="docutils literal notranslate"><span class="pre">perf</span> <span class="pre">stat</span></code> within tolerance. The C++
 and Python examples document permissions and degrade to portable timing
 when counters are unavailable.</p></td>
-<td><p>Planned</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/issues/4639">Profile PR05 (#4639)</a></p></td>
 <td><p>Calibration diagnostics integration.</p></td>
 <td><p>Metrics explain candidates but never override correctness or elapsed
 time selection.</p></td>
-<td><p>Planned</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light/issues/4640">Profile PR06 (#4640)</a></p></td>
 <td><p>Additional platform backends.</p></td>
