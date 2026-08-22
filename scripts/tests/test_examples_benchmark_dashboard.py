@@ -8,16 +8,12 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(
-    REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html"
-)
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html")
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
 )
-SCRIPT = os.path.join(
-    REPO_ROOT, "scripts", "record_onnx_light_cpu_benchmark.py"
-)
+SCRIPT = os.path.join(REPO_ROOT, "scripts", "record_onnx_light_cpu_benchmark.py")
 sys.path.insert(0, os.path.dirname(SCRIPT))
 
 
@@ -53,8 +49,16 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('summaryRow.className = "operator-summary"', text)
         self.assertIn('details.className = "operator-details"', text)
         self.assertNotIn("panel.open = true", text)
-        for label in ("inputs", "average speed-up", "best speed-up", "worst speed-up"):
+        for label in (
+            "input types",
+            "average speed-up",
+            "best speed-up",
+            "worst speed-up",
+        ):
             self.assertIn(label, text)
+        self.assertNotIn('["inputs", String(summary.inputs', text)
+        self.assertIn("(example.rows || []).map(firstInputType).filter(Boolean)", text)
+        self.assertIn('["input types", inputTypes || "—", ""]', text)
 
     def test_input_type_column_matches_the_onnx_light_benchmark(self):
         text = _read(PAGE)
@@ -66,7 +70,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("? row.input_type", text)
         self.assertIn("? row.inputs", text)
         self.assertIn('raw.split(",")[0].split("[")[0].trim()', text)
-        self.assertIn('code.textContent = inputType;', text)
+        self.assertIn("code.textContent = inputType;", text)
 
     def test_panels_are_sorted_by_operator(self):
         text = _read(PAGE)
@@ -100,9 +104,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         # SMALL/MID/BIG derive from the speed-up on the first/last/middle sizes.
         self.assertIn("cats.small = first !== null && first > 1;", text)
         self.assertIn("cats.big = last !== null && last > 1;", text)
-        self.assertIn(
-            "cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text
-        )
+        self.assertIn("cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text)
 
     def test_page_has_category_checkbox_column(self):
         text = _read(PAGE)
@@ -128,9 +130,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 class TestIndexWiring(unittest.TestCase):
     def test_index_links_dashboard(self):
         text = _read(INDEX)
-        self.assertIn(
-            'href="dashboard/onnx-light-cpu/examples-benchmark.html"', text
-        )
+        self.assertIn('href="dashboard/onnx-light-cpu/examples-benchmark.html"', text)
         # The doc-link label / word must match (checked generically elsewhere).
         self.assertIn('data-word="BENCH"', text)
 
@@ -150,12 +150,8 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("repository: xadupre/onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
-        self.assertIn(
-            "python -u scripts/record_onnx_light_cpu_benchmark.py", text
-        )
-        self.assertIn(
-            "cache_data/onnx-light-cpu/examples_benchmark.json", text
-        )
+        self.assertIn("python -u scripts/record_onnx_light_cpu_benchmark.py", text)
+        self.assertIn("cache_data/onnx-light-cpu/examples_benchmark.json", text)
 
 
 class TestScriptCLI(unittest.TestCase):
