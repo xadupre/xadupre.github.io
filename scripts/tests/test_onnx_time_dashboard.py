@@ -20,11 +20,16 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn('id="scenario"', text)
         self.assertIn('id="metric"', text)
         self.assertIn('<option value="All">All</option>', text)
-        for chart_id in ("loadChart", "saveChart", "cppChart"):
+        for chart_id in (
+            "load1FileChart",
+            "load2FileChart",
+            "save1FileChart",
+            "save2FileChart",
+        ):
             self.assertIn(f'id="{chart_id}"', text)
-        self.assertIn('kind === "cpp"', text)
-        self.assertIn('/-cpp(?:-|$)/', text)
-        self.assertIn('row.name.startsWith(kind + "/")', text)
+        for prefix in ("load/1file", "load/2file", "save/1file", "save/2file"):
+            self.assertIn(f'prefix: "{prefix}"', text)
+        self.assertIn('row.name.startsWith(prefix + "x")', text)
         self.assertIn("x: Date.parse(row.date)", text)
         self.assertIn("loadChartJs()", text)
 
