@@ -8,16 +8,12 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(
-    REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html"
-)
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html")
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
 )
-SCRIPT = os.path.join(
-    REPO_ROOT, "scripts", "record_onnx_light_cpu_benchmark.py"
-)
+SCRIPT = os.path.join(REPO_ROOT, "scripts", "record_onnx_light_cpu_benchmark.py")
 sys.path.insert(0, os.path.dirname(SCRIPT))
 
 
@@ -53,13 +49,19 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('summaryRow.className = "operator-summary"', text)
         self.assertIn('details.className = "operator-details"', text)
         self.assertNotIn("panel.open = true", text)
+        self.assertIn('id="operatorHeader"', text)
+        self.assertIn(
+            'document.getElementById("operatorHeader").style.display = "grid";',
+            text,
+        )
         for label in (
             "input types",
             "average speed-up",
             "best speed-up",
             "worst speed-up",
         ):
-            self.assertIn(label, text)
+            self.assertEqual(text.count(f"<span>{label}</span>"), 1)
+        self.assertNotIn('cellLabel.className = "summary-label";', text)
         self.assertNotIn('["inputs", String(summary.inputs', text)
         self.assertIn("(example.rows || []).map(firstInputType).filter(Boolean)", text)
         self.assertIn('["input types", inputTypes || "—", ""]', text)
@@ -110,14 +112,13 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         # SMALL/MID/BIG derive from the speed-up on the first/last/middle sizes.
         self.assertIn("cats.small = first !== null && first > 1;", text)
         self.assertIn("cats.big = last !== null && last > 1;", text)
-        self.assertIn(
-            "cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text
-        )
+        self.assertIn("cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text)
 
     def test_page_has_category_checkbox_column(self):
         text = _read(PAGE)
         self.assertIn("categories", text)
-        self.assertIn('catValue.className = "summary-value category-boxes";', text)
+        self.assertIn('catCell.className = "summary-categories summary-value";', text)
+        self.assertIn('catValue.className = "category-boxes";', text)
         self.assertIn('[["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]]', text)
         # The per-operator category boxes are read-only indicators.
         self.assertIn("input.disabled = true;", text)
@@ -134,13 +135,30 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('id="filterCount"', text)
         self.assertIn("operators shown", text)
 
+    def test_page_filters_operators_by_input_type(self):
+        text = _read(PAGE)
+        self.assertIn('id="typeFilter"', text)
+        self.assertIn('<option value="">all input types</option>', text)
+        self.assertIn(
+            "const inputTypes = [...new Set(rendered.flatMap(item => item.inputTypes))]",
+            text,
+        )
+        self.assertIn(
+            'const typeMatch = inputType === "" || panelInputTypes.includes(inputType);',
+            text,
+        )
+        self.assertIn('typeSelect.addEventListener("change", apply);', text)
+
+    def test_operator_rows_are_compact(self):
+        text = _read(PAGE)
+        self.assertIn("margin-bottom: 0.25em;", text)
+        self.assertIn("padding: 0.35em 1em;", text)
+
 
 class TestIndexWiring(unittest.TestCase):
     def test_index_links_dashboard(self):
         text = _read(INDEX)
-        self.assertIn(
-            'href="dashboard/onnx-light-cpu/examples-benchmark.html"', text
-        )
+        self.assertIn('href="dashboard/onnx-light-cpu/examples-benchmark.html"', text)
         # The doc-link label / word must match (checked generically elsewhere).
         self.assertIn('data-word="BENCH"', text)
 
@@ -160,12 +178,8 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn("repository: xadupre/onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
-        self.assertIn(
-            "python -u scripts/record_onnx_light_cpu_benchmark.py", text
-        )
-        self.assertIn(
-            "cache_data/onnx-light-cpu/examples_benchmark.json", text
-        )
+        self.assertIn("python -u scripts/record_onnx_light_cpu_benchmark.py", text)
+        self.assertIn("cache_data/onnx-light-cpu/examples_benchmark.json", text)
 
 
 class TestScriptCLI(unittest.TestCase):
