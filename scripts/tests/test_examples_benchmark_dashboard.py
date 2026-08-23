@@ -8,7 +8,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html")
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "cpu-benchmark.html")
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
@@ -166,7 +166,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 class TestIndexWiring(unittest.TestCase):
     def test_index_links_dashboard(self):
         text = _read(INDEX)
-        self.assertIn('href="dashboard/onnx-light-cpu/examples-benchmark.html"', text)
+        self.assertIn('href="dashboard/onnx-light-cpu/cpu-benchmark.html"', text)
         # The doc-link label / word must match (checked generically elsewhere).
         self.assertIn('data-word="BENCH"', text)
 
