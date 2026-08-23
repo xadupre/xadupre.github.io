@@ -35,7 +35,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_page_renders_examples_and_speedup(self):
         text = _read(PAGE)
-        self.assertIn("function renderExample(example, cats)", text)
+        self.assertIn("function renderExample(example, cats, benchmarkDate)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
         # The three backends are labelled for the table header.
@@ -79,6 +79,14 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('return raw.split(",")[0].trim();', text)
         self.assertIn('firstInputTensor(row).split("[")[0].trim()', text)
         self.assertIn("code.textContent = inputTensor;", text)
+
+    def test_summary_and_rows_show_the_benchmark_date(self):
+        text = _read(PAGE)
+        self.assertEqual(text.count("<span>date</span>"), 1)
+        self.assertIn('["date", formatBenchmarkDate(benchmarkDate), ""]', text)
+        self.assertIn('dateTh.textContent = "date";', text)
+        self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
+        self.assertIn("renderExample(ex, cats, payload.date)", text)
 
     def test_panels_are_sorted_by_operator(self):
         text = _read(PAGE)
