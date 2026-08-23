@@ -42,25 +42,34 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .meta strong { color: #c9d1d9; }
 .example-desc { font-size: 0.85em; color: #8b949e; margin: 0.2em 0 0.6em; }
 #examples { width: 100%; max-width: 1000px; }
-.operator-panel { padding: 0; overflow: hidden; }
+.operator-panel {
+  border-radius: 6px;
+  margin-bottom: 0.25em;
+  padding: 0;
+  overflow: hidden;
+}
+.operator-header,
 .operator-summary {
-  cursor: pointer;
   display: grid;
   grid-template-columns: minmax(150px, 1.5fr) repeat(4, minmax(85px, 1fr)) minmax(150px, 1.3fr);
   gap: 0.75em;
   align-items: center;
-  padding: 0.8em 1em;
+  padding: 0.35em 1em;
+}
+.operator-header {
+  box-sizing: border-box;
+  color: #8b949e;
+  font-size: 0.72em;
+  max-width: 1000px;
+  width: 100%;
+}
+.operator-summary {
+  cursor: pointer;
   list-style: none;
 }
 .operator-summary::-webkit-details-marker { display: none; }
 .operator-summary:hover { background: rgba(56, 139, 253, 0.08); }
 .operator-summary:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
-.operator-summary .summary-label {
-  color: #8b949e;
-  display: block;
-  font-size: 0.72em;
-  margin-bottom: 0.2em;
-}
 .operator-summary .summary-value { font-weight: bold; }
 .operator-summary .operator-name::before {
   color: #8b949e;
@@ -99,7 +108,8 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .filter .filter-title { color: #c9d1d9; font-weight: bold; }
 .filter label { display: inline-flex; align-items: center; gap: 0.35em; cursor: pointer; }
 .filter label input { accent-color: #58a6ff; }
-.filter #nameFilter {
+.filter #nameFilter,
+.filter #typeFilter {
   background: #0d1117;
   border: 1px solid rgba(139, 148, 158, 0.4);
   border-radius: 6px;
@@ -108,7 +118,9 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   padding: 0.3em 0.5em;
   min-width: 12em;
 }
-.filter #nameFilter:focus-visible { outline: 2px solid #58a6ff; outline-offset: -1px; }
+.filter #typeFilter { min-width: 10em; }
+.filter #nameFilter:focus-visible,
+.filter #typeFilter:focus-visible { outline: 2px solid #58a6ff; outline-offset: -1px; }
 .filter .filter-desc { color: #8b949e; }
 .filter #filterCount { color: #8b949e; margin-left: auto; }
 .operator-details {
@@ -146,6 +158,7 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
 .legend .swatch.slower { background: #f85149; }
 .legend .swatch.neutral { background: #bc8cff; }
 @media (max-width: 720px) {
+  .operator-header { display: none !important; }
   .operator-summary { grid-template-columns: 1fr 1fr; }
   .operator-summary .operator-name { grid-column: 1 / -1; }
   .operator-summary .summary-categories { grid-column: 1 / -1; }
@@ -195,6 +208,11 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
     <label title="Filter operators by name (case-insensitive)">
       <input type="search" id="nameFilter" placeholder="operator name…" autocomplete="off" />
     </label>
+    <label title="Filter operators by first input element type">
+      <select id="typeFilter">
+        <option value="">all input types</option>
+      </select>
+    </label>
     <label title="onnx-light-cpu is faster on the smallest input">
       <input type="checkbox" class="filter-check" value="small" />
       <span><strong>SMALL</strong></span>
@@ -216,6 +234,14 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
   </div>
 </div>
 
+<div id="operatorHeader" class="operator-header" style="display:none;">
+  <span>operator</span>
+  <span>input types</span>
+  <span>average speed-up</span>
+  <span>best speed-up</span>
+  <span>worst speed-up</span>
+  <span>categories</span>
+</div>
 <div id="examples"></div>
 
 <script>
@@ -347,27 +373,17 @@ function renderExample(example, cats) {
     ["worst speed-up", fmtSpeedup(summary.min_speedup_cpu),
       speedupClass(summary.min_speedup_cpu)],
   ];
-  summaryValues.forEach(([label, value, cls]) => {
+  summaryValues.forEach(([, value, cls]) => {
     const cell = document.createElement("span");
-    cell.className = cls;
-    const cellLabel = document.createElement("span");
-    cellLabel.className = "summary-label";
-    cellLabel.textContent = label;
-    const cellValue = document.createElement("span");
-    cellValue.className = "summary-value";
-    cellValue.textContent = value;
-    cell.appendChild(cellLabel);
-    cell.appendChild(cellValue);
+    cell.className = "summary-value" + (cls ? " " + cls : "");
+    cell.textContent = value;
     summaryRow.appendChild(cell);
   });
 
   const catCell = document.createElement("span");
-  catCell.className = "summary-categories";
-  const catLabel = document.createElement("span");
-  catLabel.className = "summary-label";
-  catLabel.textContent = "categories";
+  catCell.className = "summary-categories summary-value";
   const catValue = document.createElement("span");
-  catValue.className = "summary-value category-boxes";
+  catValue.className = "category-boxes";
   [["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]].forEach(([key, text]) => {
     const box = document.createElement("label");
     box.className = "category-box";
@@ -381,7 +397,6 @@ function renderExample(example, cats) {
     box.appendChild(span);
     catValue.appendChild(box);
   });
-  catCell.appendChild(catLabel);
   catCell.appendChild(catValue);
   summaryRow.appendChild(catCell);
   panel.appendChild(summaryRow);
@@ -471,15 +486,26 @@ function setupFilter(rendered) {
   filterPanel.style.display = "block";
   const checks = Array.from(document.querySelectorAll(".filter-check"));
   const nameInput = document.getElementById("nameFilter");
+  const typeSelect = document.getElementById("typeFilter");
   const count = document.getElementById("filterCount");
+  const inputTypes = [...new Set(rendered.flatMap(item => item.inputTypes))]
+    .sort((a, b) => a.localeCompare(b));
+  inputTypes.forEach(inputType => {
+    const option = document.createElement("option");
+    option.value = inputType;
+    option.textContent = inputType;
+    typeSelect.appendChild(option);
+  });
   function apply() {
     const active = checks.filter(c => c.checked).map(c => c.value);
     const term = nameInput.value.trim().toLowerCase();
+    const inputType = typeSelect.value;
     let shown = 0;
-    rendered.forEach(({ panel, cats, name }) => {
+    rendered.forEach(({ panel, cats, name, inputTypes: panelInputTypes }) => {
       const catMatch = active.length === 0 || active.some(key => cats[key]);
       const nameMatch = term === "" || name.includes(term);
-      const match = catMatch && nameMatch;
+      const typeMatch = inputType === "" || panelInputTypes.includes(inputType);
+      const match = catMatch && nameMatch && typeMatch;
       panel.style.display = match ? "" : "none";
       if (match) shown += 1;
     });
@@ -487,6 +513,7 @@ function setupFilter(rendered) {
   }
   checks.forEach(c => c.addEventListener("change", apply));
   nameInput.addEventListener("input", apply);
+  typeSelect.addEventListener("change", apply);
   apply();
 }
 
@@ -516,6 +543,7 @@ fetch(JSON_URL, { cache: "no-store" })
     }
     hideMessage();
     renderMeta(payload);
+    document.getElementById("operatorHeader").style.display = "grid";
     const container = document.getElementById("examples");
     const rendered = [];
     /* Panels are listed in operator order (name as tie-breaker). */
@@ -531,7 +559,10 @@ fetch(JSON_URL, { cache: "no-store" })
       const panel = renderExample(ex, cats);
       container.appendChild(panel);
       const name = String(ex.op || ex.title || ex.name || "").toLowerCase();
-      rendered.push({ panel, cats, name });
+      const inputTypes = [...new Set(
+        (ex.rows || []).map(firstInputType).filter(Boolean)
+      )];
+      rendered.push({ panel, cats, name, inputTypes });
     });
     setupFilter(rendered);
   })
