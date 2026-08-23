@@ -8,7 +8,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
-PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "examples-benchmark.html")
+PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "cpu-benchmark.html")
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
@@ -35,7 +35,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_page_renders_examples_and_speedup(self):
         text = _read(PAGE)
-        self.assertIn("function renderExample(example, cats)", text)
+        self.assertIn("function renderExample(example, cats, benchmarkDate)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
         # The three backends are labelled for the table header.
@@ -79,6 +79,14 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('return raw.split(",")[0].trim();', text)
         self.assertIn('firstInputTensor(row).split("[")[0].trim()', text)
         self.assertIn("code.textContent = inputTensor;", text)
+
+    def test_summary_and_rows_show_the_benchmark_date(self):
+        text = _read(PAGE)
+        self.assertEqual(text.count("<span>date</span>"), 1)
+        self.assertIn('["date", formatBenchmarkDate(benchmarkDate), ""]', text)
+        self.assertIn('dateTh.textContent = "date";', text)
+        self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
+        self.assertIn("renderExample(ex, cats, payload.date)", text)
 
     def test_panels_are_sorted_by_operator(self):
         text = _read(PAGE)
@@ -158,7 +166,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 class TestIndexWiring(unittest.TestCase):
     def test_index_links_dashboard(self):
         text = _read(INDEX)
-        self.assertIn('href="dashboard/onnx-light-cpu/examples-benchmark.html"', text)
+        self.assertIn('href="dashboard/onnx-light-cpu/cpu-benchmark.html"', text)
         # The doc-link label / word must match (checked generically elsewhere).
         self.assertIn('data-word="BENCH"', text)
 

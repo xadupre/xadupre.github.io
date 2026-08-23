@@ -35,7 +35,7 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn("renderInputTypeFilter", text)
         # The selector filters rows through the shared rowMatches predicate.
         self.assertIn("state.inputTypeFilter", text)
-        self.assertIn("(row.input_type || \"\") !== state.inputTypeFilter", text)
+        self.assertIn('(row.input_type || "") !== state.inputTypeFilter', text)
 
     def test_table_fits_without_horizontal_scrolling(self):
         text = _read(PAGE)
@@ -43,6 +43,15 @@ class TestBenchmarkDashboard(unittest.TestCase):
         # the page width so it does not require horizontal scrolling.
         self.assertIn("table-layout: fixed;", text)
         self.assertIn("<colgroup>", text)
+
+    def test_rows_show_the_benchmark_date(self):
+        text = _read(PAGE)
+        self.assertIn('<th class="center">date</th>', text)
+        self.assertIn("state.benchmarkDate = payload.date;", text)
+        self.assertIn(
+            "dateTd.textContent = formatBenchmarkDate(state.benchmarkDate);", text
+        )
+        self.assertIn('slice(0, 16) + " UTC"', text)
 
     def test_weight_and_three_speedup_averages_are_present(self):
         text = _read(PAGE)
