@@ -364,6 +364,35 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             },
         )
 
+    def test_build_payload_isolates_native_cpu_failures(self):
+        tests = [{"name": "crash", "model": "model", "data_sets": []}]
+        crashed = {
+            "success": False,
+            "error": "onnx-light-cpu worker crashed with exit code -11",
+            "error_step": "run",
+            "elapsed_s": 0.0,
+        }
+
+        def fake_run(model, data_sets, backend, rtol, atol):
+            self.assertNotEqual(backend, "onnx_light_cpu")
+            return {"success": True, "error": "", "error_step": ""}
+
+        with mock.patch.object(
+            rbc, "_run_cpu_tests_isolated", return_value=[crashed]
+        ) as isolated:
+            payload = rbc.build_payload(
+                discover=lambda kind: tests,
+                run=fake_run,
+                versions=lambda: {},
+                isolate_cpu=True,
+            )
+
+        isolated.assert_called_once_with(tests, rbc.DEFAULT_RTOL, rbc.DEFAULT_ATOL)
+        row = payload["tests"][0]
+        self.assertFalse(row["onnx_light_cpu"])
+        self.assertEqual(row["onnx_light_cpu_error"], crashed["error"])
+        self.assertEqual(row["onnx_light_cpu_error_step"], "run")
+
     def test_build_payload_carries_previous_last_pass_for_failing_tests(self):
         import datetime as dt
 

@@ -32,7 +32,9 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import multiprocessing
 import os
+import queue
 import sys
 import time
 import traceback
@@ -743,6 +745,99 @@ def run_test_with_backend(
     }
 
 
+def _cpu_worker(task_queue, result_queue, rtol: float, atol: float) -> None:
+    """Run onnx-light-cpu tests until stopped or a native kernel crashes."""
+    while True:
+        task = task_queue.get()
+        if task is None:
+            return
+        index, model, data_sets = task
+        result_queue.put(
+            (
+                index,
+                run_test_with_backend(
+                    model, data_sets, "onnx_light_cpu", rtol=rtol, atol=atol
+                ),
+            )
+        )
+
+
+def _run_cpu_tests_isolated(
+    tests: List[Dict[str, Any]], rtol: float, atol: float
+) -> List[Dict[str, Any]]:
+    """Run native CPU kernels out of process so one crash does not abort the job."""
+    context = multiprocessing.get_context("spawn")
+    results: List[Dict[str, Any]] = []
+    process = None
+    task_queue = None
+    result_queue = None
+
+    def stop_worker() -> None:
+        nonlocal process, task_queue, result_queue
+        worker = process
+        tasks = task_queue
+        results_queue = result_queue
+        process = task_queue = result_queue = None
+        if worker is not None:
+            if worker.is_alive():
+                tasks.put(None)
+                worker.join(timeout=5)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join()
+            tasks.close()
+            results_queue.close()
+
+    try:
+        for index, test in enumerate(tests):
+            if process is None or not process.is_alive():
+                stop_worker()
+                task_queue = context.Queue()
+                result_queue = context.Queue()
+                process = context.Process(
+                    target=_cpu_worker,
+                    args=(task_queue, result_queue, rtol, atol),
+                )
+                process.start()
+
+            task_queue.put((index, test["model"], test["data_sets"]))
+            while True:
+                try:
+                    result_index, info = result_queue.get(timeout=0.1)
+                    if result_index != index:
+                        raise RuntimeError(
+                            f"unexpected onnx-light-cpu result index {result_index}"
+                        )
+                    results.append(info)
+                    break
+                except queue.Empty:
+                    if process.is_alive():
+                        continue
+                    process.join()
+                    results.append(
+                        {
+                            "success": False,
+                            "error": (
+                                "onnx-light-cpu worker crashed with exit code "
+                                f"{process.exitcode}"
+                            ),
+                            "error_step": "run",
+                            "elapsed_s": 0.0,
+                        }
+                    )
+                    stop_worker()
+                    _log(
+                        f"onnx-light-cpu worker crashed while running "
+                        f"{test['name']}; continuing with the next test."
+                    )
+                    break
+            if (index + 1) % 50 == 0:
+                _log(f"Ran {index + 1}/{len(tests)} tests on onnx-light-cpu.")
+        return results
+    finally:
+        stop_worker()
+
+
 def _row_from_results(
     name: str,
     results: Dict[str, Dict[str, Any]],
@@ -848,6 +943,7 @@ def build_payload(
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
     previous: Optional[Dict[str, Any]] = None,
+    isolate_cpu: bool = False,
 ) -> Dict[str, Any]:
     """Discover all tests, run them on every backend and return a payload."""
     if versions is None:
@@ -907,31 +1003,37 @@ def build_payload(
 
     # Kernel registration is process-wide and irreversible. Run every
     # unmodified onnx-light baseline first, then install onnx-light-cpu once
-    # and execute its complete pass so the baseline remains trustworthy.
+    # and execute its complete pass so the baseline remains trustworthy. The
+    # command-line recorder uses a child process so a native kernel crash can be
+    # attributed to one test without losing the rest of the snapshot.
+    cpu_infos = _run_cpu_tests_isolated(tests, rtol, atol) if isolate_cpu else None
     for idx, entry in enumerate(entries):
         test = entry["test"]
-        try:
-            info = run(
-                test["model"],
-                test["data_sets"],
-                "onnx_light_cpu",
-                rtol=rtol,
-                atol=atol,
-            )
-        except Exception as exc:  # noqa: BLE001
-            _log(
-                f"Unhandled error for {test['name']} on onnx_light_cpu: {exc}\n"
-                f"{traceback.format_exc()}"
-            )
-            info = {
-                "success": False,
-                "error": _stringify_error(exc),
-                "error_step": "run",
-            }
+        if cpu_infos is not None:
+            info = cpu_infos[idx]
+        else:
+            try:
+                info = run(
+                    test["model"],
+                    test["data_sets"],
+                    "onnx_light_cpu",
+                    rtol=rtol,
+                    atol=atol,
+                )
+            except Exception as exc:  # noqa: BLE001
+                _log(
+                    f"Unhandled error for {test['name']} on onnx_light_cpu: {exc}\n"
+                    f"{traceback.format_exc()}"
+                )
+                info = {
+                    "success": False,
+                    "error": _stringify_error(exc),
+                    "error_step": "run",
+                }
         entry["results"]["onnx_light_cpu"] = info
         bucket = "pass" if info.get("success") else "fail"
         totals["onnx_light_cpu"][bucket] += 1
-        if (idx + 1) % 50 == 0:
+        if cpu_infos is None and (idx + 1) % 50 == 0:
             _log(f"Ran {idx + 1}/{len(tests)} tests on onnx-light-cpu.")
 
     rows: List[Dict[str, Any]] = []
@@ -1032,6 +1134,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             rtol=args.rtol,
             atol=args.atol,
             previous=previous,
+            isolate_cpu=True,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record backend test coverage: {exc}")
