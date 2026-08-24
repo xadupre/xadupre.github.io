@@ -96,6 +96,24 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('return date.toISOString().slice(0, 10);', text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
+    def test_expanded_table_puts_speedup_immediately_after_date(self):
+        text = _read(PAGE)
+        header_date = text.index('dateTh.textContent = "date";')
+        header_speedup = text.index('spTh.textContent = "speed-up (cpu)";')
+        header_backends = text.index("backends.forEach(b => {", header_date)
+        self.assertLess(header_date, header_speedup)
+        self.assertLess(header_speedup, header_backends)
+
+        row_date = text.index(
+            "dateTd.textContent = formatBenchmarkDate(benchmarkDate);"
+        )
+        row_speedup = text.index(
+            "spTd.textContent = fmtSpeedup(row.speedup_cpu);", row_date
+        )
+        row_backends = text.index("backends.forEach(b => {", row_date)
+        self.assertLess(row_date, row_speedup)
+        self.assertLess(row_speedup, row_backends)
+
     def test_expanded_tables_are_sortable(self):
         text = _read(PAGE)
         self.assertIn("function makeSortable(table)", text)
