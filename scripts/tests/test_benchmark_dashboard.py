@@ -8,6 +8,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light", "benchmark.html")
+METHODOLOGY = os.path.join(REPO_ROOT, "dashboard", "benchmark-methodology.html")
 
 
 def _read(path: str) -> str:
@@ -18,6 +19,13 @@ def _read(path: str) -> str:
 class TestBenchmarkDashboard(unittest.TestCase):
     def test_page_exists(self):
         self.assertTrue(os.path.isfile(PAGE), f"missing page: {PAGE}")
+
+    def test_page_links_benchmark_methodology(self):
+        text = _read(PAGE)
+        self.assertIn('href="../benchmark-methodology.html"', text)
+        methodology = _read(METHODOLOGY)
+        self.assertIn("separate competing runtimes into global phases", methodology)
+        self.assertIn("two seconds of cumulative measured execution", methodology)
 
     def test_input_type_column_present(self):
         text = _read(PAGE)

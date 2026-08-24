@@ -9,6 +9,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "cpu-benchmark.html")
+METHODOLOGY = os.path.join(REPO_ROOT, "dashboard", "benchmark-methodology.html")
 INDEX = os.path.join(REPO_ROOT, "index.html")
 WORKFLOW = os.path.join(
     REPO_ROOT, ".github", "workflows", "record_onnx_light_cpu_examples_benchmark.yml"
@@ -25,6 +26,11 @@ def _read(path: str) -> str:
 class TestExamplesBenchmarkDashboard(unittest.TestCase):
     def test_page_exists(self):
         self.assertTrue(os.path.isfile(PAGE), f"missing page: {PAGE}")
+
+    def test_page_links_benchmark_methodology(self):
+        text = _read(PAGE)
+        self.assertIn('href="../benchmark-methodology.html"', text)
+        self.assertTrue(os.path.isfile(METHODOLOGY))
 
     def test_page_loads_the_expected_json(self):
         text = _read(PAGE)
@@ -93,7 +99,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('dateTh.textContent = "date";', text)
         self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
         self.assertIn("renderExample(ex, cats, payload.date)", text)
-        self.assertIn('return date.toISOString().slice(0, 10);', text)
+        self.assertIn("return date.toISOString().slice(0, 10);", text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
     def test_expanded_table_puts_speedup_immediately_after_date(self):

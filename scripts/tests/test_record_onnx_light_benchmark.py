@@ -76,13 +76,7 @@ class TestOnnxruntimeRunner(unittest.TestCase):
         # The serialized model is passed through unchanged on the CPU provider.
         self.assertEqual(created[0][0], b"corpus-model")
         self.assertEqual(created[0][2], ["CPUExecutionProvider"])
-        self.assertEqual(
-            created[0][1].entries,
-            {
-                "session.intra_op.allow_spinning": "0",
-                "session.inter_op.allow_spinning": "0",
-            },
-        )
+        self.assertIsNone(created[0][1])
         self.assertEqual(runner([]), ["output"])
 
     def test_session_error_propagates(self):
@@ -449,6 +443,37 @@ class TestRunBenchmark(unittest.TestCase):
         # avg drops 0.0 and 100.0, leaving [1.0, 1.0, 1.0] -> 1.0.
         self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
+    def test_measurement_stops_after_cumulative_duration(self):
+        ticks = iter((0.0, 1.1))
+
+        def _dummy_factory(model):
+            return lambda inputs: [np.zeros((1,))]
+
+        saved = rlb._RUNNER_FACTORIES.get("onnxruntime")
+        saved_pc = rlb.time.perf_counter
+        try:
+            rlb._RUNNER_FACTORIES["onnxruntime"] = _dummy_factory
+            rlb.time.perf_counter = lambda: next(ticks)
+            result = rlb.run_benchmark(
+                object(),
+                [([np.ones((1,))], [np.zeros((1,))])],
+                "onnxruntime",
+                n_warmup=1,
+                n_measure=5,
+                max_measure_duration_s=1.0,
+            )
+        finally:
+            rlb.time.perf_counter = saved_pc
+            if saved is None:
+                del rlb._RUNNER_FACTORIES["onnxruntime"]
+            else:
+                rlb._RUNNER_FACTORIES["onnxruntime"] = saved
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["n_warmup"], 1)
+        self.assertEqual(result["n_measure"], 1)
+        self.assertEqual(result["avg_ms"], 1100.0)
+
 
 class TestSymbolicCost(unittest.TestCase):
     def test_none_when_no_data_sets(self):
@@ -729,6 +754,10 @@ class TestBuildPayload(unittest.TestCase):
         for backend, nw, nm in call_log:
             self.assertEqual(nw, 2)
             self.assertEqual(nm, 7)
+        self.assertEqual(
+            [backend for backend, _, _ in call_log],
+            [backend for backend in rlb.BENCHMARK_EXECUTION_ORDER for _ in range(2)],
+        )
 
         # test_abs and test_relu both succeeded on both backends → speedup set.
         for row in payload["tests"]:
@@ -1072,9 +1101,7 @@ class TestOnnxLightReferenceRunner(unittest.TestCase):
         self.assertEqual(telemetry["sessions"], 1)
         self.assertEqual(telemetry["runs"], 2)
         self.assertIs(telemetry["feeds"][0]["x"], first_input)
-        self.assertEqual(
-            telemetry["cpu_execution"], {"spin_policy": "park_immediately"}
-        )
+        self.assertIsNone(telemetry["cpu_execution"])
 
     def test_make_onnx_light_runner_uses_runtime_session(self):
         """The onnx_light backend runs through the ``RuntimeSession`` path, the
