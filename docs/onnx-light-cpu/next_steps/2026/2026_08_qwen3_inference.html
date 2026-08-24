@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -396,6 +396,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_tree_ensemble.html">Tree Ensemble Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_processor_performance_profile.html">Processor Memory and Compute Performance Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
 </ul>
@@ -465,7 +466,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>discussion</strong></p>
+<p><strong>planned</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>The objective is the shortest path from the current kernel set to useful
@@ -496,6 +497,67 @@ must not delay the dense decoder.</p>
 sampling inside the graph, generic attention masks, and broad operator parity
 come later.</p>
 </section>
+<section id="frozen-model-contract">
+<h2>Frozen model contract<a class="headerlink" href="#frozen-model-contract" title="Link to this heading">#</a></h2>
+<p>Qwen PR01 pins immutable Hugging Face model and tokenizer commit hashes; model
+names alone are not reproducible inputs. The initial revisions must retain the
+official dense configurations:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 18.0%" />
+<col style="width: 10.0%" />
+<col style="width: 12.0%" />
+<col style="width: 12.0%" />
+<col style="width: 10.0%" />
+<col style="width: 10.0%" />
+<col style="width: 10.0%" />
+<col style="width: 18.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Model</p></th>
+<th class="head"><p>Layers</p></th>
+<th class="head"><p>Hidden</p></th>
+<th class="head"><p>Intermediate</p></th>
+<th class="head"><p>Q heads</p></th>
+<th class="head"><p>KV heads</p></th>
+<th class="head"><p>Head size</p></th>
+<th class="head"><p>Vocabulary</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Qwen/Qwen3-0.6B</span></code></p></td>
+<td><p>28</p></td>
+<td><p>1,024</p></td>
+<td><p>3,072</p></td>
+<td><p>16</p></td>
+<td><p>8</p></td>
+<td><p>128</p></td>
+<td><p>151,936</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Qwen/Qwen3-4B</span></code></p></td>
+<td><p>36</p></td>
+<td><p>2,560</p></td>
+<td><p>9,728</p></td>
+<td><p>32</p></td>
+<td><p>8</p></td>
+<td><p>128</p></td>
+<td><p>151,936</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Both models use BF16 activations and weights in the unquantized artifact,
+Q/K RMS normalization, SwiGLU, tied token-embedding/LM-head weights, full
+half-split RoPE with theta 1,000,000, no rope scaling or sliding window, and a
+40,960-token configured context. A revision that changes any of these values
+is a new benchmark artifact, not an update to an existing result.</p>
+<p>The large context is an opt-in structure and memory check. Shared CI uses a
+deterministic synthetic two-layer fixture with the same head size, GQA ratio,
+Q/K normalization, tied-weight aliasing, cache boundary, and operator forms.
+The existing four-layer Qwen3-like fixture in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> remains useful
+for shape and memory planning, but it is not an executable or numerical Qwen
+baseline and does not satisfy Qwen PR01.</p>
+</section>
 <section id="plans-to-execute-first">
 <h2>Plans to execute first<a class="headerlink" href="#plans-to-execute-first" title="Link to this heading">#</a></h2>
 <p>Do not execute the existing roadmaps from top to bottom. Use only their
@@ -522,32 +584,32 @@ benchmark, memory and per-node profile.</p></td>
 <td><p>All kernel changes until the baseline is reproducible.</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
-<td><p>Gemm/MatMul PR09.6 plus Qwen PR02-PR03</p></td>
+<td><p>Completed Gemm/MatMul PR09.6 plus Qwen PR02-PR03</p></td>
 <td><p>Standard QDQ INT4 recognition, packed decode GEMV, small-M, then prefill
 GEMM for exact Qwen shapes.</p></td>
 <td><p>Float8, full integer parity, float64, and generic PR10.5.</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
-<td><p>ExpLog PR01-PR03 plus Qwen PR04</p></td>
+<td><p>Completed ExpLog PR01-PR03 plus Qwen PR04</p></td>
 <td><p>Correct/fast Exp, RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout
 operations needed by one block.</p></td>
-<td><p>Log tuning and the full unary/binary operator matrices.</p></td>
+<td><p>Non-Qwen unary/binary operator matrices and graph fusions.</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
-<td><p>Qwen PR05, narrow slice of Attention PR11-PR14</p></td>
-<td><p>Batch-1 causal GQA, online softmax, prefill, and single-token decode.</p></td>
-<td><p>General masks, layouts, types, and the generic Attention PR15 gate.</p></td>
+<td><p>Attention PR11-PR14 plus Qwen PR05 integration</p></td>
+<td><p>Reuse the shared materialized and online Attention engines for batch-1
+causal GQA, prefill, and single-token decode.</p></td>
+<td><p>The generic Attention PR15 performance gate.</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
-<td><p>KV-cache C0-C2 plus Qwen PR06</p></td>
+<td><p>Corrected KV-cache C0-C2 plus Qwen PR06a-PR06b</p></td>
 <td><p>Request-owned contiguous cache and cache-aware streaming decode.</p></td>
 <td><p>Paging, beam/speculative operations, and KV quantization.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Parallel prerequisite</p></td>
+<tr class="row-odd"><td><p>Completed prerequisite</p></td>
 <td><p>Runtime PR01, PR02, and PR04</p></td>
-<td><p>Session executor and no nested pools, completed before final Qwen
-scheduling/tuning.</p></td>
-<td><p>Runtime inspection, standalone compatibility, and broad policy gates.</p></td>
+<td><p>Reuse the delivered session executor and no-nested-pools contract.</p></td>
+<td><p>No new runtime-executor integration in the Qwen sequence.</p></td>
 </tr>
 <tr class="row-even"><td><p>6</p></td>
 <td><p>Qwen PR07-PR08</p></td>
@@ -561,15 +623,34 @@ scheduling/tuning.</p></td>
 <section id="export-contract">
 <h2>Export contract<a class="headerlink" href="#export-contract" title="Link to this heading">#</a></h2>
 <p>Two equivalent standard-ONNX graphs are retained:</p>
-<dl class="simple">
-<dt><code class="docutils literal notranslate"><span class="pre">qwen3-float</span></code></dt><dd><p>A correctness graph with ordinary constant float32, float16, or bfloat16
-weights and ONNX opset 23 or later.</p>
+<dl>
+<dt><code class="docutils literal notranslate"><span class="pre">qwen3-float</span></code></dt><dd><p>The primary correctness graph with ordinary constant BF16 weights and
+activations at ONNX opset 23. An FP32 diagnostic export is retained for
+numerical localization, but it is not a separate performance target.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">qwen3-int4-qdq</span></code></dt><dd><p>A weight-only graph whose constant INT4/UINT4 weights, block scales, and
-optional zero points are represented by <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span></code> feeding
-<code class="docutils literal notranslate"><span class="pre">MatMul</span></code>. The runtime must recognize the constant QDQ pattern and pass
-packed weights directly to an internal weight-only plan. It must never
-materialize a complete float weight tensor.</p>
+<dt><code class="docutils literal notranslate"><span class="pre">qwen3-int4-qdq</span></code></dt><dd><p>A weight-only BF16 graph using one canonical encoding. Each non-embedding
+projection is a logical <code class="docutils literal notranslate"><span class="pre">UINT4[K,N]</span></code> initializer in ONNX row-major,
+low-nibble-first storage. <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span></code> uses <code class="docutils literal notranslate"><span class="pre">axis=0</span></code>,
+<code class="docutils literal notranslate"><span class="pre">block_size=32</span></code>, BF16 scales shaped <code class="docutils literal notranslate"><span class="pre">[ceil(K/32),N]</span></code>, explicit UINT4
+zero points of the same shape, and BF16 output feeding <code class="docutils literal notranslate"><span class="pre">MatMul</span></code>.</p>
+<p>The tied embedding/LM-head weight is stored once as logical
+<code class="docutils literal notranslate"><span class="pre">UINT4[vocabulary,hidden]</span></code>. Its <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span></code> uses <code class="docutils literal notranslate"><span class="pre">axis=1</span></code> and
+scale/zero-point shape <code class="docutils literal notranslate"><span class="pre">[vocabulary,ceil(hidden/32)]</span></code>. The standard graph
+feeds that dequantized value to <code class="docutils literal notranslate"><span class="pre">Gather</span></code> for embeddings and through
+<code class="docutils literal notranslate"><span class="pre">Transpose</span></code> to the LM-head <code class="docutils literal notranslate"><span class="pre">MatMul</span></code>. The optimized plan dequantizes only
+selected embedding rows and streams the same packed initializer in
+transposed access order for the LM-head; it does not clone the serialized
+initializer.</p>
+<p>Qwen dimensions have no partial quantization block. Partial K blocks, odd
+N, and packed-byte tails remain mandatory synthetic tests. A transposed or
+differently blocked exporter output is a distinct artifact and must be
+normalized before matching.</p>
+<p>The runtime recognizes only this exact constant pattern initially and
+passes packed weights, scales, and zero points directly to an internal
+BF16-activation weight-only plan. It never materializes a complete BF16 or
+float weight tensor. The portable <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span></code> path must accept
+BF16 scales/output before Qwen PR02 exits. Qwen PR01 may record that
+current gap but makes no production-kernel change.</p>
 </dd>
 </dl>
 <p>Opset 23 is preferred because it provides the standard
@@ -579,7 +660,10 @@ those decompositions are not the preferred optimized representation.</p>
 <p>Every benchmark artifact records the exact model revision, exporter revision,
 opsets, graph digest, quantization block size, symmetric/asymmetric encoding,
 weight packing order, tokenizer, prompt tokens, generated token ids, and
-runtime options. No result from one INT4 encoding is attributed to another.</p>
+runtime options. It also records initializer aliasing: the tied embedding and
+LM-head storage may have separate access plans but must not duplicate the
+serialized weight or an unbounded expanded representation. No result from one
+INT4 encoding is attributed to another.</p>
 </section>
 <section id="operator-priority">
 <h2>Operator priority<a class="headerlink" href="#operator-priority" title="Link to this heading">#</a></h2>
@@ -615,8 +699,8 @@ fused scales and zero points.</p></td>
 <tr class="row-even"><td><p>P0</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code></p></td>
 <td><p>Token embedding lookup.</p></td>
-<td><p>Correct typed rows and contiguous copy; optimize only if profiling makes
-it visible.</p></td>
+<td><p>Recognize the tied quantized initializer and dequantize only selected
+rows; retain correct typed contiguous copy for float weights.</p></td>
 </tr>
 <tr class="row-odd"><td><p>P1</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code> v23</p></td>
@@ -692,6 +776,10 @@ by block-quantized INT4 constant-weight GEMV.</p>
 <li><p>packed constant storage aligned for the selected kernel;</p></li>
 <li><p>bounded workspace and useful thread count.</p></li>
 </ul>
+<p>The implemented PR09.6 integer kernel supplies tested nibble decoding, panel
+packing, tail handling, and dot-product primitives. It does not implement
+BF16/FP32 activations multiplied by scaled INT4 weights and is therefore prior
+art, not the Qwen weight-only plan.</p>
 <p>The plan keeps weights compressed. Decode kernels unpack into vector registers
 or small cache-resident panels, apply zero-point correction and scales, and
 accumulate into float32. They do not expand the full matrix to INT8 or float.
@@ -708,10 +796,12 @@ output columns across workers so each weight byte is streamed once.</p>
 It lands only after decode correctness and throughput are established.</p>
 </dd>
 </dl>
-<p>The kernel corpus uses the exact Qwen3 dimensions for every Q, K, V, O,
-gate, up, down, and LM-head matrix, not only synthetic powers of two. It
-reports weight bytes read, effective memory bandwidth, unpack/scale time,
-first-use packing time, and steady-state throughput.</p>
+<p>The kernel corpus uses the exact Qwen3 dimensions for embedding, every Q, K,
+V, O, gate, up, down, and LM-head matrix, not only synthetic powers of two.
+It reports weight bytes read, effective memory bandwidth, unpack/scale time,
+first-use packing time, and steady-state throughput. Tests prove that the
+embedding row path and transposed LM-head path reference one packed
+initializer.</p>
 </section>
 </section>
 <section id="phase-q0-freeze-the-executable-baseline">
@@ -722,28 +812,65 @@ first-use packing time, and steady-state throughput.</p>
 <li><p>float and standard QDQ INT4 graphs with identical public inputs/outputs;</p></li>
 <li><p>prompt lengths 1, 32, 128, 512, and 2,048;</p></li>
 <li><p>generated lengths 1, 32, and 128 at batch 1;</p></li>
-<li><p>context checkpoints at 128, 1,024, 4,096, and the model’s supported limit;</p></li>
+<li><p>context checkpoints at 128, 1,024, and 4,096, with 40,960 opt-in;</p></li>
 <li><p>greedy decoding outside the graph for the first milestone;</p></li>
-<li><p>per-node and per-phase profiling with warmup and raw samples.</p></li>
+<li><p>per-node and per-phase profiling with warmup and raw samples;</p></li>
+<li><p>a backend manifest for every executed node, including explicit portable
+fallback outside timed priority regions.</p></li>
 </ul>
-<p>Report model-load latency, peak and steady resident memory, time to first
+<p>Qwen PR01 also registers lazy backend cases through the standard
+<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> collector. Case names encode model, float/QDQ contract,
+prefill/decode, prompt/context/generated lengths, and thread policy. Shared CI
+executes the synthetic fixture in correctness and <code class="docutils literal notranslate"><span class="pre">TestMode::BENCHMARK</span></code>
+modes. Real Qwen3-0.6B and Qwen3-4B cases are opt-in, download pinned
+revisions into an external cache, and publish through the same benchmark
+runner and dashboard; model weights are not committed to this repository.
+Metadata tests verify unique names, lazy construction, graph digests, tensor
+types and sizes, exact projection shapes, and the opt-in large-context cases.</p>
+<p>Report model-load latency, first-use preparation latency, peak and steady
+resident memory, time to first
 token, prefill tokens/second, median and tail decode latency, generated
 tokens/second, and bytes allocated/copied per token. Compare identical graphs
-where possible; when comparing standard QDQ with ONNX Runtime
-<code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code>, label the graph-contract difference explicitly.</p>
-<p>The output gate is token identity for greedy decoding plus bounded logit error
-at every checked step. INT4 quality is compared with the same quantized
-weights, not with the unquantized model alone.</p>
+under two separately labelled contracts:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">standard-contract</span></code></dt><dd><p>The identical standard ONNX float or QDQ graph runs in both runtimes. This
+is the correctness and graph-coverage comparison. Qwen PR01 establishes
+the graph and reference outputs even if the current onnx-light runtime
+reports unsupported BF16 blocked dequantization; Qwen PR02 must make the
+QDQ graph executable before publishing standard-contract timings.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">native-performance</span></code></dt><dd><p>The same quantized values, scales, zero points, prompts, and cache
+semantics are converted to ONNX Runtime <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> and
+<code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> where required. This is the primary product-level
+performance comparison; graph conversion time and persistent converted
+bytes are reported. Results are never presented as identical-graph speed.</p>
+</dd>
+</dl>
+<p>Qwen PR01 pins the reference CPU, OS, compiler, ONNX Runtime version, power
+mode, NUMA placement, and compact affinity. It publishes one-thread and
+physical-core policies; both runtimes receive the same admitted thread count,
+affinity, warmup, and alternating sample order. The priority performance
+matrix is Qwen3-4B with prompt lengths 32 and 512, context checkpoints 128,
+1,024, and 4,096, and 128 generated tokens.</p>
+<p>Correctness uses teacher-forced prefixes so one unstable greedy choice does
+not hide later numerical errors. PR01 freezes explicit per-type absolute and
+relative logit tolerances from the reference implementation. The selected
+token must be identical when the reference top-1 margin exceeds twice the
+measured logit error bound; near ties may select any token within that bound.
+Stable reference prompts additionally retain exact greedy-token regression
+sequences. INT4 quality is compared with the same quantized weights, scales,
+and zero points, not with the unquantized model alone.</p>
 </section>
 <section id="phase-q1-int4-projections-and-lm-head">
 <h2>Phase Q1: INT4 projections and LM head<a class="headerlink" href="#phase-q1-int4-projections-and-lm-head" title="Link to this heading">#</a></h2>
-<p>Extend the pending packed-INT4 work in the
+<p>Extend the completed packed-integer INT4 work in the
 <a class="reference internal" href="2026_08_gemm_matmul.html"><span class="doc">Gemm and MatMul roadmap</span></a> into a complete standard
 QDQ weight-only contract:</p>
 <ol class="arabic simple">
 <li><p>constant <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> recognition;</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">int4_gemv</span></code> for Qwen decode shapes;</p></li>
 <li><p>plan-owned packed weights reused by every token;</p></li>
+<li><p>tied quantized <code class="docutils literal notranslate"><span class="pre">Gather</span></code> and transposed LM-head access without duplication;</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">int4_small_m</span></code> for short prompts/speculative blocks;</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">int4_gemm</span></code> for prefill;</p></li>
 <li><p>LM-head and vocabulary-tail specialization.</p></li>
@@ -751,9 +878,11 @@ QDQ weight-only contract:</p>
 <p>Do not wait for Float8, every integer operator, float64 parity, or the final
 generic MatMul PR10.5 gate. The Qwen path depends on existing float
 correctness, constant-B planning, and the new weight-only kernels only.</p>
-<p>Q1 exits when the full INT4 graph loads without expanded float weights, every
+<p>Q1 exits when the full INT4 graph loads without expanded BF16/float weights, every
 projection is dispatched to the packed plan, and batch-1 decode projection
-time is competitive with ONNX Runtime <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> on the reference CPU.</p>
+time is competitive with ONNX Runtime <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> on the frozen reference
+CPU. Persistent packed storage, including tied-weight plans, stays within
+<code class="docutils literal notranslate"><span class="pre">1.25x</span></code> the serialized UINT4 weights plus serialized scales and zero points.</p>
 </section>
 <section id="phase-q2-one-complete-qwen-block">
 <h2>Phase Q2: one complete Qwen block<a class="headerlink" href="#phase-q2-one-complete-qwen-block" title="Link to this heading">#</a></h2>
@@ -768,31 +897,40 @@ time is competitive with ONNX Runtime <code class="docutils literal notranslate"
 </ul>
 <p>This phase reuses only the Qwen-relevant portions of the unary and binary
 elementwise roadmaps. It does not wait for their complete operator matrices.
-ExpLog PR01 through PR03 are pulled forward because corrected, fast <code class="docutils literal notranslate"><span class="pre">Exp</span></code> is
-needed by sigmoid and online softmax; <code class="docutils literal notranslate"><span class="pre">Log</span></code> tuning is not on the Qwen
-critical path.</p>
+ExpLog PR01 through PR03 are complete and provide the corrected, fast <code class="docutils literal notranslate"><span class="pre">Exp</span></code>
+needed by sigmoid and online softmax. Qwen PR04 adds only missing
+Qwen-specific adapters and optimized traversals. Existing portable
+<code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code>, <code class="docutils literal notranslate"><span class="pre">RotaryEmbedding</span></code>, and <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span></code> kernels in
+<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> remain the differential fallback; their existence does not
+count as optimized CPU dispatch.</p>
 <p>Q2 exits when one float and one INT4 decoder block match ONNX Runtime and no
-primitive RMSNorm or RoPE decomposition materializes avoidable intermediates.</p>
+primitive RMSNorm or RoPE decomposition materializes avoidable intermediates.
+The standard RoPE nodes use rank-4 <code class="docutils literal notranslate"><span class="pre">[batch,heads,sequence,128]</span></code> inputs,
+<code class="docutils literal notranslate"><span class="pre">interleaved=0</span></code>, <code class="docutils literal notranslate"><span class="pre">rotary_embedding_dim=128</span></code>, and explicit position ids;
+Q and K use their respective frozen head counts.</p>
 </section>
 <section id="phase-q3-narrow-causal-gqa">
 <h2>Phase Q3: narrow causal GQA<a class="headerlink" href="#phase-q3-narrow-causal-gqa" title="Link to this heading">#</a></h2>
-<p>Pull a Qwen-specific slice ahead of the full
-<a class="reference internal" href="2026_08_attention.html"><span class="doc">Attention roadmap</span></a>. The initial descriptor supports
-only:</p>
+<p>Qwen PR05 does not create a second attention descriptor, planner, graph
+matcher, or compute engine. It integrates the frozen graph with the shared
+<code class="docutils literal notranslate"><span class="pre">AttentionDescriptor</span></code>, per-invocation <code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code>, materialized
+fallback, and online engine delivered by Attention PR11 through PR14. The
+Qwen priority subset is:</p>
 <ul class="simple">
 <li><p>batch 1;</p></li>
 <li><p>Qwen3 query-head/KV-head geometry;</p></li>
 <li><p>causal attention without arbitrary masks;</p></li>
-<li><p>float32 first, then the activation/cache type used by the frozen INT4 model;</p></li>
+<li><p>BF16 for the frozen models, with FP32 as the diagnostic fallback;</p></li>
 <li><p>prompt prefill and <code class="docutils literal notranslate"><span class="pre">Lq</span> <span class="pre">==</span> <span class="pre">1</span></code> decode;</p></li>
 <li><p>standard tensor <code class="docutils literal notranslate"><span class="pre">past_key</span></code>/<code class="docutils literal notranslate"><span class="pre">past_value</span></code> and
 <code class="docutils literal notranslate"><span class="pre">present_key</span></code>/<code class="docutils literal notranslate"><span class="pre">present_value</span></code> for the correctness fallback.</p></li>
 </ul>
-<p>The graph optimizer recognizes the standard
-<code class="docutils literal notranslate"><span class="pre">MatMul</span> <span class="pre">-&gt;</span> <span class="pre">scale/mask</span> <span class="pre">-&gt;</span> <span class="pre">Softmax</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> attention pattern and lowers it
-to an internal GQA plan. It does not expose a <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> operator from
-this repository. GQA maps query-head groups onto shared K/V heads without
-physically repeating K or V.</p>
+<p>The existing <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> graph optimizer recognizes the standard
+<code class="docutils literal notranslate"><span class="pre">MatMul</span> <span class="pre">-&gt;</span> <span class="pre">scale/mask</span> <span class="pre">-&gt;</span> <span class="pre">Softmax</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> attention pattern and emits
+standard <code class="docutils literal notranslate"><span class="pre">ai.onnx::Attention</span></code>. <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> dispatches that node to the
+shared engine; Qwen code does not lower it to a private GQA operator. It does
+not expose a <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> operator from this repository. GQA maps
+query-head groups onto shared K/V heads without physically repeating K or V.</p>
 <p>The optimized path uses blocked online softmax and never materializes the
 complete attention-score matrix. Prefill uses query blocks; decode uses a
 single-query streaming kernel. General masks, arbitrary layouts, and broad
@@ -806,7 +944,7 @@ prefill or decode without increasing peak memory.</p>
 <p>Tensor <code class="docutils literal notranslate"><span class="pre">Concat</span></code> of all past K/V is acceptable only as a correctness
 baseline. It copies work proportional to context length at every generated
 token and prevents competitive long-context decode.</p>
-<p>Execute the minimum C0-C2 slice of the
+<p>Execute C0 through C2 from the
 <a class="reference internal" href="2026_08_kv_cache.html"><span class="doc">Persistent KV Cache roadmap</span></a>:</p>
 <ol class="arabic simple">
 <li><p>one request-owned persistent runtime cache value;</p></li>
@@ -816,6 +954,15 @@ token and prevents competitive long-context decode.</p>
 <li><p>explicit reset and session/request isolation;</p></li>
 <li><p>import/export adapters only when standard tensor cache outputs are visible.</p></li>
 </ol>
+<p>This cross-repository work is split at the ownership boundary. Qwen PR06a in
+<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> delivers the request-owned cache handle, persistent lifetime,
+reset/isolation semantics, execution-plan actions, safe tensor-cache rewrite,
+and backend-neutral import/export interfaces. Qwen PR06b in
+<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> delivers contiguous CPU allocation and growth, append/view/
+export kernels, the block iterator, and direct consumption by shared streaming
+Attention. PR06b is the implementation vehicle for the Qwen-critical C0-C2
+slice; the later paged and quantized parts of the broader KV roadmap remain
+discussed.</p>
 <p>Do not block this milestone on paged storage, beam reorder, speculative
 truncate, sliding windows, INT8/INT4 KV compression, or observable cache
 format APIs. Append bytes must be proportional to new tokens, and a generated
@@ -826,9 +973,11 @@ remain identical to the tensor-cache reference.</p>
 </section>
 <section id="phase-q5-scheduling-and-fusion">
 <h2>Phase Q5: scheduling and fusion<a class="headerlink" href="#phase-q5-scheduling-and-fusion" title="Link to this heading">#</a></h2>
-<p>Execute Runtime PR01, PR02, and PR04 from the
-<a class="reference internal" href="2026_08_runtime_execution_controls.html"><span class="doc">Runtime Execution Controls roadmap</span></a> before final tuning. Registered Qwen
-kernels share the session executor; standalone entry points are serial.</p>
+<p>Runtime PR01, PR02, and PR04 from the
+<a class="reference internal" href="2026_08_runtime_execution_controls.html"><span class="doc">Runtime Execution Controls roadmap</span></a> are complete. Registered Qwen kernels
+must reuse the delivered session executor and nesting guard; standalone entry
+points remain serial. Qwen PR07 tunes participants and fusions but adds no
+executor or private pool.</p>
 <p>Tune distinct policies for:</p>
 <ul class="simple">
 <li><p>INT4 GEMV decode, usually partitioned over output channels;</p></li>
@@ -986,13 +1135,15 @@ adapter by the separate repository.</p>
 fallback occurs in a timed priority region.</p></td>
 </tr>
 <tr class="row-odd"><td><p>INT4 memory</p></td>
-<td><p>Full float weights are never materialized. Persistent packed weights
-plus scales/metadata stay within a documented bound over serialized
-INT4 bytes.</p></td>
+<td><p>Full BF16/float weights are never materialized. Persistent packed
+weights plus scales/metadata stay within <code class="docutils literal notranslate"><span class="pre">1.25x</span></code> serialized UINT4
+weights plus serialized scales/zero points, with tied storage counted
+once.</p></td>
 </tr>
 <tr class="row-even"><td><p>Correctness</p></td>
-<td><p>Float and INT4 logits satisfy explicit tolerances; greedy token ids
-match at every checked generation step.</p></td>
+<td><p>Float and INT4 teacher-forced logits satisfy the frozen tolerances.
+Greedy ids match for stable top-1 margins; documented near ties satisfy
+the bounded candidate rule. Stable prompts match exact token sequences.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Decode structure</p></td>
 <td><p>One token performs no full-weight conversion, complete score-matrix
@@ -1003,10 +1154,11 @@ allocation, or full-KV copy.</p></td>
 batch 1 with bounded memory and stable repeated latency.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Performance</p></td>
-<td><p>Q4 publishes TTFT and tokens/second against ONNX Runtime on the same
-CPU, graph contract, threads, affinity, and prompt/context matrix.
-Initial acceptance requires no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>; final
-tuning targets at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> median.</p></td>
+<td><p>Q4 publishes both <code class="docutils literal notranslate"><span class="pre">standard-contract</span></code> and <code class="docutils literal notranslate"><span class="pre">native-performance</span></code> TTFT
+and tokens/second on the frozen CPU, threads, affinity, and
+prompt/context matrix. Against the native-performance baseline, initial
+acceptance requires no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code> and final tuning
+reaches at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> median.</p></td>
 </tr>
 </tbody>
 </table>
@@ -1033,8 +1185,9 @@ tuning targets at least <code class="docutils literal notranslate"><span class="
 <tbody>
 <tr class="row-even"><td><p>Qwen PR01</p></td>
 <td><p>Frozen graphs and generation benchmark.</p></td>
-<td><p>Float/QDQ graph digests, operator inventories, correctness tokens, TTFT,
-decode, memory, and per-node profiles are reproducible.</p></td>
+<td><p>Pinned model/exporter/tokenizer revisions, the canonical QDQ contract,
+graph digests, lazy backend cases, correctness rules, both comparator
+contracts, TTFT, decode, memory, and per-node profiles are reproducible.</p></td>
 <td><p>None</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -1042,7 +1195,7 @@ decode, memory, and per-node profiles are reproducible.</p></td>
 <td><p>Standard QDQ INT4 plan and decode GEMV.</p></td>
 <td><p>Constant QDQ is captured once; every decode projection keeps weights
 compressed and passes exact packing/tail plus model-logit tests.</p></td>
-<td><p>Qwen PR01; Gemm PR09.6</p></td>
+<td><p>Qwen PR01; reuses completed Gemm PR09.6 primitives</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Qwen PR03</p></td>
@@ -1056,36 +1209,48 @@ regressing decode or exceeding the memory bound.</p></td>
 <td><p>Qwen block operator slice.</p></td>
 <td><p>Standard RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout paths run
 one complete float and INT4 block without avoidable intermediates.</p></td>
-<td><p>Qwen PR02; ExpLog PR01-PR03</p></td>
+<td><p>Qwen PR02; completed ExpLog PR01-PR03</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Qwen PR05</p></td>
-<td><p>Narrow standard-pattern GQA.</p></td>
-<td><p>Batch-1 causal prefill and decode use online softmax and zero-copy
-query/KV-head grouping, with a tensor-cache fallback.</p></td>
-<td><p>Qwen PR04</p></td>
+<td><p>Frozen-graph integration with shared Attention.</p></td>
+<td><p>Standard <code class="docutils literal notranslate"><span class="pre">Attention</span></code> dispatches to the shared descriptor, planner,
+materialized fallback, and online engine. Batch-1 causal prefill/decode
+use zero-copy query/KV-head grouping; no Qwen-only engine is introduced.</p></td>
+<td><p>Qwen PR04; Attention PR14 / #391</p></td>
 <td><p>Pending</p></td>
 </tr>
-<tr class="row-odd"><td><p>Qwen PR06</p></td>
-<td><p>Persistent contiguous KV cache.</p></td>
+<tr class="row-odd"><td><p>Qwen PR06a</p></td>
+<td><p>Backend-neutral persistent cache in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>.</p></td>
+<td><p>Request-owned state survives invocation cleanup, reset and isolation are
+explicit, safe tensor-cache rewrites preserve observable outputs, and
+execution planning accounts for persistent lifetime and bytes.</p></td>
+<td><p>Qwen PR05; KV C0</p></td>
+<td><p>Pending</p></td>
+</tr>
+<tr class="row-even"><td><p>Qwen PR06b</p></td>
+<td><p>Contiguous CPU cache and cache-aware decode in <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>.</p></td>
 <td><p>Append work is proportional to new tokens; decode reads the cache
-directly and produces no full present-cache copy or gather.</p></td>
-<td><p>Qwen PR05; KV C0-C2</p></td>
+directly through the shared Attention block iterator and produces no
+full present-cache copy or gather.</p></td>
+<td><p>Qwen PR06a; KV C1-C2</p></td>
 <td><p>Pending</p></td>
 </tr>
-<tr class="row-even"><td><p>Qwen PR07</p></td>
-<td><p>Session executor and measured fusion.</p></td>
-<td><p>Runtime PR01/02/04 integration prevents nested pools; only measured
-Qwen fusions land, with inspectable scheduling decisions.</p></td>
-<td><p>Qwen PR06</p></td>
+<tr class="row-odd"><td><p>Qwen PR07</p></td>
+<td><p>Participant tuning and measured fusion.</p></td>
+<td><p>The completed Runtime PR01/02/04 executor is reused without a private
+pool; only measured Qwen fusions land, with inspectable scheduling
+decisions.</p></td>
+<td><p>Qwen PR06b</p></td>
 <td><p>Pending</p></td>
 </tr>
-<tr class="row-odd"><td><p>Qwen PR08</p></td>
+<tr class="row-even"><td><p>Qwen PR08</p></td>
 <td><p>First dense-Qwen3 performance gate.</p></td>
 <td><p>Both reference models pass correctness/memory gates, every priority case
 is at least <code class="docutils literal notranslate"><span class="pre">0.9x</span></code> ONNX Runtime, and median performance reaches
-<code class="docutils literal notranslate"><span class="pre">1.0x</span></code> or remains open with published bottleneck evidence.</p></td>
-<td><p>Qwen PR01-PR07</p></td>
+<code class="docutils literal notranslate"><span class="pre">1.0x</span></code>. If the target is missed, bottleneck evidence is published and
+PR08 remains open.</p></td>
+<td><p>Qwen PR01-PR07, including PR06a and PR06b</p></td>
 <td><p>Pending</p></td>
 </tr>
 </tbody>
@@ -1106,6 +1271,9 @@ is the direct weight-only comparison;</p></li>
 <li><p>its CPU
 <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/bert/group_query_attention.cc">GroupQueryAttention</a>
 confirms the GQA/KV-cache execution target;</p></li>
+<li><p>the pinned model contracts originate from the official
+<a class="reference external" href="https://huggingface.co/Qwen/Qwen3-0.6B/blob/main/config.json">Qwen3-0.6B configuration</a> and
+<a class="reference external" href="https://huggingface.co/Qwen/Qwen3-4B/blob/main/config.json">Qwen3-4B configuration</a>;</p></li>
 <li><p>the ONNX Runtime GenAI
 <a class="reference external" href="https://github.com/microsoft/onnxruntime-genai/blob/main/src/python/py/models/builders/qwen.py">Qwen builder</a>
 distinguishes full-attention layers and their KV-cache handling.</p></li>
@@ -1161,6 +1329,7 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#frozen-model-contract">Frozen model contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#plans-to-execute-first">Plans to execute first</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#export-contract">Export contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator-priority">Operator priority</a></li>
@@ -1213,7 +1382,7 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 22, 2026.
+  Last updated on Aug 24, 2026.
   <br/>
 </p></div>
       

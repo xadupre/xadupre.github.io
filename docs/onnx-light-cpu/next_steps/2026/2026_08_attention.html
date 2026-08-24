@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -396,6 +396,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_tree_ensemble.html">Tree Ensemble Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_processor_performance_profile.html">Processor Memory and Compute Performance Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
 </ul>
@@ -465,27 +466,30 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>discussion</strong></p>
+<p><strong>planned</strong></p>
 <p>The portable runtime provides tensor-based Attention correctness, but
 <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> does not yet provide the optimized materialized or streaming
-kernel described here. Roadmap PR11 through PR15 remain pending.</p>
+kernel described here. The shared GEMM/MatMul engine and its benchmark tooling
+are available, so Roadmap PR11 may start. The separate default-policy GEMM
+parity work may continue without blocking this roadmap.</p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>The objective is a correct, bounded-memory CPU implementation of tensor-based
 ONNX <code class="docutils literal notranslate"><span class="pre">Attention</span></code> with performance parity against the ONNX Runtime CPU
 execution provider. Parity means a corpus median speed-up of at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code>
 and no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code> on dedicated hardware.</p>
-<p>This roadmap starts after the final blocking GEMM and MatMul parity gate,
-<a class="reference internal" href="2026_08_gemm_matmul.html"><span class="doc">Roadmap PR10.5</span></a>. Attention reuses the shared
-matrix-multiplication engine’s packing, dot-product micro-kernels, type
-conversion, and scheduler, but is not implemented as two ordinary materialized
-MatMul calls on its optimized path.</p>
+<p>This roadmap starts from the shared matrix engine delivered through
+<a class="reference internal" href="2026_08_gemm_matmul.html"><span class="doc">Roadmap PR10.5</span></a>. Attention reuses its packing,
+dot-product micro-kernels, type conversion, and scheduler. The materialized
+correctness path may compose those primitives, but the optimized path is not
+implemented as two ordinary materialized MatMul calls.</p>
 </section>
 <section id="related-roadmaps">
 <h2>Related roadmaps<a class="headerlink" href="#related-roadmaps" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><a class="reference internal" href="2026_08_gemm_matmul.html"><span class="doc">Gemm and MatMul Performance Roadmap</span></a> provides
-the prerequisite matrix-multiplication engine and closes with PR10.5.</p></li>
+the prerequisite matrix-multiplication engine. Its remaining default-policy
+parity work is independent of Attention.</p></li>
 <li><p><a class="reference internal" href="2026_08_kv_cache.html"><span class="doc">Persistent KV Cache and Decode roadmap</span></a> owns
 persistent state, paged storage, cache quantization, and optimized cache
 append. This roadmap covers standard tensor <code class="docutils literal notranslate"><span class="pre">past</span></code>/<code class="docutils literal notranslate"><span class="pre">present</span></code>
@@ -494,18 +498,37 @@ compatibility and reports its allocation and copy cost separately.</p></li>
 </section>
 <section id="scope">
 <h2>Scope<a class="headerlink" href="#scope" title="Link to this heading">#</a></h2>
-<p>The Attention adapter handles Q/K/V head geometry, scaling, masks, causal
-behavior, grouped-query and multi-query head mapping, and optional tensor
-<code class="docutils literal notranslate"><span class="pre">past</span></code>/<code class="docutils literal notranslate"><span class="pre">present</span></code> state according to the selected ONNX opset.</p>
+<p>The adapter implements <code class="docutils literal notranslate"><span class="pre">ai.onnx::Attention</span></code> v23 and v24. It handles Q/K/V
+head geometry, scaling, masks, causal behavior, grouped-query and multi-query
+head mapping, and optional tensor cache state according to the selected opset.</p>
 <p>The implementation supports:</p>
 <ul class="simple">
-<li><p>MHA, GQA, and MQA through one internal descriptor;</p></li>
-<li><p>boolean, additive, padding, causal, sliding-window, and sparse masks;</p></li>
+<li><p>rank-4 <code class="docutils literal notranslate"><span class="pre">[B,</span> <span class="pre">H,</span> <span class="pre">L,</span> <span class="pre">D]</span></code> and rank-3 packed <code class="docutils literal notranslate"><span class="pre">[B,</span> <span class="pre">L,</span> <span class="pre">H</span> <span class="pre">*</span> <span class="pre">D]</span></code> layouts;</p></li>
+<li><p>MHA, GQA, and MQA through one internal descriptor, including a value head
+dimension different from the Q/K head dimension;</p></li>
+<li><p>broadcastable rank-2 through rank-4 boolean and additive <code class="docutils literal notranslate"><span class="pre">attn_mask</span></code>
+tensors, causal masking, their intersection, and zero output for a fully
+masked query row;</p></li>
+<li><p>v24 <code class="docutils literal notranslate"><span class="pre">nonpad_kv_seqlen</span></code> external-cache masking and v23/v24 internal
+<code class="docutils literal notranslate"><span class="pre">past_key</span></code>/<code class="docutils literal notranslate"><span class="pre">past_value</span></code> concatenation with optional <code class="docutils literal notranslate"><span class="pre">present</span></code> outputs;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">scale</span></code>, <code class="docutils literal notranslate"><span class="pre">softcap</span></code>, <code class="docutils literal notranslate"><span class="pre">qk_matmul_output_mode</span></code> 0 through 3, and the
+optional observable <code class="docutils literal notranslate"><span class="pre">qk_matmul_output</span></code>;</p></li>
 <li><p>prefill, short-query lengths 2-16, and single-token decode;</p></li>
-<li><p>FP32, FP16, and BF16 inputs with FP32 softmax accumulation;</p></li>
+<li><p>equal-type FP32, FP16, and BF16 Q/K/V with default or explicit FP32 softmax
+accumulation;</p></li>
 <li><p>zero-copy GQA/MQA head mapping, without physically repeating K or V;</p></li>
 <li><p>exact ONNX layouts, output shapes, empty sequences, and validation errors.</p></li>
 </ul>
+<p>The ONNX schema also permits DOUBLE, a V type different from Q/K, and softmax
+precisions other than FP32. Those combinations are outside this roadmap and
+are not currently supported by the portable kernel either. CPU registration
+must not advertise unsupported Q/K types; combinations that can reach the CPU
+adapter through a supported Q type fail with an explicit unsupported error
+rather than silently changing precision or returning an approximation. A
+requested <code class="docutils literal notranslate"><span class="pre">qk_matmul_output</span></code> necessarily materializes that observable tensor;
+the dispatcher therefore selects the materialized path for it. Sliding-window
+or sparse behavior is in scope only when represented by a valid
+<code class="docutils literal notranslate"><span class="pre">attn_mask</span></code>. It does not introduce a separate non-standard mask contract.</p>
 </section>
 <section id="benchmark-contract">
 <h2>Benchmark contract<a class="headerlink" href="#benchmark-contract" title="Link to this heading">#</a></h2>
@@ -513,33 +536,82 @@ behavior, grouped-query and multi-query head mapping, and optional tensor
 Runtime and isolated measurements for the score, softmax, and value-update
 stages.</p>
 <ul class="simple">
-<li><p>Use identical tensors, masks, layouts, thread counts, CPU affinity, and
-correctness tolerances.</p></li>
+<li><p>Use identical tensors, masks, layouts, CPU affinity, and correctness
+tolerances.</p></li>
+<li><p>The primary comparison leaves thread selection unset so ONNX Runtime and
+onnx-light choose their own default execution policies. Explicit equal-thread
+runs are separate scaling diagnostics and never replace the primary result.</p></li>
 <li><p>Warm up every candidate, alternate candidate order, and report median and
 dispersion rather than the best observation.</p></li>
 <li><p>Run on an idle, pinned machine with a fixed power policy and record CPU,
 cache, ISA, compiler, and build metadata.</p></li>
-<li><p>Cover query lengths 1, 2-16, and long prefill; KV lengths from 1 to the
-target context limit; MHA, GQA, and MQA; every supported mask and type.</p></li>
+<li><p>Cover query lengths 1, 2, 8, 16, 128, and 512; KV lengths 1, 128, 1024,
+4096, and 8192 when machine memory permits; MHA <code class="docutils literal notranslate"><span class="pre">12/12</span></code>, GQA <code class="docutils literal notranslate"><span class="pre">16/4</span></code>,
+and MQA <code class="docutils literal notranslate"><span class="pre">16/1</span></code> query/KV-head ratios; head dimensions 64 and 128; rank-3
+and rank-4 layouts; and FP32, FP16, and BF16.</p></li>
+<li><p>Pair the full attribute and mask matrix with small correctness cases. The
+timed priority corpus covers no mask, causal, boolean, additive, v24
+<code class="docutils literal notranslate"><span class="pre">nonpad_kv_seqlen</span></code>, and internal tensor-cache cases without taking their
+impractical Cartesian product.</p></li>
 <li><p>Report time to first token, per-token decode latency, tokens/second, peak
-temporary memory, and effective KV-cache bandwidth.</p></li>
+temporary memory, bytes copied for tensor <code class="docutils literal notranslate"><span class="pre">past</span></code>/<code class="docutils literal notranslate"><span class="pre">present</span></code>, and effective
+KV-cache bandwidth.</p></li>
 <li><p>Measure materialized and streaming paths separately. End-to-end results must
 include every conversion, allocation, mask, and tensor past/present copy
 visible to the caller.</p></li>
+<li><p>The priority platforms are x86-64 AVX2, x86-64 AVX-512 when dedicated
+hardware is available, and Arm64 NEON. SVE measurements are reported
+separately until a dedicated SVE machine is part of the regular gate.</p></li>
 </ul>
+</section>
+<section id="backend-test-corpus">
+<h2>Backend test corpus<a class="headerlink" href="#backend-test-corpus" title="Link to this heading">#</a></h2>
+<p>Roadmap PR11 adds <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> backend test cases for <code class="docutils literal notranslate"><span class="pre">Attention</span></code> in
+both correctness and <code class="docutils literal notranslate"><span class="pre">TestMode::BENCHMARK</span></code> modes. The benchmark cases:</p>
+<ul class="simple">
+<li><p>are registered through <code class="docutils literal notranslate"><span class="pre">RegisterCpuAttentionCases</span></code> and the CPU backend
+collector, so the standard onnx-light backend API, the onnx-light-cpu
+benchmark runner, and the dashboard consume the same models;</p></li>
+<li><p>produce inputs and expected outputs lazily so large context cases are not
+allocated while the registry is collected;</p></li>
+<li><p>use globally unique <code class="docutils literal notranslate"><span class="pre">test_cpu_attention_*_benchmark</span></code> names encoding opset,
+rank-3/rank-4 layout, MHA/GQA/MQA geometry, query and KV lengths, cache and
+mask mode, and element type;</p></li>
+<li><p>include the complete timed priority corpus defined above, including KV length
+8192 only in the opt-in large corpus when machine memory permits.</p></li>
+</ul>
+<p>Unit tests execute bounded representative benchmark cases through the
+registered CPU kernel. Metadata tests cover the complete corpus without
+materializing every workload and enforce unique names, lazy construction,
+declared input/output element counts, every priority type and geometry, and
+the opt-in 8192 cases. The benchmark runner records the backend case name in
+raw output so published dashboard rows remain traceable to the registered
+model.</p>
 </section>
 <section id="phase-1-plan-and-materialized-correctness-path">
 <h2>Phase 1: plan and materialized correctness path<a class="headerlink" href="#phase-1-plan-and-materialized-correctness-path" title="Link to this heading">#</a></h2>
-<p>An immutable <code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code> is built from model metadata, static
-dimensions, CPU features, and runtime options. It records:</p>
+<p>An immutable <code class="docutils literal notranslate"><span class="pre">AttentionDescriptor</span></code> is built when the node is initialized. It
+contains only information known without runtime inputs:</p>
+<ul class="simple">
+<li><p>opset, attributes, optional input/output positions, and observable outputs;</p></li>
+<li><p>statically known rank, type, head counts, and head dimensions when present;</p></li>
+<li><p>candidate dot-product, conversion, and packing functions allowed by the CPU.</p></li>
+</ul>
+<p>Every invocation validates the actual Q/K/V, mask, and cache tensors and builds
+a lightweight <code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code> from their concrete shapes and strides. It
+records:</p>
 <ul class="simple">
 <li><p>batch size, query-head and KV-head counts, head dimensions, and GQA ratio;</p></li>
-<li><p>input/output layouts and strides;</p></li>
-<li><p>scale, causal mode, mask kind, and tensor past/present use;</p></li>
-<li><p>prefill, short-query, or single-token decode algorithm;</p></li>
-<li><p>query-row and KV-column block sizes;</p></li>
-<li><p>dot-product/packing functions, accumulation type, and useful thread count.</p></li>
+<li><p>input/output layouts and strides, query and KV lengths, and cache mode;</p></li>
+<li><p>resolved scale, causal bounds, mask representation, and output obligations;</p></li>
+<li><p>materialized, prefill-streaming, short-query, or decode algorithm;</p></li>
+<li><p>query-row and KV-column block sizes and the available outer task count.</p></li>
 </ul>
+<p>The plan does not prepack Q, K, or V at model load because those tensors are
+unknown then. It emits work items to the onnx-light executor; it does not store
+or impose a fixed thread count. The runtime policy decides how many workers are
+admitted. Shape-specialized decisions may be cached only by a complete key and
+must not retain invocation tensors.</p>
 <p>The first implementation is a materialized correctness path:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>S = scale * Q @ transpose(K)
 S = apply_mask_and_causality(S)
@@ -547,9 +619,11 @@ P = softmax(S)
 O = P @ V
 </pre></div>
 </div>
-<p>It validates all shape, mask, head-mapping, precision, and tensor
-past/present semantics against ONNX Runtime. It remains the deterministic
-fallback for combinations not supported by streaming Attention.</p>
+<p>It validates all shape, mask, head-mapping, precision, optional-output, and
+tensor cache semantics against ONNX Runtime. It remains the deterministic CPU
+fallback for supported types. DOUBLE, mixed Q/K and V types, and unsupported
+<code class="docutils literal notranslate"><span class="pre">softmax_precision</span></code> combinations remain outside the registered support
+boundary and produce an explicit error if encountered.</p>
 </section>
 <section id="phase-2-streaming-and-online-softmax">
 <h2>Phase 2: streaming and online softmax<a class="headerlink" href="#phase-2-streaming-and-online-softmax" title="Link to this heading">#</a></h2>
@@ -580,6 +654,11 @@ maximum;</p></li>
 <li><p>dedicated MHA/GQA/MQA algorithms for query lengths 1 and 2-16;</p></li>
 <li><p>FP16/BF16 score and V-update kernels with the materialized path as fallback.</p></li>
 </ul>
+<p>Here sliding-window and sparse tile skipping are optimizations inferred from a
+valid boolean or additive <code class="docutils literal notranslate"><span class="pre">attn_mask</span></code>. Arbitrary masks remain correct even
+when no skip structure can be inferred. Internal <code class="docutils literal notranslate"><span class="pre">past</span></code> tensors and external
+v24 caches may be consumed block by block, but requested <code class="docutils literal notranslate"><span class="pre">present</span></code> or
+<code class="docutils literal notranslate"><span class="pre">qk_matmul_output</span></code> tensors still incur the allocations required by ONNX.</p>
 <p>Temporary score storage falls from
 <code class="docutils literal notranslate"><span class="pre">O(B</span> <span class="pre">*</span> <span class="pre">Hq</span> <span class="pre">*</span> <span class="pre">Lq</span> <span class="pre">*</span> <span class="pre">Lkv)</span></code> to <code class="docutils literal notranslate"><span class="pre">O(Br</span> <span class="pre">*</span> <span class="pre">Bc)</span></code> per worker. The expected gain is
 <code class="docutils literal notranslate"><span class="pre">0-20%</span></code> when ONNX Runtime already uses a fused path and <code class="docutils literal notranslate"><span class="pre">1.2-2x</span></code> when it
@@ -600,13 +679,16 @@ guarantees.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Correctness</p></td>
-<td><p>Differential tests cover stateless Attention and tensor past/present,
-MHA/GQA/MQA, every mask, causal boundary, layout, empty sequence, and
-supported type.</p></td>
+<td><p>Differential tests against ONNX Runtime and the portable kernel cover
+v23/v24, stateless and both cache modes, MHA/GQA/MQA, every attribute
+and optional output, mask/causal composition, fully masked rows, rank-3
+and rank-4 layouts, empty sequences, and every dispatched type.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Fallback</p></td>
-<td><p>The materialized path remains registered for every valid combination
-not handled by the streaming path.</p></td>
+<td><p>The materialized path handles every optimized-type combination not
+handled by streaming. Types and precision modes outside CPU scope are
+not advertised and fail explicitly if dispatch still reaches the CPU
+adapter.</p></td>
 </tr>
 <tr class="row-even"><td><p>Memory</p></td>
 <td><p>Streaming Attention never materializes the complete score or
@@ -614,12 +696,13 @@ probability tensor; temporary memory is bounded by worker count and
 <code class="docutils literal notranslate"><span class="pre">Br</span> <span class="pre">x</span> <span class="pre">Bc</span></code> blocks.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Scaling</p></td>
-<td><p>Prefill scheduling scales through the physical-core count, while
-short-query and decode paths avoid harmful parallel overhead.</p></td>
+<td><p>Prefill exposes enough independent work to scale through the physical
+cores when useful, while short-query and decode avoid harmful parallel
+overhead. The runtime, not the kernel, controls admitted workers.</p></td>
 </tr>
 <tr class="row-even"><td><p>Performance</p></td>
-<td><p>Every priority platform/type case reaches at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime
-median performance with no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>.</p></td>
+<td><p>On each priority platform/type corpus, median speed-up is at least
+<code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime and no priority case is below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Reproducibility</p></td>
 <td><p>Dedicated-machine results retain raw samples and environment metadata;
@@ -649,51 +732,63 @@ regressions.</p></td>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Roadmap PR11</p></td>
-<td><p>Materialized Attention implementation.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code> validates layouts, head geometry, scale, masks, types,
-blocks, and threads. Materialized QK-softmax-PV supports all masks,
-zero-copy GQA/MQA mapping, tensor past/present, FP32/FP16/BF16, and
-batch/head/query scheduling.</p></td>
-<td><p>GEMM/MatMul PR10.5</p></td>
-<td><p>Pending</p></td>
+<tr class="row-even"><td><p>Roadmap PR11 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/387">#387</a>)</p></td>
+<td><p>Adapter, planning contract, backend corpus, and FP32 materialized
+baseline.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">AttentionDescriptor</span></code> parses v23/v24 attributes and optional IO.
+Per-invocation planning validates concrete tensors without prepacking
+unknown inputs or fixing threads. Rank-3/rank-4 stateless FP32
+MHA/GQA/MQA, scale, causal and boolean/additive masks pass differential
+tests. Lazy correctness and <code class="docutils literal notranslate"><span class="pre">TestMode::BENCHMARK</span></code> backend cases are
+available through the shared collector and enforce the priority corpus.
+Features not implemented yet delegate to the portable kernel only when
+that kernel already supports them; otherwise they fail explicitly.</p></td>
+<td><p>Shared GEMM/MatMul engine</p></td>
+<td><p>Implemented.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Roadmap PR12</p></td>
-<td><p>Materialized Attention correctness gate.</p></td>
-<td><p>The complete MHA/GQA/MQA, mask, causal, past/present, layout, empty
-sequence, and type corpus matches ONNX Runtime; the path is registered
-as the streaming fallback.</p></td>
-<td><p>PR11</p></td>
-<td><p>Pending</p></td>
+<tr class="row-odd"><td><p>Roadmap PR12 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/389">#389</a>)</p></td>
+<td><p>Complete materialized semantics and type gate.</p></td>
+<td><p>FP16/BF16, softcap, mask/causal intersection, fully masked rows, all
+<code class="docutils literal notranslate"><span class="pre">qk_matmul_output_mode</span></code> values, optional outputs, internal tensor
+past/present, and v24 external-cache <code class="docutils literal notranslate"><span class="pre">nonpad_kv_seqlen</span></code> match ONNX
+Runtime. Explicit FP32 <code class="docutils literal notranslate"><span class="pre">softmax_precision</span></code> matches the default
+accumulation. DOUBLE, mixed-type, and other softmax-precision cases
+prove the declared unsupported boundary.</p></td>
+<td><p>PR11 / #387</p></td>
+<td><p>Open; blocked by #387.</p></td>
 </tr>
-<tr class="row-even"><td><p>Roadmap PR13</p></td>
-<td><p>Online Attention compute engine.</p></td>
-<td><p>The online recurrence matches the materialized path. SIMD score kernels
-fuse scale, masks, causal bounds, and row maximum; vector exponential
-and reductions are accurate; probability-by-V updates output directly.</p></td>
-<td><p>PR12</p></td>
-<td><p>Pending</p></td>
+<tr class="row-even"><td><p>Roadmap PR13 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/388">#388</a>)</p></td>
+<td><p>FP32 online Attention compute engine.</p></td>
+<td><p>The online recurrence matches the materialized path for stateless
+prefill, short-query, and decode. SIMD score kernels fuse scale, masks,
+causal bounds, softcap, and row maximum; vector exponential and
+reductions are accurate; probability-by-V updates output directly.</p></td>
+<td><p>PR12 / #389</p></td>
+<td><p>Open; blocked by #389.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Roadmap PR14</p></td>
-<td><p>Streaming scheduling and types.</p></td>
-<td><p>Prefill and dedicated short-query/decode scheduling cover MHA/GQA/MQA
-without nested pools. FP16/BF16 score and V-update kernels match the
-materialized fallback.</p></td>
-<td><p>GEMM/MatMul PR10.3, PR13</p></td>
-<td><p>Pending</p></td>
+<tr class="row-odd"><td><p>Roadmap PR14 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/391">#391</a>)</p></td>
+<td><p>Streaming scheduling, cache modes, and low-precision types.</p></td>
+<td><p>Runtime-owned scheduling covers MHA/GQA/MQA without nested pools or a
+fixed worker count. Internal/external cache blocks, inferable mask tile
+skipping, and FP16/BF16 score/V-update kernels match the materialized
+fallback. Observable full-tensor outputs select materialized execution.</p></td>
+<td><p>PR13 / #388</p></td>
+<td><p>Open; blocked by #388.</p></td>
 </tr>
-<tr class="row-even"><td><p>Roadmap PR15</p></td>
+<tr class="row-even"><td><p>Roadmap PR15 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/390">#390</a>)</p></td>
 <td><p>Final parity and memory gate.</p></td>
-<td><p>Every priority prefill/decode platform/type case has bounded temporary
-memory, reaches at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime median performance, and
-has no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>.</p></td>
-<td><p>PR14</p></td>
-<td><p>Pending</p></td>
+<td><p>Every priority platform/type corpus has bounded temporary memory,
+reaches at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> median speed-up over ONNX Runtime, and has no
+priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. Raw default-policy samples and environment
+metadata are published; controlled-thread runs remain diagnostic.</p></td>
+<td><p>PR14 / #391</p></td>
+<td><p>Open; blocked by #391.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Roadmap PR15 is the final Attention PR.</p>
+<p>Roadmap PR15 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/390">#390</a>) is the final
+Attention PR.</p>
 </section>
 </section>
 
@@ -748,6 +843,7 @@ has no priority case below <code class="docutils literal notranslate"><span clas
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#related-roadmaps">Related roadmaps</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#scope">Scope</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-contract">Benchmark contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backend-test-corpus">Backend test corpus</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#phase-1-plan-and-materialized-correctness-path">Phase 1: plan and materialized correctness path</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#phase-2-streaming-and-online-softmax">Phase 2: streaming and online softmax</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#acceptance-criteria">Acceptance criteria</a></li>
@@ -786,7 +882,7 @@ has no priority case below <code class="docutils literal notranslate"><span clas
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 22, 2026.
+  Last updated on Aug 24, 2026.
   <br/>
 </p></div>
       

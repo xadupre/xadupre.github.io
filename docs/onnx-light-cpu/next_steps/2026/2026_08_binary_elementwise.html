@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -396,6 +396,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_tree_ensemble.html">Tree Ensemble Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_processor_performance_profile.html">Processor Memory and Compute Performance Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
 </ul>
@@ -465,15 +466,15 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>discussion</strong></p>
+<p><strong>planned</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
-<p>The objective is to implement a common CPU engine for every ONNX binary
-elementwise operator with full multidirectional broadcasting. The priority
-corpus must reach at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime median performance, with no
-priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. The engine should exceed ONNX Runtime where a
-prepared broadcast plan, a shape-specific loop, or fusion across several
-elementwise operators removes indexing and memory traffic.</p>
+<p>The objective is to implement one common CPU traversal and dispatch engine for
+the numeric and boolean ONNX binary elementwise operators listed below. The
+priority corpus must reach at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime median performance,
+with no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. The engine should exceed ONNX Runtime
+where a prepared broadcast plan, a shape-specific loop, or fusion across
+several elementwise operators removes indexing and memory traffic.</p>
 <p>The correctness implementation in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already provides
 <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> validation and equal-shape, scalar, and
 generic rank-aware traversal through <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code>. The roadmap builds
@@ -493,18 +494,57 @@ the corresponding broadcasted elements of two inputs:</p>
 <code class="docutils literal notranslate"><span class="pre">LessOrEqual</span></code>;</p></li>
 <li><p>logical: <code class="docutils literal notranslate"><span class="pre">And</span></code>, <code class="docutils literal notranslate"><span class="pre">Or</span></code> and <code class="docutils literal notranslate"><span class="pre">Xor</span></code>;</p></li>
 <li><p>integer bits: <code class="docutils literal notranslate"><span class="pre">BitwiseAnd</span></code>, <code class="docutils literal notranslate"><span class="pre">BitwiseOr</span></code>, <code class="docutils literal notranslate"><span class="pre">BitwiseXor</span></code> and <code class="docutils literal notranslate"><span class="pre">BitShift</span></code>;</p></li>
-<li><p>parameterized/specialized: <code class="docutils literal notranslate"><span class="pre">PRelu</span></code>, <code class="docutils literal notranslate"><span class="pre">CastLike</span></code> and <code class="docutils literal notranslate"><span class="pre">SwiGLU</span></code>;</p></li>
-<li><p>binary instances of variadic elementwise <code class="docutils literal notranslate"><span class="pre">Sum</span></code>, <code class="docutils literal notranslate"><span class="pre">Mean</span></code>, <code class="docutils literal notranslate"><span class="pre">Min</span></code> and
-<code class="docutils literal notranslate"><span class="pre">Max</span></code>.</p></li>
+<li><p>parameterized: <code class="docutils literal notranslate"><span class="pre">PRelu</span></code>.</p></li>
 </ul>
 <p>Schemas with two required inputs but cross-element or metadata behavior do not
 use this engine. This explicitly excludes matrix multiplication, gather and
 indexing, reshape/expand/tile, normalization, cumulative operations,
 grid/geometry operators, sequence access, top-k, string concatenation, and
 other operators where one output element is not a scalar function of two
-broadcasted input elements. <code class="docutils literal notranslate"><span class="pre">CastLike</span></code> is retained as a specialized adapter:
-its second input supplies a type rather than element values, and its compute
-loop reuses unary cast kernels.</p>
+broadcasted input elements.</p>
+<p><code class="docutils literal notranslate"><span class="pre">CastLike</span></code> is a unary conversion selected by metadata from its second input;
+it stays in the unary roadmap and never enters <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code>.
+<code class="docutils literal notranslate"><span class="pre">SwiGLU</span></code> v28 has two equal-shape inputs but does not allow broadcasting. It
+reuses the equal-shape traversal and the completed <code class="docutils literal notranslate"><span class="pre">Exp</span></code> primitive through a
+specialized adapter, without weakening its schema to accept broadcasting.
+Variadic <code class="docutils literal notranslate"><span class="pre">Sum</span></code>, <code class="docutils literal notranslate"><span class="pre">Mean</span></code>, <code class="docutils literal notranslate"><span class="pre">Min</span></code> and <code class="docutils literal notranslate"><span class="pre">Max</span></code> use a later
+<code class="docutils literal notranslate"><span class="pre">VariadicElementwisePlan</span></code> that iterates every input in one output traversal;
+they are not implemented as a chain of binary plans and temporary tensors.</p>
+</section>
+<section id="schema-and-type-contract">
+<h2>Schema and type contract<a class="headerlink" href="#schema-and-type-contract" title="Link to this heading">#</a></h2>
+<p>The source of truth is the latest schema registered by <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> for each
+operator plus its existing portable kernel dispatch. Binary PR01 generates a
+checked operator/opset/input-type/output-type manifest from those registries;
+<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> does not advertise a wider type set. In particular:</p>
+<ul class="simple">
+<li><p>arithmetic inputs and outputs have the same type except for the schema’s
+mixed base/exponent forms of <code class="docutils literal notranslate"><span class="pre">Pow</span></code>;</p></li>
+<li><p>comparisons take equal-typed inputs and emit one-byte <code class="docutils literal notranslate"><span class="pre">BOOL</span></code>;</p></li>
+<li><p>logical operations accept and emit one-byte <code class="docutils literal notranslate"><span class="pre">BOOL</span></code>;</p></li>
+<li><p>bitwise and shift operations use the schema-supported signed/unsigned
+integer widths;</p></li>
+<li><p>string <code class="docutils literal notranslate"><span class="pre">Equal</span></code> and types without a useful CPU SIMD representation remain
+explicit portable fallbacks and are correctness-tested but not registered
+as optimized kernels;</p></li>
+<li><p>FP16/BF16 are optimized only where the schema and portable implementation
+already support them; this roadmap does not add blanket Float8 or packed
+sub-byte arithmetic.</p></li>
+</ul>
+<p>Each adapter owns schema semantics that cannot live in a generic functor:
+<code class="docutils literal notranslate"><span class="pre">Mod.fmod</span></code>, <code class="docutils literal notranslate"><span class="pre">BitShift.direction</span></code>, <code class="docutils literal notranslate"><span class="pre">Pow</span></code> mixed types and output type,
+<code class="docutils literal notranslate"><span class="pre">PRelu</span></code> slope constraints, and the exact supported opset interval.
+Integer <code class="docutils literal notranslate"><span class="pre">Div</span></code> truncates toward zero. Integer <code class="docutils literal notranslate"><span class="pre">Mod</span></code> implements Python
+remainder for <code class="docutils literal notranslate"><span class="pre">fmod=0</span></code> and truncated C remainder for <code class="docutils literal notranslate"><span class="pre">fmod=1</span></code>; floating
+<code class="docutils literal notranslate"><span class="pre">Mod(fmod=1)</span></code> follows <code class="docutils literal notranslate"><span class="pre">std::fmod</span></code> and its IEEE special cases. Integer zero
+divisors, signed <code class="docutils literal notranslate"><span class="pre">INT_MIN</span> <span class="pre">/</span> <span class="pre">-1</span></code> and shift amounts at least the element width
+are invalid corpus inputs and are rejected before the optimized loop.
+<code class="docutils literal notranslate"><span class="pre">Add</span></code>/<code class="docutils literal notranslate"><span class="pre">Sub</span></code>/<code class="docutils literal notranslate"><span class="pre">Mul</span></code> overflow is implemented with unsigned-width arithmetic
+and bit-preserving conversion instead of signed C++ overflow. Integer <code class="docutils literal notranslate"><span class="pre">Pow</span></code>
+cases are restricted to representable results until a separately tested
+overflow contract exists. Differential tests cover both accepted boundaries
+and these validation failures; undefined behavior never reaches a native
+instruction.</p>
 <p>The common engine owns shape normalization, loop selection, iteration,
 parallel scheduling, and ISA dispatch. Each ONNX adapter retains its own type
 constraints and numerical semantics. In particular, integer <code class="docutils literal notranslate"><span class="pre">Div</span></code> and
@@ -514,18 +554,39 @@ approximation.</p>
 </section>
 <section id="broadcast-plan">
 <h2>Broadcast plan<a class="headerlink" href="#broadcast-plan" title="Link to this heading">#</a></h2>
-<p>A <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> should be prepared from the two input shapes, element
-sizes, output type, operator, CPU, and thread limit. It contains:</p>
+<p>An immutable <code class="docutils literal notranslate"><span class="pre">BinaryKernelDescriptor</span></code> is created with the node. It contains
+the operator, opset, attributes, validated type signature, and scalar/ISA
+functions that the current CPU may use. It contains no invocation tensors,
+shape-specific offsets, thread count, or mutable tuning state.</p>
+<p>Each invocation validates both concrete shapes through the existing
+<code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> contract and obtains a
+<code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> keyed by descriptor identity, both shapes, input and
+output types, and ISA profile. It contains:</p>
 <ul class="simple">
 <li><p>the right-aligned output shape;</p></li>
 <li><p>zero strides for broadcast dimensions and contiguous strides otherwise;</p></li>
 <li><p>coalesced dimensions;</p></li>
 <li><p>the selected loop family;</p></li>
 <li><p>contiguous inner-loop length and outer-loop count;</p></li>
-<li><p>typed scalar and vector function pointers;</p></li>
-<li><p>task size and useful thread count;</p></li>
+<li><p>the selected typed scalar and vector function pointers;</p></li>
+<li><p>safe output-alias candidates and the minimum task granularity;</p></li>
 <li><p>guards for dynamic input shapes.</p></li>
 </ul>
+<p>Static shapes retain one plan. Dynamic nodes use a bounded eight-entry
+least-recently-used cache per node; eviction never invalidates an executing
+plan. The key never contains raw pointers. A miss builds and validates a new
+plan, while a failed guard always falls back to rebuilding rather than using
+stale strides.</p>
+<p>The executor decision is separate and per invocation. It combines output
+bytes, loop family, operation cost, outer-block count, processor profile,
+session policy, and current nesting state to choose serial execution or a
+number of submitted tasks. The plan exposes independent work but stores no
+fixed thread count. The session executor alone controls admitted workers.</p>
+<p>An input may back the output only when runtime last-use analysis permits it,
+its shape and type equal the output, and the selected traversal cannot
+overwrite a value before its final read. A broadcast input is never reused as
+the larger output. Alias and non-alias execution use identical numerical
+tests.</p>
 <p>The plan should classify the operation once:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
@@ -631,8 +692,8 @@ latency requires it, particularly <code class="docutils literal notranslate"><sp
 arithmetic is unavailable;</p></li>
 <li><p>native FP16/BF16 arithmetic when it is faster and preserves the operator
 contract;</p></li>
-<li><p>byte/word/dword integer kernels for supported arithmetic, comparison,
-logical, and bitwise operations;</p></li>
+<li><p>byte/word/dword/qword integer kernels where the ISA supports the exact
+arithmetic, comparison, logical, and bitwise semantics;</p></li>
 <li><p>byte-valued ONNX <code class="docutils literal notranslate"><span class="pre">BOOL</span></code> output without bit packing;</p></li>
 <li><p>scalar fallback for operations without an efficient SIMD instruction, such
 as general integer division and some <code class="docutils literal notranslate"><span class="pre">Pow</span></code> combinations.</p></li>
@@ -701,13 +762,23 @@ scheduler:</p>
 <p>Thresholds should depend on element size, operation cost, loop family, and
 hardware. <code class="docutils literal notranslate"><span class="pre">Pow</span></code> may benefit from threads much earlier than <code class="docutils literal notranslate"><span class="pre">Add</span></code> because it
 is compute-bound.</p>
+<p>Binary PR03 measures byte thresholds from <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">KiB</span></code>, <code class="docutils literal notranslate"><span class="pre">16</span> <span class="pre">KiB</span></code>,
+<code class="docutils literal notranslate"><span class="pre">64</span> <span class="pre">KiB</span></code>, <code class="docutils literal notranslate"><span class="pre">256</span> <span class="pre">KiB</span></code> and <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">MiB</span></code> and participant caps from <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">2</span></code>,
+<code class="docutils literal notranslate"><span class="pre">4</span></code> and physical cores for every priority operation/loop-family/type group.
+It selects the smallest threshold and smallest cap whose median is within 2%
+of that group’s best result and whose small-tensor p90 does not regress the
+serial baseline by more than 2%. The selected values and raw samples are
+stored respectively in the existing tuning registry and benchmark artifact.
+Untested processors use the portable conservative profile and are marked for
+later tuning rather than silently inheriting reference-machine results.</p>
 </section>
 <section id="prepared-plans-and-dynamic-shapes">
 <h2>Prepared plans and dynamic shapes<a class="headerlink" href="#prepared-plans-and-dynamic-shapes" title="Link to this heading">#</a></h2>
-<p>Static shapes should create <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> once per session. Dynamic
-shapes should use a small cache keyed by the two shapes, types, operator, and
-thread count. The fallback always rebuilds a validated plan; it must not reuse
-one whose shape guards fail.</p>
+<p>Static shapes create <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> once per session. Dynamic shapes
+use the bounded cache defined above. Processor-specific thresholds belong to
+the tuning registry and processor profile, not to the cache key; changing a
+session policy changes the per-invocation executor decision without rebuilding
+shape traversal metadata.</p>
 <p>Planning avoids repeated shape alignment and loop classification, but its
 expected gain is small for large tensors. The primary benefit is allowing the
 hot path to call the selected loop directly. For tiny tensors, graph-level
@@ -732,41 +803,90 @@ and selection operations into one traversal. It should:</p>
 <li><p>reject fusion when an intermediate has another consumer or when aliasing,
 numerical, or dynamic-shape constraints are unsafe.</p></li>
 </ul>
+<p>The first implementation is deliberately bounded to two templates:</p>
+<dl class="simple">
+<dt><code class="docutils literal notranslate"><span class="pre">swiglu_gate</span></code></dt><dd><p><code class="docutils literal notranslate"><span class="pre">Mul(Mul(gate,</span> <span class="pre">Sigmoid(gate)),</span> <span class="pre">up)</span></code> with equal FP32/BF16 shapes
+<code class="docutils literal notranslate"><span class="pre">[1,S,H]</span></code> for <code class="docutils literal notranslate"><span class="pre">S</span></code> in <code class="docutils literal notranslate"><span class="pre">{1,32,512}</span></code> and <code class="docutils literal notranslate"><span class="pre">H</span></code> in <code class="docutils literal notranslate"><span class="pre">{3072,9728}</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">scaled_masked_scores</span></code></dt><dd><p><code class="docutils literal notranslate"><span class="pre">Add(Mul(scores,</span> <span class="pre">scalar_scale),</span> <span class="pre">additive_mask)</span></code> with FP32 scores shaped
+<code class="docutils literal notranslate"><span class="pre">[1,H,Q,K]</span></code> for <code class="docutils literal notranslate"><span class="pre">H</span></code> in <code class="docutils literal notranslate"><span class="pre">{16,32}</span></code>, <code class="docutils literal notranslate"><span class="pre">(Q,K)</span></code> in
+<code class="docutils literal notranslate"><span class="pre">{(1,128),(32,1024),(128,4096)}</span></code>, and a broadcast mask shaped
+<code class="docutils literal notranslate"><span class="pre">[1,1,Q,K]</span></code>.</p>
+</dd>
+</dl>
+<p>The fused kernel preserves the unfused operation order and uses the same
+primitive approximations. FP32 results satisfy the unfused ULP/error contract;
+BF16 results satisfy the frozen converted-reference tolerance. Integer and
+BOOL fusion are outside the first implementation. Unary roadmap work may add
+new templates later, but Binary PR07 depends only on the completed Exp
+primitive needed by <code class="docutils literal notranslate"><span class="pre">Sigmoid</span></code>.</p>
 <p>Fusion is the principal route to gains substantially above ONNX Runtime because
 an isolated <code class="docutils literal notranslate"><span class="pre">Add</span></code> already approaches the memory-bandwidth limit.</p>
 </section>
 <section id="benchmark-contract">
 <h2>Benchmark contract<a class="headerlink" href="#benchmark-contract" title="Link to this heading">#</a></h2>
 <p>Compare with ONNX Runtime using identical inputs, shapes, types, threads, and
-affinity. Warm up both implementations, alternate their order, and report the
-median and dispersion.</p>
-<p>The benchmark matrix should include:</p>
+affinity. Binary PR01 pins the reference CPU, OS, compiler, ONNX Runtime,
+power mode, NUMA placement, and compact-affinity policy. Warm up both
+implementations, alternate their order, retain raw samples, and report median,
+p10/p90, and dispersion.</p>
+<p>The complete correctness matrix includes:</p>
 <ul class="simple">
-<li><p>equal shapes from tens of elements through hundreds of millions;</p></li>
+<li><p>element counts <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">1</span></code>, <code class="docutils literal notranslate"><span class="pre">7</span></code>, <code class="docutils literal notranslate"><span class="pre">31</span></code>, <code class="docutils literal notranslate"><span class="pre">32</span></code>, <code class="docutils literal notranslate"><span class="pre">33</span></code>, <code class="docutils literal notranslate"><span class="pre">255</span></code>,
+<code class="docutils literal notranslate"><span class="pre">256</span></code>, <code class="docutils literal notranslate"><span class="pre">257</span></code>, <code class="docutils literal notranslate"><span class="pre">4,096</span></code>, <code class="docutils literal notranslate"><span class="pre">65,536</span></code>, <code class="docutils literal notranslate"><span class="pre">1,048,576</span></code> and <code class="docutils literal notranslate"><span class="pre">4,194,304</span></code>;</p></li>
 <li><p>left and right scalar broadcasting;</p></li>
-<li><p>vectors broadcast over the first, middle, and last axis;</p></li>
-<li><p>NCHW and NHWC per-channel broadcasting;</p></li>
-<li><p>batch and head broadcasting used by MatMul and Attention epilogues;</p></li>
-<li><p>leading-rank expansion and alternating singleton dimensions;</p></li>
+<li><p>row <code class="docutils literal notranslate"><span class="pre">[M,N]</span> <span class="pre">op</span> <span class="pre">[N]</span></code>, column <code class="docutils literal notranslate"><span class="pre">[M,N]</span> <span class="pre">op</span> <span class="pre">[M,1]</span></code>, NCHW
+<code class="docutils literal notranslate"><span class="pre">[2,64,32,32]</span> <span class="pre">op</span> <span class="pre">[64,1,1]</span></code>, NHWC
+<code class="docutils literal notranslate"><span class="pre">[2,32,32,64]</span> <span class="pre">op</span> <span class="pre">[64]</span></code>, and attention
+<code class="docutils literal notranslate"><span class="pre">[2,16,128,128]</span> <span class="pre">op</span> <span class="pre">[1,16,1,1]</span></code> broadcasting;</p></li>
+<li><p>leading-rank expansion and alternating singleton shapes
+<code class="docutils literal notranslate"><span class="pre">[2,1,4,1,8,1]</span> <span class="pre">op</span> <span class="pre">[1,3,1,5,1,7]</span></code>;</p></li>
 <li><p>ranks 0 through at least 8;</p></li>
 <li><p>empty dimensions and SIMD tails;</p></li>
-<li><p>FP32, FP64, FP16, BF16, integer, and <code class="docutils literal notranslate"><span class="pre">BOOL</span></code> types;</p></li>
-<li><p>cheap operations, division, comparison, <code class="docutils literal notranslate"><span class="pre">Mod</span></code> and <code class="docutils literal notranslate"><span class="pre">Pow</span></code>;</p></li>
+<li><p>every type emitted by the generated schema/kernel manifest;</p></li>
+<li><p>attributes, operand order, special values and domain boundaries for every
+operator;</p></li>
 <li><p>single-thread and physical-core configurations;</p></li>
-<li><p>representative fused expression chains.</p></li>
+<li><p>alias-permitted and forced-distinct output storage.</p></li>
 </ul>
-<p>Report latency, effective output bandwidth, total bytes accessed, selected loop
-family, selected ISA, and thread count. For broadcasting, a bandwidth metric
-must count reused input values according to actual loads rather than output
-elements alone.</p>
+<p>The required performance matrix is smaller and fixed: <code class="docutils literal notranslate"><span class="pre">Add</span></code>, <code class="docutils literal notranslate"><span class="pre">Sub</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Mul</span></code>, <code class="docutils literal notranslate"><span class="pre">Div</span></code> and <code class="docutils literal notranslate"><span class="pre">PRelu</span></code> for FP32/BF16; <code class="docutils literal notranslate"><span class="pre">Equal</span></code> and <code class="docutils literal notranslate"><span class="pre">Less</span></code> for FP32
+and INT32; <code class="docutils literal notranslate"><span class="pre">And</span></code> for BOOL; <code class="docutils literal notranslate"><span class="pre">BitwiseAnd</span></code> for INT32; and <code class="docutils literal notranslate"><span class="pre">Pow</span></code>/<code class="docutils literal notranslate"><span class="pre">Mod</span></code> for
+FP32. It covers contiguous, both scalar directions, row, per-channel, outer,
+and general-strided families at 4,096, 65,536, 1,048,576 and 4,194,304 output
+elements where the shape family permits, under one-thread and physical-core
+policies. Remaining operator/type pairs are reported but do not decide the
+isolated-kernel parity gate.</p>
+<p>Report latency, output elements/second, selected loop family, ISA, submitted
+tasks, admitted workers, and operation identity. Report two byte models:
+<code class="docutils literal notranslate"><span class="pre">unique</span> <span class="pre">tensor</span> <span class="pre">bytes</span></code> counts each logical input and output element once,
+while <code class="docutils literal notranslate"><span class="pre">expanded</span> <span class="pre">operand</span> <span class="pre">bytes</span></code> counts one value from each input per output
+element. Neither is labelled as actual DRAM traffic; hardware counters may
+report measured traffic separately.</p>
+</section>
+<section id="backend-test-corpus">
+<h2>Backend test corpus<a class="headerlink" href="#backend-test-corpus" title="Link to this heading">#</a></h2>
+<p>Binary PR01 adds lazy <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> backend cases in correctness and
+<code class="docutils literal notranslate"><span class="pre">TestMode::BENCHMARK</span></code> modes for all 19 binary operators. They are registered
+through the standard CPU backend collector so the backend API, benchmark
+runner, and dashboard consume the same models. Names encode operator, opset,
+input/output types, loop family, shape, operand order where relevant, and
+thread policy.</p>
+<p>Unit tests run bounded representatives through each registered CPU adapter.
+Metadata tests inspect the complete corpus without allocating large tensors
+and enforce unique names, lazy construction, exact element counts, the
+generated schema/type manifest, every loop family, left/right non-commutative
+cases, and opt-in 4,194,304-element cases. Raw benchmark output retains the
+backend case name and selected plan diagnostics.</p>
 </section>
 <section id="completed-foundations">
 <h2>Completed foundations<a class="headerlink" href="#completed-foundations" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already supplies <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> validation
-and the correctness-first <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code> traversal used as the portable
-fallback. Binary PR01 starts after that baseline and concentrates on reusable
-plan preparation, dimension coalescing, cached traversal, and loop
-classification.</p>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> already supplies <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> validation,
+the correctness-first <code class="docutils literal notranslate"><span class="pre">BinaryElementwise</span></code> traversal, portable kernels, and
+backend cases. <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> currently registers no binary elementwise
+kernel. Binary PR01 starts after that baseline and concentrates on the checked
+manifest, CPU backend corpus, reusable descriptor/plan preparation, dimension
+coalescing, bounded caching, and loop classification.</p>
 <p>The <a class="reference internal" href="2026_08_runtime_execution_controls.html"><span class="doc">Runtime Execution Controls Roadmap</span></a> is complete through
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/271">onnx-light-cpu #271</a> and
 <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/314">#314</a>. Registered
@@ -796,12 +916,13 @@ binary PRs consume these foundations and add no private scheduler.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Binary PR01</p></td>
-<td><p>Corpus, prepared plan, dimension coalescing, and cached traversal.</p></td>
-<td><p>Every in-scope operator/type/opset and broadcast family has differential
-cases against the existing validated fallback. <code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code>
-consumes <code class="docutils literal notranslate"><span class="pre">BroadcastShape</span></code>/<code class="docutils literal notranslate"><span class="pre">BroadcastInfo</span></code> results, coalesces shapes,
-caches guarded traversal metadata, selects a loop, and advances general
-offsets per inner block rather than per element.</p></td>
+<td><p>Manifest, backend corpus, descriptor, prepared plan, and scalar loops.</p></td>
+<td><p>The generated operator/opset/type manifest and lazy correctness/benchmark
+cases cover all 19 operators and loop families.
+<code class="docutils literal notranslate"><span class="pre">BinaryKernelDescriptor</span></code> is immutable; shape-guarded
+<code class="docutils literal notranslate"><span class="pre">BinaryBroadcastPlan</span></code> coalesces dimensions, uses a bounded dynamic
+cache, selects scalar loops, advances offsets per inner block, and
+proves safe alias decisions.</p></td>
 <td><p>Existing onnx-light broadcast validation and traversal</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -814,53 +935,66 @@ order, special values, and tails.</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Binary PR03</p></td>
-<td><p>Broadcast loop families and session-executor integration.</p></td>
+<td><p>Vector broadcast families and executor decisions.</p></td>
 <td><p>Repeated block, inner-vector, outer, and general strided patterns use
-vector inner loops. Processor-aware plan limits submitted to the
-session executor scale expensive operations, cap bandwidth-bound
-operations, and do not regress small tensors or introduce another
-scheduler.</p></td>
+vector inner loops. Per-invocation processor-aware decisions submit
+independent tasks to the session executor, scale expensive operations,
+cap bandwidth-bound operations, and do not store a thread count or
+introduce another scheduler.</p></td>
 <td><p>PR01, PR02; completed runtime foundation</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Binary PR04</p></td>
 <td><p>Comparison, logical, bitwise, shift, and integer arithmetic.</p></td>
 <td><p>Comparisons emit byte <code class="docutils literal notranslate"><span class="pre">BOOL</span></code>; logical and bitwise kernels cover every
-supported width; integer arithmetic, division, modulo, shifts, overflow,
-NaN, and signed-zero semantics match ONNX across scalar and SIMD paths.</p></td>
+supported width. Integer arithmetic, division, modulo, shifts and
+overflow boundaries are implemented without C++ undefined behavior;
+unsupported string <code class="docutils literal notranslate"><span class="pre">Equal</span></code> remains an explicit portable fallback.</p></td>
 <td><p>PR03</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Binary PR05</p></td>
-<td><p>Specialized and low-precision operators.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">Pow</span></code>, <code class="docutils literal notranslate"><span class="pre">Mod</span></code>, binary <code class="docutils literal notranslate"><span class="pre">Sum</span></code>/<code class="docutils literal notranslate"><span class="pre">Mean</span></code>/<code class="docutils literal notranslate"><span class="pre">Min</span></code>/<code class="docutils literal notranslate"><span class="pre">Max</span></code>, <code class="docutils literal notranslate"><span class="pre">PRelu</span></code>,
-<code class="docutils literal notranslate"><span class="pre">CastLike</span></code>, and <code class="docutils literal notranslate"><span class="pre">SwiGLU</span></code> use the common plan or a documented
-specialized loop. FP16/BF16/Float8 paths use native arithmetic or vector
-conversion without full-tensor conversion.</p></td>
-<td><p>PR03, PR04; Unary PR05</p></td>
+<td><p>Specialized arithmetic and low precision.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Pow</span></code>, <code class="docutils literal notranslate"><span class="pre">Mod</span></code> and <code class="docutils literal notranslate"><span class="pre">PRelu</span></code> preserve attributes, mixed types and
+numerical contracts through the common plan. Equal-shape <code class="docutils literal notranslate"><span class="pre">SwiGLU</span></code>
+reuses traversal plus the completed Exp primitive without enabling
+broadcasting. Applicable FP16/BF16 paths use native arithmetic or
+vector conversion without a full-tensor conversion.</p></td>
+<td><p>PR03, PR04; completed ExpLog foundation</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Binary PR06</p></td>
-<td><p>Shared <code class="docutils literal notranslate"><span class="pre">ElementwisePlan</span></code> fusion.</p></td>
-<td><p>Bounded unary/binary expressions retain intermediates in registers,
-preserve broadcasting, types, evaluation order, aliasing, and graph
-lifetimes, reuse prepared traversal and the session executor, and show
-at least 1.20x ONNX Runtime on two representative model expressions.</p></td>
-<td><p>PR01 through PR05; Unary PR01 through PR05</p></td>
+<td><p>Variadic <code class="docutils literal notranslate"><span class="pre">Sum</span></code>/<code class="docutils literal notranslate"><span class="pre">Mean</span></code>/<code class="docutils literal notranslate"><span class="pre">Min</span></code>/<code class="docutils literal notranslate"><span class="pre">Max</span></code> adapter.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">VariadicElementwisePlan</span></code> validates all inputs, derives one common
+iteration space, and computes each output in one traversal without
+pairwise temporary tensors. One-input, empty, broadcasting, floating
+evaluation order, integer overflow, and Min/Max NaN semantics match the
+portable kernels.</p></td>
+<td><p>PR03-PR05</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Binary PR07</p></td>
+<td><p>Shared <code class="docutils literal notranslate"><span class="pre">ElementwisePlan</span></code> fusion.</p></td>
+<td><p>The <code class="docutils literal notranslate"><span class="pre">swiglu_gate</span></code> and <code class="docutils literal notranslate"><span class="pre">scaled_masked_scores</span></code> templates retain
+intermediates in registers, preserve the declared shapes, broadcasting,
+evaluation order, aliasing and graph lifetimes, reuse prepared traversal
+and the session executor, and each reaches at least 1.20x ONNX Runtime
+median with no case below 1.10x.</p></td>
+<td><p>PR01 through PR06; completed ExpLog foundation</p></td>
+<td><p>Pending</p></td>
+</tr>
+<tr class="row-odd"><td><p>Binary PR08</p></td>
 <td><p>Final correctness and parity gate.</p></td>
 <td><p>Every in-scope operator/type/broadcast case passes differential tests;
 median priority performance is at least 1.0x ONNX Runtime with no
 priority case below 0.9x. This PR remains open while any target fails.</p></td>
-<td><p>PR01 through PR06</p></td>
+<td><p>PR01 through PR07</p></td>
 <td><p>Pending</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Binary PR07 is the final binary roadmap PR.</p>
+<p>Binary PR08 is the final binary roadmap PR.</p>
 </section>
 <section id="expected-gains">
 <h2>Expected gains<a class="headerlink" href="#expected-gains" title="Link to this heading">#</a></h2>
@@ -945,9 +1079,10 @@ fusion that removes complete tensor passes.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Correctness</p></td>
-<td><p>Differential tests pass for operand order, every supported type,
-multidirectional broadcasting, ranks, empty dimensions, tails, NaN,
-infinity, signed zero, integer edge cases, and mixed output types.</p></td>
+<td><p>Differential tests pass for the generated schema/type manifest, operand
+order, attributes, multidirectional broadcasting, ranks, empty
+dimensions, tails, NaN, infinity, signed zero, defined integer edge
+cases, mixed <code class="docutils literal notranslate"><span class="pre">Pow</span></code> types, and BOOL outputs.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Common architecture</p></td>
 <td><p>Arithmetic, comparison, logical, and bitwise adapters reuse
@@ -955,8 +1090,8 @@ infinity, signed zero, integer edge cases, and mixed output types.</p></td>
 loops.</p></td>
 </tr>
 <tr class="row-even"><td><p>Performance parity</p></td>
-<td><p>Median priority performance is at least 1.0x ONNX Runtime, with no
-priority isolated-kernel case below 0.9x.</p></td>
+<td><p>The fixed priority performance matrix reaches at least 1.0x ONNX Runtime
+median with no priority isolated-kernel case below 0.9x.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Robustness</p></td>
 <td><p>Every plan is shape-guarded and has a portable correctness fallback.</p></td>
@@ -1026,6 +1161,7 @@ regressions. Tight performance gates require pinned, dedicated machines.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#scope">Scope</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#schema-and-type-contract">Schema and type contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#broadcast-plan">Broadcast plan</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dimension-coalescing">Dimension coalescing</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#loop-architecture">Loop architecture</a></li>
@@ -1035,6 +1171,7 @@ regressions. Tight performance gates require pinned, dedicated machines.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-plans-and-dynamic-shapes">Prepared plans and dynamic shapes</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fusion">Fusion</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmark-contract">Benchmark contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#backend-test-corpus">Backend test corpus</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#completed-foundations">Completed foundations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#expected-gains">Expected gains</a></li>
@@ -1073,7 +1210,7 @@ regressions. Tight performance gates require pinned, dedicated machines.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 22, 2026.
+  Last updated on Aug 24, 2026.
   <br/>
 </p></div>
       

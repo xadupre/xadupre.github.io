@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 22, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -395,6 +395,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_tree_ensemble.html">Tree Ensemble Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_svm.html">SVM Classification and Regression Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_runtime_execution_controls.html">Runtime Execution Controls Roadmap</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_processor_performance_profile.html">Processor Memory and Compute Performance Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Registered kernel documentation</a></li>
 </ul>
@@ -459,6 +460,12 @@
                   
   <section id="registered-kernel-documentation">
 <h1>Registered kernel documentation<a class="headerlink" href="#registered-kernel-documentation" title="Link to this heading">#</a></h1>
+<dl class="field-list simple">
+<dt class="field-odd">Date<span class="colon">:</span></dt>
+<dd class="field-odd"><p>2026-08</p>
+</dd>
+</dl>
+<p><strong>complete</strong></p>
 <p>Issue <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/258">#258</a> replaces
 the manually maintained and source-scanned kernel inventories with metadata
 collected from the registrations that the runtime actually executes. The same
@@ -485,16 +492,18 @@ deleted.</p>
 <h2>Implementation sequence<a class="headerlink" href="#implementation-sequence" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
-<col style="width: 14.0%" />
-<col style="width: 27.0%" />
-<col style="width: 39.0%" />
-<col style="width: 20.0%" />
+<col style="width: 10.0%" />
+<col style="width: 25.0%" />
+<col style="width: 35.0%" />
+<col style="width: 18.0%" />
+<col style="width: 12.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Step</p></th>
 <th class="head"><p>Work</p></th>
 <th class="head"><p>Completion gate</p></th>
 <th class="head"><p>Depends on</p></th>
+<th class="head"><p>Status</p></th>
 </tr>
 </thead>
 <tbody>
@@ -505,6 +514,7 @@ Route every existing kernel registration through it.</p></td>
 every registration in deterministic order and rejects duplicate
 <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">operator,</span> <span class="pre">device)</span></code> entries.</p></td>
 <td><p>None</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>Expose <code class="docutils literal notranslate"><span class="pre">registered_kernels()</span></code> in the compiled binding and public Python
@@ -512,6 +522,7 @@ package. Derive <code class="docutils literal notranslate"><span class="pre">reg
 <td><p>Python returns domain, operator, device, kernel name, types, and optional
 version bounds for every C++ registration.</p></td>
 <td><p>Step 1</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>Replace the Sphinx source scanner with API-driven page and index
@@ -520,16 +531,73 @@ generation, including stale-page removal.</p></td>
 removing a registration changes the generated pages without editing a
 documentation-side operator list.</p></td>
 <td><p>Step 2</p></td>
+<td><p>Complete</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>Add C++, Python, API-documentation, and Sphinx parity tests.</p></td>
 <td><p>A clean warnings-as-errors Sphinx build contains exactly one page per
 inventory record; focused C++ and Python suites pass.</p></td>
 <td><p>Steps 1 through 3</p></td>
+<td><p>Complete</p></td>
 </tr>
 </tbody>
 </table>
 </div>
+<p>Step 1 (this PR) adds <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::KernelRegistration</span></code> (the structured
+domain/operator/device/kernel-name/types/opset-bounds record) together with
+<code class="docutils literal notranslate"><span class="pre">RegisterKernel</span></code> and <code class="docutils literal notranslate"><span class="pre">CollectRegisteredKernels</span></code> in
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/kernels/kernel_registration.{h,cc}</span></code>. Every
+<code class="docutils literal notranslate"><span class="pre">Register*Kernel[s]</span></code> function now builds one such record and hands it, with
+its node factory, to <code class="docutils literal notranslate"><span class="pre">RegisterKernel</span></code> instead of calling onnx-light’s
+<code class="docutils literal notranslate"><span class="pre">RegisterKernelFn</span></code> directly. <code class="docutils literal notranslate"><span class="pre">CollectRegisteredKernels</span></code> runs
+<code class="docutils literal notranslate"><span class="pre">RegisterAllKernels</span></code> with an inventory scope active, so it never mutates
+onnx-light’s shared <code class="docutils literal notranslate"><span class="pre">KernelDispatchTable</span></code>, and returns the metadata sorted
+by <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">operator,</span> <span class="pre">device,</span> <span class="pre">kernel_name)</span></code>. A registration pass rejects a
+repeated <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">operator,</span> <span class="pre">device)</span></code> key with <code class="docutils literal notranslate"><span class="pre">std::invalid_argument</span></code>.</p>
+<p>Step 2 (this PR) exposes that inventory to Python. The compiled
+<code class="docutils literal notranslate"><span class="pre">_cpuregister</span></code> extension gains a <code class="docutils literal notranslate"><span class="pre">registered_kernels()</span></code> binding that calls
+<code class="docutils literal notranslate"><span class="pre">CollectRegisteredKernels()</span></code> and renders each record’s <code class="docutils literal notranslate"><span class="pre">Device</span></code> and
+<code class="docutils literal notranslate"><span class="pre">TensorProto::DataType</span></code> fields as strings. The public
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu</span></code> package wraps each tuple into an immutable
+<code class="docutils literal notranslate"><span class="pre">RegisteredKernel</span></code> (<code class="docutils literal notranslate"><span class="pre">typing.NamedTuple</span></code>) record through
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.registered_kernels()</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.registered_kernel_names()</span></code> (and the C++
+<code class="docutils literal notranslate"><span class="pre">RegisteredKernelNames()</span></code> it is built on) is now derived from those same
+records instead of a separately hand-maintained <code class="docutils literal notranslate"><span class="pre">op_type</span> <span class="pre">-&gt;</span> <span class="pre">kernel</span> <span class="pre">name</span></code>
+list.</p>
+<p>Step 3 (this PR) replaces the C++ source scanner with generation driven
+exclusively by <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.registered_kernels()</span></code>. The
+<code class="docutils literal notranslate"><span class="pre">docs/_ext/kernel_scan.py</span></code> and <code class="docutils literal notranslate"><span class="pre">docs/_ext/onnx_kernels.py</span></code> modules (and
+the <code class="docutils literal notranslate"><span class="pre">registered-kernels</span></code> directive they provided) are deleted. The new
+<code class="docutils literal notranslate"><span class="pre">docs/_ext/kernel_pages.py</span></code> extension connects to Sphinx’s
+<code class="docutils literal notranslate"><span class="pre">builder-inited</span></code> event and, before any source file is read, writes one RST
+page per registration plus a deterministic index under
+<code class="docutils literal notranslate"><span class="pre">docs/kernels_generated/</span></code> (an entirely build-generated, <code class="docutils literal notranslate"><span class="pre">.gitignore</span></code>-d
+directory that <code class="docutils literal notranslate"><span class="pre">docs/kernels.rst</span></code> links to through a toctree). Filenames
+are derived from <code class="docutils literal notranslate"><span class="pre">(domain,</span> <span class="pre">op_type,</span> <span class="pre">device)</span></code> and disambiguated in the same
+stable order on the rare slugify collision, so two consecutive generations
+are byte-identical; any page left over from a renamed or removed registration
+is deleted so the directory always matches the current inventory exactly.</p>
+<p>Step 4 (this PR) adds the final parity coverage across the whole pipeline,
+on top of the C++ (<code class="docutils literal notranslate"><span class="pre">unittests/cc/test_onnx_light_kernel_registration.cc</span></code>,
+<code class="docutils literal notranslate"><span class="pre">unittests/cc/test_onnx_light_kernel_usage.cc</span></code>) and Python
+(<code class="docutils literal notranslate"><span class="pre">unittests/python/test_kernels_doc.py</span></code>, <code class="docutils literal notranslate"><span class="pre">unittests/python/test_kernels_e2e.py</span></code>,
+<code class="docutils literal notranslate"><span class="pre">unittests/python/test_api_doc.py</span></code>) suites steps 1 through 3 already added.
+This PR extends <code class="docutils literal notranslate"><span class="pre">test_onnx_light_kernel_registration.cc</span></code> with a test proving
+that optional opset bounds (<code class="docutils literal notranslate"><span class="pre">since_version</span></code>/<code class="docutils literal notranslate"><span class="pre">until_version</span></code>) round-trip
+exactly through <code class="docutils literal notranslate"><span class="pre">RegisterKernel</span></code>/<code class="docutils literal notranslate"><span class="pre">CollectRegisteredKernels</span></code> alongside the
+existing deterministic-ordering, no-mutation, and duplicate-rejection
+coverage. It also extends <code class="docutils literal notranslate"><span class="pre">test_kernels_doc.py</span></code> with a new
+<code class="docutils literal notranslate"><span class="pre">TestGenerationParityWithLiveInventory</span></code> class proving the <em>live</em>
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.registered_kernels()</span></code> inventory – not just the fabricated
+records the rest of that file already exercised – produces exactly one
+generated page and index entry per record, with content that matches the
+record it documents, and regenerates byte-identically. Finally, the <code class="docutils literal notranslate"><span class="pre">docs</span></code>
+workflow now builds Sphinx with <code class="docutils literal notranslate"><span class="pre">-W</span></code> (warnings treated as errors), so a
+broken cross-reference or any other build warning fails CI instead of
+silently degrading the generated documentation; a local <code class="docutils literal notranslate"><span class="pre">sphinx-build</span> <span class="pre">-W</span></code>
+run confirmed the <code class="docutils literal notranslate"><span class="pre">kernels_generated/</span></code> directory contains exactly one page
+per <code class="docutils literal notranslate"><span class="pre">registered_kernels()</span></code> record plus the index, with zero warnings.</p>
 </section>
 <section id="validation-and-compatibility">
 <h2>Validation and compatibility<a class="headerlink" href="#validation-and-compatibility" title="Link to this heading">#</a></h2>
@@ -634,7 +702,7 @@ configuration.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 22, 2026.
+  Last updated on Aug 24, 2026.
   <br/>
 </p></div>
       
