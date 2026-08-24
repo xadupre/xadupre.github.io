@@ -783,52 +783,53 @@ def _run_cpu_tests_isolated(
             task_queue.close()
             result_queue.close()
 
-    for index, test in enumerate(tests):
-        if process is None or not process.is_alive():
-            stop_worker()
-            task_queue = context.Queue()
-            result_queue = context.Queue()
-            process = context.Process(
-                target=_cpu_worker,
-                args=(task_queue, result_queue, rtol, atol),
-            )
-            process.start()
+    try:
+        for index, test in enumerate(tests):
+            if process is None or not process.is_alive():
+                stop_worker()
+                task_queue = context.Queue()
+                result_queue = context.Queue()
+                process = context.Process(
+                    target=_cpu_worker,
+                    args=(task_queue, result_queue, rtol, atol),
+                )
+                process.start()
 
-        task_queue.put((index, test["model"], test["data_sets"]))
-        while True:
-            try:
-                result_index, info = result_queue.get(timeout=0.1)
-                if result_index != index:
-                    raise RuntimeError(
-                        f"unexpected onnx-light-cpu result index {result_index}"
+            task_queue.put((index, test["model"], test["data_sets"]))
+            while True:
+                try:
+                    result_index, info = result_queue.get(timeout=0.1)
+                    if result_index != index:
+                        raise RuntimeError(
+                            f"unexpected onnx-light-cpu result index {result_index}"
+                        )
+                    results.append(info)
+                    break
+                except queue.Empty:
+                    if process.is_alive():
+                        continue
+                    process.join()
+                    results.append(
+                        {
+                            "success": False,
+                            "error": (
+                                "onnx-light-cpu worker crashed with exit code "
+                                f"{process.exitcode}"
+                            ),
+                            "error_step": "run",
+                            "elapsed_s": 0.0,
+                        }
                     )
-                results.append(info)
-                break
-            except queue.Empty:
-                if process.is_alive():
-                    continue
-                process.join()
-                results.append(
-                    {
-                        "success": False,
-                        "error": (
-                            "onnx-light-cpu worker crashed with exit code "
-                            f"{process.exitcode}"
-                        ),
-                        "error_step": "run",
-                        "elapsed_s": 0.0,
-                    }
-                )
-                _log(
-                    f"onnx-light-cpu worker crashed while running "
-                    f"{test['name']}; continuing with the next test."
-                )
-                break
-        if (index + 1) % 50 == 0:
-            _log(f"Ran {index + 1}/{len(tests)} tests on onnx-light-cpu.")
-
-    stop_worker()
-    return results
+                    _log(
+                        f"onnx-light-cpu worker crashed while running "
+                        f"{test['name']}; continuing with the next test."
+                    )
+                    break
+            if (index + 1) % 50 == 0:
+                _log(f"Ran {index + 1}/{len(tests)} tests on onnx-light-cpu.")
+        return results
+    finally:
+        stop_worker()
 
 
 def _row_from_results(
