@@ -825,6 +825,7 @@ def _run_cpu_tests_isolated(
                             "elapsed_s": 0.0,
                         }
                     )
+                    stop_worker()
                     _log(
                         f"onnx-light-cpu worker crashed while running "
                         f"{test['name']}; continuing with the next test."
