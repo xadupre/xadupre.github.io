@@ -179,23 +179,66 @@
     return run.conclusion || "completed";
   }
 
-  function render(manifest, latestRuns) {
-    var tbody = document.getElementById("workflow-status-body");
-    var message = document.getElementById("workflow-status-message");
-    var now = new Date();
-    var rows = manifest.map(function (workflow) {
-      return {
-        workflow: workflow,
-        run: latestRuns.get(workflow.path),
-        next: nextWorkflowRun(workflow.crons || [], now)
-      };
-    });
+  var sortState = { key: "next", direction: "asc" };
+
+  function sortValue(item, key) {
+    if (key === "action") return item.workflow.name.toLowerCase();
+    if (key === "last") {
+      var runDate = item.run ? new Date(item.run.run_started_at || item.run.created_at) : null;
+      return runDate && !isNaN(runDate.getTime()) ? runDate.getTime() : -Infinity;
+    }
+    if (key === "next") return item.next ? item.next.getTime() : Infinity;
+    return null;
+  }
+
+  function sortRows(rows) {
+    var direction = sortState.direction === "asc" ? 1 : -1;
     rows.sort(function (left, right) {
-      if (left.next && right.next) return left.next - right.next;
-      if (left.next) return -1;
-      if (right.next) return 1;
+      var leftValue = sortValue(left, sortState.key);
+      var rightValue = sortValue(right, sortState.key);
+      if (leftValue < rightValue) return -1 * direction;
+      if (leftValue > rightValue) return 1 * direction;
       return left.workflow.name.localeCompare(right.workflow.name);
     });
+    return rows;
+  }
+
+  function updateSortHeaders() {
+    var headers = document.querySelectorAll(".workflow-status th.workflow-sortable");
+    headers.forEach(function (header) {
+      header.classList.remove("workflow-sort-asc", "workflow-sort-desc");
+      var arrow = header.querySelector(".workflow-sort-arrow");
+      if (header.getAttribute("data-sort-key") === sortState.key) {
+        header.classList.add(sortState.direction === "asc" ? "workflow-sort-asc" : "workflow-sort-desc");
+        if (arrow) arrow.textContent = sortState.direction === "asc" ? "▲" : "▼";
+      } else if (arrow) {
+        arrow.textContent = "";
+      }
+    });
+  }
+
+  function bindSortHandlers(rows) {
+    var headers = document.querySelectorAll(".workflow-status th.workflow-sortable");
+    headers.forEach(function (header) {
+      if (header.dataset.sortBound) return;
+      header.dataset.sortBound = "true";
+      header.addEventListener("click", function () {
+        var key = header.getAttribute("data-sort-key");
+        if (sortState.key === key) {
+          sortState.direction = sortState.direction === "asc" ? "desc" : "asc";
+        } else {
+          sortState.key = key;
+          sortState.direction = "asc";
+        }
+        renderRows(rows);
+      });
+    });
+  }
+
+  function renderRows(rows) {
+    var tbody = document.getElementById("workflow-status-body");
+    sortRows(rows);
+    updateSortHeaders();
 
     tbody.textContent = "";
     rows.forEach(function (item) {
@@ -231,6 +274,20 @@
       tr.appendChild(next);
       tbody.appendChild(tr);
     });
+  }
+
+  function render(manifest, latestRuns) {
+    var message = document.getElementById("workflow-status-message");
+    var now = new Date();
+    var rows = manifest.map(function (workflow) {
+      return {
+        workflow: workflow,
+        run: latestRuns.get(workflow.path),
+        next: nextWorkflowRun(workflow.crons || [], now)
+      };
+    });
+    bindSortHandlers(rows);
+    renderRows(rows);
     message.textContent = latestRuns.isStale ?
       "Last runs are cached because the GitHub API is unavailable. Times are shown in UTC." :
       "Times are shown in UTC. Scheduled times may be delayed by GitHub.";
