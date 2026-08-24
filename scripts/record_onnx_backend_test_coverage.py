@@ -773,15 +773,20 @@ def _run_cpu_tests_isolated(
     result_queue = None
 
     def stop_worker() -> None:
-        if process is not None:
-            if process.is_alive():
-                task_queue.put(None)
-                process.join(timeout=5)
-            if process.is_alive():
-                process.terminate()
-                process.join()
-            task_queue.close()
-            result_queue.close()
+        nonlocal process, task_queue, result_queue
+        worker = process
+        tasks = task_queue
+        results_queue = result_queue
+        process = task_queue = result_queue = None
+        if worker is not None:
+            if worker.is_alive():
+                tasks.put(None)
+                worker.join(timeout=5)
+            if worker.is_alive():
+                worker.terminate()
+                worker.join()
+            tasks.close()
+            results_queue.close()
 
     try:
         for index, test in enumerate(tests):
