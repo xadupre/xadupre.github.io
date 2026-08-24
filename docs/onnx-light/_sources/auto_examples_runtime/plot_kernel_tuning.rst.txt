@@ -30,7 +30,7 @@ write a validated local profile, and run a bounded calibration.
 The example writes only to a temporary cache. Real applications may omit
 ``path`` to use :func:`~onnx_light.kernel_tuning.default_kernel_tuning_cache_path`.
 
-.. GENERATED FROM PYTHON SOURCE LINES 14-28
+.. GENERATED FROM PYTHON SOURCE LINES 14-30
 
 .. code-block:: Python
 
@@ -45,8 +45,10 @@ The example writes only to a temporary cache. Real applications may omit
 
     from onnx_light import kernel_tuning
     from onnx_light.onnx import TensorProto
-    from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light.onnx_lib import parser
+    from onnx_light.onnx_py import _onnxpykernels
+
+    runtime = _onnxpykernels.runtime
 
 
 
@@ -55,7 +57,7 @@ The example writes only to a temporary cache. Real applications may omit
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 29-35
+.. GENERATED FROM PYTHON SOURCE LINES 31-37
 
 Discover the parameters and defaults
 ++++++++++++++++++++++++++++++++++++
@@ -64,7 +66,7 @@ A tuning schema is registered for every exact combination of library,
 implementation, element type, device, and tuning ABI. ``Abs`` uses one
 parallel crossover threshold.
 
-.. GENERATED FROM PYTHON SOURCE LINES 35-42
+.. GENERATED FROM PYTHON SOURCE LINES 37-44
 
 .. code-block:: Python
 
@@ -100,7 +102,7 @@ parallel crossover threshold.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 43-49
+.. GENERATED FROM PYTHON SOURCE LINES 45-51
 
 Propose missing profiles
 ++++++++++++++++++++++++
@@ -109,7 +111,7 @@ A proposal is read-only. It compares the requested exact keys with the local
 cache and separates keys that can be calibrated automatically from those
 without callbacks.
 
-.. GENERATED FROM PYTHON SOURCE LINES 49-59
+.. GENERATED FROM PYTHON SOURCE LINES 51-61
 
 .. code-block:: Python
 
@@ -148,7 +150,7 @@ without callbacks.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 60-67
+.. GENERATED FROM PYTHON SOURCE LINES 62-69
 
 Write a validated profile
 +++++++++++++++++++++++++
@@ -158,7 +160,7 @@ omitted names from an existing matching cache profile or the portable
 defaults, validates the complete set, persists it atomically, and loads it
 into the current process by default.
 
-.. GENERATED FROM PYTHON SOURCE LINES 67-79
+.. GENERATED FROM PYTHON SOURCE LINES 69-81
 
 .. code-block:: Python
 
@@ -194,11 +196,11 @@ into the current process by default.
                           'library': 'onnx_light',
                           'tuning_abi': 2}],
               'missing': [],
-              'path': '/tmp/tmp7uo9ql6x/kernel_tuning.cache',
-              'published_generation': 185,
+              'path': '/tmp/tmpsgdyd6qa/kernel_tuning.cache',
+              'published_generation': 296,
               'stale': [],
               'status': 'loaded'},
-     'path': '/tmp/tmp7uo9ql6x/kernel_tuning.cache',
+     'path': '/tmp/tmpsgdyd6qa/kernel_tuning.cache',
      'preserved': [],
      'pruned': [],
      'status': 'updated',
@@ -213,7 +215,7 @@ into the current process by default.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 80-86
+.. GENERATED FROM PYTHON SOURCE LINES 82-88
 
 Compare cache and active values
 +++++++++++++++++++++++++++++++
@@ -222,7 +224,7 @@ Inspection reads every persisted profile without changing the registry.
 ``kernel_tuning_parameters`` separately reports the matching local cache
 values and the values currently published in this process.
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-101
+.. GENERATED FROM PYTHON SOURCE LINES 88-103
 
 .. code-block:: Python
 
@@ -267,29 +269,92 @@ values and the values currently published in this process.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 102-108
+.. GENERATED FROM PYTHON SOURCE LINES 104-112
 
 Use the active value
 ++++++++++++++++++++
 
 A session created after the profile is loaded resolves it once and copies the
 typed value into its ``Abs`` kernel. Steady-state calls do not read the cache
-or registry again.
+or registry again. The output cannot reveal which threshold was used, because
+serial and parallel execution have identical semantics. A parallel-region
+collector makes the difference observable.
 
-.. GENERATED FROM PYTHON SOURCE LINES 108-119
+.. GENERATED FROM PYTHON SOURCE LINES 112-184
 
 .. code-block:: Python
 
 
     model = parser.parse_model(
         '<ir_version: 10, opset_import: ["" : 18]>'
-        "agraph (float[4] x) => (float[4] y) { y = Abs(x) }"
+        "agraph (float[N] x) => (float[N] y) { y = Abs(x) }"
     )
-    session = ReferenceEvaluator(model)
-    x = np.array([-1.0, 2.0, -3.5, 0.0], dtype=np.float32)
-    (y,) = session.run(None, {"x": x})
+    probe_elements = max(2, chosen_minimum * 2)
+    x = -np.ones(probe_elements, dtype=np.float32)
+    tensor_proto = TensorProto()
+    tensor_proto.name = "x"
+    tensor_proto.dims.append(probe_elements)
+    tensor_proto.data_type = element_type
+    tensor_proto.raw_data = x.tobytes()
+
+
+    def make_profiled_session():
+        """Creates an uninitialized two-thread session and its runtime context."""
+        collector = runtime.ParallelRegionCollector(capacity=4)
+        options = runtime.RuntimeSessionOptions(
+            parameters=runtime.RuntimeParameters(2), parallel_region_collector=collector
+        )
+        context = runtime.RuntimeContext(runtime.KernelContext(runtime.default_opset(18)))
+        context.set("x", runtime.tensor_from_proto(tensor_proto))
+        return runtime.RuntimeSession(model, options), context
+
+
+    # Tuning profiles include the effective thread count, so ``num_threads=2``
+    # matches the sessions below. First force this exact input below the active
+    # crossover. The first run initializes the kernel and copies
+    # ``probe_elements + 1`` into the session.
+    kernel_tuning.set_kernel_tuning_parameters(
+        "Abs",
+        element_type,
+        {"parallel.minimum_elements": probe_elements + 1},
+        path=str(cache_path),
+        num_threads=2,
+    )
+    serial_session, serial_context = make_profiled_session()
+    serial_session.run(serial_context)
+    serial_events = serial_session.parallel_region_report().events
+    assert len(serial_events) == 1
+    assert serial_events[0].admitted_threads == 1
+
+    # Restore the chosen value. The initialized session remains serial because it
+    # does not consult the registry again, while a new session copies the new
+    # threshold and enters ParallelFor for the same input.
+    kernel_tuning.set_kernel_tuning_parameters(
+        "Abs",
+        element_type,
+        {"parallel.minimum_elements": chosen_minimum},
+        path=str(cache_path),
+        num_threads=2,
+    )
+    serial_session.run(serial_context)
+    serial_events = serial_session.parallel_region_report().events
+    assert len(serial_events) == 2
+    assert all(event.admitted_threads == 1 for event in serial_events)
+
+    tuned_session, tuned_context = make_profiled_session()
+    tuned_session.run(tuned_context)
+    tuned_events = tuned_session.parallel_region_report().events
+    assert len(tuned_events) == 1
+    assert tuned_events[0].requested_threads == 2
+    assert tuned_events[0].admitted_threads == 2
+
+    y = runtime.tensor_to_numpy(tuned_context.get("y")).view(np.float32)
     np.testing.assert_array_equal(y, np.abs(x))
-    print("Abs output:", y)
+    print(
+        f"same {probe_elements}-element input: old session admitted "
+        f"{serial_events[-1].admitted_threads} participant, new session admitted "
+        f"{tuned_events[0].admitted_threads}"
+    )
 
 
 
@@ -299,12 +364,12 @@ or registry again.
 
  .. code-block:: none
 
-    Abs output: [1.  2.  3.5 0. ]
+    same 32768-element input: old session admitted 1 participant, new session admitted 2
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 120-127
+.. GENERATED FROM PYTHON SOURCE LINES 185-192
 
 Calibrate the kernel
 ++++++++++++++++++++
@@ -314,7 +379,7 @@ implementation, validates every output, and searches for a stable crossover.
 ``save=False`` publishes the result only in this process. Set ``save=True``
 (the default) to merge it into the selected cache.
 
-.. GENERATED FROM PYTHON SOURCE LINES 127-142
+.. GENERATED FROM PYTHON SOURCE LINES 192-207
 
 .. code-block:: Python
 
@@ -364,7 +429,7 @@ implementation, validates every output, and searches for a stable crossover.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.008 seconds)
+   **Total running time of the script:** (0 minutes 0.016 seconds)
 
 
 .. _sphx_glr_download_auto_examples_runtime_plot_kernel_tuning.py:

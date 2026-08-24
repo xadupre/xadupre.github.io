@@ -422,11 +422,12 @@
 <li class="toctree-l1 has-children"><a class="reference internal" href="2026/2026-08_fast_loading_sequence.html">Fast-loading implementation sequence</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="2026/2026-08_model_loading_bug_fixes.html">Model-loading bug fixes</a></li>
 <li class="toctree-l2"><a class="reference internal" href="2026/2026-08_prepared_execution.html">Prepared and asynchronous execution</a></li>
-<li class="toctree-l2"><a class="reference internal" href="2026/2026-08_onnxruntime_fast_model_loading.html">Using <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> fast loading in <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></a></li>
 <li class="toctree-l2"><a class="reference internal" href="2026/2026-08_native_fast_loading_completion.html">Completing native fast model loading</a></li>
+<li class="toctree-l2"><a class="reference internal" href="2026/2026-08_onnxruntime_fast_model_loading.html">Using <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> fast loading in <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="2026/2026-08_parallel_for_profiling.html">ParallelFor profiling and hardware counters</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026/2026-08_kernel_parallelization.html">Kernel parallelization and tuning sequence</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026/2026-08_custom_types.html">Structured views over byte buffers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026/2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026/2026-08_quantization.html">Quantization</a></li>
@@ -512,25 +513,30 @@
 </dl>
 <section id="recommended-implementation-order">
 <h2>Recommended implementation order<a class="headerlink" href="#recommended-implementation-order" title="Link to this heading">#</a></h2>
-<p>Runtime execution work should proceed in dependency order:</p>
+<p>The roadmap has four objectives:</p>
 <ol class="arabic simple">
-<li><p>implement Profile PR01 from
-<a class="reference internal" href="2026/2026-08_parallel_for_profiling.html#l-next-steps-parallel-for-profiling"><span class="std std-ref">ParallelFor profiling and hardware counters</span></a>: first record a fixed maximum
-number of platform-independent profiling events; when profiling is disabled,
-the runtime must not collect data or perform any instrumentation work;</p></li>
-<li><p>add process CPU time, inspection, hardware counters, and calibration
-diagnostics only after that event contract is stable;</p></li>
-<li><p>use that same executor when the fast-loading sequence reaches
-<a class="reference internal" href="2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>, rather than creating another
-scheduler pool.</p></li>
+<li><p><strong>Parallelize and tune kernels on multiple machines.</strong> Define a safe default
+for every tunable kernel, then let each user calibrate that kernel and store
+the best parameters for their machine. See
+<a class="reference internal" href="2026/2026-08_kernel_parallelization.html#l-next-steps-kernel-parallelization"><span class="std std-ref">Kernel parallelization and tuning sequence</span></a> and
+<a class="reference internal" href="2026/2026-08_processor_aware_kernel_tuning.html#l-next-steps-processor-aware-kernel-tuning"><span class="std std-ref">Processor-aware kernel tuning</span></a>.</p></li>
+<li><p><strong>Parallelize model startup.</strong> Read and transform the model concurrently,
+then create kernels and prepack their weights through one memory-bounded
+execution plan. See <a class="reference internal" href="2026/2026-08_fast_loading_sequence.html#l-next-steps-fast-loading-sequence"><span class="std std-ref">Fast-loading implementation sequence</span></a> and
+<a class="reference internal" href="2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>.</p></li>
+<li><p><strong>Manage persistent state.</strong> Use ownership-aware arenas for KV caches and
+other state that survives one graph invocation, without copying or
+accidentally recycling live storage. See <a class="reference internal" href="2026/2026-08_mutable_cache.html#l-next-steps-mutable-cache"><span class="std std-ref">Mutable execution cache</span></a>
+and <a class="reference internal" href="2026/2026-08_buffer_reuse_arena.html#l-next-steps-buffer-reuse-arena"><span class="std std-ref">Buffer-reuse arenas</span></a>.</p></li>
+<li><p><strong>Integrate the completed startup path with ONNX Runtime.</strong> Only after the
+native loader is complete, let ORT consume <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> payload ownership,
+prepared data, and direct-read contracts. See
+<a class="reference internal" href="2026/2026-08_onnxruntime_fast_model_loading.html#l-next-steps-model-loading"><span class="std std-ref">Using onnx-light fast loading in onnxruntime</span></a>.</p></li>
 </ol>
-<p>Model-format work such as custom types, quantization, compiled tensors, and
-model resolution may proceed independently until it reaches prepared
-execution. Within the runtime track, the order above is mandatory: profiling
-or tuning a hidden global pool would produce profiles that a session cannot
-reproduce.</p>
-<p>Large-model startup follows the four-plan sequence documented in
-<a class="reference internal" href="2026/2026-08_fast_loading_sequence.html#l-next-steps-fast-loading-sequence"><span class="std std-ref">Fast-loading implementation sequence</span></a>.</p>
+<p>The execution order is <strong>1 -&gt; 2 -&gt; native loading completion -&gt; 4</strong>. Objective
+3 branches from objective 2 because persistent state reuses its arena and
+lifetime rules; it does not depend on the final ORT integration. Objective
+numbers identify themes, not permission to start cross-repository work early.</p>
 </section>
 <section id="all-next-steps">
 <h2>All Next Steps<a class="headerlink" href="#all-next-steps" title="Link to this heading">#</a></h2>
@@ -538,125 +544,173 @@ reproduce.</p>
 </div>
 <p>Use the search field to filter by status or text, and select a column heading
 to sort the table.</p>
+<p><code class="docutils literal notranslate"><span class="pre">1</span></code>–<code class="docutils literal notranslate"><span class="pre">4</span></code> refer to the four objectives above. <code class="docutils literal notranslate"><span class="pre">Foundation</span></code> supplies a
+shared prerequisite. <code class="docutils literal notranslate"><span class="pre">Independent</span></code> is useful work but is not required by
+these four objectives.</p>
 <div class="pst-scrollable-table-container"><table class="sphinx-datatable table">
 <colgroup>
 <col style="width: 12.0%" />
-<col style="width: 24.0%" />
-<col style="width: 32.0%" />
-<col style="width: 32.0%" />
+<col style="width: 12.0%" />
+<col style="width: 28.0%" />
+<col style="width: 48.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Status</p></th>
-<th class="head"><p>Next step</p></th>
-<th class="head"><p>Planned work</p></th>
-<th class="head"><p>Why</p></th>
+<th class="head"><p>Objective</p></th>
+<th class="head"><p>Plan</p></th>
+<th class="head"><p>Contribution</p></th>
 </tr>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>Started</p></td>
+<td><p>2</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_fast_loading_sequence.html#l-next-steps-fast-loading-sequence"><span class="std std-ref">Fast-loading implementation sequence</span></a></p></td>
-<td><p>Orchestrate the four-step large-model startup roadmap.</p></td>
-<td><p>Define one dependency order for fast loading.</p></td>
+<td><p>Orders the four startup plans: bug fixes, prepared execution, native
+completion, then final ORT integration.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Started</p></td>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>2</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_model_loading_bug_fixes.html#l-next-steps-model-loading-bug-fixes"><span class="std std-ref">Model-loading bug fixes</span></a></p></td>
+<td><p>Makes parsing, external data, and initializer materialization reliable
+before asynchronous work starts.</p></td>
+</tr>
+<tr class="row-even"><td><p>Completed</p></td>
+<td><p>2</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a></p></td>
+<td><p>Provides the dependency graph, bounded scheduling, kernel creation, and
+prepacking needed by parallel startup.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Planned</p></td>
+<td><p>2</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_native_fast_loading_completion.html#l-next-steps-native-fast-loading-completion"><span class="std std-ref">Completing native fast model loading</span></a></p></td>
+<td><p>Connects adaptive I/O, model resolution, prepared tensors, and
+first-token overlap before any new work in onnxruntime.</p></td>
+</tr>
+<tr class="row-even"><td><p>Blocked</p></td>
+<td><p>4</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_onnxruntime_fast_model_loading.html#l-next-steps-model-loading"><span class="std std-ref">Using onnx-light fast loading in onnxruntime</span></a></p></td>
+<td><p>Final cross-repository integration; blocked until every native loading
+issue through #4623 is closed.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>1</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_parallel_for_profiling.html#l-next-steps-parallel-for-profiling"><span class="std std-ref">ParallelFor profiling and hardware counters</span></a></p></td>
-<td><p>Add bounded, opt-in <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> diagnostics and hardware counters.</p></td>
-<td><p>Explain CPU under-utilization before tuning prepared execution.</p></td>
+<td><p>Measures work decomposition, utilization, and hardware counters so
+tuning decisions have evidence.</p></td>
 </tr>
-<tr class="row-even"><td><p>Discussed</p></td>
+<tr class="row-even"><td><p>Started</p></td>
+<td><p>1</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_kernel_parallelization.html#l-next-steps-kernel-parallelization"><span class="std std-ref">Kernel parallelization and tuning sequence</span></a></p></td>
+<td><p>Inventories kernel parallel coverage, publishes cross-machine
+baselines, then migrates measured kernel families through the tuning
+and calibration APIs.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Discussed</p></td>
+<td><p>2, 3</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured views over byte buffers</span></a></p></td>
-<td><p>Define structured byte-buffer types for custom formats.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">TypeProto.Opaque</span></code> does not describe serialized layouts.</p></td>
+<td><p>Describes structured byte buffers used by packed weights and persistent
+state.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Discussed</p></td>
+<tr class="row-even"><td><p>Discussed</p></td>
+<td><p>Foundation</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_proto_inheritance.html#l-next-steps-proto-inheritance"><span class="std std-ref">Proto schema inheritance</span></a></p></td>
-<td><p>Add schema inheritance while retaining flat wire encoding.</p></td>
-<td><p>Reuse common fields without duplicating them across proto families.</p></td>
+<td><p>Reuses common schema fields without changing the flat wire format.</p></td>
 </tr>
-<tr class="row-even"><td><p>Discussed</p></td>
+<tr class="row-odd"><td><p>Discussed</p></td>
+<td><p>1, 2, 3</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_quantization.html#l-next-steps-quantization"><span class="std std-ref">Quantization</span></a></p></td>
-<td><p>Describe quantized data families and their proto mappings.</p></td>
-<td><p>Represent quantization consistently as structured custom types.</p></td>
+<td><p>Defines quantized layouts consumed by kernels, prepared weights, and
+persistent cache pages.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Discussed</p></td>
+<tr class="row-even"><td><p>Discussed</p></td>
+<td><p>2, 3</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_graph_builder_quantized_tensor.html#l-next-steps-graph-builder-quantized-tensor"><span class="std std-ref">Quantized values in GraphBuilder</span></a></p></td>
-<td><p>Preserve quantized initializers in graph storage.</p></td>
-<td><p>Avoid implicit dequantization or rewriting by <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>.</p></td>
+<td><p>Preserves quantized initializers until preparation or persistent-state
+allocation.</p></td>
 </tr>
-<tr class="row-even"><td><p>Discussed</p></td>
+<tr class="row-odd"><td><p>Discussed</p></td>
+<td><p>Foundation</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_graph_builder_authoring.html#l-next-steps-graph-builder-authoring"><span class="std std-ref">Compact GraphBuilder authoring and runtime walkthroughs</span></a></p></td>
-<td><p>Add compact graph authoring and non-gallery runtime walkthroughs.</p></td>
-<td><p>Make models easier to build, inspect, optimize, and execute.</p></td>
+<td><p>Supplies reproducible models and workflows used to exercise the four
+objectives.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Discussed</p></td>
+<tr class="row-even"><td><p>Discussed</p></td>
+<td><p>3</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_mutable_cache.html#l-next-steps-mutable-cache"><span class="std std-ref">Mutable execution cache</span></a></p></td>
-<td><p>Support in-place KV-cache updates with controlled aliasing.</p></td>
-<td><p>Avoid duplicating large caches on every update.</p></td>
-</tr>
-<tr class="row-even"><td><p>Discussed</p></td>
-<td><p><a class="reference internal" href="2026/2026-08_compiled_tensor.html#l-next-steps-compiled-tensor"><span class="std std-ref">CompiledTensorProto</span></a></p></td>
-<td><p>Persist packed tensor representations as caches.</p></td>
-<td><p>Avoid repeating expensive prepacking when a model is reloaded.</p></td>
+<td><p>Defines in-place KV-cache updates, aliasing, capacity, and persistence.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Discussed</p></td>
-<td><p><a class="reference internal" href="2026/2026-08_model_resolution.html#l-next-steps-model-resolution"><span class="std std-ref">Model resolution before weight loading</span></a></p></td>
-<td><p>Resolve the final graph and required payloads before I/O.</p></td>
-<td><p>Load weights only after transformations and liveness analysis.</p></td>
+<td><p>2, 4</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_compiled_tensor.html#l-next-steps-compiled-tensor"><span class="std std-ref">CompiledTensorProto</span></a></p></td>
+<td><p>Persists packed weights so startup and ORT integration can avoid
+repeated prepacking.</p></td>
 </tr>
 <tr class="row-even"><td><p>Discussed</p></td>
+<td><p>2, 4</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_model_resolution.html#l-next-steps-model-resolution"><span class="std std-ref">Model resolution before weight loading</span></a></p></td>
+<td><p>Determines the final graph and live payloads before parallel reads or
+ORT handoff.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Discussed</p></td>
+<td><p>Foundation</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_split_wheels.html#l-next-steps-split-wheels"><span class="std std-ref">Splitting onnx-light into composable wheels</span></a></p></td>
-<td><p>Split public features into composable Python wheels.</p></td>
-<td><p>Let users install only the components they need.</p></td>
+<td><p>Packages runtime capabilities independently; it does not change their
+execution order.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Completed</p></td>
+<tr class="row-even"><td><p>Completed</p></td>
+<td><p>Foundation</p></td>
 <td><p><a class="reference internal" href="2025/2025-07_onnx_proto.html#l-next-steps-onnx-proto"><span class="std std-ref">Building onnx_proto, the protobuf-free ONNX schema</span></a></p></td>
-<td><p>Build the protobuf-free ONNX message layer.</p></td>
-<td><p>Provide the project’s independent base schema layer.</p></td>
+<td><p>Supplies the protobuf-free model representation used by startup and ORT.</p></td>
 </tr>
-<tr class="row-even"><td><p>Completed</p></td>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>Foundation</p></td>
 <td><p><a class="reference internal" href="2026/2026-06_lib_onnx.html#l-next-steps-lib-onnx"><span class="std std-ref">Porting the ONNX C++ library on top of onnx_proto</span></a></p></td>
-<td><p>Port the ONNX C++ library to <code class="docutils literal notranslate"><span class="pre">onnx_proto</span></code>.</p></td>
-<td><p>Run the upstream library without <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>.</p></td>
+<td><p>Supplies ONNX validation and transformation without <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Completed</p></td>
+<tr class="row-even"><td><p>Completed</p></td>
+<td><p>1</p></td>
 <td><p><a class="reference internal" href="2026/2026-06_kernels_backend_tests.html#l-next-steps-kernels-backend-tests"><span class="std std-ref">Operator kernels and the C++ backend tests</span></a></p></td>
-<td><p>Provide native kernels and backend tests in C++.</p></td>
-<td><p>Validate the runtime natively without depending on Python.</p></td>
+<td><p>Provides the native kernels and correctness corpus required before
+parallel variants are accepted.</p></td>
 </tr>
-<tr class="row-even"><td><p>Completed</p></td>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>Independent</p></td>
 <td><p><a class="reference internal" href="2026/2026-06_gradient.html#l-next-steps-gradient"><span class="std std-ref">Symbolic gradients for ONNX graphs</span></a></p></td>
-<td><p>Generate backward-pass graphs symbolically.</p></td>
-<td><p>Support training with a native graph-based gradient pass.</p></td>
+<td><p>Supports training graphs but is not a prerequisite for the four
+objectives.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Completed</p></td>
+<tr class="row-even"><td><p>Completed</p></td>
+<td><p>4</p></td>
 <td><p><a class="reference internal" href="2026/2026-07_onnxruntime_onnx_light.html#l-next-steps-ort-onnx-light"><span class="std std-ref">Integrating onnx-light into onnxruntime (PR #29723)</span></a></p></td>
-<td><p>Route onnxruntime protobuf usage through <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>.</p></td>
-<td><p>Provide a build-time alternative to protobuf in onnxruntime.</p></td>
+<td><p>Establishes the existing ORT build-time integration that the optimized
+startup contract extends.</p></td>
 </tr>
-<tr class="row-even"><td><p>Completed</p></td>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>4</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_proto_binary_size.html#l-next-steps-proto-binary-size"><span class="std std-ref">Reducing the lib_onnx_proto binary size</span></a></p></td>
-<td><p>Reduce the <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code> shared-library footprint.</p></td>
-<td><p>Avoid shipping unused wrapper overhead.</p></td>
+<td><p>Keeps the library embedded by ORT small.</p></td>
 </tr>
-<tr class="row-odd"><td><p>Completed</p></td>
+<tr class="row-even"><td><p>Completed</p></td>
+<td><p>1</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_processor_aware_kernel_tuning.html#l-next-steps-processor-aware-kernel-tuning"><span class="std std-ref">Processor-aware kernel tuning</span></a></p></td>
-<td><p>Make kernel thresholds processor-specific and persistent.</p></td>
-<td><p>Adapt thresholds to hardware instead of fixed constants.</p></td>
-</tr>
-<tr class="row-even"><td><p>Completed</p></td>
-<td><p><a class="reference internal" href="2026/2026-08_buffer_reuse_arena.html#l-next-steps-buffer-reuse-arena"><span class="std std-ref">Buffer-reuse arenas</span></a></p></td>
-<td><p>Reuse execution and I/O buffers safely.</p></td>
-<td><p>Reduce allocations without breaking NumPy ownership.</p></td>
+<td><p>Provides schemas, defaults, calibration, user overrides, immutable
+snapshots, and persistent machine profiles.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Completed</p></td>
-<td><p><a class="reference internal" href="2026/2026-08_graph_builder_optimization.html#l-next-steps-graph-builder-optimization"><span class="std std-ref">Pattern-based optimization in GraphBuilder</span></a></p></td>
-<td><p>Rewrite local graph patterns to cheaper equivalents.</p></td>
-<td><p>Add the native optimization engine missing from <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>.</p></td>
+<td><p>2, 3</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_buffer_reuse_arena.html#l-next-steps-buffer-reuse-arena"><span class="std std-ref">Buffer-reuse arenas</span></a></p></td>
+<td><p>Supplies ownership-aware reusable storage for startup buffers and
+persistent state.</p></td>
 </tr>
 <tr class="row-even"><td><p>Completed</p></td>
+<td><p>2, 4</p></td>
+<td><p><a class="reference internal" href="2026/2026-08_graph_builder_optimization.html#l-next-steps-graph-builder-optimization"><span class="std std-ref">Pattern-based optimization in GraphBuilder</span></a></p></td>
+<td><p>Finalizes graph rewrites before live payload selection and ORT handoff.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Completed</p></td>
+<td><p>1, 2</p></td>
 <td><p><a class="reference internal" href="2026/2026-08_session_execution_pools.html#l-next-steps-session-execution-pools"><span class="std std-ref">Session execution policies and shared CPU pools</span></a></p></td>
-<td><p>Manage CPU policies and shared executor pools.</p></td>
-<td><p>Give sessions deterministic, shareable execution resources.</p></td>
+<td><p>Supplies the shared executor used by parallel kernels and startup tasks.</p></td>
 </tr>
 </tbody>
 </table>
