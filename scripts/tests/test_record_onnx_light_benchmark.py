@@ -48,9 +48,16 @@ class TestOnnxruntimeRunner(unittest.TestCase):
 
         created = []
 
+        class _SessionOptions:
+            def __init__(self):
+                self.entries = {}
+
+            def add_session_config_entry(self, key, value):
+                self.entries[key] = value
+
         class _Session:
-            def __init__(self, serialized, providers=None):
-                created.append((serialized, providers))
+            def __init__(self, serialized, sess_options=None, providers=None):
+                created.append((serialized, sess_options, providers))
 
             def get_inputs(self):
                 return []
@@ -59,6 +66,7 @@ class TestOnnxruntimeRunner(unittest.TestCase):
                 return ["output"]
 
         onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.SessionOptions = _SessionOptions
         onnxruntime.InferenceSession = _Session
         model = self._FakeModel(serialized=b"corpus-model")
         runner = self._with_modules(
@@ -66,17 +74,30 @@ class TestOnnxruntimeRunner(unittest.TestCase):
             lambda: rlb._make_onnxruntime_runner(model),
         )
         # The serialized model is passed through unchanged on the CPU provider.
-        self.assertEqual(created, [(b"corpus-model", ["CPUExecutionProvider"])])
+        self.assertEqual(created[0][0], b"corpus-model")
+        self.assertEqual(created[0][2], ["CPUExecutionProvider"])
+        self.assertEqual(
+            created[0][1].entries,
+            {
+                "session.intra_op.allow_spinning": "0",
+                "session.inter_op.allow_spinning": "0",
+            },
+        )
         self.assertEqual(runner([]), ["output"])
 
     def test_session_error_propagates(self):
         import types
 
+        class _SessionOptions:
+            def add_session_config_entry(self, key, value):
+                pass
+
         class _BrokenSession:
-            def __init__(self, serialized, providers=None):
+            def __init__(self, serialized, sess_options=None, providers=None):
                 raise RuntimeError("Unsupported model IR version: 14")
 
         onnxruntime = types.ModuleType("onnxruntime")
+        onnxruntime.SessionOptions = _SessionOptions
         onnxruntime.InferenceSession = _BrokenSession
         model = self._FakeModel()
         with self.assertRaises(RuntimeError) as ctx:
@@ -989,10 +1010,11 @@ class TestOnnxLightReferenceRunner(unittest.TestCase):
         reference = types.ModuleType("onnx_light.onnx.reference")
 
         class _ReferenceEvaluator:
-            def __init__(self, model_bytes):
+            def __init__(self, model_bytes, cpu_execution=None):
                 self.input_names = ["x"]
                 telemetry["plans"] += 1
                 telemetry["sessions"] += 1
+                telemetry["cpu_execution"] = cpu_execution
 
             def run(self, output_names, feeds):
                 telemetry["runs"] += 1
@@ -1050,6 +1072,9 @@ class TestOnnxLightReferenceRunner(unittest.TestCase):
         self.assertEqual(telemetry["sessions"], 1)
         self.assertEqual(telemetry["runs"], 2)
         self.assertIs(telemetry["feeds"][0]["x"], first_input)
+        self.assertEqual(
+            telemetry["cpu_execution"], {"spin_policy": "park_immediately"}
+        )
 
     def test_make_onnx_light_runner_uses_runtime_session(self):
         """The onnx_light backend runs through the ``RuntimeSession`` path, the
@@ -1286,7 +1311,7 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         reference = types.ModuleType("onnx_light.onnx.reference")
 
         class _ReferenceEvaluator:
-            def __init__(self, model_bytes):
+            def __init__(self, model_bytes, cpu_execution=None):
                 self.input_names = ["x"]
 
             def run(self, output_names, feeds):

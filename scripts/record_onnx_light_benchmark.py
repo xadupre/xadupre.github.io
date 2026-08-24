@@ -22,7 +22,8 @@ runs.
 
 For each test the measurement protocol is:
 
-1. Load / compile the model once (not timed).
+1. Configure both runtimes to park idle workers immediately, then load /
+   compile the model once (not timed).
 2. Run :data:`N_WARMUP` iterations to prime the JIT / kernel cache.
 3. Run :data:`N_MEASURE` iterations and record the wall-clock time of each.
 4. Report the per-backend **average** execution time
@@ -104,6 +105,8 @@ N_WARMUP: int = 3
 N_MEASURE: int = 10
 
 DEFAULT_KIND: str = "node"
+
+ONNX_LIGHT_CPU_EXECUTION: Dict[str, str] = {"spin_policy": "park_immediately"}
 
 #: Suffix identifying the genuine benchmark-sized backend test cases. In
 #: ``TestMode.BENCHMARK`` mode ``onnx-light`` registers large, benchmark-sized
@@ -530,8 +533,13 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
 def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
+    options = onnxruntime.SessionOptions()
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
     sess = onnxruntime.InferenceSession(
-        model.SerializeToString(), providers=["CPUExecutionProvider"]
+        model.SerializeToString(),
+        sess_options=options,
+        providers=["CPUExecutionProvider"],
     )
     input_names = [i.name for i in sess.get_inputs()]
 
@@ -561,7 +569,9 @@ def _make_onnx_light_reference_runner(
     if register is not None:
         register()
 
-    evaluator = ReferenceEvaluator(model.SerializeToString())
+    evaluator = ReferenceEvaluator(
+        model.SerializeToString(), cpu_execution=ONNX_LIGHT_CPU_EXECUTION
+    )
     input_names = evaluator.input_names
 
     def _run(inputs: List[Any]) -> List[Any]:
