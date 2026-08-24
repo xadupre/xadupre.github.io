@@ -219,6 +219,10 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
         <option value="">all input types</option>
       </select>
     </label>
+    <label title="Keep operators with at least one test slower than onnxruntime">
+      <input type="checkbox" id="slowFilter" />
+      <span>slow tests only (speed-up &lt; 1)</span>
+    </label>
     <label title="onnx-light-cpu is faster on the smallest input">
       <input type="checkbox" class="filter-check" value="small" />
       <span><strong>SMALL</strong></span>
@@ -580,6 +584,7 @@ function setupFilter(rendered) {
   const checks = Array.from(document.querySelectorAll(".filter-check"));
   const nameInput = document.getElementById("nameFilter");
   const typeSelect = document.getElementById("typeFilter");
+  const slowCheck = document.getElementById("slowFilter");
   const count = document.getElementById("filterCount");
   const inputTypes = [...new Set(rendered.flatMap(item => item.inputTypes))]
     .sort((a, b) => a.localeCompare(b));
@@ -594,11 +599,12 @@ function setupFilter(rendered) {
     const term = nameInput.value.trim().toLowerCase();
     const inputType = typeSelect.value;
     let shown = 0;
-    rendered.forEach(({ panel, cats, name, inputTypes: panelInputTypes }) => {
+    rendered.forEach(({ panel, cats, name, inputTypes: panelInputTypes, hasSlow }) => {
       const catMatch = active.length === 0 || active.some(key => cats[key]);
       const nameMatch = term === "" || name.includes(term);
       const typeMatch = inputType === "" || panelInputTypes.includes(inputType);
-      const match = catMatch && nameMatch && typeMatch;
+      const slowMatch = !slowCheck.checked || hasSlow;
+      const match = catMatch && nameMatch && typeMatch && slowMatch;
       panel.style.display = match ? "" : "none";
       if (match) shown += 1;
     });
@@ -607,6 +613,7 @@ function setupFilter(rendered) {
   checks.forEach(c => c.addEventListener("change", apply));
   nameInput.addEventListener("input", apply);
   typeSelect.addEventListener("change", apply);
+  slowCheck.addEventListener("change", apply);
   apply();
 }
 
@@ -655,7 +662,11 @@ fetch(JSON_URL, { cache: "no-store" })
       const inputTypes = [...new Set(
         (ex.rows || []).map(firstInputType).filter(Boolean)
       )];
-      rendered.push({ panel, cats, name, inputTypes });
+      const hasSlow = (ex.rows || []).some(row =>
+        row.speedup_cpu !== null && row.speedup_cpu !== undefined &&
+        !Number.isNaN(row.speedup_cpu) && row.speedup_cpu < 1
+      );
+      rendered.push({ panel, cats, name, inputTypes, hasSlow });
     });
     setupFilter(rendered);
   })

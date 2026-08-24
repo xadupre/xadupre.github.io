@@ -174,6 +174,14 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         )
         self.assertIn('typeSelect.addEventListener("change", apply);', text)
 
+    def test_page_filters_operators_with_slow_tests(self):
+        text = _read(PAGE)
+        self.assertIn('id="slowFilter"', text)
+        self.assertIn("slow tests only (speed-up &lt; 1)", text)
+        self.assertIn("row.speedup_cpu < 1", text)
+        self.assertIn("const slowMatch = !slowCheck.checked || hasSlow;", text)
+        self.assertIn('slowCheck.addEventListener("change", apply);', text)
+
     def test_operator_rows_are_compact(self):
         text = _read(PAGE)
         self.assertIn("margin-bottom: 0.25em;", text)
