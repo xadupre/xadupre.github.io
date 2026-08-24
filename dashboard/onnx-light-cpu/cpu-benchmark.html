@@ -136,7 +136,13 @@ table.benchmark th, table.benchmark td {
   white-space: nowrap;
 }
 table.benchmark th { color: #8b949e; font-weight: normal; }
-table.benchmark th:first-child, table.benchmark td:first-child { text-align: left; }
+table.benchmark th:first-child, table.benchmark td:first-child,
+table.benchmark th:nth-child(2), table.benchmark td:nth-child(2) { text-align: left; }
+table.benchmark th.sortable { cursor: pointer; user-select: none; }
+table.benchmark th.sortable:hover { color: #c9d1d9; }
+table.benchmark th.sortable:focus-visible { outline: 2px solid #58a6ff; outline-offset: -2px; }
+table.benchmark th[aria-sort="ascending"]::after { content: " ▲"; }
+table.benchmark th[aria-sort="descending"]::after { content: " ▼"; }
 table.benchmark td.faster { color: #3fb950; font-weight: bold; }
 table.benchmark td.slower { color: #f85149; font-weight: bold; }
 table.benchmark td.neutral { color: #bc8cff; font-weight: bold; }
@@ -279,12 +285,14 @@ function fmtSpeedup(value) {
 function formatBenchmarkDate(value) {
   const date = new Date(value);
   if (!value || Number.isNaN(date.getTime())) return "—";
-  return date.toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  return date.toISOString().slice(0, 10);
 }
 
 function renderMeta(payload) {
   document.getElementById("metaPanel").style.display = "block";
-  document.getElementById("metaDate").textContent = payload.date || "(unknown date)";
+  document.getElementById("metaDate").textContent = payload.date
+    ? formatBenchmarkDate(payload.date)
+    : "(unknown date)";
   if (payload.n_warmup !== undefined) {
     document.getElementById("nWarmupLabel").textContent = payload.n_warmup;
   }
@@ -358,6 +366,53 @@ function firstInputTensor(row) {
 function firstInputType(row) {
   const first = firstInputTensor(row).split("[")[0].trim();
   return /^[A-Za-z_][A-Za-z0-9_]*$/.test(first) ? first : "";
+}
+
+function makeSortable(table) {
+  const headers = Array.from(table.querySelectorAll("thead th"));
+  headers.forEach((header, column) => {
+    header.classList.add("sortable");
+    header.tabIndex = 0;
+    header.title = "Sort by " + header.textContent;
+    const sort = () => {
+      const ascending = header.dataset.direction !== "asc";
+      headers.forEach(other => {
+        delete other.dataset.direction;
+        other.removeAttribute("aria-sort");
+      });
+      header.dataset.direction = ascending ? "asc" : "desc";
+      header.setAttribute("aria-sort", ascending ? "ascending" : "descending");
+      const tbody = table.tBodies[0];
+      const rows = Array.from(tbody.rows).map((row, index) => ({ row, index }));
+      const numeric = header.dataset.sortType === "number";
+      rows.sort((left, right) => {
+        const leftValue = left.row.cells[column].dataset.sortValue || "";
+        const rightValue = right.row.cells[column].dataset.sortValue || "";
+        let comparison;
+        if (numeric) {
+          const leftNumber = leftValue === "" ? null : Number(leftValue);
+          const rightNumber = rightValue === "" ? null : Number(rightValue);
+          if (leftNumber === null) comparison = rightNumber === null ? 0 : 1;
+          else if (rightNumber === null) comparison = -1;
+          else comparison = leftNumber - rightNumber;
+        } else {
+          comparison = leftValue.localeCompare(rightValue, undefined, {
+            numeric: true,
+            sensitivity: "base",
+          });
+        }
+        return (ascending ? comparison : -comparison) || left.index - right.index;
+      });
+      rows.forEach(item => tbody.appendChild(item.row));
+    };
+    header.addEventListener("click", sort);
+    header.addEventListener("keydown", event => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        sort();
+      }
+    });
+  });
 }
 
 function renderExample(example, cats, benchmarkDate) {
@@ -435,6 +490,9 @@ function renderExample(example, cats, benchmarkDate) {
 
   const thead = document.createElement("thead");
   const htr = document.createElement("tr");
+  const nameTh = document.createElement("th");
+  nameTh.textContent = "test name";
+  htr.appendChild(nameTh);
   const typeTh = document.createElement("th");
   typeTh.textContent = "first input tensor";
   htr.appendChild(typeTh);
@@ -444,10 +502,12 @@ function renderExample(example, cats, benchmarkDate) {
   backends.forEach(b => {
     const th = document.createElement("th");
     th.innerHTML = (BACKEND_LABELS[b] || b) + " (ms)";
+    th.dataset.sortType = "number";
     htr.appendChild(th);
   });
   const spTh = document.createElement("th");
   spTh.textContent = "speed-up (cpu)";
+  spTh.dataset.sortType = "number";
   htr.appendChild(spTh);
   thead.appendChild(htr);
   table.appendChild(thead);
@@ -455,31 +515,50 @@ function renderExample(example, cats, benchmarkDate) {
   const tbody = document.createElement("tbody");
   (example.rows || []).forEach(row => {
     const tr = document.createElement("tr");
+    const nameTd = document.createElement("td");
+    if (row.test_name) {
+      const code = document.createElement("code");
+      code.textContent = row.test_name;
+      nameTd.appendChild(code);
+      nameTd.dataset.sortValue = row.test_name;
+    } else {
+      nameTd.textContent = "—";
+    }
+    tr.appendChild(nameTd);
     const typeTd = document.createElement("td");
     const inputTensor = firstInputTensor(row);
     if (inputTensor) {
       const code = document.createElement("code");
       code.textContent = inputTensor;
       typeTd.appendChild(code);
+      typeTd.dataset.sortValue = inputTensor;
     } else {
       typeTd.textContent = "—";
     }
     tr.appendChild(typeTd);
     const dateTd = document.createElement("td");
     dateTd.textContent = formatBenchmarkDate(benchmarkDate);
+    dateTd.dataset.sortValue = dateTd.textContent === "—" ? "" : dateTd.textContent;
     tr.appendChild(dateTd);
     backends.forEach(b => {
       const td = document.createElement("td");
       td.textContent = fmtMs(row[b + "_ms"]);
+      if (row[b + "_ms"] !== null && row[b + "_ms"] !== undefined) {
+        td.dataset.sortValue = row[b + "_ms"];
+      }
       tr.appendChild(td);
     });
     const spTd = document.createElement("td");
     spTd.textContent = fmtSpeedup(row.speedup_cpu);
     spTd.className = speedupClass(row.speedup_cpu);
+    if (row.speedup_cpu !== null && row.speedup_cpu !== undefined) {
+      spTd.dataset.sortValue = row.speedup_cpu;
+    }
     tr.appendChild(spTd);
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
+  makeSortable(table);
   wrap.appendChild(table);
   details.appendChild(wrap);
 
