@@ -99,6 +99,13 @@ class TestRows(unittest.TestCase):
             [row["inputs"] for row in float32["rows"]],
             ["float32[1024]", "float32[65536]"],
         )
+        self.assertEqual(
+            [row["test_name"] for row in float32["rows"]],
+            [
+                "test_cpu_abs_n1024_benchmark",
+                "test_cpu_abs_n65536_benchmark",
+            ],
+        )
         self.assertEqual(float32["summary"]["inputs"], 2)
         self.assertEqual(float32["summary"]["avg_speedup_cpu"], 1.5)
         self.assertEqual(float32["summary"]["min_speedup_cpu"], 1.0)

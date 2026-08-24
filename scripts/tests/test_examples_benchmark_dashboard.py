@@ -80,6 +80,12 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('firstInputTensor(row).split("[")[0].trim()', text)
         self.assertIn("code.textContent = inputTensor;", text)
 
+    def test_expanded_table_shows_test_names(self):
+        text = _read(PAGE)
+        self.assertIn('nameTh.textContent = "test name";', text)
+        self.assertIn("if (row.test_name)", text)
+        self.assertIn("code.textContent = row.test_name;", text)
+
     def test_summary_and_rows_show_the_benchmark_date(self):
         text = _read(PAGE)
         self.assertEqual(text.count("<span>date</span>"), 1)
@@ -87,6 +93,17 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('dateTh.textContent = "date";', text)
         self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
         self.assertIn("renderExample(ex, cats, payload.date)", text)
+        self.assertIn('return date.toISOString().slice(0, 10);', text)
+        self.assertIn("? formatBenchmarkDate(payload.date)", text)
+
+    def test_expanded_tables_are_sortable(self):
+        text = _read(PAGE)
+        self.assertIn("function makeSortable(table)", text)
+        self.assertIn('header.addEventListener("click", sort);', text)
+        self.assertIn('header.setAttribute("aria-sort"', text)
+        self.assertIn("makeSortable(table);", text)
+        self.assertIn('th[aria-sort="ascending"]::after', text)
+        self.assertIn('th[aria-sort="descending"]::after', text)
 
     def test_panels_are_sorted_by_operator(self):
         text = _read(PAGE)

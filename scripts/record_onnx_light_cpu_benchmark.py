@@ -117,22 +117,24 @@ def _group_measurements(
                 "op": operator,
                 "backends": list(BENCHMARK_BACKENDS),
                 "rows": [],
-                "test_names": [],
             },
         )
+        row["test_name"] = measurement["test_name"]
         group["rows"].append(row)
-        group["test_names"].append(measurement["test_name"])
 
     examples: list[dict[str, Any]] = []
     for group in groups.values():
         rows = sorted(
             group.pop("rows"),
-            key=lambda row: (row.get("input_elements", 0), row["inputs"]),
+            key=lambda row: (
+                row.get("input_elements", 0),
+                row["inputs"],
+                row["test_name"],
+            ),
         )
-        test_names = group.pop("test_names")
         speedups = [row["speedup_cpu"] for row in rows if "speedup_cpu" in row]
         group["rows"] = rows
-        group["source"] = f"{len(test_names)} onnx-light-cpu benchmark tests"
+        group["source"] = f"{len(rows)} onnx-light-cpu benchmark tests"
         group["summary"] = {
             "inputs": len(rows),
             "cpu_succeeded": len(speedups),
