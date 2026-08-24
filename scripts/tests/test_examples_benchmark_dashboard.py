@@ -100,7 +100,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         text = _read(PAGE)
         header_date = text.index('dateTh.textContent = "date";')
         header_speedup = text.index('spTh.textContent = "speed-up (cpu)";')
-        header_backends = text.index("backends.forEach(b => {", header_date)
+        header_backends = text.index("backends.forEach(b => {", header_speedup)
         self.assertLess(header_date, header_speedup)
         self.assertLess(header_speedup, header_backends)
 
@@ -110,7 +110,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         row_speedup = text.index(
             "spTd.textContent = fmtSpeedup(row.speedup_cpu);", row_date
         )
-        row_backends = text.index("backends.forEach(b => {", row_date)
+        row_backends = text.index("backends.forEach(b => {", row_speedup)
         self.assertLess(row_date, row_speedup)
         self.assertLess(row_speedup, row_backends)
 
