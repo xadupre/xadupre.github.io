@@ -94,7 +94,7 @@ Measurement grid
 Documentation builds use a single warm-up and repeat to keep the gallery
 fast; a normal run measures a more statistically stable median.
 
-.. GENERATED FROM PYTHON SOURCE LINES 52-157
+.. GENERATED FROM PYTHON SOURCE LINES 52-162
 
 .. code-block:: Python
 
@@ -104,22 +104,32 @@ fast; a normal run measures a more statistically stable median.
     else:
         warmup, repeat = 3, 7
 
+    MAX_MEASURE_DURATION = 2.0
 
-    def measure(function, warmup: int, repeat: int) -> float:
+
+    def measure(
+        function, warmup: int, repeat: int, max_duration: float = MAX_MEASURE_DURATION
+    ) -> float:
         """Measures a callable after warm-up and returns its median time per call.
 
         Returns:
-            The median wall-clock duration, in seconds, of ``repeat`` calls to
-            ``function`` (excluding the ``warmup`` calls).
+            The median wall-clock duration, in seconds, of at most ``repeat``
+            calls to ``function`` (excluding the ``warmup`` calls). Measurement
+            stops once their cumulative duration reaches ``max_duration``.
         """
 
         for _ in range(warmup):
             function()
         timings = []
+        total_duration = 0.0
         for _ in range(repeat):
             start = time.perf_counter()
             function()
-            timings.append(time.perf_counter() - start)
+            duration = time.perf_counter() - start
+            timings.append(duration)
+            total_duration += duration
+            if total_duration >= max_duration:
+                break
         return float(numpy.median(timings))
 
 
@@ -149,12 +159,11 @@ fast; a normal run measures a more statistically stable median.
         )
 
 
-    def benchmark_case(op_name: str) -> dict:
-        """Benchmarks one backend benchmark case against onnx-light and onnxruntime.
+    def prepare_case(op_name: str) -> dict:
+        """Prepares one backend benchmark case for both runtimes.
 
         Returns:
-            A mapping with the operator name, the number of elements processed
-            and the median execution time measured for each runtime.
+            The model, inputs, expected output, tolerance, and display metadata.
         """
 
         pattern = f"^test_cc_{op_name}_benchmark$"
@@ -168,41 +177,35 @@ fast; a normal run measures a more statistically stable median.
         input_names = [vi.name for vi in model.graph.input]
         data_set = tc.data_sets[0]
         feeds = {name: tensor_to_numpy(tensor) for name, tensor in zip(input_names, data_set.inputs)}
-
-        onnx_light_session = ReferenceEvaluator(model)
-
-        def run_onnx_light():
-            return onnx_light_session.run(None, feeds)[0]
-
-        ort_session = onnxruntime.InferenceSession(
-            model.SerializeToString(), providers=["CPUExecutionProvider"]
-        )
-
-        def run_onnxruntime():
-            return ort_session.run(None, feeds)[0]
-
         expected = tensor_to_numpy(data_set.outputs[0])
-        numpy.testing.assert_allclose(run_onnx_light(), expected, rtol=tc.rtol, atol=tc.atol)
-        numpy.testing.assert_allclose(run_onnxruntime(), expected, rtol=tc.rtol, atol=tc.atol)
-
-        onnx_light_time = measure(run_onnx_light, warmup, repeat)
-        ort_time = measure(run_onnxruntime, warmup, repeat)
-
-        n_elements = int(numpy.prod(next(iter(feeds.values())).shape))
-        print(
-            f"[{tc.name:>28}] n={n_elements:>10} | "
-            f"onnx-light={onnx_light_time * 1e6:10.2f} us | "
-            f"onnxruntime={ort_time * 1e6:10.2f} us | "
-            f"onnx-light / onnxruntime={onnx_light_time / ort_time:5.2f}x"
-        )
         return {
             "op_name": op_name,
-            "n_elements": n_elements,
-            "onnx_light_time": onnx_light_time,
-            "ort_time": ort_time,
+            "test_name": tc.name,
+            "model": model,
+            "feeds": feeds,
+            "expected": expected,
+            "rtol": tc.rtol,
+            "atol": tc.atol,
+            "n_elements": int(numpy.prod(next(iter(feeds.values())).shape)),
         }
 
 
+    def benchmark_case(case: dict, backend: str) -> float:
+        """Benchmarks one prepared case with one runtime."""
+        if backend == "onnx_light":
+            session = ReferenceEvaluator(case["model"])
+        elif backend == "onnxruntime":
+            session = onnxruntime.InferenceSession(
+                case["model"].SerializeToString(), providers=["CPUExecutionProvider"]
+            )
+        else:
+            raise ValueError(f"Unexpected backend {backend!r}.")
+
+        def run():
+            return session.run(None, case["feeds"])[0]
+
+        numpy.testing.assert_allclose(run(), case["expected"], rtol=case["rtol"], atol=case["atol"])
+        return measure(run, warmup, repeat)
 
 
 
@@ -210,17 +213,42 @@ fast; a normal run measures a more statistically stable median.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 158-160
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 163-170
 
 Run the benchmark for every selected operator
 ----------------------------------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 160-163
+Every onnx-light case is completed before any ONNX Runtime session is
+created. Both runtimes retain their default spinning behavior, but a pool
+from one runtime therefore cannot remain alive while the other runtime's
+cases are measured.
+
+.. GENERATED FROM PYTHON SOURCE LINES 170-191
 
 .. code-block:: Python
 
 
-    results = [benchmark_case(op_name) for op_name in BENCHMARK_OPS]
+    cases = [prepare_case(op_name) for op_name in BENCHMARK_OPS]
+    onnx_light_results = [benchmark_case(case, "onnx_light") for case in cases]
+    ort_results = [benchmark_case(case, "onnxruntime") for case in cases]
+    results = []
+    for case, onnx_light_time, ort_time in zip(cases, onnx_light_results, ort_results, strict=True):
+        results.append(
+            {
+                "op_name": case["op_name"],
+                "n_elements": case["n_elements"],
+                "onnx_light_time": onnx_light_time,
+                "ort_time": ort_time,
+            }
+        )
+        print(
+            f"[{case['test_name']:>28}] n={case['n_elements']:>10} | "
+            f"onnx-light={onnx_light_time * 1e6:10.2f} us | "
+            f"onnxruntime={ort_time * 1e6:10.2f} us | "
+            f"onnx-light / onnxruntime={onnx_light_time / ort_time:5.2f}x"
+        )
 
 
 
@@ -230,20 +258,20 @@ Run the benchmark for every selected operator
 
  .. code-block:: none
 
-    [       test_cc_abs_benchmark] n=   4194304 | onnx-light=   1582.47 us | onnxruntime=    343.95 us | onnx-light / onnxruntime= 4.60x
-    [      test_cc_relu_benchmark] n=   4194304 | onnx-light=   2011.16 us | onnxruntime=    363.93 us | onnx-light / onnxruntime= 5.53x
-    [   test_cc_sigmoid_benchmark] n=   4194304 | onnx-light=   6422.95 us | onnxruntime=    750.71 us | onnx-light / onnxruntime= 8.56x
-    [      test_cc_sqrt_benchmark] n=   4194304 | onnx-light=  18281.69 us | onnxruntime=    857.62 us | onnx-light / onnxruntime=21.32x
-    [       test_cc_exp_benchmark] n=   4194304 | onnx-light=   5313.80 us | onnxruntime=    847.54 us | onnx-light / onnxruntime= 6.27x
-    [       test_cc_erf_benchmark] n=   4194304 | onnx-light=  26017.44 us | onnxruntime=   1325.04 us | onnx-light / onnxruntime=19.64x
-    [       test_cc_add_benchmark] n=   4194304 | onnx-light=   1779.78 us | onnxruntime=    701.62 us | onnx-light / onnxruntime= 2.54x
-    [       test_cc_mul_benchmark] n=   4194304 | onnx-light=   1706.51 us | onnxruntime=    763.72 us | onnx-light / onnxruntime= 2.23x
-    [       test_cc_div_benchmark] n=   4194304 | onnx-light=   1718.63 us | onnxruntime=    804.33 us | onnx-light / onnxruntime= 2.14x
+    [       test_cc_abs_benchmark] n=   4194304 | onnx-light=    535.09 us | onnxruntime=    481.37 us | onnx-light / onnxruntime= 1.11x
+    [      test_cc_relu_benchmark] n=   4194304 | onnx-light=    516.32 us | onnxruntime=    400.73 us | onnx-light / onnxruntime= 1.29x
+    [   test_cc_sigmoid_benchmark] n=   4194304 | onnx-light=   6465.82 us | onnxruntime=    765.22 us | onnx-light / onnxruntime= 8.45x
+    [      test_cc_sqrt_benchmark] n=   4194304 | onnx-light=  18247.73 us | onnxruntime=    865.26 us | onnx-light / onnxruntime=21.09x
+    [       test_cc_exp_benchmark] n=   4194304 | onnx-light=   5367.49 us | onnxruntime=    856.58 us | onnx-light / onnxruntime= 6.27x
+    [       test_cc_erf_benchmark] n=   4194304 | onnx-light=  25991.10 us | onnxruntime=   1349.65 us | onnx-light / onnxruntime=19.26x
+    [       test_cc_add_benchmark] n=   4194304 | onnx-light=    946.26 us | onnxruntime=    801.54 us | onnx-light / onnxruntime= 1.18x
+    [       test_cc_mul_benchmark] n=   4194304 | onnx-light=    756.18 us | onnxruntime=    868.65 us | onnx-light / onnxruntime= 0.87x
+    [       test_cc_div_benchmark] n=   4194304 | onnx-light=    920.31 us | onnxruntime=    780.28 us | onnx-light / onnxruntime= 1.18x
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 164-170
+.. GENERATED FROM PYTHON SOURCE LINES 192-198
 
 Plot the comparison
 --------------------
@@ -252,7 +280,7 @@ The left panel shows the raw median execution time for each backend, the
 right panel shows the speed-up of ``onnx-light`` relative to
 ``onnxruntime`` (values above 1.0 mean ``onnx-light`` is slower).
 
-.. GENERATED FROM PYTHON SOURCE LINES 170-198
+.. GENERATED FROM PYTHON SOURCE LINES 198-226
 
 .. code-block:: Python
 
@@ -299,7 +327,7 @@ right panel shows the speed-up of ``onnx-light`` relative to
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 11.745 seconds)
+   **Total running time of the script:** (0 minutes 11.531 seconds)
 
 
 .. _sphx_glr_download_auto_examples_runtime_plot_backend_benchmark_vs_onnxruntime.py:

@@ -517,7 +517,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>planned; native prerequisites are available</strong></p>
+<p><strong>in progress; native PR01–PR04 are implemented</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>This is step 3 of the fast-loading sequence. It consumes the session-scoped
@@ -548,6 +548,7 @@ page faults, and bytes in flight.</p></li>
 <section id="native-pr02-resolve-before-materializing-payloads">
 <h2>Native PR02 – resolve before materializing payloads<a class="headerlink" href="#native-pr02-resolve-before-materializing-payloads" title="Link to this heading">#</a></h2>
 <p><strong>Repository:</strong> <code class="docutils literal notranslate"><span class="pre">xadupre/onnx-light</span></code></p>
+<p><strong>Implemented by issue #4619.</strong></p>
 <p>Implement the executable slice of <a class="reference internal" href="2026-08_model_resolution.html#l-next-steps-model-resolution"><span class="std std-ref">Model resolution before weight loading</span></a> that
 freezes <code class="docutils literal notranslate"><span class="pre">RequiredPayloadManifest</span></code> before large reads. Concrete useful cases
 include a constant <code class="docutils literal notranslate"><span class="pre">If</span></code> branch, unused training/debug heads, initializers
@@ -563,10 +564,15 @@ plumbing into Native PR03 instead of shipping a standalone performance PR.</p>
 <li><p>graph transformations cannot mutate requirements after reads begin;</p></li>
 <li><p>eager loading remains a diagnosed fallback for unsupported transformations.</p></li>
 </ul>
+<p>The native prepared-task boundary now carries payload identities and validates
+every read against an immutable manifest. The manifest reports bytes omitted
+as dead, superseded, or replaced by a prepared-cache payload; unsupported
+transformations explicitly select and diagnose eager loading.</p>
 </section>
 <section id="native-pr03-consume-prepared-tensors-before-portable-weights">
 <h2>Native PR03 – consume prepared tensors before portable weights<a class="headerlink" href="#native-pr03-consume-prepared-tensors-before-portable-weights" title="Link to this heading">#</a></h2>
 <p><strong>Repository:</strong> <code class="docutils literal notranslate"><span class="pre">xadupre/onnx-light</span></code></p>
+<p><strong>Implemented by issue #4620.</strong></p>
 <p>Implement the CPU subset of <a class="reference internal" href="2026-08_compiled_tensor.html#l-next-steps-compiled-tensor"><span class="std std-ref">CompiledTensorProto</span></a>. Resolve source
 digest, CPU/ISA, runtime, kernel layout, and format compatibility from metadata.
 On a hit, read or map the packed payload and skip the portable source and
@@ -580,10 +586,18 @@ an atomic cache entry in the background.</p>
 <li><p>warm prepared-cache <code class="docutils literal notranslate"><span class="pre">T_first_token</span></code> improves by at least 20% on the reduced
 fixture, or profiling proves preparation is not on its critical path.</p></li>
 </ul>
+<p>The native prepared-tensor cache validates the source digest, CPU architecture
+and ISA, runtime version, kernel layout, format version, payload length, and
+payload digest before publication. Compatible entries publish directly without
+calling the portable loader or prepacker. Diagnosed misses publish the freshly
+prepared value first and atomically replace the cache entry on a background
+writer. <code class="docutils literal notranslate"><span class="pre">bench_prepared_cache_startup</span></code> compares these two first-token paths on
+the reduced fixture and enforces the 20% warm-cache target.</p>
 </section>
 <section id="native-pr04-connect-and-tune-first-token-overlap">
 <h2>Native PR04 – connect and tune first-token overlap<a class="headerlink" href="#native-pr04-connect-and-tune-first-token-overlap" title="Link to this heading">#</a></h2>
 <p><strong>Repository:</strong> <code class="docutils literal notranslate"><span class="pre">xadupre/onnx-light</span></code></p>
+<p><strong>Implemented by issue #4621.</strong></p>
 <p>Connect the frozen payload manifest and prepared-cache choices to the
 session-scoped tasks in <a class="reference internal" href="2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>. Prioritize
 embeddings and early decoder blocks; prepare later blocks under bounded memory
@@ -600,10 +614,25 @@ envelope;</p></li>
 <li><p>dedicated x86 and ARM results separate cold storage, warm page cache, warm
 prepared cache, first token, and fully prepared milestones.</p></li>
 </ul>
+<p><code class="docutils literal notranslate"><span class="pre">PreparedMaterialization</span></code> now joins each resolver-selected packed or portable
+recipe to its manifest-backed session task chain. Invocation descriptors name
+only the <code class="docutils literal notranslate"><span class="pre">PreparedKey</span></code> objects they consume; plan construction adds those exact
+publisher dependencies and rejects missing or ambiguous publishers. Critical
+embedding and early-block chains outrank explicitly prefetched later blocks while
+the existing per-resource and global admission budgets remain authoritative.</p>
+<p>Every executed task also emits a timestamped <code class="docutils literal notranslate"><span class="pre">PreparedTaskTrace</span></code> interval with
+its effective priority and resource class. This makes I/O, prepack, and inference
+overlap directly testable instead of inferring it from aggregate load time.
+<code class="docutils literal notranslate"><span class="pre">bench_prepared_cache_startup</span></code> reports portable and prepared-cache first-token
+times, while <code class="docutils literal notranslate"><span class="pre">bench_prepared_hot_path</span></code> reports the fully prepared cost against
+the direct <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> envelope. Run both binaries on each x86 and ARM
+target, once after dropping the storage cache and once with a warm page cache;
+retain their machine-readable output as the dedicated platform result.</p>
 </section>
 <section id="native-pr05-add-prepared-object-eviction-and-reload">
 <h2>Native PR05 – add prepared-object eviction and reload<a class="headerlink" href="#native-pr05-add-prepared-object-eviction-and-reload" title="Link to this heading">#</a></h2>
 <p><strong>Repository:</strong> <code class="docutils literal notranslate"><span class="pre">xadupre/onnx-light</span></code></p>
+<p><strong>Implemented by issue #4622.</strong></p>
 <p>Add pinning, bounded prepared residency, eviction, and reload from the
 companion prepared model. An active inference pins every object it consumes;
 eviction may remove residency but never identity or an in-use allocation.</p>
@@ -615,6 +644,13 @@ eviction may remove residency but never identity or an in-use allocation.</p>
 prepacking its portable source;</p></li>
 <li><p>critical reloads outrank speculative preparation and background cache writes.</p></li>
 </ul>
+<p>The prepared scheduler’s memory budget now also bounds completed object
+residency. Least-recently-used inactive generations are evicted first, while
+consumer pins delay eviction until the active task releases them. Eviction keeps
+the object key and materialization recipe, so later invocations replay only the
+selected companion packed-payload read and publication tasks. Existing
+dependency priority propagation promotes demanded reloads above prefetch and
+background persistence work.</p>
 </section>
 <section id="native-pr06-add-device-preparation-variants">
 <h2>Native PR06 – add device preparation variants<a class="headerlink" href="#native-pr06-add-device-preparation-variants" title="Link to this heading">#</a></h2>

@@ -41,7 +41,7 @@ example first materializes random weights (both backends need real weight
 bytes to build a session) and then times the initialization step of each
 backend, printing a comparison table and a bar chart.
 
-.. GENERATED FROM PYTHON SOURCE LINES 25-229
+.. GENERATED FROM PYTHON SOURCE LINES 25-243
 
 
 
@@ -59,11 +59,11 @@ backend, printing a comparison table and a bar chart.
     -- materialized 39 weight initializer(s)
     -- model has 393 nodes
     -- serialized model size: 256,995,440 bytes
-    -- benchmark onnxruntime initialization
     -- benchmark onnx-light initialization
+    -- benchmark onnxruntime initialization
            name   median      avg      min      max      std  median (ms)   avg (ms)   min (ms)   max (ms)  std (ms)
-    onnxruntime 0.200829 0.202334 0.200145 0.209079 0.003407   200.829289 202.333983 200.145225 209.078924  3.407187
-     onnx-light 0.000696 0.000706 0.000678 0.000752 0.000026     0.696217   0.705841   0.678413   0.751671  0.025826
+     onnx-light 0.000770 0.000776 0.000693 0.000892 0.000070     0.770269   0.775987   0.693144   0.891805  0.069601
+    onnxruntime 0.144618 0.142356 0.138406 0.145562 0.003187   144.618301 142.356084 138.405730 145.561682  3.187487
 
 
 
@@ -102,7 +102,16 @@ backend, printing a comparison table and a bar chart.
         N_ITER, N_WARMUP = 5, 1
 
 
-    def measure(name: str, fn, n: int = N_ITER, warmup: int = N_WARMUP) -> dict:
+    MAX_MEASURE_DURATION = 2.0
+
+
+    def measure(
+        name: str,
+        fn,
+        n: int = N_ITER,
+        warmup: int = N_WARMUP,
+        max_duration: float = MAX_MEASURE_DURATION,
+    ) -> dict:
         """Runs *fn* with warm-up iterations and records timing statistics.
 
         Args:
@@ -119,10 +128,15 @@ backend, printing a comparison table and a bar chart.
         for _ in range(max(0, warmup)):
             fn()
         times = []
+        total_duration = 0.0
         for _ in range(max(1, n)):
             start = time.perf_counter()
             fn()
-            times.append(time.perf_counter() - start)
+            duration = time.perf_counter() - start
+            times.append(duration)
+            total_duration += duration
+            if total_duration >= max_duration:
+                break
         values = np.array(times)
         return {
             "name": name,
@@ -256,12 +270,12 @@ backend, printing a comparison table and a bar chart.
         def init_onnx_light() -> None:
             ReferenceEvaluator(model)
 
-        print("-- benchmark onnxruntime initialization")
-        ort_stats = measure("onnxruntime", init_onnxruntime)
         print("-- benchmark onnx-light initialization")
         onnxl_stats = measure("onnx-light", init_onnx_light)
+        print("-- benchmark onnxruntime initialization")
+        ort_stats = measure("onnxruntime", init_onnxruntime)
 
-        results = pandas.DataFrame([ort_stats, onnxl_stats])
+        results = pandas.DataFrame([onnxl_stats, ort_stats])
         for column in ("median", "avg", "min", "max", "std"):
             results[f"{column} (ms)"] = results[column] * 1e3
         print(results.to_string(index=False))
@@ -282,7 +296,7 @@ backend, printing a comparison table and a bar chart.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 4.781 seconds)
+   **Total running time of the script:** (0 minutes 4.347 seconds)
 
 
 .. _sphx_glr_download_auto_examples_runtime_plot_qwen3_init_benchmark.py:
