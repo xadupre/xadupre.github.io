@@ -234,7 +234,12 @@ class TestWorkflow(unittest.TestCase):
         # Both dependencies are built from source, as required by the issue.
         self.assertIn("repository: xadupre/onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
+        self.assertIn("cmake -S ./onnx-light -B ./onnx-light/build", text)
+        self.assertIn("pip install ./onnx-light", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
+        self.assertIn("--no-deps", text)
+        self.assertNotIn("pip install onnx-light", text)
+        self.assertNotIn("pip install onnx-light-cpu", text)
         self.assertIn("python -u scripts/record_onnx_light_cpu_benchmark.py", text)
         self.assertIn("cache_data/onnx-light-cpu/examples_benchmark.json", text)
 

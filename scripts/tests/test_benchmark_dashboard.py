@@ -9,6 +9,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light", "benchmark.html")
 METHODOLOGY = os.path.join(REPO_ROOT, "dashboard", "benchmark-methodology.html")
+WORKFLOW = os.path.join(
+    REPO_ROOT, ".github", "workflows", "record_onnx_light_benchmark.yml"
+)
 
 
 def _read(path: str) -> str:
@@ -19,6 +22,17 @@ def _read(path: str) -> str:
 class TestBenchmarkDashboard(unittest.TestCase):
     def test_page_exists(self):
         self.assertTrue(os.path.isfile(PAGE), f"missing page: {PAGE}")
+
+    def test_workflow_builds_benchmark_backends_from_source(self):
+        text = _read(WORKFLOW)
+        self.assertIn("repository: xadupre/onnx-light", text)
+        self.assertIn("cmake -S ./onnx-light -B ./onnx-light/build", text)
+        self.assertIn("pip install ./onnx-light", text)
+        self.assertIn("repository: xadupre/onnx-light-cpu", text)
+        self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
+        self.assertIn("--no-deps", text)
+        self.assertNotIn("pip install onnx-light", text)
+        self.assertNotIn("pip install onnx-light-cpu", text)
 
     def test_page_links_benchmark_methodology(self):
         text = _read(PAGE)
