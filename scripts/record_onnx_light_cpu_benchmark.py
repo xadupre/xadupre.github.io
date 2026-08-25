@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 import math
 import os
@@ -165,29 +166,39 @@ def run_tests(
     run: Callable[..., dict[str, Any]] = rlb.run_benchmark,
 ) -> list[dict[str, Any]]:
     """Benchmark the supplied onnx-light-cpu cases."""
-    measurements: list[dict[str, Any]] = []
+    cpu_results = []
     for test in tests:
-        model = test["model"]
+        cpu_results.append(
+            run(
+                test["model"],
+                test["data_sets"],
+                "onnx_light_cpu",
+                n_warmup=n_warmup,
+                n_measure=n_measure,
+            )
+        )
+    gc.collect()
+
+    ort_results = []
+    for test in tests:
+        ort_results.append(
+            run(
+                test["model"],
+                test["data_sets"],
+                "onnxruntime",
+                n_warmup=n_warmup,
+                n_measure=n_measure,
+            )
+        )
+
+    measurements: list[dict[str, Any]] = []
+    for test, cpu, ort in zip(tests, cpu_results, ort_results, strict=True):
         data_sets = test["data_sets"]
-        cpu = run(
-            model,
-            data_sets,
-            "onnx_light_cpu",
-            n_warmup=n_warmup,
-            n_measure=n_measure,
-        )
-        ort = run(
-            model,
-            data_sets,
-            "onnxruntime",
-            n_warmup=n_warmup,
-            n_measure=n_measure,
-        )
         first_inputs = data_sets[0][0]
         inputs = _format_inputs(first_inputs)
         row = _row(inputs, cpu, ort)
         row["input_elements"] = _first_input_element_count(first_inputs)
-        operator = rlb._operator_name(model) or "?"
+        operator = rlb._operator_name(test["model"]) or "?"
         measurements.append(
             {
                 "operator": operator,

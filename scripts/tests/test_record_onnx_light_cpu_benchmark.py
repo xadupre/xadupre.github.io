@@ -141,6 +141,35 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
 
+    def test_run_tests_uses_global_backend_phases(self):
+        model = types.SimpleNamespace(
+            graph=types.SimpleNamespace(
+                node=[types.SimpleNamespace(op_type="Abs", domain="")]
+            )
+        )
+        tests = [
+            {
+                "name": f"test_cpu_abs_{index}_benchmark",
+                "model": model,
+                "data_sets": [
+                    (([types.SimpleNamespace(dtype="float32", shape=(1,))]), [])
+                ],
+            }
+            for index in range(2)
+        ]
+        calls = []
+
+        def run(model, data_sets, backend, n_warmup, n_measure):
+            calls.append(backend)
+            return {"success": True, "avg_ms": 1.0}
+
+        rcb.run_tests(tests, run=run)
+
+        self.assertEqual(
+            calls,
+            ["onnx_light_cpu", "onnx_light_cpu", "onnxruntime", "onnxruntime"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

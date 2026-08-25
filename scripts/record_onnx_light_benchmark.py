@@ -20,12 +20,17 @@ built-in ``onnx-light`` pass over every test runs before the
 resolves each kernel once and replays the cached execution plan on subsequent
 runs.
 
-For each test the measurement protocol is:
+The benchmark runs every test through ``onnx-light``, then every test through
+``onnx-light-cpu``, and finally every test through ONNX Runtime. Sessions from
+one phase are released before the next phase starts, so each runtime keeps its
+default worker-spin policy without perturbing another runtime's measurements.
 
-1. Configure both runtimes to park idle workers immediately, then load /
-   compile the model once (not timed).
+For each backend and test the measurement protocol is:
+
+1. Load / compile the model once (not timed).
 2. Run :data:`N_WARMUP` iterations to prime the JIT / kernel cache.
-3. Run :data:`N_MEASURE` iterations and record the wall-clock time of each.
+3. Run up to :data:`N_MEASURE` iterations, stopping after two seconds of
+   cumulative measured execution, and record the wall-clock time of each.
 4. Report the per-backend **average** execution time
    (in milliseconds), computed as a trimmed mean that discards the fastest
    and slowest timed iterations, along with the raw ``min``/``max`` samples,
@@ -67,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gc
 import json
 import os
 import sys
@@ -104,9 +110,15 @@ N_WARMUP: int = 3
 #: Default number of timed iterations used to compute the average time.
 N_MEASURE: int = 10
 
+MAX_MEASURE_DURATION_S: float = 2.0
+
 DEFAULT_KIND: str = "node"
 
-ONNX_LIGHT_CPU_EXECUTION: Dict[str, str] = {"spin_policy": "park_immediately"}
+BENCHMARK_EXECUTION_ORDER: Tuple[str, ...] = (
+    "onnx_light",
+    "onnx_light_cpu",
+    "onnxruntime",
+)
 
 #: Suffix identifying the genuine benchmark-sized backend test cases. In
 #: ``TestMode.BENCHMARK`` mode ``onnx-light`` registers large, benchmark-sized
@@ -533,12 +545,8 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
 def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
-    options = onnxruntime.SessionOptions()
-    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
-    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
     sess = onnxruntime.InferenceSession(
         model.SerializeToString(),
-        sess_options=options,
         providers=["CPUExecutionProvider"],
     )
     input_names = [i.name for i in sess.get_inputs()]
@@ -569,9 +577,7 @@ def _make_onnx_light_reference_runner(
     if register is not None:
         register()
 
-    evaluator = ReferenceEvaluator(
-        model.SerializeToString(), cpu_execution=ONNX_LIGHT_CPU_EXECUTION
-    )
+    evaluator = ReferenceEvaluator(model.SerializeToString())
     input_names = evaluator.input_names
 
     def _run(inputs: List[Any]) -> List[Any]:
@@ -733,6 +739,7 @@ def run_benchmark(
     backend: str,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
+    max_measure_duration_s: float = MAX_MEASURE_DURATION_S,
 ) -> Dict[str, Any]:
     """Run a benchmark for ``backend`` on ``model`` / ``data_sets``.
 
@@ -790,6 +797,7 @@ def run_benchmark(
 
     # --- Timed measurement iterations ---------------------------------------
     times_ms: List[float] = []
+    total_elapsed_s = 0.0
     for _ in range(n_measure):
         t0 = time.perf_counter()
         for inputs, _ in data_sets:
@@ -803,8 +811,12 @@ def run_benchmark(
                     "n_warmup": n_warmup,
                     "n_measure": len(times_ms),
                 }
-        elapsed_ms = (time.perf_counter() - t0) * 1_000
+        elapsed_s = time.perf_counter() - t0
+        elapsed_ms = elapsed_s * 1_000
         times_ms.append(elapsed_ms)
+        total_elapsed_s += elapsed_s
+        if total_elapsed_s >= max_measure_duration_s:
+            break
 
     if not times_ms:
         return {
@@ -833,7 +845,7 @@ def run_benchmark(
         "min_ms": round(sorted_ms[0], 6),
         "max_ms": round(sorted_ms[-1], 6),
         "n_warmup": n_warmup,
-        "n_measure": n_measure,
+        "n_measure": len(times_ms),
     }
 
 
@@ -1161,16 +1173,8 @@ def build_payload(
                 "error_step": "run",
             }
 
-    # ``onnx_light_cpu`` installs its SIMD kernels into onnx-light's shared C++
-    # dispatch table globally and irreversibly (there is no un-register hook), so
-    # it is deferred to a second pass: the built-in ``onnx_light`` backend is
-    # timed for every test first to keep that baseline unaffected by the
-    # registration.
-    deferred = "onnx_light_cpu"
-    first_pass_backends = [b for b in BENCHMARK_BACKENDS if b != deferred]
-
     per_test: List[Dict[str, Any]] = []
-    for idx, test in enumerate(tests):
+    for test in tests:
         name = test["name"]
         model = test["model"]
         data_sets = test["data_sets"]
@@ -1186,16 +1190,12 @@ def build_payload(
         cost_n = _symbolic_cost(data_sets, operator, model)
         input_type = _first_input_type(data_sets)
 
-        results: Dict[str, Dict[str, Any]] = {}
-        for backend in first_pass_backends:
-            results[backend] = _benchmark(name, model, data_sets, backend)
-
         per_test.append(
             {
                 "name": name,
                 "tag": tag,
                 "graph": graph,
-                "results": results,
+                "results": {},
                 "cost_n": cost_n,
                 "cost_complexity": cost_complexity,
                 "operator": operator,
@@ -1203,18 +1203,17 @@ def build_payload(
             }
         )
 
-        if (idx + 1) % 50 == 0:
-            _log(f"Benchmarked {idx + 1}/{len(tests)} tests (built-in backends).")
-
-    # Second pass: the ``onnx_light_cpu`` backend registers its SIMD kernels on
-    # first use, after which every onnx-light run dispatches to them.
-    if deferred in BENCHMARK_BACKENDS:
+    # The plain onnx-light phase must precede onnx-light-cpu because registering
+    # the accelerated kernels is process-wide and irreversible. ONNX Runtime is
+    # measured last, after all onnx-light sessions have been released.
+    for backend in BENCHMARK_EXECUTION_ORDER:
         for idx, (test, entry) in enumerate(zip(tests, per_test)):
-            entry["results"][deferred] = _benchmark(
-                entry["name"], test["model"], test["data_sets"], deferred
+            entry["results"][backend] = _benchmark(
+                entry["name"], test["model"], test["data_sets"], backend
             )
             if (idx + 1) % 50 == 0:
-                _log(f"Benchmarked {idx + 1}/{len(tests)} tests (onnx-light-cpu).")
+                _log(f"Benchmarked {idx + 1}/{len(tests)} tests ({backend}).")
+        gc.collect()
 
     rows: List[Dict[str, Any]] = [
         _row_from_results(
@@ -1229,7 +1228,6 @@ def build_payload(
         )
         for entry in per_test
     ]
-
 
     # Summary stats across all tests that both backends succeeded on.
     both_ok = [
