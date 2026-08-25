@@ -25,6 +25,8 @@ class TestOnnxTimeDashboard(unittest.TestCase):
             "load2FileChart",
             "save1FileChart",
             "save2FileChart",
+            "loadSpeedupChart",
+            "saveSpeedupChart",
         ):
             self.assertIn(f'id="{chart_id}"', text)
         for prefix in ("load/1file", "load/2file", "save/1file", "save/2file"):
@@ -32,10 +34,17 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn('row.name.startsWith(prefix + "x")', text)
         self.assertIn("x: Date.parse(row.date)", text)
         self.assertIn("loadChartJs()", text)
+        self.assertIn('baseline: "load/1filex1/onnx"', text)
+        self.assertIn('baseline: "save/1filex1/onnx"', text)
+        self.assertIn("baselineByRun.get(row.run_id) / Number(row[metric])", text)
+        self.assertIn("SPEEDUP_CHARTS.forEach(renderSpeedupChart)", text)
 
         with open(DATA, newline="", encoding="utf-8") as stream:
             rows = list(csv.DictReader(stream))
         self.assertTrue(rows)
+        names = {row["name"] for row in rows}
+        self.assertIn("load/1filex1/onnx", names)
+        self.assertIn("save/1filex1/onnx", names)
         for row in rows:
             datetime.datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
 
