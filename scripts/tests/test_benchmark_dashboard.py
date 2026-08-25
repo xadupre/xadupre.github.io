@@ -31,7 +31,7 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
         self.assertIn("--no-deps", text)
-        self.assertNotIn("pip install onnx-light ", text)
+        self.assertNotIn("pip install onnx-light", text)
         self.assertNotIn("pip install onnx-light-cpu", text)
 
     def test_page_links_benchmark_methodology(self):
