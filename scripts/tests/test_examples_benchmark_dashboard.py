@@ -254,6 +254,11 @@ class TestScriptCLI(unittest.TestCase):
         for name in ("build_payload", "write_payload", "main", "parse_args"):
             self.assertTrue(hasattr(module, name), f"missing {name}")
 
+    def test_page_shows_repeat_time_limit(self):
+        text = _read(PAGE)
+        self.assertIn('id="maxRepeatTimeLabel"', text)
+        self.assertIn("payload.max_repeat_time_s", text)
+
 
 if __name__ == "__main__":
     unittest.main()

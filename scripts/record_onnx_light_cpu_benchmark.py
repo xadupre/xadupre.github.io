@@ -22,8 +22,9 @@ from typing import Any
 import record_onnx_light_benchmark as rlb
 
 BENCHMARK_BACKENDS = ("onnx_light_cpu", "onnxruntime")
-N_WARMUP = 3
-N_MEASURE = 10
+N_WARMUP = rlb.N_WARMUP
+N_MEASURE = rlb.N_MEASURE
+MAX_REPEAT_TIME_S = rlb.MAX_REPEAT_TIME_S
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
 
@@ -163,6 +164,7 @@ def run_tests(
     tests: list[dict[str, Any]],
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
+    max_repeat_time_s: float = MAX_REPEAT_TIME_S,
     run: Callable[..., dict[str, Any]] = rlb.run_benchmark,
 ) -> list[dict[str, Any]]:
     """Benchmark the supplied onnx-light-cpu cases."""
@@ -175,6 +177,7 @@ def run_tests(
                 "onnx_light_cpu",
                 n_warmup=n_warmup,
                 n_measure=n_measure,
+                max_repeat_time_s=max_repeat_time_s,
             )
         )
     gc.collect()
@@ -188,6 +191,7 @@ def run_tests(
                 "onnxruntime",
                 n_warmup=n_warmup,
                 n_measure=n_measure,
+                max_repeat_time_s=max_repeat_time_s,
             )
         )
 
@@ -214,6 +218,7 @@ def build_payload(
     limit: int | None = None,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
+    max_repeat_time_s: float = MAX_REPEAT_TIME_S,
     discover: Callable[[str], list[dict[str, Any]]] = discover_benchmark_tests,
     run: Callable[..., list[dict[str, Any]]] = run_tests,
     versions: Callable[[], dict[str, str]] = collect_versions,
@@ -231,10 +236,16 @@ def build_payload(
         "date": timestamp.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "n_warmup": n_warmup,
         "n_measure": n_measure,
+        "max_repeat_time_s": max_repeat_time_s,
         "versions": versions(),
         "simd_level": level,
         "simd_name": _SIMD_NAMES.get(level, str(level)),
-        "examples": run(tests, n_warmup=n_warmup, n_measure=n_measure),
+        "examples": run(
+            tests,
+            n_warmup=n_warmup,
+            n_measure=n_measure,
+            max_repeat_time_s=max_repeat_time_s,
+        ),
     }
 
 
@@ -252,6 +263,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--n-warmup", type=int, default=N_WARMUP)
     parser.add_argument("--n-measure", type=int, default=N_MEASURE)
+    parser.add_argument("--max-repeat-time", type=float, default=MAX_REPEAT_TIME_S)
     return parser.parse_args(argv)
 
 
@@ -262,6 +274,7 @@ def main(argv: list[str] | None = None) -> int:
         limit=args.limit,
         n_warmup=args.n_warmup,
         n_measure=args.n_measure,
+        max_repeat_time_s=args.max_repeat_time,
     )
     path = os.path.join(args.cache_dir, "onnx-light-cpu", "examples_benchmark.json")
     write_payload(path, payload)

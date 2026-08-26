@@ -458,9 +458,40 @@ class TestRunBenchmark(unittest.TestCase):
                 object(),
                 [([np.ones((1,))], [np.zeros((1,))])],
                 "onnxruntime",
-                n_warmup=1,
+                n_warmup=0,
                 n_measure=5,
-                max_measure_duration_s=1.0,
+                max_repeat_time_s=1.0,
+            )
+        finally:
+            rlb.time.perf_counter = saved_pc
+            if saved is None:
+                del rlb._RUNNER_FACTORIES["onnxruntime"]
+            else:
+                rlb._RUNNER_FACTORIES["onnxruntime"] = saved
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["n_warmup"], 0)
+        self.assertEqual(result["n_measure"], 1)
+        self.assertEqual(result["avg_ms"], 1100.0)
+
+    def test_warmup_stops_after_cumulative_duration(self):
+        ticks = iter((0.0, 1.1, 2.0, 2.1))
+
+        def _dummy_factory(model):
+            return lambda inputs: [np.zeros((1,))]
+
+        saved = rlb._RUNNER_FACTORIES.get("onnxruntime")
+        saved_pc = rlb.time.perf_counter
+        try:
+            rlb._RUNNER_FACTORIES["onnxruntime"] = _dummy_factory
+            rlb.time.perf_counter = lambda: next(ticks)
+            result = rlb.run_benchmark(
+                object(),
+                [([np.ones((1,))], [np.zeros((1,))])],
+                "onnxruntime",
+                n_warmup=5,
+                n_measure=1,
+                max_repeat_time_s=1.0,
             )
         finally:
             rlb.time.perf_counter = saved_pc
@@ -472,7 +503,6 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["n_warmup"], 1)
         self.assertEqual(result["n_measure"], 1)
-        self.assertEqual(result["avg_ms"], 1100.0)
 
 
 class TestSymbolicCost(unittest.TestCase):
@@ -714,8 +744,15 @@ class TestBuildPayload(unittest.TestCase):
 
         call_log = []
 
-        def _run(model, data_sets, backend, n_warmup, n_measure):
-            call_log.append((backend, n_warmup, n_measure))
+        def _run(
+            model,
+            data_sets,
+            backend,
+            n_warmup,
+            n_measure,
+            max_repeat_time_s,
+        ):
+            call_log.append((backend, n_warmup, n_measure, max_repeat_time_s))
             return {
                 "success": True,
                 "error": "",
@@ -729,6 +766,7 @@ class TestBuildPayload(unittest.TestCase):
             kind="node",
             n_warmup=2,
             n_measure=7,
+            max_repeat_time_s=0.5,
             discover=_discover,
             run=_run,
             versions=lambda: {"onnxruntime": "1.0", "onnx_light": "0.1"},
@@ -738,6 +776,7 @@ class TestBuildPayload(unittest.TestCase):
         self.assertIn("kind", payload)
         self.assertEqual(payload["n_warmup"], 2)
         self.assertEqual(payload["n_measure"], 7)
+        self.assertEqual(payload["max_repeat_time_s"], 0.5)
         self.assertIn("summary", payload)
         self.assertIn("tests", payload)
         self.assertEqual(len(payload["tests"]), 2)
@@ -745,17 +784,18 @@ class TestBuildPayload(unittest.TestCase):
         # Each test should have been run against both BENCHMARK_BACKENDS.
         for backend in rlb.BENCHMARK_BACKENDS:
             self.assertGreater(
-                sum(1 for b, _, _ in call_log if b == backend),
+                sum(1 for b, _, _, _ in call_log if b == backend),
                 0,
                 msg=f"{backend} was never called",
             )
 
         # Check that both warm-up and measure counts are forwarded.
-        for backend, nw, nm in call_log:
+        for backend, nw, nm, max_repeat_time_s in call_log:
             self.assertEqual(nw, 2)
             self.assertEqual(nm, 7)
+            self.assertEqual(max_repeat_time_s, 0.5)
         self.assertEqual(
-            [backend for backend, _, _ in call_log],
+            [backend for backend, _, _, _ in call_log],
             [backend for backend in rlb.BENCHMARK_EXECUTION_ORDER for _ in range(2)],
         )
 
@@ -815,7 +855,14 @@ class TestBuildPayload(unittest.TestCase):
                 for i in range(20)
             ]
 
-        def _run(model, data_sets, backend, n_warmup, n_measure):
+        def _run(
+            model,
+            data_sets,
+            backend,
+            n_warmup,
+            n_measure,
+            max_repeat_time_s,
+        ):
             return {
                 "success": False,
                 "error": "no data",
@@ -883,12 +930,27 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.kind, rlb.DEFAULT_KIND)
         self.assertEqual(args.n_warmup, rlb.N_WARMUP)
         self.assertEqual(args.n_measure, rlb.N_MEASURE)
+        self.assertEqual(args.max_repeat_time, rlb.MAX_REPEAT_TIME_S)
+        self.assertEqual(rlb.N_WARMUP, 2 * (os.cpu_count() or 1))
+        self.assertEqual(rlb.N_MEASURE, 10 * (os.cpu_count() or 1))
         self.assertIsNone(args.limit)
 
     def test_override(self):
-        args = rlb.parse_args(["--n-warmup", "5", "--n-measure", "20", "--limit", "10"])
+        args = rlb.parse_args(
+            [
+                "--n-warmup",
+                "5",
+                "--n-measure",
+                "20",
+                "--max-repeat-time",
+                "0.25",
+                "--limit",
+                "10",
+            ]
+        )
         self.assertEqual(args.n_warmup, 5)
         self.assertEqual(args.n_measure, 20)
+        self.assertEqual(args.max_repeat_time, 0.25)
         self.assertEqual(args.limit, 10)
 
 
