@@ -39,7 +39,14 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn('href="../benchmark-methodology.html"', text)
         methodology = _read(METHODOLOGY)
         self.assertIn("separate competing runtimes into global phases", methodology)
-        self.assertIn("two seconds of cumulative measured execution", methodology)
+        self.assertIn("two warm-up repetitions", methodology)
+        self.assertIn("ten measured repetitions per logical CPU", methodology)
+        self.assertIn("after one second of cumulative execution", methodology)
+
+    def test_page_shows_repeat_time_limit(self):
+        text = _read(PAGE)
+        self.assertIn('id="maxRepeatTimeLabel"', text)
+        self.assertIn("payload.max_repeat_time_s", text)
 
     def test_input_type_column_present(self):
         text = _read(PAGE)

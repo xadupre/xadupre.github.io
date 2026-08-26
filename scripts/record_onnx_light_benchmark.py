@@ -28,9 +28,10 @@ default worker-spin policy without perturbing another runtime's measurements.
 For each backend and test the measurement protocol is:
 
 1. Load / compile the model once (not timed).
-2. Run :data:`N_WARMUP` iterations to prime the JIT / kernel cache.
-3. Run up to :data:`N_MEASURE` iterations, stopping after two seconds of
-   cumulative measured execution, and record the wall-clock time of each.
+2. Run up to :data:`N_WARMUP` iterations to prime the JIT / kernel cache,
+   stopping after :data:`MAX_REPEAT_TIME_S` seconds of cumulative execution.
+3. Run up to :data:`N_MEASURE` iterations, also stopping after
+   :data:`MAX_REPEAT_TIME_S` seconds, and record the wall-clock time of each.
 4. Report the per-backend **average** execution time
    (in milliseconds), computed as a trimmed mean that discards the fastest
    and slowest timed iterations, along with the raw ``min``/``max`` samples,
@@ -66,6 +67,7 @@ Usage::
 
     python scripts/record_onnx_light_benchmark.py [--cache-dir DIR]
         [--kind node] [--limit N] [--n-warmup N] [--n-measure N]
+        [--max-repeat-time SECONDS]
 """
 
 from __future__ import annotations
@@ -104,13 +106,15 @@ BACKEND_PACKAGE: Dict[str, str] = {
     "onnx_light_cpu": "onnx_light_cpu",
 }
 
+CPU_COUNT: int = os.cpu_count() or 1
+
 #: Default number of warm-up iterations (not timed) run before measurement.
-N_WARMUP: int = 3
+N_WARMUP: int = 2 * CPU_COUNT
 
 #: Default number of timed iterations used to compute the average time.
-N_MEASURE: int = 10
+N_MEASURE: int = 10 * CPU_COUNT
 
-MAX_MEASURE_DURATION_S: float = 2.0
+MAX_REPEAT_TIME_S: float = 1.0
 
 DEFAULT_KIND: str = "node"
 
@@ -739,7 +743,7 @@ def run_benchmark(
     backend: str,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
-    max_measure_duration_s: float = MAX_MEASURE_DURATION_S,
+    max_repeat_time_s: float = MAX_REPEAT_TIME_S,
 ) -> Dict[str, Any]:
     """Run a benchmark for ``backend`` on ``model`` / ``data_sets``.
 
@@ -782,7 +786,10 @@ def run_benchmark(
         }
 
     # --- Warm-up iterations (not timed) -------------------------------------
+    warmup_count = 0
+    warmup_elapsed_s = 0.0
     for _ in range(n_warmup):
+        t0 = time.perf_counter()
         for inputs, _ in data_sets:
             try:
                 runner(inputs)
@@ -791,9 +798,13 @@ def run_benchmark(
                     "success": False,
                     "error": _stringify_error(exc),
                     "error_step": "warmup",
-                    "n_warmup": 0,
+                    "n_warmup": warmup_count,
                     "n_measure": 0,
                 }
+        warmup_count += 1
+        warmup_elapsed_s += time.perf_counter() - t0
+        if warmup_elapsed_s >= max_repeat_time_s:
+            break
 
     # --- Timed measurement iterations ---------------------------------------
     times_ms: List[float] = []
@@ -808,14 +819,14 @@ def run_benchmark(
                     "success": False,
                     "error": _stringify_error(exc),
                     "error_step": "measure",
-                    "n_warmup": n_warmup,
+                    "n_warmup": warmup_count,
                     "n_measure": len(times_ms),
                 }
         elapsed_s = time.perf_counter() - t0
         elapsed_ms = elapsed_s * 1_000
         times_ms.append(elapsed_ms)
         total_elapsed_s += elapsed_s
-        if total_elapsed_s >= max_measure_duration_s:
+        if total_elapsed_s >= max_repeat_time_s:
             break
 
     if not times_ms:
@@ -823,7 +834,7 @@ def run_benchmark(
             "success": False,
             "error": "no timing samples collected",
             "error_step": "measure",
-            "n_warmup": n_warmup,
+            "n_warmup": warmup_count,
             "n_measure": 0,
         }
 
@@ -844,7 +855,7 @@ def run_benchmark(
         "avg_ms": round(avg_ms, 6),
         "min_ms": round(sorted_ms[0], 6),
         "max_ms": round(sorted_ms[-1], 6),
-        "n_warmup": n_warmup,
+        "n_warmup": warmup_count,
         "n_measure": len(times_ms),
     }
 
@@ -1135,6 +1146,7 @@ def build_payload(
     limit: Optional[int] = None,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
+    max_repeat_time_s: float = MAX_REPEAT_TIME_S,
     discover: Callable[[str], List[Dict[str, Any]]] = discover_node_tests,
     run: Callable[..., Dict[str, Any]] = run_benchmark,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
@@ -1161,6 +1173,7 @@ def build_payload(
                 backend,
                 n_warmup=n_warmup,
                 n_measure=n_measure,
+                max_repeat_time_s=max_repeat_time_s,
             )
         except Exception as exc:  # noqa: BLE001
             _log(
@@ -1273,6 +1286,7 @@ def build_payload(
         "kind": kind,
         "n_warmup": n_warmup,
         "n_measure": n_measure,
+        "max_repeat_time_s": max_repeat_time_s,
         "versions": version_map,
         "summary": summary,
         "tests": rows,
@@ -1339,6 +1353,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=N_MEASURE,
         help=f"Number of timed iterations per test (default: {N_MEASURE}).",
     )
+    parser.add_argument(
+        "--max-repeat-time",
+        type=float,
+        default=MAX_REPEAT_TIME_S,
+        help=(
+            "Maximum cumulative time in seconds for each warm-up and "
+            f"measurement phase (default: {MAX_REPEAT_TIME_S})."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -1351,6 +1374,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             limit=args.limit,
             n_warmup=args.n_warmup,
             n_measure=args.n_measure,
+            max_repeat_time_s=args.max_repeat_time,
         )
     except Exception as exc:  # noqa: BLE001
         _log(f"ERROR: failed to record benchmark: {exc}")

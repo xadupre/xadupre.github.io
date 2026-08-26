@@ -117,8 +117,9 @@ class TestPayload(unittest.TestCase):
     def test_payload_uses_discovered_tests(self):
         calls = {}
 
-        def run(tests, n_warmup, n_measure):
+        def run(tests, n_warmup, n_measure, max_repeat_time_s):
             calls["tests"] = tests
+            calls["max_repeat_time_s"] = max_repeat_time_s
             return []
 
         cpu = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
@@ -138,6 +139,7 @@ class TestPayload(unittest.TestCase):
             else:
                 sys.modules[cpu.__name__] = original
         self.assertEqual(calls["tests"], [{"name": "test_cpu_abs_benchmark"}])
+        self.assertEqual(calls["max_repeat_time_s"], rcb.MAX_REPEAT_TIME_S)
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
 
@@ -159,15 +161,27 @@ class TestPayload(unittest.TestCase):
         ]
         calls = []
 
-        def run(model, data_sets, backend, n_warmup, n_measure):
-            calls.append(backend)
+        def run(
+            model,
+            data_sets,
+            backend,
+            n_warmup,
+            n_measure,
+            max_repeat_time_s,
+        ):
+            calls.append((backend, max_repeat_time_s))
             return {"success": True, "avg_ms": 1.0}
 
         rcb.run_tests(tests, run=run)
 
         self.assertEqual(
             calls,
-            ["onnx_light_cpu", "onnx_light_cpu", "onnxruntime", "onnxruntime"],
+            [
+                ("onnx_light_cpu", rcb.MAX_REPEAT_TIME_S),
+                ("onnx_light_cpu", rcb.MAX_REPEAT_TIME_S),
+                ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
+                ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
+            ],
         )
 
 
