@@ -231,6 +231,7 @@ class TestWorkflow(unittest.TestCase):
     def test_workflow_builds_from_source_and_runs_script(self):
         text = _read(WORKFLOW)
         self.assertIn("name: DATA onnx-light-cpu benchmark", text)
+        self.assertIn("timeout-minutes: 120", text)
         # Both dependencies are built from source, as required by the issue.
         self.assertIn("repository: xadupre/onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
