@@ -126,6 +126,34 @@ def _first_input_element_count(inputs: Any) -> int:
     return 0
 
 
+def _make_cpu_suite_runner_factory() -> (
+    Callable[[Any], Callable[[list[Any]], list[Any]]]
+):
+    """Build CPU runners with one registration and one verification per suite."""
+    registration: dict[str, Any] = {"attempted": False, "error": None}
+    verification = {"done": False}
+
+    def factory(model: Any) -> Callable[[list[Any]], list[Any]]:
+        if not registration["attempted"]:
+            registration["attempted"] = True
+            try:
+                from onnx_light_cpu import register_kernels
+
+                register_kernels()
+            except Exception as exc:
+                registration["error"] = exc
+                raise
+        if registration["error"] is not None:
+            raise registration["error"]
+        return rlb._make_onnx_light_cpu_runner(
+            model,
+            register_kernels=False,
+            verification_state=verification,
+        )
+
+    return factory
+
+
 def _group_measurements(
     measurements: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -198,18 +226,26 @@ def run_tests(
     cpu_results = []
     metadata = []
     total = len(tests)
+    cpu_runner_factory = (
+        _make_cpu_suite_runner_factory() if run is rlb.run_benchmark else None
+    )
     for index, test in enumerate(tests, start=1):
         loaded = test if "model" in test else load(test["name"])
         rlb._log(f"Benchmarking {index}/{total} tests (onnx_light_cpu): {test['name']}")
+        run_kwargs = {
+            "n_warmup": n_warmup,
+            "n_measure": n_measure,
+            "max_warmup_time_s": max_warmup_time_s,
+            "max_repeat_time_s": max_repeat_time_s,
+        }
+        if cpu_runner_factory is not None:
+            run_kwargs["runner_factory"] = cpu_runner_factory
         cpu_results.append(
             run(
                 loaded["model"],
                 loaded["data_sets"],
                 "onnx_light_cpu",
-                n_warmup=n_warmup,
-                n_measure=n_measure,
-                max_warmup_time_s=max_warmup_time_s,
-                max_repeat_time_s=max_repeat_time_s,
+                **run_kwargs,
             )
         )
         first_inputs = loaded["data_sets"][0][0]

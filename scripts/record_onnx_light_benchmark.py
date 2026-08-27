@@ -605,7 +605,12 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     return _make_onnx_light_reference_runner(model)
 
 
-def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
+def _make_onnx_light_cpu_runner(
+    model,
+    *,
+    register_kernels: bool = True,
+    verification_state: Optional[Dict[str, bool]] = None,
+) -> Callable[[List[Any]], List[Any]]:
     """Build the onnx-light runner with the ``onnx-light-cpu`` SIMD kernels active.
 
     ``onnx-light-cpu`` ships SIMD-accelerated ``Abs``/``Exp``/``Log``/``Gemm``/
@@ -644,12 +649,20 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     silently fell back to a built-in kernel (so onnx-light-cpu is *not* really
     used where it should be), which the process-wide
     :func:`onnx_light_cpu.used_kernel_names` record alone cannot detect.
+
+    ``register_kernels=False`` and a shared ``verification_state`` let callers
+    that run a homogeneous benchmark suite pay both process-wide setup costs
+    only once. The defaults retain the standalone per-model checks.
     """
     import onnx_light_cpu
 
     runner = _make_onnx_light_reference_runner(
-        model, register=onnx_light_cpu.register_kernels
+        model, register=onnx_light_cpu.register_kernels if register_kernels else None
     )
+
+    checked = verification_state if verification_state is not None else {"done": False}
+    if checked["done"]:
+        return runner
 
     clear_used_kernel_names = getattr(onnx_light_cpu, "clear_used_kernel_names", None)
     used_kernel_names = getattr(onnx_light_cpu, "used_kernel_names", None)
@@ -659,6 +672,7 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     except ImportError:
         set_kernel_usage_recording = None
     if clear_used_kernel_names is None or used_kernel_names is None:
+        checked["done"] = True
         return runner
 
     # Map of ONNX ``op_type`` -> library-qualified kernel name that
@@ -671,8 +685,6 @@ def _make_onnx_light_cpu_runner(model) -> Callable[[List[Any]], List[Any]]:
     )
     cpu_kernel_names = set(registered.values())
     overridden_op_types = set(registered)
-
-    checked = {"done": False}
 
     def _run_checked(inputs: List[Any]) -> List[Any]:
         if checked["done"]:
@@ -745,6 +757,7 @@ def run_benchmark(
     n_measure: int = N_MEASURE,
     max_repeat_time_s: float = MAX_REPEAT_TIME_S,
     max_warmup_time_s: Optional[float] = None,
+    runner_factory: Optional[Callable[[Any], Callable[[List[Any]], List[Any]]]] = None,
 ) -> Dict[str, Any]:
     """Run a benchmark for ``backend`` on ``model`` / ``data_sets``.
 
@@ -760,11 +773,14 @@ def run_benchmark(
     * ``max_ms`` – slowest timed iteration in milliseconds.
     * ``n_warmup`` – number of warm-up iterations actually run.
     * ``n_measure`` – number of timed iterations actually run.
+
+    ``runner_factory`` overrides the registered backend factory when a caller
+    needs to share process-wide setup across several benchmark invocations.
     """
     if max_warmup_time_s is None:
         max_warmup_time_s = max_repeat_time_s
 
-    factory = _RUNNER_FACTORIES.get(backend)
+    factory = runner_factory or _RUNNER_FACTORIES.get(backend)
     if factory is None:
         return {
             "success": False,
