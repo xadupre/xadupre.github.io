@@ -216,7 +216,8 @@ class TestPayload(unittest.TestCase):
             calls.append((backend, max_repeat_time_s))
             return {"success": True, "avg_ms": 1.0}
 
-        rcb.run_tests(tests, run=run)
+        with patch.object(rcb.rlb, "_log") as log:
+            rcb.run_tests(tests, run=run)
 
         self.assertEqual(
             calls,
@@ -225,6 +226,15 @@ class TestPayload(unittest.TestCase):
                 ("onnx_light_cpu", rcb.MAX_REPEAT_TIME_S),
                 ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
                 ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
+            ],
+        )
+        self.assertEqual(
+            [call.args[0] for call in log.call_args_list],
+            [
+                "Benchmarking 1/2 tests (onnx_light_cpu): test_cpu_abs_0_benchmark",
+                "Benchmarking 2/2 tests (onnx_light_cpu): test_cpu_abs_1_benchmark",
+                "Benchmarking 1/2 tests (onnxruntime): test_cpu_abs_0_benchmark",
+                "Benchmarking 2/2 tests (onnxruntime): test_cpu_abs_1_benchmark",
             ],
         )
 

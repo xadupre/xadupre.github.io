@@ -195,8 +195,10 @@ def run_tests(
     """Benchmark the supplied onnx-light-cpu cases."""
     cpu_results = []
     metadata = []
-    for test in tests:
+    total = len(tests)
+    for index, test in enumerate(tests, start=1):
         loaded = test if "model" in test else load(test["name"])
+        rlb._log(f"Benchmarking {index}/{total} tests (onnx_light_cpu): {test['name']}")
         cpu_results.append(
             run(
                 loaded["model"],
@@ -220,8 +222,9 @@ def run_tests(
     gc.collect()
 
     ort_results = []
-    for test in tests:
+    for index, test in enumerate(tests, start=1):
         loaded = test if "model" in test else load(test["name"])
+        rlb._log(f"Benchmarking {index}/{total} tests (onnxruntime): {test['name']}")
         ort_results.append(
             run(
                 loaded["model"],
