@@ -36,13 +36,23 @@ load/1filex1/onnxlight avg=4.0 ms median=3.9 ms max=4.2 ms std=0.1 ms</pre>"""
 
             self.assertEqual(
                 rot.append_snapshot(
-                    html_path, csv_path, "2026-08-21T00:00:00Z", "abc", "123"
+                    html_path,
+                    csv_path,
+                    "2026-08-21T00:00:00Z",
+                    "abc",
+                    "123",
+                    "Linux X64 / Test CPU",
                 ),
                 1,
             )
             self.assertEqual(
                 rot.append_snapshot(
-                    html_path, csv_path, "2026-08-22T00:00:00Z", "abc", "123"
+                    html_path,
+                    csv_path,
+                    "2026-08-22T00:00:00Z",
+                    "abc",
+                    "123",
+                    "Linux X64 / Test CPU",
                 ),
                 0,
             )
@@ -51,6 +61,7 @@ load/1filex1/onnxlight avg=4.0 ms median=3.9 ms max=4.2 ms std=0.1 ms</pre>"""
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["commit"], "abc")
             self.assertEqual(rows[0]["run_id"], "123")
+            self.assertEqual(rows[0]["machine"], "Linux X64 / Test CPU")
             self.assertEqual(float(rows[0]["avg"]), 0.0125)
 
     def test_empty_page_is_rejected(self):
@@ -60,8 +71,38 @@ load/1filex1/onnxlight avg=4.0 ms median=3.9 ms max=4.2 ms std=0.1 ms</pre>"""
                 stream.write("<html></html>")
             with self.assertRaisesRegex(ValueError, "No benchmark timings"):
                 rot.append_snapshot(
-                    html_path, os.path.join(temp, "out.csv"), "date", "abc", "123"
+                    html_path,
+                    os.path.join(temp, "out.csv"),
+                    "date",
+                    "abc",
+                    "123",
+                    "machine",
                 )
+
+    def test_append_snapshot_upgrades_legacy_csv(self):
+        html = (
+            "<pre>load/1filex1/onnx avg=1.0 ms median=1.0 ms "
+            "max=1.0 ms std=0.0 ms</pre>"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            html_path = os.path.join(temp, "plot_onnx_time.html")
+            csv_path = os.path.join(temp, "onnx_time.csv")
+            with open(html_path, "w", encoding="utf-8") as stream:
+                stream.write(html)
+            with open(csv_path, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "date,commit,run_id,name,avg,median,max,std\n"
+                    "date,abc,old,old,1,1,1,0\n"
+                )
+
+            rot.append_snapshot(
+                html_path, csv_path, "date", "abc", "new", "Linux X64 / Test CPU"
+            )
+
+            with open(csv_path, newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[0]["machine"], "not recorded")
+            self.assertEqual(rows[1]["machine"], "Linux X64 / Test CPU")
 
     def test_output_may_be_a_bare_filename(self):
         html = (
@@ -76,7 +117,9 @@ load/1filex1/onnxlight avg=4.0 ms median=3.9 ms max=4.2 ms std=0.1 ms</pre>"""
             try:
                 os.chdir(temp)
                 self.assertEqual(
-                    rot.append_snapshot(html_path, "out.csv", "date", "abc", "123"),
+                    rot.append_snapshot(
+                        html_path, "out.csv", "date", "abc", "123", "machine"
+                    ),
                     1,
                 )
             finally:
