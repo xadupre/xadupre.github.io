@@ -44,6 +44,8 @@ to 4096.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import argparse
+import gc
 import os
 import time
 
@@ -53,6 +55,18 @@ import onnxruntime
 # ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example
 # runs quickly as a unit test while still exercising every code path.
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the model so the example depends on
@@ -110,19 +124,28 @@ model_bytes = model.SerializeToString()
 # Timing helper
 # ---------------------------------------------------------------------------
 #
-# Each candidate gets three untimed warm-up calls, then is called ``repeat``
-# times and the median wall-clock time is retained. The number of repeats
-# shrinks as the matrices grow but never below seven.
+# Each candidate gets ``--warmup`` untimed calls, then up to ``--repeat``
+# measured calls or ``--max-repeat-time`` cumulative seconds.
 
 
-def measure(func, repeat, warmup=3):
+def measure(func, repeat, warmup, max_duration):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -202,32 +225,26 @@ for size, a, b in inputs():
     accelerated_kernel_names = used_kernel_names()
     assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
     set_kernel_usage_recording(False)
-    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
-    rows_by_size[size][2] = measure(lambda a=a, b=b: run_light(a, b), repeat)
+    rows_by_size[size][2] = measure(
+        lambda a=a, b=b: run_light(a, b),
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
+    )
 
 for size, a, b in inputs():
     if size not in alone_sizes:
         continue
-    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
     alone_times[size] = measure(
-        lambda a=a, b=b: alone_session.run(None, {"A": a, "B": b}), repeat
+        lambda a=a, b=b: alone_session.run(None, {"A": a, "B": b}),
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
     )
-
-for size, a, b in inputs():
-    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
-    rows_by_size[size][1] = measure(lambda a=a, b=b: a @ b, repeat)
-
-session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
-for size, a, b in inputs():
-    repeat = max(7, min(100, 20_000_000 // (size * size * size)))
-    rows_by_size[size][3] = measure(lambda a=a, b=b: session.run(None, {"A": a, "B": b}), repeat)
 
 for size, a, b in inputs():
     expected = a @ b
     np.testing.assert_allclose(run_light(a, b), expected, rtol=1e-2, atol=1e-2)
-    np.testing.assert_allclose(
-        session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
-    )
     if size in alone_sizes:
         np.testing.assert_allclose(
             alone_session.run(None, {"A": a, "B": b})[0],
@@ -235,6 +252,31 @@ for size, a, b in inputs():
             rtol=1e-2,
             atol=1e-2,
         )
+
+plot_light_results = light_session is not None
+light_session = None
+alone_session = None
+gc.collect()
+
+for size, a, b in inputs():
+    rows_by_size[size][1] = measure(
+        lambda a=a, b=b: a @ b, args.repeat, args.warmup, args.max_repeat_time
+    )
+
+session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
+for size, a, b in inputs():
+    rows_by_size[size][3] = measure(
+        lambda a=a, b=b: session.run(None, {"A": a, "B": b}),
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
+    )
+
+for _size, a, b in inputs():
+    expected = a @ b
+    np.testing.assert_allclose(
+        session.run(None, {"A": a, "B": b})[0], expected, rtol=1e-2, atol=1e-2
+    )
 
 rows = [tuple(rows_by_size[size]) for size in size_grid]
 for size, numpy_time, cpu_time, ort_time in rows:
@@ -290,7 +332,7 @@ ax_time.plot(
     markeredgewidth=2,
     zorder=2,
 )
-if light_session is not None:
+if plot_light_results:
     ax_time.plot(
         sizes,
         cpu_times * 1e6,
@@ -326,7 +368,7 @@ ax_speedup.plot(
     markeredgewidth=2,
     zorder=2,
 )
-if light_session is not None:
+if plot_light_results:
     cpu_speedup = ort_times / cpu_times
     ax_speedup.plot(
         sizes,

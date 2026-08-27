@@ -29,6 +29,7 @@ elements.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import argparse
 import gc
 import os
 import time
@@ -39,6 +40,18 @@ import onnxruntime
 # ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller sizes) so the example
 # runs quickly as a unit test while still exercising every code path.
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the model so the example depends on
@@ -98,15 +111,31 @@ model_bytes = model.SerializeToString()
 size_grid = [100, 1000] if unit_test_going else [10**k for k in range(2, 9)]
 
 
-def measure(func, repeat, warmup=3, number=1):
+def measure(
+    func,
+    repeat,
+    warmup,
+    number=1,
+    max_duration=1.0,
+):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         for _ in range(number):
             func()
-        timings.append((time.perf_counter() - start) / number)
+        duration = time.perf_counter() - start
+        timings.append(duration / number)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -229,9 +258,14 @@ def benchmark_phase(run, column, validate=True):
     rng = np.random.default_rng(0)
     for size in size_grid:
         inp = rng.uniform(-100.0, 100.0, size=size).astype(np.float32)
-        repeat = max(7, min(200, 2_000_000 // size))
         number = max(1, min(20, 10_000_000 // size))
-        rows_by_size[size][column] = measure(lambda inp=inp: run(inp), repeat, number=number)
+        rows_by_size[size][column] = measure(
+            lambda inp=inp: run(inp),
+            args.repeat,
+            args.warmup,
+            number=number,
+            max_duration=args.max_repeat_time,
+        )
         if validate:
             assert np.array_equal(run(inp), np.abs(inp)), size
 
@@ -246,6 +280,11 @@ assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
 set_kernel_usage_recording(False)
 
 benchmark_phase(lambda inp: alone_session.run(None, {"X": inp})[0], 2)
+
+plot_light_results = light_session is not None
+light_session = None
+alone_session = None
+gc.collect()
 
 _ort_setup_start = time.perf_counter()
 session = onnxruntime.InferenceSession(model_bytes, providers=["CPUExecutionProvider"])
@@ -293,7 +332,7 @@ import matplotlib.pyplot as plt
 fig, (ax_time, ax_speedup) = plt.subplots(1, 2, figsize=(12, 4.5))
 
 ax_time.plot(sizes, numpy_times * 1e6, "o--", label="numpy", color="#9b7ec8")
-if light_session is not None:
+if plot_light_results:
     ax_time.plot(
         sizes,
         cpu_times * 1e6,
@@ -318,7 +357,7 @@ ax_time.tick_params(axis="x", labelrotation=45)
 ax_time.legend()
 
 ax_speedup.plot(sizes, ort_times / numpy_times, "o--", label="numpy", color="#9b7ec8")
-if light_session is not None:
+if plot_light_results:
     cpu_speedup = ort_times / cpu_times
     ax_speedup.plot(
         sizes,

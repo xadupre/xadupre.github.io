@@ -27,8 +27,8 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-<link href="../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+  <link href="../_static/styles/theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
@@ -36,20 +36,24 @@
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/v/dt/dt-2.3.5/datatables.min.css" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <script defer src="../_static/scripts/fontawesome.js?digest=cb8930eaaf36d9849b67"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
-<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67" />
 
+    <script src="../_static/jquery.js?v=5d32c60e"></script>
+    <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
     <script src="../_static/documentation_options.js?v=5929fcd5"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=f281be69"></script>
     <script src="../_static/sg-tags.js?v=d80f6fa4"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script src="https://cdn.datatables.net/v/dt/dt-2.3.5/datatables.min.js"></script>
     <script src="../_static/activate_datatables.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'design/gemm_kernel_design';</script>
@@ -62,7 +66,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 27, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -638,9 +642,10 @@ A (M x K)                 Y (M x N)
   row panels
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">T(i,j)</span></code> computes <code class="docutils literal notranslate"><span class="pre">Ai</span> <span class="pre">&#64;</span> <span class="pre">Bj</span></code> and writes only output zone <code class="docutils literal notranslate"><span class="pre">Y(i,j)</span></code>.
-Consequently, tasks in the grid need no output locks. With six threads and
-three row panels, two column panels form a full wave:</p>
+<p>Each <code class="docutils literal notranslate"><span class="pre">NC</span></code>-wide B panel is divided into cache-sized column micro-panels.
+<code class="docutils literal notranslate"><span class="pre">T(i,j)</span></code> computes <code class="docutils literal notranslate"><span class="pre">Ai</span></code> against one such micro-panel and writes only its
+output zone. Consequently, tasks in the grid need no output locks. With six
+threads and three row panels, two column micro-panels form a full wave:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>wave 1: B0, B1 -&gt; T00 T10 T20 T01 T11 T21
 wave 2: B2     -&gt; T02 T12 T22
 </pre></div>
@@ -648,9 +653,23 @@ wave 2: B2     -&gt; T02 T12 T22
 <p>For every K chunk, <code class="docutils literal notranslate"><span class="pre">B0</span></code> and <code class="docutils literal notranslate"><span class="pre">B1</span></code> are each packed once before the first
 wave. Their packed buffers remain read-only while the six tasks reuse them.
 Each task packs the required A row panel and accumulates into its own zone of
-<code class="docutils literal notranslate"><span class="pre">Y</span></code>. Shape-aware constraints reduce cache-derived <code class="docutils literal notranslate"><span class="pre">MC</span></code> and <code class="docutils literal notranslate"><span class="pre">NC</span></code> only
-when the original values would expose fewer useful tasks than available
-threads.</p>
+<code class="docutils literal notranslate"><span class="pre">Y</span></code>. Shape-aware constraints reduce cache-derived <code class="docutils literal notranslate"><span class="pre">MC</span></code> only
+when the original values would expose fewer useful tasks than the work can
+amortize. The prepared plan budgets one participant per 8 million FMAs,
+bounded by the configured and available threads, so a large machine does not
+fragment small and medium matrices into cache-inefficient panels merely to
+occupy every worker.</p>
+<p>For wide projections with at most two row panels and at least sixteen column
+micro-panels, each compute task packs its own B micro-panel immediately before
+consuming it. This fuses packing and computation into one executor region,
+trading at most one duplicate B pack for the second row panel against an
+otherwise global packing barrier. Wide projections with <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">&lt;=</span> <span class="pre">256</span></code>,
+<code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">&gt;=</span> <span class="pre">2048</span></code>, and <code class="docutils literal notranslate"><span class="pre">512</span> <span class="pre">&lt;=</span> <span class="pre">K</span> <span class="pre">&lt;=</span> <span class="pre">1024</span></code> also use one complete K block; the
+packed A and B micro-panels remain L2-sized while the second K barrier
+disappears. These shapes budget one participant per 6 million FMAs instead of
+the general 8-million-FMA target, exposing enough row-panel work to use up to
+48 participants without fragmenting the panels as aggressively as a smaller
+global budget.</p>
 <p>The scheduler chooses the outermost useful dimension in this order:</p>
 <ol class="arabic simple">
 <li><p>independent small batch items;</p></li>
@@ -668,6 +687,11 @@ and combines their partial outputs:</p>
 <p>When a product is already running inside a parallel batch region, nested
 split-K is disabled: the product executes its M x N grid directly, avoiding
 serial split-K partitions, temporary partial buffers, and a redundant
+reduction. Very deep reductions (<code class="docutils literal notranslate"><span class="pre">K</span> <span class="pre">&gt;=</span> <span class="pre">8192</span></code>) may use split-K for outputs up
+to 1,024 elements when the M x N grid exposes too little parallelism. The plan
+budgets one partition per 2 million FMAs and bounds the count by both the
+available participants and the number of <code class="docutils literal notranslate"><span class="pre">KC</span></code> slices. This replaces repeated
+barriers between <code class="docutils literal notranslate"><span class="pre">KC</span></code> slices with one parallel region and one final
 reduction.</p>
 </section>
 <section id="thread-runtime-and-affinity">
@@ -716,7 +740,10 @@ each <code class="docutils literal notranslate"><span class="pre">B</span></code
 broadcast axpy over the output columns, and keeps one column panel’s
 accumulators in a small <code class="docutils literal notranslate"><span class="pre">M</span> <span class="pre">x</span> <span class="pre">nb</span></code> buffer. The axpy is unit-stride for
 non-transposed <code class="docutils literal notranslate"><span class="pre">B</span></code>, so it vectorizes over <code class="docutils literal notranslate"><span class="pre">N</span></code> – the useful dimension when
-<code class="docutils literal notranslate"><span class="pre">M</span></code> is tiny – while work is parallelized over <code class="docutils literal notranslate"><span class="pre">N</span></code> column panels.</p>
+<code class="docutils literal notranslate"><span class="pre">M</span></code> is tiny – while work is parallelized over cache-sized groups of column
+micro-panels. Its lower per-participant work budget reflects the memory-streaming
+kernel. An oversized runtime pool falls back to serial execution when at most
+four useful panel groups would otherwise wake dozens of idle workers.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detail::SelectGemmAlgorithm()</span></code> (<code class="docutils literal notranslate"><span class="pre">gemm_plan.cc</span></code>) picks one of these five
 strategies from <code class="docutils literal notranslate"><span class="pre">m</span></code>, <code class="docutils literal notranslate"><span class="pre">n</span></code>, <code class="docutils literal notranslate"><span class="pre">k</span></code>, <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>/<code class="docutils literal notranslate"><span class="pre">trans_b</span></code>, and the
 target’s <code class="docutils literal notranslate"><span class="pre">vector_lanes</span></code>/<code class="docutils literal notranslate"><span class="pre">register_rows</span></code>. Split-K is checked first (it only
@@ -938,9 +965,9 @@ defaults cover unavailable cache discovery.</p></td>
 </tr>
 <tr class="row-even"><td><p>M/N task parallelism</p></td>
 <td><p>Implemented – the general five-loop path schedules the row-panel x
-column-panel grid in bounded column waves. Each B panel is packed once
-per K chunk, while task-aware MC/NC constraints expose enough row and
-column work without an unbounded packed workspace.</p></td>
+cache-sized column-micro-panel grid in bounded waves. Each B panel is
+packed once per K chunk, while task-aware MC constraints expose enough
+row and column work without an unbounded packed workspace.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Batch scheduling</p></td>
 <td><p>Implemented – <code class="docutils literal notranslate"><span class="pre">MatMulPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">StridedBatchedGemm</span></code>, and
@@ -1010,9 +1037,10 @@ elsewhere. The selected value drives algorithm selection, MC alignment,
 row packing, and execution.</p></td>
 </tr>
 <tr class="row-even"><td><p>Aligned packed panels</p></td>
-<td><p>Implemented – A and B workspaces are 64-byte aligned. B row strides
-are padded to the active vector width, keeping AVX2 and AVX-512 loads
-on aligned addresses. The kernels use branch-free unaligned-load
+<td><p>Implemented – A and B workspaces are uninitialized 64-byte-aligned
+buffers because packing overwrites every consumed element. B row strides
+are padded to the active vector width, keeping AVX2 and AVX-512 loads on
+aligned addresses. The kernels use branch-free unaligned-load
 instructions, which have the same throughput on these aligned
 addresses and also keep direct kernels safe.</p></td>
 </tr>
@@ -1225,8 +1253,8 @@ dispatch.</p>
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
-<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+  <script defer src="../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -1234,7 +1262,7 @@ dispatch.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 27, 2026.
   <br/>
 </p></div>
       

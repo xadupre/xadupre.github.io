@@ -195,6 +195,85 @@ executor by operator family, type, processor profile, and ISA:
 * thread count is capped when memory bandwidth or available blocks saturate;
 * caller-owned pools and the internal pool must not oversubscribe each other.
 
+Current tuning contract
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``Abs`` registers tuning ABI 4, while ``Exp``/``Log`` and ``Not`` register
+tuning ABI 2 for every supported exact operator/input-type key with
+``implementation="simd_dispatch"``. The shared parameters are:
+
+* ``parallel.threshold_bytes``: minimum input bytes before executor dispatch;
+  zero disables dispatch;
+* ``parallel.target_block_bytes``: target input bytes per task and always
+  positive;
+* ``parallel.max_participants``: executor participant ceiling; zero uses every
+  participant exposed by the session;
+* ``parallel.cost_model``: one delegates grain and participant selection to the
+  session executor, while zero retains the fixed calibrated thresholds.
+
+``Abs`` and ``Not`` additionally accept ``parallel.preferred_participants``.
+Zero leaves the participant count automatic. A positive value requests that
+exact count once parallel execution is worthwhile, but the executor still
+clamps it to ``parallel.max_participants`` and the session limit.
+``Abs`` also accepts ``memory.streaming_store_threshold_bytes``; zero disables
+non-temporal stores, while a positive value enables them for FP32 tensors at
+or above that total input size.
+
+The portable defaults retain SIMD execution inline through the measured
+small/medium-tensor region:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 28 24 24 24
+
+   * - Operator and input types
+     - Threshold
+     - Target block
+     - Maximum participants
+   * - ``Abs`` FP32
+     - 2 MiB
+     - 256 KiB
+     - 32
+   * - ``Abs`` INT32
+     - 2 MiB
+     - 256 KiB
+     - executor maximum
+   * - ``Abs`` FP64/INT64
+     - 2 MiB
+     - 512 KiB
+     - executor maximum
+   * - ``Abs`` FP16/BF16/INT16
+     - 4 MiB
+     - 128 KiB
+     - executor maximum
+   * - ``Abs`` INT8
+     - 8 MiB
+     - 64 KiB
+     - executor maximum
+   * - ``Exp``/``Log`` FP32/FP64
+     - 2 MiB
+     - 256 KiB
+     - 32
+   * - ``Exp`` FP16/BF16
+     - 1 MiB
+     - 128 KiB
+     - 32
+   * - ``Log`` FP16
+     - 64 KiB
+     - 1,600 bytes
+     - executor maximum
+   * - ``Log`` BF16
+     - 512 KiB
+     - 64 KiB
+     - 32
+   * - ``Not`` BOOL
+     - 2 MiB
+     - 256 KiB
+     - 32
+
+Processor profiles may override these values without changing kernel code
+or introducing process-global mutable scheduling state.
+
 Fusion
 ------
 

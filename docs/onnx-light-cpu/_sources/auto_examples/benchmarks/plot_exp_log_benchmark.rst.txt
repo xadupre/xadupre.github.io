@@ -26,7 +26,7 @@ onnx-light-cpu kernels, and NumPy around the scheduling thresholds used by the
 Exp and Log CPU kernels. Each runtime is measured in a separate phase so that
 persistent worker pools do not perturb measurements of another candidate.
 
-.. GENERATED FROM PYTHON SOURCE LINES 10-147
+.. GENERATED FROM PYTHON SOURCE LINES 10-221
 
 
 
@@ -36,12 +36,45 @@ persistent worker pools do not perturb measurements of another candidate.
    :class: sphx-glr-single-img
 
 
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
 
 
+    Exp:
+      size=     1024 | numpy=      1.95 us | onnx-light=      5.78 us | onnx-light-cpu=      4.75 us | cpu vs built-in= 1.22x | onnxruntime=      8.90 us | cpu vs onnxruntime= 1.88x
+      size=    32768 | numpy=     43.06 us | onnx-light=     95.01 us | onnx-light-cpu=     24.76 us | cpu vs built-in= 3.84x | onnxruntime=     26.61 us | cpu vs onnxruntime= 1.07x
+      size=    65535 | numpy=     83.96 us | onnx-light=    186.94 us | onnx-light-cpu=     45.59 us | cpu vs built-in= 4.10x | onnxruntime=     45.02 us | cpu vs onnxruntime= 0.99x
+      size=    65536 | numpy=     84.67 us | onnx-light=     95.96 us | onnx-light-cpu=     48.38 us | cpu vs built-in= 1.98x | onnxruntime=     44.45 us | cpu vs onnxruntime= 0.92x
+      size=   131071 | numpy=    170.54 us | onnx-light=    187.72 us | onnx-light-cpu=     92.21 us | cpu vs built-in= 2.04x | onnxruntime=     44.40 us | cpu vs onnxruntime= 0.48x
+      size=   131072 | numpy=    174.26 us | onnx-light=    187.48 us | onnx-light-cpu=     93.73 us | cpu vs built-in= 2.00x | onnxruntime=     58.61 us | cpu vs onnxruntime= 0.63x
+      size=   262144 | numpy=    338.28 us | onnx-light=    373.21 us | onnx-light-cpu=    181.04 us | cpu vs built-in= 2.06x | onnxruntime=     76.49 us | cpu vs onnxruntime= 0.42x
+      size=  1048576 | numpy=   1372.78 us | onnx-light=   1492.77 us | onnx-light-cpu=    332.37 us | cpu vs built-in= 4.49x | onnxruntime=    260.42 us | cpu vs onnxruntime= 0.78x
+      size=  4194304 | numpy=   5488.56 us | onnx-light=   6216.34 us | onnx-light-cpu=   1246.72 us | cpu vs built-in= 4.99x | onnxruntime=    831.03 us | cpu vs onnxruntime= 0.67x
+
+    Log:
+      size=     1024 | numpy=      2.41 us | onnx-light=      6.18 us | onnx-light-cpu=      3.34 us | cpu vs built-in= 1.85x | onnxruntime=     10.10 us | cpu vs onnxruntime= 3.03x
+      size=    32768 | numpy=     57.48 us | onnx-light=    106.61 us | onnx-light-cpu=     20.04 us | cpu vs built-in= 5.32x | onnxruntime=     40.84 us | cpu vs onnxruntime= 2.04x
+      size=    65535 | numpy=    114.18 us | onnx-light=    209.64 us | onnx-light-cpu=     34.59 us | cpu vs built-in= 6.06x | onnxruntime=     82.82 us | cpu vs onnxruntime= 2.39x
+      size=    65536 | numpy=    113.68 us | onnx-light=    106.98 us | onnx-light-cpu=     34.64 us | cpu vs built-in= 3.09x | onnxruntime=    141.66 us | cpu vs onnxruntime= 4.09x
+      size=   131071 | numpy=    229.76 us | onnx-light=    210.03 us | onnx-light-cpu=     63.02 us | cpu vs built-in= 3.33x | onnxruntime=    158.35 us | cpu vs onnxruntime= 2.51x
+      size=   131072 | numpy=    227.82 us | onnx-light=    210.05 us | onnx-light-cpu=     63.05 us | cpu vs built-in= 3.33x | onnxruntime=    127.98 us | cpu vs onnxruntime= 2.03x
+      size=   262144 | numpy=    461.85 us | onnx-light=    425.03 us | onnx-light-cpu=    123.79 us | cpu vs built-in= 3.43x | onnxruntime=    249.25 us | cpu vs onnxruntime= 2.01x
+      size=  1048576 | numpy=   1839.86 us | onnx-light=   1684.29 us | onnx-light-cpu=    473.77 us | cpu vs built-in= 3.56x | onnxruntime=    965.44 us | cpu vs onnxruntime= 2.04x
+      size=  4194304 | numpy=   7466.02 us | onnx-light=   6695.04 us | onnx-light-cpu=   1847.32 us | cpu vs built-in= 3.62x | onnxruntime=   3817.13 us | cpu vs onnxruntime= 2.07x
+
+
+
+
+
+
+|
 
 .. code-block:: Python
 
 
+    import argparse
+    import gc
     import os
     import statistics
     import time
@@ -53,6 +86,18 @@ persistent worker pools do not perturb measurements of another candidate.
     from onnx_light.onnx import TensorProto, helper
     from onnx_light.onnx.reference import ReferenceEvaluator
     from onnx_light_cpu import register_kernels
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+    args, _ = parser.parse_known_args()
+    if args.repeat <= 0:
+        parser.error("--repeat must be greater than 0")
+    if args.warmup < 0:
+        parser.error("--warmup must be greater than or equal to 0")
+    if args.max_repeat_time <= 0:
+        parser.error("--max-repeat-time must be greater than 0")
 
 
     def make_model(op_type):
@@ -82,16 +127,27 @@ persistent worker pools do not perturb measurements of another candidate.
         )
 
 
-    def measure(run, arrays, repeat):
+    def measure(run, arrays, repeat, warmup, max_duration):
         """Measures median inference times for all arrays."""
-        run(arrays[0])
         results = []
         for array in arrays:
+            warmup_duration = 0.0
+            for _ in range(warmup):
+                begin = time.perf_counter()
+                run(array)
+                warmup_duration += time.perf_counter() - begin
+                if warmup_duration >= max_duration:
+                    break
             samples = []
+            total_duration = 0.0
             for _ in range(repeat):
                 begin = time.perf_counter()
                 run(array)
-                samples.append(time.perf_counter() - begin)
+                duration = time.perf_counter() - begin
+                samples.append(duration)
+                total_duration += duration
+                if total_duration >= max_duration:
+                    break
             results.append(statistics.median(samples))
         return np.array(results)
 
@@ -99,13 +155,11 @@ persistent worker pools do not perturb measurements of another candidate.
     threads = min(4, os.cpu_count() or 1)
     if os.environ.get("UNITTEST_GOING"):
         sizes = np.array([1024, 65536, 131072], dtype=np.int64)
-        repeat = 2
     else:
         sizes = np.array(
             [1024, 32768, 65535, 65536, 131071, 131072, 262144, 1048576, 4194304],
             dtype=np.int64,
         )
-        repeat = 10
 
     rng = np.random.default_rng(42)
     exp_arrays = [rng.uniform(-4, 4, int(size)).astype(np.float32) for size in sizes]
@@ -125,34 +179,84 @@ persistent worker pools do not perturb measurements of another candidate.
         )
         for op_type, model in models.items()
     }
-    ort_sessions = {op_type: make_ort_session(model, threads) for op_type, model in models.items()}
 
-    all_times = {}
+    all_times = {op_type: {} for op_type in models}
     for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
         builtin = builtin_sessions[op_type]
         cpu = cpu_sessions[op_type]
-        ort = ort_sessions[op_type]
-        expected = builtin.run(None, {"X": arrays[-1]})[0]
+        numpy_op = np.exp if op_type == "Exp" else np.log
+        expected = numpy_op(arrays[-1])
+        np.testing.assert_allclose(
+            builtin.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
+        )
         np.testing.assert_allclose(
             cpu.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
         )
-        np.testing.assert_allclose(
-            ort.run(None, {"X": arrays[-1]})[0], expected, rtol=2e-5, atol=2e-6
+        all_times[op_type]["onnx-light"] = measure(
+            lambda array, current=builtin: current.run(None, {"X": array}),
+            arrays,
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
         )
-        numpy_op = np.exp if op_type == "Exp" else np.log
+        all_times[op_type]["onnx-light-cpu"] = measure(
+            lambda array, current=cpu: current.run(None, {"X": array}),
+            arrays,
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
+        )
 
-        all_times[op_type] = {
-            "onnx-light": measure(
-                lambda array, current=builtin: current.run(None, {"X": array}), arrays, repeat
-            ),
-            "onnx-light-cpu": measure(
-                lambda array, current=cpu: current.run(None, {"X": array}), arrays, repeat
-            ),
-            "ONNX Runtime": measure(
-                lambda array, current=ort: current.run(None, {"X": array}), arrays, repeat
-            ),
-            "NumPy": measure(numpy_op, arrays, repeat),
-        }
+    del builtin
+    del cpu
+    del builtin_sessions
+    del cpu_sessions
+    gc.collect()
+
+    for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
+        numpy_op = np.exp if op_type == "Exp" else np.log
+        all_times[op_type]["NumPy"] = measure(
+            numpy_op, arrays, args.repeat, args.warmup, args.max_repeat_time
+        )
+
+    ort_sessions = {op_type: make_ort_session(model, threads) for op_type, model in models.items()}
+    for op_type, arrays in (("Exp", exp_arrays), ("Log", log_arrays)):
+        ort = ort_sessions[op_type]
+        numpy_op = np.exp if op_type == "Exp" else np.log
+        np.testing.assert_allclose(
+            ort.run(None, {"X": arrays[-1]})[0],
+            numpy_op(arrays[-1]),
+            rtol=2e-5,
+            atol=2e-6,
+        )
+        all_times[op_type]["ONNX Runtime"] = measure(
+            lambda array, current=ort: current.run(None, {"X": array}),
+            arrays,
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
+        )
+
+    for op_type in ("Exp", "Log"):
+        print(f"\n{op_type}:")
+        for size, numpy_time, light_time, cpu_time, ort_time in zip(
+            sizes,
+            all_times[op_type]["NumPy"],
+            all_times[op_type]["onnx-light"],
+            all_times[op_type]["onnx-light-cpu"],
+            all_times[op_type]["ONNX Runtime"],
+            strict=True,
+        ):
+            cpu_speedup = light_time / cpu_time
+            ort_speedup = ort_time / cpu_time
+            print(
+                f"  size={size:>9} | numpy={numpy_time * 1e6:10.2f} us | "
+                f"onnx-light={light_time * 1e6:10.2f} us | "
+                f"onnx-light-cpu={cpu_time * 1e6:10.2f} us | "
+                f"cpu vs built-in={cpu_speedup:5.2f}x | "
+                f"onnxruntime={ort_time * 1e6:10.2f} us | "
+                f"cpu vs onnxruntime={ort_speedup:5.2f}x"
+            )
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8), sharex="col")
     for row, op_type in enumerate(("Exp", "Log")):
@@ -177,12 +281,13 @@ persistent worker pools do not perturb measurements of another candidate.
     axes[1, 1].set_xlabel("tensor elements")
     axes[0, 0].legend()
     plt.tight_layout()
+    fig.savefig("plot_exp_log_benchmark.png")
     plt.show()
 
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.042 seconds)
+   **Total running time of the script:** (0 minutes 3.860 seconds)
 
 
 .. _sphx_glr_download_auto_examples_benchmarks_plot_exp_log_benchmark.py:

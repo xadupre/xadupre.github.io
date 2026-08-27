@@ -57,6 +57,8 @@ created and first run after registration.
 # Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 # ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
+import argparse
+import gc
 import os
 import time
 
@@ -67,6 +69,18 @@ import onnxruntime
 # ``UNITTEST_GOING=1`` shrinks the benchmark (fewer/smaller shapes) so the
 # example runs quickly as a unit test while still exercising every code path.
 unit_test_going = os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True")
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+args, _ = parser.parse_known_args()
+if args.repeat <= 0:
+    parser.error("--repeat must be greater than 0")
+if args.warmup < 0:
+    parser.error("--warmup must be greater than or equal to 0")
+if args.max_repeat_time <= 0:
+    parser.error("--max-repeat-time must be greater than 0")
 
 # ``onnx-light`` ships ``onnx_light.onnx`` as a drop-in replacement for the
 # ``onnx`` package; use it to build the models so the example depends on
@@ -128,18 +142,28 @@ def make_session(tensor_proto_dtype):
 # Timing helper
 # -------------
 #
-# Each candidate gets three untimed warm-up calls, then is called ``repeat``
-# times (at least seven) and the median wall-clock time is retained.
+# Each candidate gets ``--warmup`` untimed calls, then up to ``--repeat``
+# measured calls or ``--max-repeat-time`` cumulative seconds.
 
 
-def measure(func, repeat, warmup=3):
+def measure(func, repeat, warmup, max_duration):
+    warmup_duration = 0.0
     for _ in range(warmup):
+        start = time.perf_counter()
         func()
+        warmup_duration += time.perf_counter() - start
+        if warmup_duration >= max_duration:
+            break
     timings = []
+    total_duration = 0.0
     for _ in range(repeat):
         start = time.perf_counter()
         func()
-        timings.append(time.perf_counter() - start)
+        duration = time.perf_counter() - start
+        timings.append(duration)
+        total_duration += duration
+        if total_duration >= max_duration:
+            break
     return float(np.median(timings))
 
 
@@ -219,14 +243,12 @@ benchmark_inputs = []
 for shape_label, M, N, K in SHAPES:
     a32 = rng.standard_normal((M, K)).astype(np.float32)
     b32 = rng.standard_normal((K, N)).astype(np.float32)
-    repeat = max(7, min(50, 200_000_000 // (M * N * K + 1)))
-
-    print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={repeat}")
+    print(f"\nshape={shape_label.splitlines()[0]:<24} M={M} N={N} K={K} repeat={args.repeat}")
     inputs = {
         label: (a32.astype(np_dtype), b32.astype(np_dtype))
         for label, (_, np_dtype) in DTYPES.items()
     }
-    benchmark_inputs.append((shape_label, M, N, K, a32, b32, inputs, repeat))
+    benchmark_inputs.append((shape_label, M, N, K, a32, b32, inputs))
     for label in DTYPES:
         a, b = inputs[label]
 
@@ -239,22 +261,48 @@ for shape_label, M, N, K in SHAPES:
         kernel_names = used_kernel_names()
         assert accelerated_kernel_name in kernel_names, (label, shape_label, kernel_names)
         set_kernel_usage_recording(False)
-        elapsed = measure(run, repeat)
+        elapsed = measure(run, args.repeat, args.warmup, args.max_repeat_time)
         results[label].append(elapsed)
         print(f"  {label:<9} | onnx-light-cpu={elapsed * 1e6:10.2f} us")
 
-for shape_label, _M, _N, _K, a32, b32, _, repeat in benchmark_inputs:
+for shape_label, _M, _N, _K, a32, b32, _ in benchmark_inputs:
     if shape_label not in ALONE_SHAPE_LABELS:
         continue
     elapsed = measure(
         lambda a=a32, b=b32: alone_session.run(None, {"A": a, "B": b})[0],
-        repeat,
+        args.repeat,
+        args.warmup,
+        args.max_repeat_time,
     )
     alone_results[shape_label] = elapsed
     print(
         f"onnx-light (built-in) | shape={shape_label.splitlines()[0]:<24} "
         f"| {elapsed * 1e6:10.2f} us"
     )
+
+for shape_label, _, _, _, a32, b32, inputs in benchmark_inputs:
+    expected = a32 @ b32
+    if shape_label in ALONE_SHAPE_LABELS:
+        np.testing.assert_allclose(
+            alone_session.run(None, {"A": a32, "B": b32})[0],
+            expected,
+            rtol=1e-3,
+            atol=1e-3,
+        )
+    for label, session in sessions.items():
+        a, b = inputs[label]
+        tolerance = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
+        output = session.run(None, {"A": a, "B": b})[0]
+        np.testing.assert_allclose(
+            output.astype(np.float32),
+            expected,
+            rtol=tolerance,
+            atol=tolerance,
+        )
+
+sessions = None
+alone_session = None
+gc.collect()
 
 ort_sessions = {
     label: onnxruntime.InferenceSession(
@@ -264,12 +312,14 @@ ort_sessions = {
     for label in ("float32", "float16")
 }
 ort_results = {label: [] for label in ort_sessions}
-for shape_label, _, _, _, _, _, inputs, repeat in benchmark_inputs:
+for shape_label, _, _, _, _, _, inputs in benchmark_inputs:
     for label, session in ort_sessions.items():
         a, b = inputs[label]
         elapsed = measure(
             lambda session=session, a=a, b=b: session.run(None, {"A": a, "B": b})[0],
-            repeat,
+            args.repeat,
+            args.warmup,
+            args.max_repeat_time,
         )
         ort_results[label].append(elapsed)
         print(
@@ -277,31 +327,21 @@ for shape_label, _, _, _, _, _, inputs, repeat in benchmark_inputs:
             f"onnxruntime={elapsed * 1e6:10.2f} us"
         )
 
-for shape_label, _, _, _, a32, b32, inputs, _ in benchmark_inputs:
+for _shape_label, _, _, _, a32, b32, inputs in benchmark_inputs:
     expected = a32 @ b32
-    if shape_label in ALONE_SHAPE_LABELS:
-        np.testing.assert_allclose(
-            alone_session.run(None, {"A": a32, "B": b32})[0],
-            expected,
-            rtol=1e-3,
-            atol=1e-3,
-        )
-    for label in DTYPES:
+    for label in ort_sessions:
         a, b = inputs[label]
-        tol = 1e-3 if label == "float32" else (5e-2 if label == "float16" else 5e-1)
-        output = sessions[label].run(None, {"A": a, "B": b})[0]
-        np.testing.assert_allclose(output.astype(np.float32), expected, rtol=tol, atol=tol)
-
-        if label in ort_sessions:
-            ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
-            # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
-            # onnx-light-cpu widens to ``float32`` (see the module docstring), so
-            # onnxruntime's rounding error grows with the reduction length ``K``
-            # and needs a wider tolerance than the onnx-light-cpu comparison.
-            ort_tol = 5e-1 if label == "float16" else tol
-            np.testing.assert_allclose(
-                ort_output.astype(np.float32), expected, rtol=ort_tol, atol=ort_tol
-            )
+        ort_output = ort_sessions[label].run(None, {"A": a, "B": b})[0]
+        # onnxruntime's ``float16`` Gemm accumulates in ``float16``, whereas
+        # onnx-light-cpu widens to ``float32`` (see the module docstring), so
+        # onnxruntime's rounding error grows with the reduction length ``K``.
+        ort_tolerance = 5e-1 if label == "float16" else 1e-3
+        np.testing.assert_allclose(
+            ort_output.astype(np.float32),
+            expected,
+            rtol=ort_tolerance,
+            atol=ort_tolerance,
+        )
 
 print(f"verified {accelerated_kernel_name} for every benchmark shape and dtype")
 set_kernel_usage_recording(True)
