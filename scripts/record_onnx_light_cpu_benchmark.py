@@ -64,9 +64,11 @@ def discover_benchmark_tests(kind: str = "node") -> list[dict[str, Any]]:
 
 
 def _load_benchmark_test(name: str) -> dict[str, Any]:
-    from onnx_light.onnx.backend import TestMode, get_test_case_by_name
+    from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
 
-    cases = get_test_case_by_name(name, include_big=True, mode=TestMode.BENCHMARK)
+    cases = collect_test_cases_by_name(
+        f"^{re.escape(name)}$", include_big=True, mode=TestMode.BENCHMARK
+    )
     if len(cases) != 1:
         raise RuntimeError(f"Unable to load benchmark test {name!r}.")
     case = cases[0]
