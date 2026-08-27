@@ -282,6 +282,34 @@ class TestPayload(unittest.TestCase):
             ["onnx_light_cpu", "onnx_light_cpu", "onnxruntime", "onnxruntime"],
         )
 
+    def test_cpu_suite_registers_and_verifies_only_once(self):
+        registered = []
+        verification_states = []
+        cpu = types.ModuleType("onnx_light_cpu")
+        cpu.register_kernels = lambda: registered.append(True)
+
+        def make_runner(model, *, register_kernels, verification_state):
+            self.assertFalse(register_kernels)
+            verification_states.append(verification_state)
+
+            def runner(inputs):
+                verification_state["done"] = True
+                return inputs
+
+            return runner
+
+        with (
+            patch.dict(sys.modules, {"onnx_light_cpu": cpu}),
+            patch.object(rcb.rlb, "_make_onnx_light_cpu_runner", make_runner),
+        ):
+            factory = rcb._make_cpu_suite_runner_factory()
+            factory("model-1")([])
+            factory("model-2")([])
+
+        self.assertEqual(registered, [True])
+        self.assertIs(verification_states[0], verification_states[1])
+        self.assertTrue(verification_states[0]["done"])
+
 
 if __name__ == "__main__":
     unittest.main()

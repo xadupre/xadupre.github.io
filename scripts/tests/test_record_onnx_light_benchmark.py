@@ -1534,6 +1534,39 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         self.assertEqual(events["usage_recording"], [True, False])
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
+    def test_cpu_runners_can_share_completed_verification(self):
+        model, modules, events = self._install_fakes()
+        used = {"cleared": 0}
+        cpu = modules["onnx_light_cpu"]
+        cpu.clear_used_kernel_names = lambda: used.__setitem__(
+            "cleared", used["cleared"] + 1
+        )
+        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
+        verification = {"done": False}
+
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            first = rlb._make_onnx_light_cpu_runner(
+                model, register_kernels=False, verification_state=verification
+            )
+            first([np.array([-1.0], dtype=np.float32)])
+            second = rlb._make_onnx_light_cpu_runner(
+                model, register_kernels=False, verification_state=verification
+            )
+            second([np.array([-2.0], dtype=np.float32)])
+        finally:
+            for name, mod in saved.items():
+                if mod is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = mod
+
+        self.assertEqual(events["registered"], 0)
+        self.assertEqual(used["cleared"], 1)
+        self.assertEqual(events["usage_recording"], [True, False])
+
     def test_cpu_runner_registers_globally_before_evaluator(self):
         """The public API registers CPU kernels globally before construction."""
         model, modules, events = self._install_fakes()
