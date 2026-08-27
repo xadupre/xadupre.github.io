@@ -744,6 +744,7 @@ def run_benchmark(
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
     max_repeat_time_s: float = MAX_REPEAT_TIME_S,
+    max_warmup_time_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run a benchmark for ``backend`` on ``model`` / ``data_sets``.
 
@@ -760,6 +761,9 @@ def run_benchmark(
     * ``n_warmup`` – number of warm-up iterations actually run.
     * ``n_measure`` – number of timed iterations actually run.
     """
+    if max_warmup_time_s is None:
+        max_warmup_time_s = max_repeat_time_s
+
     factory = _RUNNER_FACTORIES.get(backend)
     if factory is None:
         return {
@@ -803,7 +807,7 @@ def run_benchmark(
                 }
         warmup_count += 1
         warmup_elapsed_s += time.perf_counter() - t0
-        if warmup_elapsed_s >= max_repeat_time_s:
+        if warmup_elapsed_s >= max_warmup_time_s:
             break
 
     # --- Timed measurement iterations ---------------------------------------
@@ -826,7 +830,7 @@ def run_benchmark(
         elapsed_ms = elapsed_s * 1_000
         times_ms.append(elapsed_ms)
         total_elapsed_s += elapsed_s
-        if total_elapsed_s >= max_repeat_time_s:
+        if len(times_ms) >= min(3, n_measure) and total_elapsed_s >= max_repeat_time_s:
             break
 
     if not times_ms:

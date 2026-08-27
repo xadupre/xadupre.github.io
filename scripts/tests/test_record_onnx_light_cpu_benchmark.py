@@ -161,8 +161,16 @@ class TestPayload(unittest.TestCase):
     def test_payload_uses_discovered_tests(self):
         calls = {}
 
-        def run(tests, n_warmup, n_measure, max_repeat_time_s):
+        def run(
+            tests,
+            n_warmup,
+            n_measure,
+            max_warmup_time_s,
+            max_repeat_time_s,
+        ):
             calls["tests"] = tests
+            calls["n_warmup"] = n_warmup
+            calls["max_warmup_time_s"] = max_warmup_time_s
             calls["max_repeat_time_s"] = max_repeat_time_s
             return []
 
@@ -183,7 +191,11 @@ class TestPayload(unittest.TestCase):
             else:
                 sys.modules[cpu.__name__] = original
         self.assertEqual(calls["tests"], [{"name": "test_cpu_abs_benchmark"}])
+        self.assertEqual(calls["n_warmup"], 2)
+        self.assertEqual(calls["max_warmup_time_s"], 0.05)
         self.assertEqual(calls["max_repeat_time_s"], rcb.MAX_REPEAT_TIME_S)
+        self.assertEqual(payload["max_warmup_time_s"], 0.05)
+        self.assertEqual(payload["max_repeat_time_s"], 0.2)
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
 
@@ -211,9 +223,10 @@ class TestPayload(unittest.TestCase):
             backend,
             n_warmup,
             n_measure,
+            max_warmup_time_s,
             max_repeat_time_s,
         ):
-            calls.append((backend, max_repeat_time_s))
+            calls.append((backend, n_warmup, max_warmup_time_s, max_repeat_time_s))
             return {"success": True, "avg_ms": 1.0}
 
         with patch.object(rcb.rlb, "_log") as log:
@@ -222,10 +235,10 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("onnx_light_cpu", rcb.MAX_REPEAT_TIME_S),
-                ("onnx_light_cpu", rcb.MAX_REPEAT_TIME_S),
-                ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
-                ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
+                ("onnx_light_cpu", 2, 0.05, 0.2),
+                ("onnx_light_cpu", 2, 0.05, 0.2),
+                ("onnxruntime", 2, 0.05, 0.2),
+                ("onnxruntime", 2, 0.05, 0.2),
             ],
         )
         self.assertEqual(
