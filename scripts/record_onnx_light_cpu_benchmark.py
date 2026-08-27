@@ -42,17 +42,39 @@ def collect_versions() -> dict[str, str]:
     return versions
 
 
+def _collect_benchmark_cases() -> list[Any]:
+    from onnx_light.onnx.backend import TestMode, collect_test_cases
+
+    return collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
+
+
 def discover_benchmark_tests(kind: str = "node") -> list[dict[str, Any]]:
     """Return only benchmark-tagged cases registered by onnx-light-cpu."""
     from onnx_light_cpu import register_backend_test_cases
 
     register_backend_test_cases()
+    kinds = rlb._normalize_kinds(kind)
     return [
-        test
-        for test in rlb.discover_node_tests(kind)
-        if str(test.get("name", "")).startswith("test_cpu_")
-        and str(test.get("name", "")).endswith("_benchmark")
+        {"name": str(test.name)}
+        for test in _collect_benchmark_cases()
+        if str(test.name).startswith("test_cpu_")
+        and str(test.name).endswith("_benchmark")
+        and (not kinds or getattr(test, "kind", None) in kinds)
     ]
+
+
+def _load_benchmark_test(name: str) -> dict[str, Any]:
+    from onnx_light.onnx.backend import TestMode, get_test_case_by_name
+
+    cases = get_test_case_by_name(name, include_big=True, mode=TestMode.BENCHMARK)
+    if len(cases) != 1:
+        raise RuntimeError(f"Unable to load benchmark test {name!r}.")
+    case = cases[0]
+    return {
+        "name": name,
+        "model": rlb._onnx_light_model_to_onnx(case.model),
+        "data_sets": rlb._cc_data_sets_to_python(case),
+    }
 
 
 def _first_input_type(signature: Any) -> str:
@@ -166,46 +188,60 @@ def run_tests(
     n_measure: int = N_MEASURE,
     max_repeat_time_s: float = MAX_REPEAT_TIME_S,
     run: Callable[..., dict[str, Any]] = rlb.run_benchmark,
+    load: Callable[[str], dict[str, Any]] = _load_benchmark_test,
 ) -> list[dict[str, Any]]:
     """Benchmark the supplied onnx-light-cpu cases."""
     cpu_results = []
+    metadata = []
     for test in tests:
+        loaded = test if "model" in test else load(test["name"])
         cpu_results.append(
             run(
-                test["model"],
-                test["data_sets"],
+                loaded["model"],
+                loaded["data_sets"],
                 "onnx_light_cpu",
                 n_warmup=n_warmup,
                 n_measure=n_measure,
                 max_repeat_time_s=max_repeat_time_s,
             )
         )
+        first_inputs = loaded["data_sets"][0][0]
+        metadata.append(
+            {
+                "operator": rlb._operator_name(loaded["model"]) or "?",
+                "inputs": _format_inputs(first_inputs),
+                "input_elements": _first_input_element_count(first_inputs),
+            }
+        )
+        del loaded
+        gc.collect()
     gc.collect()
 
     ort_results = []
     for test in tests:
+        loaded = test if "model" in test else load(test["name"])
         ort_results.append(
             run(
-                test["model"],
-                test["data_sets"],
+                loaded["model"],
+                loaded["data_sets"],
                 "onnxruntime",
                 n_warmup=n_warmup,
                 n_measure=n_measure,
                 max_repeat_time_s=max_repeat_time_s,
             )
         )
+        del loaded
+        gc.collect()
 
     measurements: list[dict[str, Any]] = []
-    for test, cpu, ort in zip(tests, cpu_results, ort_results, strict=True):
-        data_sets = test["data_sets"]
-        first_inputs = data_sets[0][0]
-        inputs = _format_inputs(first_inputs)
-        row = _row(inputs, cpu, ort)
-        row["input_elements"] = _first_input_element_count(first_inputs)
-        operator = rlb._operator_name(test["model"]) or "?"
+    for test, cpu, ort, details in zip(
+        tests, cpu_results, ort_results, metadata, strict=True
+    ):
+        row = _row(details["inputs"], cpu, ort)
+        row["input_elements"] = details["input_elements"]
         measurements.append(
             {
-                "operator": operator,
+                "operator": details["operator"],
                 "test_name": test["name"],
                 "row": row,
             }

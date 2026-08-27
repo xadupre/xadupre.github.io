@@ -20,23 +20,24 @@ class TestDiscovery(unittest.TestCase):
         module = types.ModuleType("onnx_light_cpu")
         module.register_backend_test_cases = lambda: calls.append("registered")
         original = sys.modules.get("onnx_light_cpu")
-        discover = rcb.rlb.discover_node_tests
-        rcb.rlb.discover_node_tests = lambda kind: [
-            {"name": "test_cpu_abs_benchmark"},
-            {"name": "test_cc_abs_benchmark"},
-            {"name": "test_cpu_abs_float32"},
+        collect = rcb._collect_benchmark_cases
+        rcb._collect_benchmark_cases = lambda: [
+            types.SimpleNamespace(name="test_cpu_abs_benchmark", kind="node"),
+            types.SimpleNamespace(name="test_cc_abs_benchmark", kind="node"),
+            types.SimpleNamespace(name="test_cpu_abs_float32", kind="node"),
         ]
         sys.modules["onnx_light_cpu"] = module
         try:
             tests = rcb.discover_benchmark_tests()
         finally:
-            rcb.rlb.discover_node_tests = discover
+            rcb._collect_benchmark_cases = collect
             if original is None:
                 del sys.modules["onnx_light_cpu"]
             else:
                 sys.modules["onnx_light_cpu"] = original
         self.assertEqual(calls, ["registered"])
         self.assertEqual([test["name"] for test in tests], ["test_cpu_abs_benchmark"])
+        self.assertNotIn("model", tests[0])
 
 
 class TestRows(unittest.TestCase):
@@ -182,6 +183,37 @@ class TestPayload(unittest.TestCase):
                 ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
                 ("onnxruntime", rcb.MAX_REPEAT_TIME_S),
             ],
+        )
+
+    def test_run_tests_reloads_lazy_cases_for_each_backend(self):
+        names = ["test_cpu_abs_1_benchmark", "test_cpu_abs_2_benchmark"]
+        loads = []
+        calls = []
+
+        def load(name):
+            loads.append(name)
+            return {
+                "name": name,
+                "model": types.SimpleNamespace(
+                    graph=types.SimpleNamespace(
+                        node=[types.SimpleNamespace(op_type="Abs", domain="")]
+                    )
+                ),
+                "data_sets": [
+                    ([types.SimpleNamespace(dtype="float32", shape=(1,))], [])
+                ],
+            }
+
+        def run(model, data_sets, backend, **kwargs):
+            calls.append(backend)
+            return {"success": True, "avg_ms": 1.0}
+
+        rcb.run_tests([{"name": name} for name in names], run=run, load=load)
+
+        self.assertEqual(loads, names + names)
+        self.assertEqual(
+            calls,
+            ["onnx_light_cpu", "onnx_light_cpu", "onnxruntime", "onnxruntime"],
         )
 
 
