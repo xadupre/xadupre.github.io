@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -15,6 +16,36 @@ import record_onnx_time as rot  # noqa: E402
 
 
 class TestRecordOnnxTime(unittest.TestCase):
+    def test_main_defaults_to_current_platform(self):
+        html = (
+            "<pre>load/1filex1/onnx avg=1.0 ms median=1.0 ms "
+            "max=1.0 ms std=0.0 ms</pre>"
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            html_path = os.path.join(temp, "plot_onnx_time.html")
+            csv_path = os.path.join(temp, "onnx_time.csv")
+            with open(html_path, "w", encoding="utf-8") as stream:
+                stream.write(html)
+            args = [
+                "record_onnx_time.py",
+                html_path,
+                "--output",
+                csv_path,
+                "--commit",
+                "abc",
+                "--run-id",
+                "123",
+            ]
+
+            with patch.object(sys, "argv", args), patch.object(
+                rot.platform, "platform", return_value="Test Platform"
+            ):
+                rot.main()
+
+            with open(csv_path, newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows[0]["machine"], "Test Platform")
+
     def test_extract_timings_decodes_html_and_converts_ms(self):
         html = """<pre>load/1filex1/onnx  avg=12.5 ms median=12.0 ms
 max=13.0 ms std=0.5 ms
