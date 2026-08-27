@@ -444,7 +444,7 @@ class TestRunBenchmark(unittest.TestCase):
         self.assertAlmostEqual(result["avg_ms"], 1.0, places=6)
 
     def test_measurement_stops_after_cumulative_duration(self):
-        ticks = iter((0.0, 1.1))
+        ticks = iter((0.0, 1.1, 2.0, 3.1, 4.0, 5.1))
 
         def _dummy_factory(model):
             return lambda inputs: [np.zeros((1,))]
@@ -471,7 +471,7 @@ class TestRunBenchmark(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["n_warmup"], 0)
-        self.assertEqual(result["n_measure"], 1)
+        self.assertEqual(result["n_measure"], 3)
         self.assertEqual(result["avg_ms"], 1100.0)
 
     def test_warmup_stops_after_cumulative_duration(self):
@@ -492,6 +492,37 @@ class TestRunBenchmark(unittest.TestCase):
                 n_warmup=5,
                 n_measure=1,
                 max_repeat_time_s=1.0,
+            )
+        finally:
+            rlb.time.perf_counter = saved_pc
+            if saved is None:
+                del rlb._RUNNER_FACTORIES["onnxruntime"]
+            else:
+                rlb._RUNNER_FACTORIES["onnxruntime"] = saved
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["n_warmup"], 1)
+        self.assertEqual(result["n_measure"], 1)
+
+    def test_warmup_uses_independent_time_limit(self):
+        ticks = iter((0.0, 0.06, 1.0, 1.01))
+
+        def _dummy_factory(model):
+            return lambda inputs: [np.zeros((1,))]
+
+        saved = rlb._RUNNER_FACTORIES.get("onnxruntime")
+        saved_pc = rlb.time.perf_counter
+        try:
+            rlb._RUNNER_FACTORIES["onnxruntime"] = _dummy_factory
+            rlb.time.perf_counter = lambda: next(ticks)
+            result = rlb.run_benchmark(
+                object(),
+                [([np.ones((1,))], [np.zeros((1,))])],
+                "onnxruntime",
+                n_warmup=2,
+                n_measure=1,
+                max_warmup_time_s=0.05,
+                max_repeat_time_s=0.2,
             )
         finally:
             rlb.time.perf_counter = saved_pc
