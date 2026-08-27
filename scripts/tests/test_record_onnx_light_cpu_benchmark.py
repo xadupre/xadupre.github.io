@@ -7,6 +7,7 @@ import os
 import sys
 import types
 import unittest
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -38,6 +39,48 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual(calls, ["registered"])
         self.assertEqual([test["name"] for test in tests], ["test_cpu_abs_benchmark"])
         self.assertNotIn("model", tests[0])
+
+
+class TestLoading(unittest.TestCase):
+    def test_loads_one_benchmark_case_by_exact_name(self):
+        calls = []
+        benchmark_mode = object()
+        backend = types.ModuleType("onnx_light.onnx.backend")
+        backend.TestMode = types.SimpleNamespace(BENCHMARK=benchmark_mode)
+        backend.collect_test_cases_by_name = lambda pattern, **kwargs: (
+            calls.append((pattern, kwargs)) or [types.SimpleNamespace(model="cc-model")]
+        )
+        modules = {
+            "onnx_light": types.ModuleType("onnx_light"),
+            "onnx_light.onnx": types.ModuleType("onnx_light.onnx"),
+            "onnx_light.onnx.backend": backend,
+        }
+        with (
+            patch.dict(sys.modules, modules),
+            patch.object(
+                rcb.rlb, "_onnx_light_model_to_onnx", lambda model: f"onnx-{model}"
+            ),
+            patch.object(rcb.rlb, "_cc_data_sets_to_python", lambda case: ["data"]),
+        ):
+            loaded = rcb._load_benchmark_test("test_cpu_abs[1]_benchmark")
+
+        self.assertEqual(
+            calls,
+            [
+                (
+                    r"^test_cpu_abs\[1\]_benchmark$",
+                    {"include_big": True, "mode": benchmark_mode},
+                )
+            ],
+        )
+        self.assertEqual(
+            loaded,
+            {
+                "name": "test_cpu_abs[1]_benchmark",
+                "model": "onnx-cc-model",
+                "data_sets": ["data"],
+            },
+        )
 
 
 class TestRows(unittest.TestCase):
