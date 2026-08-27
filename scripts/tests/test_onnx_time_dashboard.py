@@ -22,11 +22,13 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn('<option value="All">All</option>', text)
         for chart_id in (
             "load1FileChart",
+            "load1FileSpeedupChart",
             "load2FileChart",
+            "load2FileSpeedupChart",
             "save1FileChart",
+            "save1FileSpeedupChart",
             "save2FileChart",
-            "loadSpeedupChart",
-            "saveSpeedupChart",
+            "save2FileSpeedupChart",
         ):
             self.assertIn(f'id="{chart_id}"', text)
         for prefix in ("load/1file", "load/2file", "save/1file", "save/2file"):
@@ -34,10 +36,17 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn('row.name.startsWith(prefix + "x")', text)
         self.assertIn("x: Date.parse(row.date)", text)
         self.assertIn("loadChartJs()", text)
-        self.assertIn('baseline: "load/1filex1/onnx"', text)
-        self.assertIn('baseline: "save/1filex1/onnx"', text)
+        for baseline in (
+            "load/1filex1/onnx",
+            "load/2filex1/onnx",
+            "save/1filex1/onnx",
+            "save/2filex1/onnx",
+        ):
+            self.assertIn(f'baseline: "{baseline}"', text)
         self.assertIn("baselineByRun.get(row.run_id) / Number(row[metric])", text)
-        self.assertIn("SPEEDUP_CHARTS.forEach(renderSpeedupChart)", text)
+        self.assertIn("CHARTS.forEach(renderSpeedupChart)", text)
+        self.assertEqual(text.count('type:"logarithmic"'), 2)
+        self.assertEqual(text.count('"Machine: " + item.raw.machine'), 2)
 
         with open(DATA, newline="", encoding="utf-8") as stream:
             rows = list(csv.DictReader(stream))
@@ -57,6 +66,7 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn("docs/examples/proto/plot_onnx_time.py", text)
         self.assertIn("python scripts/record_onnx_time.py", text)
         self.assertIn("--output cache_data/onnx-light/onnx_time.csv", text)
+        self.assertIn("--machine", text)
         self.assertIn('git -C onnx-light rev-parse HEAD', text)
         self.assertIn('git add cache_data/onnx-light/onnx_time.csv', text)
 
