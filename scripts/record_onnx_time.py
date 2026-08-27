@@ -6,6 +6,7 @@ import argparse
 import csv
 import datetime as dt
 import os
+import platform
 import re
 from html.parser import HTMLParser
 
@@ -119,7 +120,11 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="historical CSV path")
     parser.add_argument("--commit", required=True, help="onnx-light source commit")
     parser.add_argument("--run-id", required=True, help="documentation workflow run id")
-    parser.add_argument("--machine", required=True, help="benchmark machine description")
+    parser.add_argument(
+        "--machine",
+        default=platform.platform(),
+        help="benchmark machine description (default: current platform)",
+    )
     parser.add_argument(
         "--date",
         default=dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
