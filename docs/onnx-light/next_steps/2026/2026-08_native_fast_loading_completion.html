@@ -27,8 +27,8 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../../_static/styles/theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
-<link href="../../_static/styles/pydata-sphinx-theme.css?digest=90905a2f556bf617f1a9" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=cb8930eaaf36d9849b67" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
@@ -42,10 +42,10 @@
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=6659ab8e" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../../_static/scripts/fontawesome.js?digest=90905a2f556bf617f1a9"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=cb8930eaaf36d9849b67"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
-<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67" />
 
     <script src="../../_static/documentation_options.js?v=b3d22ae5"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
@@ -173,6 +173,13 @@
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../design/index.html">
     Design
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../technical_details/index.html">
+    Technical
   </a>
 </li>
 
@@ -323,6 +330,13 @@
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../design/index.html">
     Design
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../../technical_details/index.html">
+    Technical
   </a>
 </li>
 
@@ -517,7 +531,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>in progress; native PR01–PR04 are implemented</strong></p>
+<p><strong>implemented; native PR01–PR06 are implemented</strong></p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>This is step 3 of the fast-loading sequence. It consumes the session-scoped
@@ -655,6 +669,7 @@ background persistence work.</p>
 <section id="native-pr06-add-device-preparation-variants">
 <h2>Native PR06 – add device preparation variants<a class="headerlink" href="#native-pr06-add-device-preparation-variants" title="Link to this heading">#</a></h2>
 <p><strong>Repository:</strong> <code class="docutils literal notranslate"><span class="pre">xadupre/onnx-light</span></code></p>
+<p><strong>Implemented by issue #4623.</strong></p>
 <p>After fixed CPU placement is stable, add one CUDA <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> whose initialization
 chooses CPU-pack-plus-copy or device-side packing. Add alternative execution
 device variants and residency policy only after that path is measurable.</p>
@@ -666,6 +681,30 @@ device variants and residency policy only after that path is measurable.</p>
 <li><p>unsupported or failed variants fall back explicitly without publishing a
 partial prepared object.</p></li>
 </ul>
+<p>The fixed-placement CUDA <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> preparation contract now expands either
+<code class="docutils literal notranslate"><span class="pre">I/O</span> <span class="pre">-&gt;</span> <span class="pre">CPU</span> <span class="pre">pack</span> <span class="pre">-&gt;</span> <span class="pre">device</span> <span class="pre">copy</span> <span class="pre">-&gt;</span> <span class="pre">publish</span></code> or
+<code class="docutils literal notranslate"><span class="pre">I/O</span> <span class="pre">-&gt;</span> <span class="pre">device</span> <span class="pre">copy</span> <span class="pre">-&gt;</span> <span class="pre">device</span> <span class="pre">pack</span> <span class="pre">-&gt;</span> <span class="pre">publish</span></code> with explicit resource classes.
+Backend submissions return an explicit completion event and retain their source
+owners until that event completes. The published allocation retains a separate
+device owner through residency, active-consumer pins, and eviction.</p>
+<p>The prepared key length-prefixes the CUDA ordinal and architecture, packed
+layout, kernel ABI, and ordered source lineage. Unsupported preferred paths
+select the alternative directly. Failed submitted paths mark their generation
+failed before the alternative produces a new generation, so only a complete
+event-confirmed allocation can become resident. This PR deliberately adds no
+dynamic placement or device-specific residency policy.</p>
+<p>Validation on the PR build host used a kernel-enabled release build. The five
+focused CUDA preparation tests and the fifteen existing prepared scheduler and
+residency tests passed in approximately 52–54 ms. The 4 MiB prepared-cache benchmark measured
+35.744 ms for portable preparation and 6.319 ms for the warm prepared entry
+(82.3% improvement). The unchanged hot-path benchmark measured 39.407
+microseconds of prepared dispatch overhead and did not meet its existing
+1-microsecond envelope; the same benchmark and asynchronous dispatch path are
+unchanged from the branch baseline, so that existing miss is not attributed to
+device preparation. This host exposes no <code class="docutils literal notranslate"><span class="pre">nvidia-smi</span></code>, so these results validate
+the backend contract and fallback/ownership behavior but are not concrete CUDA
+kernel timings; a CUDA backend must supply and measure the two submission
+callbacks before adding placement or residency variants.</p>
 </section>
 <section id="completion-criteria">
 <h2>Completion criteria<a class="headerlink" href="#completion-criteria" title="Link to this heading">#</a></h2>
@@ -765,8 +804,8 @@ and add the ORT-plus-onnx-light integrated comparison.</p>
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9"></script>
-<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -790,7 +829,7 @@ and add the ORT-plus-onnx-light integrated comparison.</p>
         <div class="footer-item">
 <p class="theme-version">
   <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
-  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.20.0.
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.21.0.
 </p></div>
       
     </div>

@@ -37,13 +37,14 @@ compares the median execution time of ``onnx-light``'s
 :class:`~onnx_light.onnx.reference.ReferenceEvaluator` against
 ``onnxruntime`` running the very same :class:`ModelProto` and input data.
 
-.. GENERATED FROM PYTHON SOURCE LINES 21-34
+.. GENERATED FROM PYTHON SOURCE LINES 21-35
 
 .. code-block:: Python
 
 
     from __future__ import annotations
 
+    import argparse
     import os
     import time
 
@@ -61,7 +62,7 @@ compares the median execution time of ``onnx-light``'s
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 35-42
+.. GENERATED FROM PYTHON SOURCE LINES 36-43
 
 Selecting a subset of backend benchmark cases
 ----------------------------------------------
@@ -71,13 +72,24 @@ Every eligible operator family registers a benchmark case named
 companions this example does not use). We only keep the float32 variant so
 the comparison against ``onnxruntime`` is straightforward.
 
-.. GENERATED FROM PYTHON SOURCE LINES 42-46
+.. GENERATED FROM PYTHON SOURCE LINES 43-59
 
 .. code-block:: Python
 
 
     BENCHMARK_OPS = ["abs", "relu", "sigmoid", "sqrt", "exp", "erf", "add", "mul", "div"]
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+    args, _ = parser.parse_known_args()
+    if args.repeat <= 0:
+        parser.error("--repeat must be greater than 0")
+    if args.warmup < 0:
+        parser.error("--warmup must be greater than or equal to 0")
+    if args.max_repeat_time <= 0:
+        parser.error("--max-repeat-time must be greater than 0")
 
 
 
@@ -86,30 +98,23 @@ the comparison against ``onnxruntime`` is straightforward.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 47-52
+
+.. GENERATED FROM PYTHON SOURCE LINES 60-66
 
 Measurement grid
 ----------------
 
-Documentation builds use a single warm-up and repeat to keep the gallery
-fast; a normal run measures a more statistically stable median.
+Each runtime gets up to ``--warmup`` untimed calls, then up to ``--repeat``
+measured calls. Both phases stop after ``--max-repeat-time`` cumulative
+seconds.
 
-.. GENERATED FROM PYTHON SOURCE LINES 52-162
+.. GENERATED FROM PYTHON SOURCE LINES 66-172
 
 .. code-block:: Python
 
 
-    if os.environ.get("UNITTEST_GOING") == "1":
-        warmup, repeat = 1, 2
-    else:
-        warmup, repeat = 3, 7
 
-    MAX_MEASURE_DURATION = 2.0
-
-
-    def measure(
-        function, warmup: int, repeat: int, max_duration: float = MAX_MEASURE_DURATION
-    ) -> float:
+    def measure(function, warmup: int, repeat: int, max_duration: float) -> float:
         """Measures a callable after warm-up and returns its median time per call.
 
         Returns:
@@ -118,8 +123,13 @@ fast; a normal run measures a more statistically stable median.
             stops once their cumulative duration reaches ``max_duration``.
         """
 
+        warmup_duration = 0.0
         for _ in range(warmup):
+            start = time.perf_counter()
             function()
+            warmup_duration += time.perf_counter() - start
+            if warmup_duration >= max_duration:
+                break
         timings = []
         total_duration = 0.0
         for _ in range(repeat):
@@ -205,7 +215,7 @@ fast; a normal run measures a more statistically stable median.
             return session.run(None, case["feeds"])[0]
 
         numpy.testing.assert_allclose(run(), case["expected"], rtol=case["rtol"], atol=case["atol"])
-        return measure(run, warmup, repeat)
+        return measure(run, args.warmup, args.repeat, args.max_repeat_time)
 
 
 
@@ -215,7 +225,7 @@ fast; a normal run measures a more statistically stable median.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 163-170
+.. GENERATED FROM PYTHON SOURCE LINES 173-180
 
 Run the benchmark for every selected operator
 ----------------------------------------------
@@ -225,7 +235,7 @@ created. Both runtimes retain their default spinning behavior, but a pool
 from one runtime therefore cannot remain alive while the other runtime's
 cases are measured.
 
-.. GENERATED FROM PYTHON SOURCE LINES 170-191
+.. GENERATED FROM PYTHON SOURCE LINES 180-201
 
 .. code-block:: Python
 
@@ -258,20 +268,20 @@ cases are measured.
 
  .. code-block:: none
 
-    [       test_cc_abs_benchmark] n=   4194304 | onnx-light=    535.09 us | onnxruntime=    481.37 us | onnx-light / onnxruntime= 1.11x
-    [      test_cc_relu_benchmark] n=   4194304 | onnx-light=    516.32 us | onnxruntime=    400.73 us | onnx-light / onnxruntime= 1.29x
-    [   test_cc_sigmoid_benchmark] n=   4194304 | onnx-light=   6465.82 us | onnxruntime=    765.22 us | onnx-light / onnxruntime= 8.45x
-    [      test_cc_sqrt_benchmark] n=   4194304 | onnx-light=  18247.73 us | onnxruntime=    865.26 us | onnx-light / onnxruntime=21.09x
-    [       test_cc_exp_benchmark] n=   4194304 | onnx-light=   5367.49 us | onnxruntime=    856.58 us | onnx-light / onnxruntime= 6.27x
-    [       test_cc_erf_benchmark] n=   4194304 | onnx-light=  25991.10 us | onnxruntime=   1349.65 us | onnx-light / onnxruntime=19.26x
-    [       test_cc_add_benchmark] n=   4194304 | onnx-light=    946.26 us | onnxruntime=    801.54 us | onnx-light / onnxruntime= 1.18x
-    [       test_cc_mul_benchmark] n=   4194304 | onnx-light=    756.18 us | onnxruntime=    868.65 us | onnx-light / onnxruntime= 0.87x
-    [       test_cc_div_benchmark] n=   4194304 | onnx-light=    920.31 us | onnxruntime=    780.28 us | onnx-light / onnxruntime= 1.18x
+    [       test_cc_abs_benchmark] n=   4194304 | onnx-light=    434.17 us | onnxruntime=    320.15 us | onnx-light / onnxruntime= 1.36x
+    [      test_cc_relu_benchmark] n=   4194304 | onnx-light=    453.68 us | onnxruntime=    300.20 us | onnx-light / onnxruntime= 1.51x
+    [   test_cc_sigmoid_benchmark] n=   4194304 | onnx-light=   6427.13 us | onnxruntime=    755.76 us | onnx-light / onnxruntime= 8.50x
+    [      test_cc_sqrt_benchmark] n=   4194304 | onnx-light=  18257.69 us | onnxruntime=    860.13 us | onnx-light / onnxruntime=21.23x
+    [       test_cc_exp_benchmark] n=   4194304 | onnx-light=   5297.20 us | onnxruntime=    859.28 us | onnx-light / onnxruntime= 6.16x
+    [       test_cc_erf_benchmark] n=   4194304 | onnx-light=  26025.50 us | onnxruntime=   1343.69 us | onnx-light / onnxruntime=19.37x
+    [       test_cc_add_benchmark] n=   4194304 | onnx-light=    710.73 us | onnxruntime=    772.91 us | onnx-light / onnxruntime= 0.92x
+    [       test_cc_mul_benchmark] n=   4194304 | onnx-light=    734.16 us | onnxruntime=    796.79 us | onnx-light / onnxruntime= 0.92x
+    [       test_cc_div_benchmark] n=   4194304 | onnx-light=    770.31 us | onnxruntime=    834.54 us | onnx-light / onnxruntime= 0.92x
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 192-198
+.. GENERATED FROM PYTHON SOURCE LINES 202-208
 
 Plot the comparison
 --------------------
@@ -280,7 +290,7 @@ The left panel shows the raw median execution time for each backend, the
 right panel shows the speed-up of ``onnx-light`` relative to
 ``onnxruntime`` (values above 1.0 mean ``onnx-light`` is slower).
 
-.. GENERATED FROM PYTHON SOURCE LINES 198-226
+.. GENERATED FROM PYTHON SOURCE LINES 208-236
 
 .. code-block:: Python
 
@@ -327,7 +337,7 @@ right panel shows the speed-up of ``onnx-light`` relative to
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 11.531 seconds)
+   **Total running time of the script:** (0 minutes 13.886 seconds)
 
 
 .. _sphx_glr_download_auto_examples_runtime_plot_backend_benchmark_vs_onnxruntime.py:

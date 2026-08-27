@@ -41,13 +41,14 @@ one runtime's spinning workers to perturb the other runtime's measurement.
 The two ``onnx-light`` series use the same prepared evaluator with either a
 NumPy array or a pre-built runtime ``Tensor`` as input.
 
-.. GENERATED FROM PYTHON SOURCE LINES 25-43
+.. GENERATED FROM PYTHON SOURCE LINES 25-56
 
 .. code-block:: Python
 
 
     from __future__ import annotations
 
+    import argparse
     import os
     import time
 
@@ -63,6 +64,17 @@ NumPy array or a pre-built runtime ``Tensor`` as input.
     runtime = _onnxpykernels.runtime
     ORT_MAX_IR_VERSION = 13
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-r", "--repeat", type=int, default=10 * (os.cpu_count() or 1))
+    parser.add_argument("-w", "--warmup", type=int, default=2 * (os.cpu_count() or 1))
+    parser.add_argument("-t", "--max-repeat-time", type=float, default=1.0)
+    args, _ = parser.parse_known_args()
+    if args.repeat <= 0:
+        parser.error("--repeat must be greater than 0")
+    if args.warmup < 0:
+        parser.error("--warmup must be greater than or equal to 0")
+    if args.max_repeat_time <= 0:
+        parser.error("--max-repeat-time must be greater than 0")
 
 
 
@@ -70,7 +82,8 @@ NumPy array or a pre-built runtime ``Tensor`` as input.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-52
+
+.. GENERATED FROM PYTHON SOURCE LINES 57-65
 
 Element types under test
 ------------------------
@@ -81,7 +94,7 @@ kernel for that type. ``bfloat16`` is materialized through
 :mod:`ml_dtypes`; ``onnxruntime`` has no ``bfloat16`` ``Abs`` kernel, so it is
 excluded from that comparison.
 
-.. GENERATED FROM PYTHON SOURCE LINES 52-103
+.. GENERATED FROM PYTHON SOURCE LINES 65-112
 
 .. code-block:: Python
 
@@ -108,20 +121,16 @@ excluded from that comparison.
         return model
 
 
-    MAX_MEASURE_DURATION = 2.0
-
-
-    def measure(
-        function,
-        repeat: int,
-        warmup: int = 3,
-        number: int = 1,
-        max_duration: float = MAX_MEASURE_DURATION,
-    ) -> float:
+    def measure(function, repeat: int, warmup: int, number: int, max_duration: float) -> float:
         """Measures a callable after warm-up and returns its median time per call."""
 
+        warmup_duration = 0.0
         for _ in range(warmup):
+            start = time.perf_counter()
             function()
+            warmup_duration += time.perf_counter() - start
+            if warmup_duration >= max_duration:
+                break
         timings = []
         total_duration = 0.0
         for _ in range(repeat):
@@ -143,7 +152,7 @@ excluded from that comparison.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 104-109
+.. GENERATED FROM PYTHON SOURCE LINES 113-118
 
 Measurement grid
 ----------------
@@ -151,19 +160,15 @@ Measurement grid
 Normal execution uses the complete logarithmic grid. Documentation tests use
 two small vectors to keep the gallery build fast.
 
-.. GENERATED FROM PYTHON SOURCE LINES 109-233
+.. GENERATED FROM PYTHON SOURCE LINES 118-250
 
 .. code-block:: Python
 
 
     if os.environ.get("UNITTEST_GOING") == "1":
         size_grid = [100, 1_000]
-        minimum_repeat = 3
-        warmup = 1
     else:
         size_grid = [10**power for power in range(2, 9)]
-        minimum_repeat = 7
-        warmup = 3
 
 
     def benchmark_dtype(label: str, elem_type: int, np_dtype, ort_supported: bool) -> dict:
@@ -208,16 +213,29 @@ two small vectors to keep the gallery build fast.
         for size in size_grid:
             values = random_generator.uniform(-100.0, 100.0, size=size).astype(np_dtype)
             expected = numpy.abs(values)
-            repeat = max(minimum_repeat, min(200, 2_000_000 // size))
             number = max(1, min(20, 10_000_000 // size))
 
-            numpy_time = measure(lambda values=values: numpy.abs(values), repeat, warmup, number)
+            numpy_time = measure(
+                lambda values=values: numpy.abs(values),
+                args.repeat,
+                args.warmup,
+                number,
+                args.max_repeat_time,
+            )
             onnx_light_time = measure(
-                lambda values=values: run_onnx_light(values), repeat, warmup, number
+                lambda values=values: run_onnx_light(values),
+                args.repeat,
+                args.warmup,
+                number,
+                args.max_repeat_time,
             )
             input_tensor = make_input_tensor(values)
             onnx_light_tensor_time = measure(
-                lambda tensor=input_tensor: run_onnx_light_tensor(tensor), repeat, warmup, number
+                lambda tensor=input_tensor: run_onnx_light_tensor(tensor),
+                args.repeat,
+                args.warmup,
+                number,
+                args.max_repeat_time,
             )
             numpy.testing.assert_array_equal(run_onnx_light(values), expected)
             numpy.testing.assert_array_equal(run_onnx_light_tensor(input_tensor), expected)
@@ -248,13 +266,12 @@ two small vectors to keep the gallery build fast.
         for size in result["sizes"]:
             values = random_generator.uniform(-100.0, 100.0, size=int(size)).astype(np_dtype)
             expected = numpy.abs(values)
-            repeat = max(minimum_repeat, min(200, 2_000_000 // int(size)))
             number = max(1, min(20, 10_000_000 // int(size)))
 
             def run(values=values):
                 return session.run(None, {"X": values})[0]
 
-            ort_times.append(measure(run, repeat, warmup, number))
+            ort_times.append(measure(run, args.repeat, args.warmup, number, args.max_repeat_time))
             numpy.testing.assert_array_equal(run(), expected)
         result["ort_times"] = numpy.array(ort_times)
 
@@ -286,12 +303,12 @@ two small vectors to keep the gallery build fast.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 234-236
+.. GENERATED FROM PYTHON SOURCE LINES 251-253
 
 Measure steady-state execution for every element type
 -----------------------------------------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 236-242
+.. GENERATED FROM PYTHON SOURCE LINES 253-259
 
 .. code-block:: Python
 
@@ -309,32 +326,32 @@ Measure steady-state execution for every element type
 
  .. code-block:: none
 
-    [ float32] size=      100 | numpy=      0.61 us | onnx-light=      2.84 us | onnx-light (Tensor)=      2.84 us | onnxruntime=      8.48 us | onnx-light / onnxruntime= 0.34x
-    [ float32] size=     1000 | numpy=      0.87 us | onnx-light=      3.00 us | onnx-light (Tensor)=      2.96 us | onnxruntime=      8.49 us | onnx-light / onnxruntime= 0.35x
-    [ float32] size=    10000 | numpy=      1.61 us | onnx-light=      3.87 us | onnx-light (Tensor)=      3.83 us | onnxruntime=      6.54 us | onnx-light / onnxruntime= 0.59x
-    [ float32] size=   100000 | numpy=     20.07 us | onnx-light=     10.51 us | onnx-light (Tensor)=      9.39 us | onnxruntime=     20.77 us | onnx-light / onnxruntime= 0.51x
-    [ float32] size=  1000000 | numpy=    146.96 us | onnx-light=     90.94 us | onnx-light (Tensor)=     69.22 us | onnxruntime=    135.40 us | onnx-light / onnxruntime= 0.67x
-    [ float32] size= 10000000 | numpy=   4981.90 us | onnx-light=   2038.39 us | onnx-light (Tensor)=   2042.02 us | onnxruntime=   1609.25 us | onnx-light / onnxruntime= 1.27x
-    [ float32] size=100000000 | numpy=  43544.60 us | onnx-light=  23421.32 us | onnx-light (Tensor)=  22610.87 us | onnxruntime=  22806.37 us | onnx-light / onnxruntime= 1.03x
-    [ float16] size=      100 | numpy=      0.60 us | onnx-light=      2.84 us | onnx-light (Tensor)=      2.80 us | onnxruntime=     10.12 us | onnx-light / onnxruntime= 0.28x
-    [ float16] size=     1000 | numpy=      0.81 us | onnx-light=      2.92 us | onnx-light (Tensor)=      2.86 us | onnxruntime=      6.69 us | onnx-light / onnxruntime= 0.44x
-    [ float16] size=    10000 | numpy=      1.24 us | onnx-light=      3.41 us | onnx-light (Tensor)=      3.36 us | onnxruntime=      9.12 us | onnx-light / onnxruntime= 0.37x
-    [ float16] size=   100000 | numpy=      5.58 us | onnx-light=      7.56 us | onnx-light (Tensor)=      6.44 us | onnxruntime=     60.96 us | onnx-light / onnxruntime= 0.12x
-    [ float16] size=  1000000 | numpy=     81.38 us | onnx-light=     75.78 us | onnx-light (Tensor)=     56.86 us | onnxruntime=    183.71 us | onnx-light / onnxruntime= 0.41x
-    [ float16] size= 10000000 | numpy=    981.34 us | onnx-light=    611.60 us | onnx-light (Tensor)=    608.85 us | onnxruntime=   5036.78 us | onnx-light / onnxruntime= 0.12x
-    [ float16] size=100000000 | numpy=  21020.83 us | onnx-light=  11107.77 us | onnx-light (Tensor)=  11024.38 us | onnxruntime=  61681.32 us | onnx-light / onnxruntime= 0.18x
-    [bfloat16] size=      100 | numpy=      0.61 us | onnx-light=      5.32 us | onnx-light (Tensor)=      3.09 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size=     1000 | numpy=      1.19 us | onnx-light=      5.33 us | onnx-light (Tensor)=      3.14 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size=    10000 | numpy=      5.03 us | onnx-light=      5.89 us | onnx-light (Tensor)=      3.63 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size=   100000 | numpy=     43.86 us | onnx-light=     16.85 us | onnx-light (Tensor)=      8.25 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size=  1000000 | numpy=    428.81 us | onnx-light=     81.88 us | onnx-light (Tensor)=     65.33 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size= 10000000 | numpy=   4279.52 us | onnx-light=    554.79 us | onnx-light (Tensor)=    523.19 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
-    [bfloat16] size=100000000 | numpy=  55737.09 us | onnx-light=  11006.23 us | onnx-light (Tensor)=  10982.40 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [ float32] size=      100 | numpy=      0.63 us | onnx-light=      2.90 us | onnx-light (Tensor)=      2.85 us | onnxruntime=      8.65 us | onnx-light / onnxruntime= 0.34x
+    [ float32] size=     1000 | numpy=      0.91 us | onnx-light=      3.03 us | onnx-light (Tensor)=      2.96 us | onnxruntime=      8.92 us | onnx-light / onnxruntime= 0.34x
+    [ float32] size=    10000 | numpy=      1.63 us | onnx-light=      3.85 us | onnx-light (Tensor)=      3.77 us | onnxruntime=     10.65 us | onnx-light / onnxruntime= 0.36x
+    [ float32] size=   100000 | numpy=     15.66 us | onnx-light=      9.80 us | onnx-light (Tensor)=      9.19 us | onnxruntime=     21.33 us | onnx-light / onnxruntime= 0.46x
+    [ float32] size=  1000000 | numpy=    135.75 us | onnx-light=     58.95 us | onnx-light (Tensor)=     58.02 us | onnxruntime=     75.83 us | onnx-light / onnxruntime= 0.78x
+    [ float32] size= 10000000 | numpy=   4031.34 us | onnx-light=   1628.08 us | onnx-light (Tensor)=   1641.63 us | onnxruntime=   1784.51 us | onnx-light / onnxruntime= 0.91x
+    [ float32] size=100000000 | numpy=  42859.20 us | onnx-light=  23672.70 us | onnx-light (Tensor)=  23446.25 us | onnxruntime=  24370.69 us | onnx-light / onnxruntime= 0.97x
+    [ float16] size=      100 | numpy=      0.62 us | onnx-light=      2.89 us | onnx-light (Tensor)=      2.84 us | onnxruntime=     10.33 us | onnx-light / onnxruntime= 0.28x
+    [ float16] size=     1000 | numpy=      0.85 us | onnx-light=      2.98 us | onnx-light (Tensor)=      2.92 us | onnxruntime=     10.65 us | onnx-light / onnxruntime= 0.28x
+    [ float16] size=    10000 | numpy=      1.26 us | onnx-light=      3.40 us | onnx-light (Tensor)=      3.35 us | onnxruntime=     14.92 us | onnx-light / onnxruntime= 0.23x
+    [ float16] size=   100000 | numpy=      6.72 us | onnx-light=      6.84 us | onnx-light (Tensor)=      6.26 us | onnxruntime=     60.10 us | onnx-light / onnxruntime= 0.11x
+    [ float16] size=  1000000 | numpy=     69.68 us | onnx-light=     33.87 us | onnx-light (Tensor)=     30.71 us | onnxruntime=    152.93 us | onnx-light / onnxruntime= 0.22x
+    [ float16] size= 10000000 | numpy=   1026.98 us | onnx-light=    595.38 us | onnx-light (Tensor)=    622.52 us | onnxruntime=   5266.32 us | onnx-light / onnxruntime= 0.11x
+    [ float16] size=100000000 | numpy=  21736.68 us | onnx-light=  11574.30 us | onnx-light (Tensor)=  11717.27 us | onnxruntime=  61681.36 us | onnx-light / onnxruntime= 0.19x
+    [bfloat16] size=      100 | numpy=      0.64 us | onnx-light=      5.33 us | onnx-light (Tensor)=      3.09 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size=     1000 | numpy=      1.23 us | onnx-light=      5.44 us | onnx-light (Tensor)=      3.16 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size=    10000 | numpy=      5.06 us | onnx-light=      5.91 us | onnx-light (Tensor)=      3.63 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size=   100000 | numpy=     43.92 us | onnx-light=      9.83 us | onnx-light (Tensor)=      6.47 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size=  1000000 | numpy=    429.29 us | onnx-light=     51.15 us | onnx-light (Tensor)=     32.18 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size= 10000000 | numpy=   4290.31 us | onnx-light=    572.64 us | onnx-light (Tensor)=    599.29 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
+    [bfloat16] size=100000000 | numpy=  55648.26 us | onnx-light=  12084.43 us | onnx-light (Tensor)=  11838.84 us | onnxruntime=n/a | onnx-light / onnxruntime=n/a
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 243-252
+.. GENERATED FROM PYTHON SOURCE LINES 260-269
 
 Plot execution time and relative speed
 --------------------------------------
@@ -346,7 +363,7 @@ slowdowns are equally readable around the baseline. No speed-up is reported
 for ``bfloat16`` because changing the baseline to NumPy would make that row
 incomparable.
 
-.. GENERATED FROM PYTHON SOURCE LINES 252-326
+.. GENERATED FROM PYTHON SOURCE LINES 269-345
 
 .. code-block:: Python
 
@@ -424,6 +441,8 @@ incomparable.
         speedup_axis.set_title(f"Abs speed-up ({label}, onnxruntime = 1)")
         speedup_axis.legend()
 
+    figure.tight_layout()
+    figure.savefig("plot_abs_benchmark.png")
 
 
 
@@ -436,36 +455,10 @@ incomparable.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 327-329
-
-``onnx-light`` is expected to beat ``onnxruntime`` on the smallest ``float32``
-vector, where the fixed per-call overhead dominates.
-
-.. GENERATED FROM PYTHON SOURCE LINES 329-339
-
-.. code-block:: Python
-
-
-    float32_result = results[0]
-    float32_speedups = float32_result["ort_times"] / float32_result["onnx_light_times"]
-    assert float32_speedups[0] > 1.0, (
-        "onnx-light is expected to be faster than onnxruntime for the first (smallest) size, "
-        f"got a speed-up of {float32_speedups[0]:.2f}x for size {float32_result['sizes'][0]}"
-    )
-
-    figure.tight_layout()
-    figure.savefig("plot_abs_benchmark.png")
-
-
-
-
-
-
-
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 15.531 seconds)
+   **Total running time of the script:** (0 minutes 24.880 seconds)
 
 
 .. _sphx_glr_download_auto_examples_runtime_plot_abs_benchmark.py:
