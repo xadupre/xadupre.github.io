@@ -8,6 +8,7 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 PAGE = os.path.join(ROOT, "dashboard", "onnx-light", "onnx-time.html")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "record_onnx_time.yml")
+DOC_WORKFLOW = os.path.join(ROOT, ".github", "workflows", "build_onnx_light_docs.yml")
 DATA = os.path.join(ROOT, "cache_data", "onnx-light", "onnx_time.csv")
 
 
@@ -67,8 +68,15 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn("python scripts/record_onnx_time.py", text)
         self.assertIn("--output cache_data/onnx-light/onnx_time.csv", text)
         self.assertIn("--machine", text)
-        self.assertIn('git -C onnx-light rev-parse HEAD', text)
-        self.assertIn('git add cache_data/onnx-light/onnx_time.csv', text)
+        self.assertIn("git -C onnx-light rev-parse HEAD", text)
+        self.assertIn("git add cache_data/onnx-light/onnx_time.csv", text)
+
+    def test_documentation_workflow_records_machine(self):
+        with open(DOC_WORKFLOW, encoding="utf-8") as stream:
+            text = stream.read()
+        self.assertIn("python site/scripts/record_onnx_time.py", text)
+        self.assertIn('machine="${{ runner.os }} ${{ runner.arch }} / $(lscpu', text)
+        self.assertIn('--machine "${machine}"', text)
 
 
 if __name__ == "__main__":
