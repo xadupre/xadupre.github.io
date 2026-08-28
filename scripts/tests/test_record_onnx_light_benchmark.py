@@ -804,6 +804,7 @@ class TestBuildPayload(unittest.TestCase):
         )
 
         self.assertIn("date", payload)
+        self.assertIn("machine", payload)
         self.assertTrue(payload["machine"])
         self.assertIn("kind", payload)
         self.assertEqual(payload["n_warmup"], 2)
