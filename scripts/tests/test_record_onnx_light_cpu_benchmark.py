@@ -7,12 +7,28 @@ import os
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_light_cpu_benchmark as rcb
+
+
+class TestProcessorName(unittest.TestCase):
+    def test_uses_the_cpu_model_from_proc_cpuinfo(self):
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+            patch("builtins.open", mock_open(read_data="model name : Benchmark CPU\n")),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
+
+    def test_falls_back_to_the_platform_processor(self):
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=False),
+            patch.object(rcb.rlb.platform, "processor", return_value="Fallback CPU"),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "Fallback CPU")
 
 
 class TestDiscovery(unittest.TestCase):
