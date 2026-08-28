@@ -1,0 +1,73 @@
+name: DATA onnx PR activity
+
+# Records a weekly snapshot of open and recently merged pull requests in
+# onnx/onnx for dashboard/onnx/pr-activity.html.
+
+on:
+  schedule:
+    - cron: "7 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  record:
+    if: github.event_name == 'schedule' || github.actor == github.repository_owner || github.actor == 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout xadupre.github.io
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Record ONNX PR activity
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -u scripts/record_pr_activity.py --repo onnx/onnx
+
+      - name: Commit and push cache data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cache_data/onnx/pr_activity.csv
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Update onnx PR activity cache"
+          branch="${GITHUB_REF_NAME:-main}"
+          attempts=5
+          for i in $(seq 1 "$attempts"); do
+            push_err="$(mktemp)"
+            if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
+              rm -f "$push_err"
+              exit 0
+            fi
+            if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
+              rm -f "$push_err"
+              echo "Push rejected by GitHub with HTTP 403." >&2
+              exit 1
+            fi
+            rm -f "$push_err"
+            git fetch origin "${branch}"
+            if ! git rebase -X ours "origin/${branch}"; then
+              git rebase --abort || true
+              exit 1
+            fi
+            sleep $((i * 5))
+          done
+          echo "Failed to push after ${attempts} attempts." >&2
+          exit 1
