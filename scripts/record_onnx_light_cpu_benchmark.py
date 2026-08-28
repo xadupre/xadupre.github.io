@@ -22,6 +22,20 @@ from typing import Any
 import record_onnx_light_benchmark as rlb
 
 BENCHMARK_BACKENDS = ("onnx_light_cpu", "onnxruntime")
+BENCHMARK_TYPES = (
+    "float32",
+    "float64",
+    "float16",
+    "bfloat16",
+    "int4",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+)
 N_WARMUP = 2
 N_MEASURE = rlb.N_MEASURE
 MAX_WARMUP_TIME_S = 0.05
@@ -49,7 +63,19 @@ def _collect_benchmark_cases() -> list[Any]:
     return collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
 
 
-def discover_benchmark_tests(kind: str = "node") -> list[dict[str, Any]]:
+def benchmark_type_from_name(name: str) -> str | None:
+    """Return the recognized type whose occurrence starts first in *name*."""
+    matches = (
+        (position, type_name)
+        for type_name in BENCHMARK_TYPES
+        if (position := name.find(type_name)) >= 0
+    )
+    return min(matches, default=(0, None))[1]
+
+
+def discover_benchmark_tests(
+    kind: str = "node", benchmark_type: str | None = None
+) -> list[dict[str, Any]]:
     """Return only benchmark-tagged cases registered by onnx-light-cpu."""
     from onnx_light_cpu import register_backend_test_cases
 
@@ -60,6 +86,10 @@ def discover_benchmark_tests(kind: str = "node") -> list[dict[str, Any]]:
         for test in _collect_benchmark_cases()
         if str(test.name).startswith("test_cpu_")
         and str(test.name).endswith("_benchmark")
+        and (
+            benchmark_type is None
+            or benchmark_type_from_name(str(test.name)) == benchmark_type
+        )
         and (not kinds or getattr(test, "kind", None) in kinds)
     ]
 
@@ -296,6 +326,7 @@ def run_tests(
 
 def build_payload(
     kind: str = "node",
+    benchmark_type: str | None = None,
     limit: int | None = None,
     n_warmup: int = N_WARMUP,
     n_measure: int = N_MEASURE,
@@ -307,7 +338,7 @@ def build_payload(
     now: dt.datetime | None = None,
 ) -> dict[str, Any]:
     """Discover, run, and format the onnx-light-cpu benchmark tests."""
-    tests = discover(kind)
+    tests = discover(kind, benchmark_type)
     if limit is not None:
         tests = tests[: max(0, limit)]
     from onnx_light_cpu.onnx_py._cpukernels import detect_simd_level
@@ -340,10 +371,50 @@ def write_payload(path: str, payload: dict[str, Any]) -> None:
         stream.write("\n")
 
 
+def merge_payload(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+    benchmark_type: str | None,
+) -> dict[str, Any]:
+    """Replace one type in a previous payload with freshly measured examples."""
+    if benchmark_type is None:
+        return current
+    retained = [
+        example
+        for example in previous.get("examples", [])
+        if not any(
+            benchmark_type_from_name(str(row.get("test_name", "")))
+            == benchmark_type
+            for row in example.get("rows", [])
+        )
+    ]
+    merged = dict(current)
+    merged["examples"] = sorted(
+        retained + current["examples"],
+        key=lambda example: (
+            str(example.get("op", "")).lower(),
+            str(example.get("rows", [{}])[0].get("input_type", "")).lower(),
+        ),
+    )
+    return merged
+
+
+def load_payload(path: str) -> dict[str, Any]:
+    """Load an existing benchmark payload."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, dict):
+        raise TypeError(f"Expected a JSON object in {path!r}.")
+    return payload
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache-dir", default="cache_data")
     parser.add_argument("--kind", default="node")
+    parser.add_argument("--type", choices=BENCHMARK_TYPES)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--n-warmup", type=int, default=N_WARMUP)
     parser.add_argument("--n-measure", type=int, default=N_MEASURE)
@@ -356,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     payload = build_payload(
         kind=args.kind,
+        benchmark_type=args.type,
         limit=args.limit,
         n_warmup=args.n_warmup,
         n_measure=args.n_measure,
@@ -363,6 +435,7 @@ def main(argv: list[str] | None = None) -> int:
         max_repeat_time_s=args.max_repeat_time,
     )
     path = os.path.join(args.cache_dir, "onnx-light-cpu", "examples_benchmark.json")
+    payload = merge_payload(load_payload(path), payload, args.type)
     write_payload(path, payload)
     return 0
 

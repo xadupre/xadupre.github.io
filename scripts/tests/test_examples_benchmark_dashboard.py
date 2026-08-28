@@ -242,6 +242,8 @@ class TestWorkflow(unittest.TestCase):
         self.assertNotIn("pip install onnx-light", text)
         self.assertNotIn("pip install onnx-light-cpu", text)
         self.assertIn("python -u scripts/record_onnx_light_cpu_benchmark.py", text)
+        self.assertIn('type: choice', text)
+        self.assertIn('--type "${{ needs.select-type.outputs.type }}"', text)
         self.assertIn("cache_data/onnx-light-cpu/examples_benchmark.json", text)
 
 
