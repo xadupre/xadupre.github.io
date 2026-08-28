@@ -215,6 +215,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         text = _read(PAGE)
         self.assertIn("margin-bottom: 0.25em;", text)
         self.assertIn("padding: 0.35em 1em;", text)
+        self.assertIn(".operator-summary {\n  cursor: pointer;\n  font-size: 0.72em;", text)
 
 
 class TestIndexWiring(unittest.TestCase):
