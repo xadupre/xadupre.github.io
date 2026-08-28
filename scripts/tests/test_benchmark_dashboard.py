@@ -136,7 +136,7 @@ class TestBenchmarkDashboard(unittest.TestCase):
             text,
         )
         self.assertIn(
-            '"sum(onnxruntime latency) / sum(onnx-light+cpu latency)"', text
+            '"sum(onnxruntime latency) / sum(onnx-light-cpu latency)"', text
         )
         # And the legend documents the new colour.
         self.assertIn('class="swatch close"', text)
