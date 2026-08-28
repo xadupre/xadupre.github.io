@@ -25,6 +25,18 @@ class TestProcessorName(unittest.TestCase):
             ):
                 self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
 
+    def test_prefers_the_model_name_over_per_core_processor_entries(self):
+        cpu_info = (
+            "Processor : AArch64 Processor rev 4 (aarch64)\n"
+            "Hardware : ARM Server\n"
+            "model name : Benchmark CPU\n"
+        )
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+            patch("builtins.open", mock_open(read_data=cpu_info)),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
+
     def test_falls_back_to_the_platform_processor(self):
         with (
             patch.object(rcb.rlb.os.path, "isfile", return_value=False),

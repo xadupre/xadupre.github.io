@@ -114,11 +114,15 @@ def processor_name() -> str:
     """Return the processor model used for a benchmark."""
     cpu_info = "/proc/cpuinfo"
     if os.path.isfile(cpu_info):
+        names = {}
         with open(cpu_info, encoding="utf-8") as stream:
             for line in stream:
                 key, separator, value = line.partition(":")
                 if separator and key.strip() in {"model name", "Hardware", "Processor"}:
-                    return value.strip()
+                    names.setdefault(key.strip(), value.strip())
+        for key in ("model name", "Hardware", "Processor"):
+            if key in names:
+                return names[key]
     return platform.processor() or platform.machine()
 
 
