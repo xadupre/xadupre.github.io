@@ -45,7 +45,7 @@ class TestRecordPrActivity(unittest.TestCase):
         )
         with open(workflow, encoding="utf-8") as stream:
             text = stream.read()
-        self.assertIn('cron: "53 4 * * 1"', text)
+        self.assertIn('cron: "53 4 * * *"', text)
         self.assertIn("python -u scripts/record_pr_activity.py", text)
         self.assertIn("cache_data/onnxruntime/pr_activity.csv", text)
         self.assertIn("cache_data/onnxruntime/open_pulls.json", text)
@@ -55,7 +55,7 @@ class TestRecordPrActivity(unittest.TestCase):
         )
         with open(onnx_workflow, encoding="utf-8") as stream:
             text = stream.read()
-        self.assertIn('cron: "7 5 * * 1"', text)
+        self.assertIn('cron: "7 5 * * *"', text)
         self.assertIn(
             "python -u scripts/record_pr_activity.py --repo onnx/onnx", text
         )
