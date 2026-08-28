@@ -17,11 +17,13 @@ import record_onnx_light_cpu_benchmark as rcb
 
 class TestProcessorName(unittest.TestCase):
     def test_uses_the_cpu_model_from_proc_cpuinfo(self):
-        with (
-            patch.object(rcb.rlb.os.path, "isfile", return_value=True),
-            patch("builtins.open", mock_open(read_data="model name : Benchmark CPU\n")),
-        ):
-            self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
+        for key in ("model name", "Hardware", "Processor"):
+            with (
+                self.subTest(key=key),
+                patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+                patch("builtins.open", mock_open(read_data=f"{key} : Benchmark CPU\n")),
+            ):
+                self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
 
     def test_falls_back_to_the_platform_processor(self):
         with (
