@@ -225,7 +225,19 @@ def _group_measurements(
             "cpu_succeeded": len(speedups),
             **(
                 {
-                    "avg_speedup_cpu": round(sum(speedups) / len(speedups), 4),
+                    "avg_speedup_cpu": round(
+                        sum(
+                            row["onnxruntime_ms"]
+                            for row in rows
+                            if "speedup_cpu" in row
+                        )
+                        / sum(
+                            row["onnx_light_cpu_ms"]
+                            for row in rows
+                            if "speedup_cpu" in row
+                        ),
+                        4,
+                    ),
                     "min_speedup_cpu": min(speedups),
                     "max_speedup_cpu": max(speedups),
                 }
