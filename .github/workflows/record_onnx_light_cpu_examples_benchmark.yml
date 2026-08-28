@@ -1,30 +1,96 @@
 name: DATA onnx-light-cpu benchmark
 
-# Weekly job that runs the benchmark-tagged C++ backend tests registered by
-# onnx-light-cpu and measures them with onnxruntime and onnx-light-cpu, then
-# caches the results as JSON
+# Jobs spread across the week run the benchmark-tagged C++ backend tests
+# registered by onnx-light-cpu, one data type at a time, and measure them with
+# onnxruntime and onnx-light-cpu, then cache the merged results as JSON
 # under ``cache_data/onnx-light-cpu/examples_benchmark.json``. The dashboard at
 # ``dashboard/onnx-light-cpu/cpu-benchmark.html`` consumes that file.
 
 on:
   schedule:
-    # Run once a week, Monday at 08:41 UTC. The odd minute avoids the load
-    # spikes that happen exactly on the hour, and the offset from the
-    # onnx-light benchmark workflow (08:13) avoids competing for the same
-    # runner slot.
+    # Two types per weekday and one per weekend day, all at odd minutes to
+    # avoid load spikes exactly on the hour.
     - cron: "41 8 * * 1"
+    - cron: "41 20 * * 1"
+    - cron: "41 8 * * 2"
+    - cron: "41 20 * * 2"
+    - cron: "41 8 * * 3"
+    - cron: "41 20 * * 3"
+    - cron: "41 8 * * 4"
+    - cron: "41 20 * * 4"
+    - cron: "41 8 * * 5"
+    - cron: "41 20 * * 5"
+    - cron: "41 8 * * 6"
+    - cron: "41 8 * * 0"
   workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
+    inputs:
+      type:
+        description: Data type to benchmark
+        required: true
+        type: choice
+        options:
+          - float32
+          - float64
+          - float16
+          - bfloat16
+          - int4
+          - int8
+          - int16
+          - int32
+          - int64
+          - uint8
+          - uint16
+          - uint32
 
 permissions:
   contents: write
 
 jobs:
+  select-type:
+    runs-on: ubuntu-latest
+    outputs:
+      type: ${{ steps.select.outputs.type }}
+    steps:
+      - name: Select benchmark type
+        id: select
+        env:
+          REQUESTED_TYPE: ${{ inputs.type }}
+          SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          if [ -n "${REQUESTED_TYPE}" ]; then
+            type="${REQUESTED_TYPE}"
+          else
+            case "${SCHEDULE}" in
+              "41 8 * * 1") type=float32 ;;
+              "41 20 * * 1") type=float64 ;;
+              "41 8 * * 2") type=float16 ;;
+              "41 20 * * 2") type=bfloat16 ;;
+              "41 8 * * 3") type=int4 ;;
+              "41 20 * * 3") type=int8 ;;
+              "41 8 * * 4") type=int16 ;;
+              "41 20 * * 4") type=int32 ;;
+              "41 8 * * 5") type=int64 ;;
+              "41 20 * * 5") type=uint8 ;;
+              "41 8 * * 6") type=uint16 ;;
+              "41 8 * * 0") type=uint32 ;;
+              *)
+                echo "Unsupported schedule: ${SCHEDULE}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+          echo "Selected benchmark type: ${type}"
+          echo "type=${type}" >> "$GITHUB_OUTPUT"
+
   record:
-    if: github.event_name == 'schedule' || github.actor == github.repository_owner || github.actor == 'github-actions[bot]'
+    needs: select-type
+    name: record (${{ needs.select-type.outputs.type }})
+    if: >-
+      github.event_name == 'schedule' || github.actor == github.repository_owner ||
+      github.actor == 'github-actions[bot]'
+    concurrency:
+      group: ${{ github.workflow }}-${{ needs.select-type.outputs.type }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -121,7 +187,8 @@ jobs:
 
       - name: Record benchmark snapshot
         run: |
-          python -u scripts/record_onnx_light_cpu_benchmark.py
+          python -u scripts/record_onnx_light_cpu_benchmark.py \
+            --type "${{ needs.select-type.outputs.type }}"
 
       - name: Commit and push cache data
         run: |

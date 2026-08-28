@@ -40,6 +40,33 @@ class TestDiscovery(unittest.TestCase):
         self.assertEqual([test["name"] for test in tests], ["test_cpu_abs_benchmark"])
         self.assertNotIn("model", tests[0])
 
+    def test_filters_on_first_recognized_type_in_name(self):
+        module = types.ModuleType("onnx_light_cpu")
+        module.register_backend_test_cases = lambda: None
+        cases = [
+            types.SimpleNamespace(
+                name="test_cpu_cast_uint8_float32_benchmark", kind="node"
+            ),
+            types.SimpleNamespace(
+                name="test_cpu_cast_float32_uint8_benchmark", kind="node"
+            ),
+            types.SimpleNamespace(name="test_cpu_abs_bfloat16_benchmark", kind="node"),
+        ]
+        with (
+            patch.dict(sys.modules, {"onnx_light_cpu": module}),
+            patch.object(rcb, "_collect_benchmark_cases", lambda: cases),
+        ):
+            tests = rcb.discover_benchmark_tests(benchmark_type="uint8")
+
+        self.assertEqual(
+            [test["name"] for test in tests],
+            ["test_cpu_cast_uint8_float32_benchmark"],
+        )
+        self.assertEqual(
+            rcb.benchmark_type_from_name("test_cpu_abs_bfloat16_benchmark"),
+            "bfloat16",
+        )
+
 
 class TestLoading(unittest.TestCase):
     def test_loads_one_benchmark_case_by_exact_name(self):
@@ -161,6 +188,10 @@ class TestPayload(unittest.TestCase):
     def test_payload_uses_discovered_tests(self):
         calls = {}
 
+        def discover(kind, benchmark_type):
+            calls["discover"] = (kind, benchmark_type)
+            return [{"name": "test_cpu_abs_float32_benchmark"}]
+
         def run(
             tests,
             n_warmup,
@@ -180,7 +211,8 @@ class TestPayload(unittest.TestCase):
         sys.modules[cpu.__name__] = cpu
         try:
             payload = rcb.build_payload(
-                discover=lambda kind: [{"name": "test_cpu_abs_benchmark"}],
+                benchmark_type="float32",
+                discover=discover,
                 run=run,
                 versions=dict,
                 now=dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
@@ -190,7 +222,10 @@ class TestPayload(unittest.TestCase):
                 del sys.modules[cpu.__name__]
             else:
                 sys.modules[cpu.__name__] = original
-        self.assertEqual(calls["tests"], [{"name": "test_cpu_abs_benchmark"}])
+        self.assertEqual(calls["discover"], ("node", "float32"))
+        self.assertEqual(
+            calls["tests"], [{"name": "test_cpu_abs_float32_benchmark"}]
+        )
         self.assertEqual(calls["n_warmup"], 2)
         self.assertEqual(calls["max_warmup_time_s"], 0.05)
         self.assertEqual(calls["max_repeat_time_s"], rcb.MAX_REPEAT_TIME_S)
@@ -198,6 +233,52 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(payload["max_repeat_time_s"], 0.2)
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
+
+    def test_merge_payload_replaces_only_requested_type(self):
+        previous = {
+            "date": "old",
+            "examples": [
+                {
+                    "op": "Abs",
+                    "rows": [
+                        {
+                            "input_type": "float32",
+                            "test_name": "test_cpu_abs_float32_benchmark",
+                        }
+                    ],
+                },
+                {
+                    "op": "Add",
+                    "rows": [
+                        {
+                            "input_type": "int8",
+                            "test_name": "test_cpu_add_int8_benchmark",
+                        }
+                    ],
+                },
+            ],
+        }
+        current = {
+            "date": "new",
+            "examples": [
+                {
+                    "op": "Relu",
+                    "rows": [
+                        {
+                            "input_type": "float32",
+                            "test_name": "test_cpu_relu_float32_benchmark",
+                        }
+                    ],
+                }
+            ],
+        }
+
+        merged = rcb.merge_payload(previous, current, "float32")
+
+        self.assertEqual(merged["date"], "new")
+        self.assertEqual(
+            [example["op"] for example in merged["examples"]], ["Add", "Relu"]
+        )
 
     def test_run_tests_uses_global_backend_phases(self):
         model = types.SimpleNamespace(
