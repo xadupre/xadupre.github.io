@@ -135,6 +135,9 @@ class TestBenchmarkDashboard(unittest.TestCase):
             'avgSpeedup >= 1 ? "faster" : (avgSpeedup >= 0.9 ? "close" : "slower")',
             text,
         )
+        self.assertIn(
+            '"sum(onnxruntime latency) / sum(onnx-light-cpu latency)"', text
+        )
         # And the legend documents the new colour.
         self.assertIn('class="swatch close"', text)
         self.assertIn("within 10% (speedup in [0.9, 1[)", text)

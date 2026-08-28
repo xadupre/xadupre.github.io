@@ -44,6 +44,9 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("function renderExample(example, cats, benchmarkDate)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
+        self.assertIn(
+            "sum(onnxruntime latency) / sum(onnx-light-cpu latency)", text
+        )
         # The three backends are labelled for the table header.
         for backend in ("numpy", "onnx-light-cpu", "onnxruntime"):
             self.assertIn(backend, text)

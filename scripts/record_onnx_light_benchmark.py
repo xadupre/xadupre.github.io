@@ -1291,7 +1291,6 @@ def build_payload(
     speedups_cpu = [r["speedup_cpu"] for r in cpu_ok if "speedup_cpu" in r]
     summary["cpu_succeeded"] = len(cpu_ok)
     if speedups_cpu:
-        summary["avg_speedup_cpu"] = round(sum(speedups_cpu) / len(speedups_cpu), 4)
         summary["min_speedup_cpu"] = round(min(speedups_cpu), 4)
         summary["max_speedup_cpu"] = round(max(speedups_cpu), 4)
     weighted_cpu = _weighted_avg_speedup(cpu_ok, "speedup_cpu")
@@ -1299,6 +1298,7 @@ def build_payload(
         summary["avg_speedup_weighted_cpu"] = weighted_cpu
     sum_latency_cpu = _sum_latency_speedup(cpu_ok, "onnx_light_cpu_avg_ms")
     if sum_latency_cpu is not None:
+        summary["avg_speedup_cpu"] = sum_latency_cpu
         summary["speedup_sum_latency_cpu"] = sum_latency_cpu
 
     return {

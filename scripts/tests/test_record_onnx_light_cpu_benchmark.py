@@ -136,6 +136,8 @@ class TestRows(unittest.TestCase):
                     "inputs": "float32[65536]",
                     "input_type": "float32",
                     "input_elements": 65536,
+                    "onnx_light_cpu_ms": 1.0,
+                    "onnxruntime_ms": 2.0,
                     "speedup_cpu": 2.0,
                 },
             },
@@ -146,6 +148,8 @@ class TestRows(unittest.TestCase):
                     "inputs": "float32[1024]",
                     "input_type": "float32",
                     "input_elements": 1024,
+                    "onnx_light_cpu_ms": 10.0,
+                    "onnxruntime_ms": 10.0,
                     "speedup_cpu": 1.0,
                 },
             },
@@ -156,6 +160,8 @@ class TestRows(unittest.TestCase):
                     "inputs": "float64[1024]",
                     "input_type": "float64",
                     "input_elements": 1024,
+                    "onnx_light_cpu_ms": 2.0,
+                    "onnxruntime_ms": 1.0,
                     "speedup_cpu": 0.5,
                 },
             },
@@ -178,7 +184,7 @@ class TestRows(unittest.TestCase):
             ],
         )
         self.assertEqual(float32["summary"]["inputs"], 2)
-        self.assertEqual(float32["summary"]["avg_speedup_cpu"], 1.5)
+        self.assertEqual(float32["summary"]["avg_speedup_cpu"], 1.0909)
         self.assertEqual(float32["summary"]["min_speedup_cpu"], 1.0)
         self.assertEqual(float32["summary"]["max_speedup_cpu"], 2.0)
         self.assertEqual(examples[1]["rows"][0]["input_type"], "float64")

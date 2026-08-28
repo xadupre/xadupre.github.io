@@ -784,11 +784,18 @@ class TestBuildPayload(unittest.TestCase):
             max_repeat_time_s,
         ):
             call_log.append((backend, n_warmup, n_measure, max_repeat_time_s))
+            op_type = model.graph.node[0].op_type
+            avg_ms = {
+                ("onnx_light_cpu", "Abs"): 1.0,
+                ("onnx_light_cpu", "Relu"): 10.0,
+                ("onnxruntime", "Abs"): 2.0,
+                ("onnxruntime", "Relu"): 10.0,
+            }.get((backend, op_type), 1.5)
             return {
                 "success": True,
                 "error": "",
                 "error_step": "",
-                "avg_ms": 1.5,
+                "avg_ms": avg_ms,
                 "n_warmup": n_warmup,
                 "n_measure": n_measure,
             }
@@ -846,7 +853,7 @@ class TestBuildPayload(unittest.TestCase):
         # The onnx-light-cpu backend is timed as well, so its summary and
         # per-row speedup are present too.
         self.assertEqual(summary["cpu_succeeded"], 2)
-        self.assertIn("avg_speedup_cpu", summary)
+        self.assertEqual(summary["avg_speedup_cpu"], 1.0909)
         self.assertIn("avg_speedup_weighted_cpu", summary)
         self.assertIn("speedup_sum_latency_cpu", summary)
         for row in payload["tests"]:
