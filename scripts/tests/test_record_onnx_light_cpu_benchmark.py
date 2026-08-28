@@ -203,7 +203,7 @@ class TestPayload(unittest.TestCase):
             calls["n_warmup"] = n_warmup
             calls["max_warmup_time_s"] = max_warmup_time_s
             calls["max_repeat_time_s"] = max_repeat_time_s
-            return []
+            return [{"op": "Abs"}]
 
         cpu = types.ModuleType("onnx_light_cpu.onnx_py._cpukernels")
         cpu.detect_simd_level = lambda: 3
@@ -216,6 +216,7 @@ class TestPayload(unittest.TestCase):
                 run=run,
                 versions=dict,
                 now=dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
+                machine="Test machine",
             )
         finally:
             if original is None:
@@ -233,6 +234,7 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(payload["max_repeat_time_s"], 0.2)
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
+        self.assertEqual(payload["examples"][0]["machine"], "Test machine")
 
     def test_merge_payload_replaces_only_requested_type(self):
         previous = {

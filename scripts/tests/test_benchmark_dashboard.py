@@ -48,6 +48,11 @@ class TestBenchmarkDashboard(unittest.TestCase):
         self.assertIn('id="maxRepeatTimeLabel"', text)
         self.assertIn("payload.max_repeat_time_s", text)
 
+    def test_page_shows_machine(self):
+        text = _read(PAGE)
+        self.assertIn('id="metaMachine"', text)
+        self.assertIn('payload.machine ? " Machine: " + payload.machine', text)
+
     def test_input_type_column_present(self):
         text = _read(PAGE)
         # The table exposes a sortable "input type" column bound to the

@@ -102,6 +102,11 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("return date.toISOString().slice(0, 10);", text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
+    def test_operator_type_summary_shows_its_machine(self):
+        text = _read(PAGE)
+        self.assertIn("<span>machine</span>", text)
+        self.assertIn('["machine", example.machine || "not recorded", ""]', text)
+
     def test_expanded_table_puts_speedup_immediately_after_date(self):
         text = _read(PAGE)
         header_date = text.index('dateTh.textContent = "date";')
