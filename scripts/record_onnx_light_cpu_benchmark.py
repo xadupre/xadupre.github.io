@@ -14,7 +14,6 @@ import gc
 import json
 import math
 import os
-import platform
 import re
 import sys
 from collections.abc import Callable
@@ -359,7 +358,7 @@ def build_payload(
 
     level = int(detect_simd_level())
     timestamp = now or dt.datetime.now(tz=dt.timezone.utc)
-    machine = machine or platform.platform()
+    machine = machine or rlb.processor_name()
     examples = run(
         tests,
         n_warmup=n_warmup,

@@ -7,12 +7,53 @@ import os
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import mock_open, patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_onnx_light_cpu_benchmark as rcb
+
+
+class TestProcessorName(unittest.TestCase):
+    def test_uses_the_cpu_model_from_proc_cpuinfo(self):
+        for key in ("model name", "Hardware", "Processor"):
+            with (
+                self.subTest(key=key),
+                patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+                patch("builtins.open", mock_open(read_data=f"{key} : Benchmark CPU\n")),
+            ):
+                self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
+
+    def test_prefers_the_model_name_over_per_core_processor_entries(self):
+        cpu_info = (
+            "Processor : AArch64 Processor rev 4 (aarch64)\n"
+            "Hardware : ARM Server\n"
+            "model name : Benchmark CPU\n"
+        )
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+            patch("builtins.open", mock_open(read_data=cpu_info)),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "Benchmark CPU")
+
+    def test_prefers_hardware_over_per_core_processor_entries(self):
+        cpu_info = (
+            "Processor : AArch64 Processor rev 4 (aarch64)\n"
+            "Hardware : ARM Server\n"
+        )
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=True),
+            patch("builtins.open", mock_open(read_data=cpu_info)),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "ARM Server")
+
+    def test_falls_back_to_the_platform_processor(self):
+        with (
+            patch.object(rcb.rlb.os.path, "isfile", return_value=False),
+            patch.object(rcb.rlb.platform, "processor", return_value="Fallback CPU"),
+        ):
+            self.assertEqual(rcb.rlb.processor_name(), "Fallback CPU")
 
 
 class TestDiscovery(unittest.TestCase):

@@ -109,6 +109,23 @@ BACKEND_PACKAGE: Dict[str, str] = {
 
 CPU_COUNT: int = os.cpu_count() or 1
 
+
+def processor_name() -> str:
+    """Return the processor model used for a benchmark."""
+    cpu_info = "/proc/cpuinfo"
+    if os.path.isfile(cpu_info):
+        names = {}
+        with open(cpu_info, encoding="utf-8") as stream:
+            for line in stream:
+                key, separator, value = line.partition(":")
+                if separator and key.strip() in {"model name", "Hardware", "Processor"}:
+                    names.setdefault(key.strip(), value.strip())
+        for key in ("model name", "Hardware", "Processor"):
+            if key in names:
+                return names[key]
+    return platform.processor() or platform.machine()
+
+
 #: Default number of warm-up iterations (not timed) run before measurement.
 N_WARMUP: int = 2 * CPU_COUNT
 
@@ -1172,6 +1189,7 @@ def build_payload(
     run: Callable[..., Dict[str, Any]] = run_benchmark,
     versions: Optional[Callable[[], Dict[str, str]]] = None,
     now: Optional[dt.datetime] = None,
+    machine: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Discover all tests, run benchmarks on every backend and return a payload."""
     if versions is None:
@@ -1304,7 +1322,7 @@ def build_payload(
 
     return {
         "date": now_iso,
-        "machine": platform.platform(),
+        "machine": machine or processor_name(),
         "kind": kind,
         "n_warmup": n_warmup,
         "n_measure": n_measure,
