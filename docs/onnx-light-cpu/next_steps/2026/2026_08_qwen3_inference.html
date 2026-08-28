@@ -38,6 +38,7 @@
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
     <link rel="stylesheet" type="text/css" href="../../_static/sphinx-design.min.css?v=95c83b7e" />
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/v/dt/dt-2.3.5/datatables.min.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/byop.css?v=3ec7badb" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../../_static/scripts/fontawesome.js?digest=cb8930eaaf36d9849b67"></script>
@@ -66,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 27, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -162,15 +163,15 @@
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../../byop.html">
-    ByOp
+  <a class="nav-link nav-internal" href="../../design/index.html">
+    Design
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../../design/index.html">
-    Design
+  <a class="nav-link nav-internal" href="../../byop.html">
+    ByOp
   </a>
 </li>
 
@@ -298,15 +299,15 @@
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../../byop.html">
-    ByOp
+  <a class="nav-link nav-internal" href="../../design/index.html">
+    Design
   </a>
 </li>
 
 
 <li class="nav-item ">
-  <a class="nav-link nav-internal" href="../../design/index.html">
-    Design
+  <a class="nav-link nav-internal" href="../../byop.html">
+    ByOp
   </a>
 </li>
 
@@ -404,6 +405,8 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_processor_performance_profile.html">Processor Memory and Compute Performance Profile</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kv_cache.html">Persistent KV Cache and Decode Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_registered_kernel_documentation.html">Registered kernel documentation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_kernel_performance_improvements.html">Recent Kernel Performance Improvements</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_08_com_microsoft_domain.html">com.microsoft Domain Support</a></li>
 </ul>
 </div>
 </nav></div>
@@ -484,8 +487,10 @@ generic operator roadmap first. Work is ordered by its effect on:</p>
 <li><p>steady-state single-token decode latency;</p></li>
 <li><p>copied KV-cache bytes per generated token.</p></li>
 </ul>
-<p>The first functional target is Qwen3-0.6B because it keeps iteration and
-correctness tests short. Qwen3-4B is the first performance and memory target.
+<p>The first functional target is the concrete 28-layer INT4 artifact inventoried
+below because it keeps the graph contract fixed and exposes every immediate
+execution blocker. Qwen3-0.6B remains the short correctness reference and
+Qwen3-4B remains the first performance and memory target.
 The initial scope excludes Qwen3 MoE, VL, hybrid recurrent/attention variants,
 continuous batching, beam search, and speculative decoding. Those extensions
 must not delay the dense decoder.</p>
@@ -563,6 +568,159 @@ The existing four-layer Qwen3-like fixture in <code class="docutils literal notr
 for shape and memory planning, but it is not an executable or numerical Qwen
 baseline and does not satisfy Qwen PR01.</p>
 </section>
+<section id="audited-ort-int4-artifact">
+<h2>Audited ORT INT4 artifact<a class="headerlink" href="#audited-ort-int4-artifact" title="Link to this heading">#</a></h2>
+<p>The first executable target is the local artifact
+<code class="docutils literal notranslate"><span class="pre">/home/xadupre/examples/models/qwen3-8b-cpu-int4/model.onnx</span></code>. The absolute
+path is a development input, not a portable model identity. Qwen PR01 must
+copy the graph and external data into the external model cache under immutable
+artifact metadata before CI or published benchmarks use it.</p>
+<p>The audited graph has SHA-256
+<code class="docutils literal notranslate"><span class="pre">f6745c77935bc5640751b3a961246e77a9bc515055dc8cba08d0f2ca5ba183a3</span></code>.
+It uses IR version 10, <code class="docutils literal notranslate"><span class="pre">ai.onnx</span></code> opset 26 and <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> opset 1,
+contains 519 nodes and 398 initializers, and references
+<code class="docutils literal notranslate"><span class="pre">model.onnx.data</span></code> with 1,016,070,144 physical bytes and SHA-256
+<code class="docutils literal notranslate"><span class="pre">43ea4a553800251cd2f74505a7a4140f4e19be78bad27e343425ab9dd420608c</span></code>.
+Its graph dimensions identify 28 decoder layers, hidden size 1,024,
+intermediate size 3,072, 16 query heads, 8 KV heads, head size 128, and
+vocabulary size 151,936. These dimensions do not describe an 8B model despite
+the development directory name; model metadata and tokenizer revision must
+determine the final published artifact name.</p>
+<p>The public contract is FP32: <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> and <code class="docutils literal notranslate"><span class="pre">attention_mask</span></code> are INT64,
+56 past K/V inputs and 56 present K/V outputs use FP32, and <code class="docutils literal notranslate"><span class="pre">logits</span></code> uses
+FP32. Rotary caches have shape <code class="docutils literal notranslate"><span class="pre">[40960,64]</span></code>. The embedding initializer is an
+unquantized FP32 <code class="docutils literal notranslate"><span class="pre">[151936,1024]</span></code> matrix; only the 141 projection nodes use
+INT4 <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code>. This means the audited artifact is not equivalent to the
+fully quantized tied-embedding QDQ contract described below.</p>
+<section id="exact-kernel-inventory">
+<h3>Exact kernel inventory<a class="headerlink" href="#exact-kernel-inventory" title="Link to this heading">#</a></h3>
+<p>The table is exhaustive for this graph. <code class="docutils literal notranslate"><span class="pre">Registered</span></code> means a kernel is present
+in the current <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> registration inventory, not merely that an
+ONNX reference implementation may exist. All twelve rows marked <code class="docutils literal notranslate"><span class="pre">Missing</span></code>
+must receive either a CPU kernel or an explicit, tested <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> core
+execution path before the artifact can run without an untracked fallback.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 26.0%" />
+<col style="width: 8.0%" />
+<col style="width: 15.0%" />
+<col style="width: 51.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Operator</p></th>
+<th class="head"><p>Nodes</p></th>
+<th class="head"><p>Current status</p></th>
+<th class="head"><p>Exact required contract</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Mul</span></code></p></td>
+<td><p>56</p></td>
+<td><p>Registered</p></td>
+<td><p>FP32 tensor multiplication for SiLU and gated MLP products.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Sub</span></code></p></td>
+<td><p>1</p></td>
+<td><p>Registered</p></td>
+<td><p>INT64 scalar/vector subtraction in the attention-mask prelude; verify
+opset-26 dispatch against the registered v14+ kernel.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Constant</span></code></p></td>
+<td><p>6</p></td>
+<td><p>Missing CPU registration</p></td>
+<td><p>Materialize the six INT64 shape/axis constants. This should normally be
+a prepared graph value in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> core rather than a timed CPU
+compute kernel, but its execution ownership must be explicit.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Cast</span></code></p></td>
+<td><p>2</p></td>
+<td><p>Missing</p></td>
+<td><p>INT64 to INT32 conversion for <code class="docutils literal notranslate"><span class="pre">seqlens_k</span></code> and
+<code class="docutils literal notranslate"><span class="pre">total_sequence_length</span></code> consumed by GQA.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Gather</span></code></p></td>
+<td><p>2</p></td>
+<td><p>Missing</p></td>
+<td><p>FP32 embedding lookup with INT64 token ids on axis 0, plus one INT64
+scalar gather from the attention-mask shape.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::ReduceSum</span></code></p></td>
+<td><p>1</p></td>
+<td><p>Missing</p></td>
+<td><p>INT64 reduction over an axes tensor input with <code class="docutils literal notranslate"><span class="pre">keepdims=0</span></code> for the
+attention-mask sequence length.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Reshape</span></code></p></td>
+<td><p>112</p></td>
+<td><p>Missing</p></td>
+<td><p>FP32 reshape from an INT64 shape tensor, including <code class="docutils literal notranslate"><span class="pre">0</span></code> and <code class="docutils literal notranslate"><span class="pre">-1</span></code>
+semantics; use a metadata view whenever the input is contiguous.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Shape</span></code></p></td>
+<td><p>1</p></td>
+<td><p>Missing</p></td>
+<td><p>Produce the INT64 shape of the rank-2 <code class="docutils literal notranslate"><span class="pre">attention_mask</span></code> input.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Sigmoid</span></code></p></td>
+<td><p>28</p></td>
+<td><p>Missing</p></td>
+<td><p>FP32 sigmoid for <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">*</span> <span class="pre">sigmoid(x)</span></code>. Reuse the existing Exp primitives
+and retain an unfused kernel before adding a SiLU/gate fusion.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::SimplifiedLayerNormalization</span></code></p></td>
+<td><p>57</p></td>
+<td><p>Missing compatibility adapter</p></td>
+<td><p>FP32 RMS-style normalization with <code class="docutils literal notranslate"><span class="pre">axis=-1</span></code>, <code class="docutils literal notranslate"><span class="pre">epsilon=1e-6</span></code> and
+<code class="docutils literal notranslate"><span class="pre">stash_type=1</span></code>. Lower to the existing <code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code> engine
+only after proving identical output and accumulation semantics.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ai.onnx::Split</span></code></p></td>
+<td><p>28</p></td>
+<td><p>Missing</p></td>
+<td><p>Split FP32 QKV projections on <code class="docutils literal notranslate"><span class="pre">axis=-1</span></code> using the INT64 input
+<code class="docutils literal notranslate"><span class="pre">[2048,1024,1024]</span></code> and produce three views where legal.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MatMulNBits</span></code> v1</p></td>
+<td><p>141</p></td>
+<td><p>Missing and blocking</p></td>
+<td><p>FP32 activation, packed UINT8 storage containing 4-bit weights, FP32
+scales, <code class="docutils literal notranslate"><span class="pre">block_size=32</span></code> and <code class="docutils literal notranslate"><span class="pre">accuracy_level=4</span></code>. Required shapes are
+<code class="docutils literal notranslate"><span class="pre">1024x3072</span></code> (56), <code class="docutils literal notranslate"><span class="pre">1024x4096</span></code> (28), <code class="docutils literal notranslate"><span class="pre">2048x1024</span></code> (28),
+<code class="docutils literal notranslate"><span class="pre">3072x1024</span></code> (28), and <code class="docutils literal notranslate"><span class="pre">1024x151936</span></code> (1). The implementation must
+keep weights compressed and cover GEMV decode plus GEMM prefill.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> v1</p></td>
+<td><p>28</p></td>
+<td><p>Missing and blocking</p></td>
+<td><p>FP32 causal GQA with 16 query heads, 8 KV heads, head size 128,
+<code class="docutils literal notranslate"><span class="pre">scale=1/sqrt(128)</span></code>, integrated half-split RoPE, external FP32
+cos/sin caches, tensor past/present K/V, and three outputs. Adapt this
+contract to the shared Attention planner instead of creating a second
+attention engine.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::SkipSimplifiedLayerNormalization</span></code> v1</p></td>
+<td><p>56</p></td>
+<td><p>Missing and blocking</p></td>
+<td><p>Fused FP32 residual addition and RMS-style normalization with
+<code class="docutils literal notranslate"><span class="pre">epsilon=1e-6</span></code>. Fifty-five nodes expose the normalized value and the
+residual through sparse optional outputs; the final node exposes only
+the normalized value. Lower to Add plus the shared normalization engine
+first, then add a measured fused traversal.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The minimum functional implementation order for this exact artifact is:
+prepared <code class="docutils literal notranslate"><span class="pre">Constant</span></code>/<code class="docutils literal notranslate"><span class="pre">Shape</span></code> plus <code class="docutils literal notranslate"><span class="pre">Gather</span></code>/<code class="docutils literal notranslate"><span class="pre">Cast</span></code>/<code class="docutils literal notranslate"><span class="pre">ReduceSum</span></code> for
+inputs; <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code>; <code class="docutils literal notranslate"><span class="pre">Split</span></code>/<code class="docutils literal notranslate"><span class="pre">Reshape</span></code>;
+<code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code>; <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code>;
+<code class="docutils literal notranslate"><span class="pre">Sigmoid</span></code>; and <code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code>. <code class="docutils literal notranslate"><span class="pre">Mul</span></code> and <code class="docutils literal notranslate"><span class="pre">Sub</span></code>
+need model-level coverage but no new kernel. <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> already
+owns rotary embedding, softmax, mask handling, and tensor KV concatenation in
+this graph, so separate <code class="docutils literal notranslate"><span class="pre">RotaryEmbedding</span></code>, <code class="docutils literal notranslate"><span class="pre">Softmax</span></code>, <code class="docutils literal notranslate"><span class="pre">Concat</span></code> and
+<code class="docutils literal notranslate"><span class="pre">Slice</span></code> kernels are not execution prerequisites for this artifact.</p>
+</section>
+</section>
 <section id="plans-to-execute-first">
 <h2>Plans to execute first<a class="headerlink" href="#plans-to-execute-first" title="Link to this heading">#</a></h2>
 <p>Do not execute the existing roadmaps from top to bottom. Use only their
@@ -590,20 +748,23 @@ benchmark, memory and per-node profile.</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>Completed Gemm/MatMul PR09.6 plus Qwen PR02-PR03</p></td>
-<td><p>Standard QDQ INT4 recognition, packed decode GEMV, small-M, then prefill
-GEMM for exact Qwen shapes.</p></td>
+<td><p>Direct <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> v1 adapter for the audited artifact, shared
+packed decode GEMV, small-M, then prefill GEMM; retain standard QDQ as
+the portable serialization.</p></td>
 <td><p>Float8, full integer parity, float64, and generic PR10.5.</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p>Completed ExpLog PR01-PR03 plus Qwen PR04</p></td>
-<td><p>Correct/fast Exp, RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout
-operations needed by one block.</p></td>
+<td><p>The exact standard-operator inventory above: Gather, Cast, ReduceSum,
+Shape, Reshape, Split, Sigmoid, SimplifiedLayerNormalization, and the
+SkipSimplifiedLayerNormalization adapter.</p></td>
 <td><p>Non-Qwen unary/binary operator matrices and graph fusions.</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>Attention PR11-PR14 plus Qwen PR05 integration</p></td>
-<td><p>Reuse the shared materialized and online Attention engines for batch-1
-causal GQA, prefill, and single-token decode.</p></td>
+<td><p>Adapt the audited <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> contract to the shared
+materialized and online Attention engines for batch-1 causal GQA,
+integrated RoPE, tensor-cache prefill, and single-token decode.</p></td>
 <td><p>The generic Attention PR15 performance gate.</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
@@ -627,8 +788,17 @@ causal GQA, prefill, and single-token decode.</p></td>
 </section>
 <section id="export-contract">
 <h2>Export contract<a class="headerlink" href="#export-contract" title="Link to this heading">#</a></h2>
-<p>Two equivalent standard-ONNX graphs are retained:</p>
+<p>Three graph contracts are retained. The audited native graph is executable
+first; the two standard-ONNX graphs provide portability and differential
+correctness:</p>
 <dl>
+<dt><code class="docutils literal notranslate"><span class="pre">qwen3-ort-int4</span></code></dt><dd><p>The audited opset-26 graph described above. It is the immediate execution
+target and uses <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code>, <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> and
+<code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code> from <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> plus
+experimental <code class="docutils literal notranslate"><span class="pre">ai.onnx::SimplifiedLayerNormalization</span></code>. Each adapter must
+lower to the same internal compute plans as the standard contracts so
+native and portable support do not fork into separate engines.</p>
+</dd>
 <dt><code class="docutils literal notranslate"><span class="pre">qwen3-float</span></code></dt><dd><p>The primary correctness graph with ordinary constant BF16 weights and
 activations at ONNX opset 23. An FP32 diagnostic export is retained for
 numerical localization, but it is not a separate performance target.</p>
@@ -870,9 +1040,11 @@ and zero points, not with the unquantized model alone.</p>
 <h2>Phase Q1: INT4 projections and LM head<a class="headerlink" href="#phase-q1-int4-projections-and-lm-head" title="Link to this heading">#</a></h2>
 <p>Extend the completed packed-integer INT4 work in the
 <a class="reference internal" href="2026_08_gemm_matmul.html"><span class="doc">Gemm and MatMul roadmap</span></a> into a complete standard
-QDQ weight-only contract:</p>
+QDQ weight-only contract and a direct adapter for the audited graph:</p>
 <ol class="arabic simple">
-<li><p>constant <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> recognition;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MatMulNBits</span></code> v1 validation and lowering for the exact
+three-input, four-bit, block-32 contract;</p></li>
+<li><p>constant <code class="docutils literal notranslate"><span class="pre">DequantizeLinear</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> recognition into the same plan;</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">int4_gemv</span></code> for Qwen decode shapes;</p></li>
 <li><p>plan-owned packed weights reused by every token;</p></li>
 <li><p>tied quantized <code class="docutils literal notranslate"><span class="pre">Gather</span></code> and transposed LM-head access without duplication;</p></li>
@@ -893,13 +1065,19 @@ CPU. Persistent packed storage, including tied-weight plans, stays within
 <h2>Phase Q2: one complete Qwen block<a class="headerlink" href="#phase-q2-one-complete-qwen-block" title="Link to this heading">#</a></h2>
 <p>Implement the minimum standard-operator slice needed to run one decoder block:</p>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code> v23 plus recognition of its decomposed pattern;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">RotaryEmbedding</span></code> v23 plus a decomposed RoPE matcher;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code> embedding;</p></li>
-<li><p>SIMD Add/Mul/Sigmoid and fused SiLU-gate traversal;</p></li>
-<li><p>stable Softmax for the materialized reference;</p></li>
-<li><p>zero-copy Reshape/Slice views and measured Transpose/Concat copies.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code> for FP32 embeddings and the INT64 shape scalar;</p></li>
+<li><p>INT64 <code class="docutils literal notranslate"><span class="pre">Shape</span></code>, <code class="docutils literal notranslate"><span class="pre">ReduceSum</span></code>, <code class="docutils literal notranslate"><span class="pre">Sub</span></code> and INT64-to-INT32 <code class="docutils literal notranslate"><span class="pre">Cast</span></code> for the
+attention-mask prelude;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code> lowered to the RMSNormalization engine;</p></li>
+<li><p>zero-copy FP32 <code class="docutils literal notranslate"><span class="pre">Reshape</span></code> and <code class="docutils literal notranslate"><span class="pre">Split</span></code> views where legal;</p></li>
+<li><p>SIMD FP32 Mul/Sigmoid and fused SiLU-gate traversal;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code> lowered to Add plus the shared
+normalization engine, including sparse optional outputs.</p></li>
 </ul>
+<p>Standard <code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code> v23, <code class="docutils literal notranslate"><span class="pre">RotaryEmbedding</span></code> v23, stable Softmax,
+Slice, Transpose and Concat remain required by the portable graph contract,
+but they are not blockers for the audited native graph because GQA contains
+RoPE, attention softmax, and tensor-cache concatenation.</p>
 <p>This phase reuses only the Qwen-relevant portions of the unary and binary
 elementwise roadmaps. It does not wait for their complete operator matrices.
 ExpLog PR01 through PR03 are complete and provide the corrected, fast <code class="docutils literal notranslate"><span class="pre">Exp</span></code>
@@ -917,7 +1095,9 @@ Q and K use their respective frozen head counts.</p>
 <section id="phase-q3-narrow-causal-gqa">
 <h2>Phase Q3: narrow causal GQA<a class="headerlink" href="#phase-q3-narrow-causal-gqa" title="Link to this heading">#</a></h2>
 <p>Qwen PR05 does not create a second attention descriptor, planner, graph
-matcher, or compute engine. It integrates the frozen graph with the shared
+matcher, or compute engine. It first adapts the audited
+<code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> node, then integrates the portable
+standard graph with the shared
 <code class="docutils literal notranslate"><span class="pre">AttentionDescriptor</span></code>, per-invocation <code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code>, materialized
 fallback, and online engine delivered by Attention PR11 through PR14. The
 Qwen priority subset is:</p>
@@ -933,9 +1113,10 @@ Qwen priority subset is:</p>
 <p>The existing <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> graph optimizer recognizes the standard
 <code class="docutils literal notranslate"><span class="pre">MatMul</span> <span class="pre">-&gt;</span> <span class="pre">scale/mask</span> <span class="pre">-&gt;</span> <span class="pre">Softmax</span> <span class="pre">-&gt;</span> <span class="pre">MatMul</span></code> attention pattern and emits
 standard <code class="docutils literal notranslate"><span class="pre">ai.onnx::Attention</span></code>. <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> dispatches that node to the
-shared engine; Qwen code does not lower it to a private GQA operator. It does
-not expose a <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> operator from this repository. GQA maps
-query-head groups onto shared K/V heads without physically repeating K or V.</p>
+shared engine. The native compatibility layer validates
+<code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> attributes and inputs and builds the same descriptor;
+it is not a private GQA compute engine. GQA maps query-head groups onto shared
+K/V heads without physically repeating K or V.</p>
 <p>The optimized path uses blocked online softmax and never materializes the
 complete attention-score matrix. Prefill uses query blocks; decode uses a
 single-query streaming kernel. General masks, arbitrary layouts, and broad
@@ -1022,10 +1203,14 @@ corresponding functionality is needed.</p>
 </section>
 <section id="com-microsoft-operator-inventory">
 <h2><code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> operator inventory<a class="headerlink" href="#com-microsoft-operator-inventory" title="Link to this heading">#</a></h2>
-<p>These operators are implemented in the separate repository requested for
-Microsoft-domain compatibility. They are listed here so the export and
-integration contract is complete; none is registered by
-<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>.</p>
+<p>No Microsoft-domain operator in this table is currently registered by
+<code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>. The audited artifact makes <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code>,
+<code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> and <code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code> immediate
+execution dependencies rather than optional comparator formats. Their
+compatibility registrations may remain in the dedicated Microsoft-domain
+repository, but they must lower to the shared packed MatMul, Attention, Add,
+and RMSNormalization plans owned here. The remaining rows stay conditional
+until a frozen graph contains them.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 31.0%" />
@@ -1120,7 +1305,7 @@ register CUDA/WebGPU implementations, not a CPU compute kernel.</p></td>
 <p>ONNX Runtime also carries experimental <code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code> in the
 default ONNX domain at version 1. It is not the standard ONNX
 <code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code> v23 schema and should be treated as another compatibility
-adapter by the separate repository.</p>
+adapter that lowers to the shared normalization engine.</p>
 </section>
 <section id="benchmark-gates">
 <h2>Benchmark gates<a class="headerlink" href="#benchmark-gates" title="Link to this heading">#</a></h2>
@@ -1190,16 +1375,18 @@ reaches at least <code class="docutils literal notranslate"><span class="pre">1.
 <tbody>
 <tr class="row-even"><td><p>Qwen PR01</p></td>
 <td><p>Frozen graphs and generation benchmark.</p></td>
-<td><p>Pinned model/exporter/tokenizer revisions, the canonical QDQ contract,
-graph digests, lazy backend cases, correctness rules, both comparator
-contracts, TTFT, decode, memory, and per-node profiles are reproducible.</p></td>
+<td><p>The audited native artifact and portable graphs have pinned
+model/exporter/tokenizer revisions, external-data digests, exhaustive
+kernel inventories, lazy backend cases, correctness rules, comparator
+contracts, TTFT, decode, memory, and per-node profiles.</p></td>
 <td><p>None</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-odd"><td><p>Qwen PR02</p></td>
-<td><p>Standard QDQ INT4 plan and decode GEMV.</p></td>
-<td><p>Constant QDQ is captured once; every decode projection keeps weights
-compressed and passes exact packing/tail plus model-logit tests.</p></td>
+<td><p>Native MatMulNBits and standard QDQ INT4 plan plus decode GEMV.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> and constant QDQ lower to one prepared plan; every
+decode projection keeps weights compressed and passes exact
+packing/tail plus model-logit tests.</p></td>
 <td><p>Qwen PR01; reuses completed Gemm PR09.6 primitives</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -1212,16 +1399,19 @@ regressing decode or exceeding the memory bound.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Qwen PR04</p></td>
 <td><p>Qwen block operator slice.</p></td>
-<td><p>Standard RMSNorm, RoPE, Gather, SiLU gate, Softmax, and layout paths run
-one complete float and INT4 block without avoidable intermediates.</p></td>
+<td><p>Every missing standard-domain row in the audited inventory plus the
+Simplified/SkipSimplified normalization adapters runs one complete
+native INT4 block; the portable RMSNorm, RoPE, Gather, SiLU, Softmax,
+and layout paths remain differential coverage.</p></td>
 <td><p>Qwen PR02; completed ExpLog PR01-PR03</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Qwen PR05</p></td>
 <td><p>Frozen-graph integration with shared Attention.</p></td>
-<td><p>Standard <code class="docutils literal notranslate"><span class="pre">Attention</span></code> dispatches to the shared descriptor, planner,
-materialized fallback, and online engine. Batch-1 causal prefill/decode
-use zero-copy query/KV-head grouping; no Qwen-only engine is introduced.</p></td>
+<td><p>Native <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> and standard <code class="docutils literal notranslate"><span class="pre">Attention</span></code> dispatch to
+the shared descriptor, planner, materialized fallback, and online
+engine. Batch-1 causal prefill/decode use zero-copy query/KV-head
+grouping; no Qwen-only compute engine is introduced.</p></td>
 <td><p>Qwen PR04; Attention PR14 / #391</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -1335,6 +1525,10 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#frozen-model-contract">Frozen model contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#audited-ort-int4-artifact">Audited ORT INT4 artifact</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#exact-kernel-inventory">Exact kernel inventory</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#plans-to-execute-first">Plans to execute first</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#export-contract">Export contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator-priority">Operator priority</a></li>
@@ -1387,7 +1581,7 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 27, 2026.
+  Last updated on Aug 28, 2026.
   <br/>
 </p></div>
       
