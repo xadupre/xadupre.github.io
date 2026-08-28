@@ -14,6 +14,7 @@ import gc
 import json
 import math
 import os
+import platform
 import re
 import sys
 from collections.abc import Callable
@@ -348,6 +349,7 @@ def build_payload(
     run: Callable[..., list[dict[str, Any]]] = run_tests,
     versions: Callable[[], dict[str, str]] = collect_versions,
     now: dt.datetime | None = None,
+    machine: str | None = None,
 ) -> dict[str, Any]:
     """Discover, run, and format the onnx-light-cpu benchmark tests."""
     tests = discover(kind, benchmark_type)
@@ -357,6 +359,14 @@ def build_payload(
 
     level = int(detect_simd_level())
     timestamp = now or dt.datetime.now(tz=dt.timezone.utc)
+    machine = machine or platform.platform()
+    examples = run(
+        tests,
+        n_warmup=n_warmup,
+        n_measure=n_measure,
+        max_warmup_time_s=max_warmup_time_s,
+        max_repeat_time_s=max_repeat_time_s,
+    )
     return {
         "date": timestamp.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "n_warmup": n_warmup,
@@ -366,13 +376,7 @@ def build_payload(
         "versions": versions(),
         "simd_level": level,
         "simd_name": _SIMD_NAMES.get(level, str(level)),
-        "examples": run(
-            tests,
-            n_warmup=n_warmup,
-            n_measure=n_measure,
-            max_warmup_time_s=max_warmup_time_s,
-            max_repeat_time_s=max_repeat_time_s,
-        ),
+        "examples": [{**example, "machine": machine} for example in examples],
     }
 
 

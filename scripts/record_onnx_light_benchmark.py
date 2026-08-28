@@ -77,6 +77,7 @@ import datetime as dt
 import gc
 import json
 import os
+import platform
 import sys
 import time
 import traceback
@@ -1303,6 +1304,7 @@ def build_payload(
 
     return {
         "date": now_iso,
+        "machine": platform.platform(),
         "kind": kind,
         "n_warmup": n_warmup,
         "n_measure": n_measure,
