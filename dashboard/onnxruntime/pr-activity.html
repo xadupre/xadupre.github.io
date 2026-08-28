@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ONNX Runtime pull request activity</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0d1117;
+  color: #c9d1d9;
+  font-family: sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5em;
+  box-sizing: border-box;
+}
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { text-align: center; margin-bottom: 1em; }
+h1 { margin: 0.2em 0; font-size: 1.4em; }
+.nav { font-size: 0.9em; margin-bottom: 0.5em; }
+.summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 0.8em;
+  width: 100%;
+  max-width: 1100px;
+  margin-bottom: 1em;
+}
+.metric, .chart-wrap, .observations {
+  background: rgba(22, 27, 34, 0.85);
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+.metric { padding: 0.8em 1em; text-align: center; }
+.metric .label { color: #8b949e; font-size: 0.8em; }
+.metric .value { color: #79c0ff; font: bold 1.6em monospace; margin-top: 0.2em; }
+.chart-wrap, .observations {
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  margin-bottom: 1em;
+}
+.chart-container { position: relative; height: 38vh; min-height: 280px; }
+.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
+.hint, .description { color: #8b949e; font-size: 0.8em; text-align: center; }
+.description { max-width: 900px; margin: 0 0 1em; }
+.message {
+  display: none;
+  padding: 1em;
+  width: 100%;
+  max-width: 1100px;
+  box-sizing: border-box;
+  text-align: center;
+}
+.message.visible { display: block; }
+.message.error { color: #f85149; }
+.observations { overflow-x: auto; }
+.observations h2 { font-size: 1em; margin: 0 0 0.5em; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+th, td {
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid rgba(139, 148, 158, 0.25);
+  text-align: right;
+}
+th:first-child, td:first-child { text-align: left; }
+th { color: #8b949e; font-weight: normal; }
+td { font-family: monospace; }
+@media (max-width: 650px) {
+  .summary { grid-template-columns: 1fr; }
+}
+</style>
+<script src="../../assets/chart-loader.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav"><a href="../../index.html">&larr; back to home</a></div>
+  <h1>ONNX Runtime &mdash; weekly pull request activity</h1>
+</header>
+<p class="description">
+  Weekly snapshots of <a href="https://github.com/microsoft/onnxruntime/pulls">microsoft/onnxruntime</a>.
+  The merged count covers the seven days preceding each snapshot; open PR age
+  is measured from creation time to the snapshot.
+</p>
+<div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
+<div id="message" class="message"></div>
+<div id="summary" class="summary" style="display:none;">
+  <div class="metric"><div class="label">open PRs</div><div id="latestOpen" class="value">0</div></div>
+  <div class="metric"><div class="label">merged in preceding 7 days</div><div id="latestMerged" class="value">0</div></div>
+  <div class="metric"><div class="label">average age of open PRs</div><div id="latestAge" class="value">0 days</div></div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">open and merged pull requests</h2>
+  <div class="chart-container"><canvas id="chartCounts"></canvas></div>
+  <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
+</div>
+<div class="chart-wrap">
+  <h2 class="chart-title">average age of open pull requests</h2>
+  <div class="chart-container"><canvas id="chartAge"></canvas></div>
+  <div class="hint">Age in days at each weekly snapshot.</div>
+</div>
+<div id="observations" class="observations" style="display:none;">
+  <h2>Latest snapshots</h2>
+  <table>
+    <thead><tr><th>date</th><th>open PRs</th><th>merged (7d)</th><th>average open age (days)</th></tr></thead>
+    <tbody id="observationsBody"></tbody>
+  </table>
+</div>
+<footer class="data-updated" data-source="../../cache_data/onnxruntime/pr_activity.csv" style="margin:1em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+<script>
+const CSV_URL = "../../cache_data/onnxruntime/pr_activity.csv";
+
+function showError(text) {
+  const message = document.getElementById("message");
+  message.textContent = text;
+  message.className = "message visible error";
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  const header = lines.shift().split(",");
+  const index = {
+    date: header.indexOf("date"),
+    open: header.indexOf("open_prs"),
+    merged: header.indexOf("merged_prs_7d"),
+    age: header.indexOf("avg_open_age_days"),
+  };
+  return lines.map(line => {
+    const columns = line.split(",");
+    return {
+      date: columns[index.date],
+      open: Number(columns[index.open]),
+      merged: Number(columns[index.merged]),
+      age: Number(columns[index.age]),
+    };
+  }).filter(row =>
+    row.date && Number.isFinite(row.open) &&
+    Number.isFinite(row.merged) && Number.isFinite(row.age)
+  ).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+const commonOptions = {
+  responsive: true,
+  maintainAspectRatio: false,
+  interaction: { mode: "nearest", intersect: false },
+  plugins: {
+    legend: { labels: { color: "#c9d1d9" } },
+    zoom: {
+      pan: { enabled: true, mode: "xy" },
+      zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "xy" },
+    },
+  },
+  scales: {
+    x: {
+      type: "time",
+      time: { unit: "week", tooltipFormat: "yyyy-MM-dd" },
+      ticks: { color: "#c9d1d9" },
+      grid: { color: "rgba(139,148,158,0.25)" },
+    },
+    y: {
+      beginAtZero: true,
+      ticks: { color: "#c9d1d9" },
+      grid: { color: "rgba(139,148,158,0.25)" },
+    },
+  },
+};
+
+function render(rows) {
+  const latest = rows[rows.length - 1];
+  document.getElementById("latestOpen").textContent = latest.open.toLocaleString();
+  document.getElementById("latestMerged").textContent = latest.merged.toLocaleString();
+  document.getElementById("latestAge").textContent = latest.age.toFixed(1) + " days";
+  document.getElementById("summary").style.display = "";
+
+  const points = (key) => rows.map(row => ({ x: row.date, y: row[key] }));
+  new Chart(document.getElementById("chartCounts"), {
+    type: "line",
+    data: { datasets: [
+      { label: "open PRs", data: points("open"), borderColor: "#58a6ff", backgroundColor: "#58a6ff", tension: 0.15 },
+      { label: "merged in preceding 7 days", data: points("merged"), borderColor: "#3fb950", backgroundColor: "#3fb950", tension: 0.15 },
+    ] },
+    options: commonOptions,
+  });
+  new Chart(document.getElementById("chartAge"), {
+    type: "line",
+    data: { datasets: [
+      { label: "average age (days)", data: points("age"), borderColor: "#d2a8ff", backgroundColor: "#d2a8ff", tension: 0.15 },
+    ] },
+    options: commonOptions,
+  });
+
+  const body = document.getElementById("observationsBody");
+  for (const row of rows.slice(-12).reverse()) {
+    const tr = document.createElement("tr");
+    for (const value of [
+      row.date.slice(0, 10),
+      row.open.toLocaleString(),
+      row.merged.toLocaleString(),
+      row.age.toFixed(2),
+    ]) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    body.appendChild(tr);
+  }
+  document.getElementById("observations").style.display = "";
+}
+
+for (const id of ["chartCounts", "chartAge"]) {
+  document.getElementById(id).addEventListener("dblclick", event => {
+    const chart = Chart.getChart(event.currentTarget);
+    if (chart) chart.resetZoom();
+  });
+}
+
+loadChartJs()
+  .then(() => fetch(CSV_URL, { cache: "no-store" }))
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.text();
+  })
+  .then(text => {
+    const rows = parseCSV(text);
+    if (!rows.length) throw new Error("No PR activity snapshots are available.");
+    render(rows);
+  })
+  .catch(error => showError("Unable to load PR activity data: " + error.message));
+</script>
+</body>
+</html>
