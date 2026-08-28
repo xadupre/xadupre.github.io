@@ -21,6 +21,7 @@ CHART_LOADER_PAGES = [
     ("dashboard/onnx/stats.html", 2),
     ("dashboard/onnx/build-durations.html", 2),
     ("dashboard/onnx/lost-compute.html", 2),
+    ("dashboard/onnxruntime/pr-activity.html", 2),
     ("dashboard/onnx-light/package-size.html", 2),
     ("dashboard/onnx-light/pr-stats.html", 2),
     ("dashboard/onnx-light/build-durations.html", 2),

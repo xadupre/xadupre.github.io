@@ -18,6 +18,7 @@ PAGES = [
     ("dashboard/onnx/stats.html", 2),
     ("dashboard/onnx/backend-test-coverage.html", 2),
     ("dashboard/onnx/build-durations.html", 2),
+    ("dashboard/onnxruntime/pr-activity.html", 2),
     ("dashboard/onnx-light/backend-test-coverage.html", 2),
     ("dashboard/onnx-light/build-durations.html", 2),
     ("dashboard/onnx-light/package-size.html", 2),
