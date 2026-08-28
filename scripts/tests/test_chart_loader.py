@@ -19,6 +19,7 @@ REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 CHART_LOADER_PAGES = [
     ("dashboard/pypi-downloads.html", 1),
     ("dashboard/onnx/stats.html", 2),
+    ("dashboard/onnx/pr-activity.html", 2),
     ("dashboard/onnx/build-durations.html", 2),
     ("dashboard/onnx/lost-compute.html", 2),
     ("dashboard/onnxruntime/pr-activity.html", 2),

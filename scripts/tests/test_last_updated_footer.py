@@ -16,6 +16,7 @@ PAGES = [
     ("dashboard/pypi-downloads.html", 1),
     ("dashboard/mbext/class-coverage.html", 2),
     ("dashboard/onnx/stats.html", 2),
+    ("dashboard/onnx/pr-activity.html", 2),
     ("dashboard/onnx/backend-test-coverage.html", 2),
     ("dashboard/onnx/build-durations.html", 2),
     ("dashboard/onnxruntime/pr-activity.html", 2),

@@ -18,17 +18,20 @@ import record_pr_activity as rpa
 class TestRecordPrActivity(unittest.TestCase):
     def test_dashboard_and_home_page_are_wired(self):
         root = os.path.dirname(os.path.dirname(HERE))
-        page = os.path.join(root, "dashboard", "onnxruntime", "pr-activity.html")
-        with open(page, encoding="utf-8") as stream:
-            text = stream.read()
-        self.assertIn("open_prs", text)
-        self.assertIn("merged_prs_7d", text)
-        self.assertIn("avg_open_age_days", text)
-        self.assertIn("loadChartJs()", text)
+        for project in ("onnx", "onnxruntime"):
+            page = os.path.join(root, "dashboard", project, "pr-activity.html")
+            with open(page, encoding="utf-8") as stream:
+                text = stream.read()
+            self.assertIn("open_prs", text)
+            self.assertIn("merged_prs_7d", text)
+            self.assertIn("avg_open_age_days", text)
+            self.assertIn("loadChartJs()", text)
 
         with open(os.path.join(root, "index.html"), encoding="utf-8") as stream:
             index = stream.read()
+        self.assertIn('href="dashboard/onnx/pr-activity.html"', index)
         self.assertIn('href="dashboard/onnxruntime/pr-activity.html"', index)
+        self.assertIn("record_onnx_pr_activity.yml", index)
         self.assertIn("record_onnxruntime_pr_activity.yml", index)
 
     def test_workflow_runs_the_recorder(self):
@@ -41,6 +44,17 @@ class TestRecordPrActivity(unittest.TestCase):
         self.assertIn('cron: "53 4 * * 1"', text)
         self.assertIn("python -u scripts/record_pr_activity.py", text)
         self.assertIn("cache_data/onnxruntime/pr_activity.csv", text)
+
+        onnx_workflow = os.path.join(
+            root, ".github", "workflows", "record_onnx_pr_activity.yml"
+        )
+        with open(onnx_workflow, encoding="utf-8") as stream:
+            text = stream.read()
+        self.assertIn('cron: "7 5 * * 1"', text)
+        self.assertIn(
+            "python -u scripts/record_pr_activity.py --repo onnx/onnx", text
+        )
+        self.assertIn("cache_data/onnx/pr_activity.csv", text)
 
     def test_collect_snapshot(self):
         now = dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc)
