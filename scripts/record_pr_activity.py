@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import os
 import urllib.parse
 from collections.abc import Iterator
@@ -52,6 +53,7 @@ def collect_snapshot(
     repo: str,
     token: str | None,
     now: dt.datetime | None = None,
+    open_pulls: list[dict] | None = None,
 ) -> dict[str, str]:
     """Collect the current PR activity metrics for ``repo``."""
     if now is None:
@@ -61,7 +63,8 @@ def collect_snapshot(
     else:
         now = now.astimezone(dt.timezone.utc)
 
-    open_pulls = list(iter_pulls(repo, "open", token))
+    if open_pulls is None:
+        open_pulls = list(iter_pulls(repo, "open", token))
     ages = []
     for pr in open_pulls:
         created_at = pr.get("created_at")
@@ -121,6 +124,29 @@ def write_snapshot(csv_path: str, snapshot: dict[str, str]) -> None:
         writer.writerows(rows)
 
 
+def write_open_pull_tables(json_path: str, pulls: list[dict]) -> None:
+    """Write the newest and oldest currently open pull requests."""
+
+    def row(pull: dict) -> dict:
+        user = pull.get("user")
+        return {
+            "number": pull.get("number"),
+            "title": pull.get("title", ""),
+            "user": user.get("login", "") if isinstance(user, dict) else "",
+            "created_at": pull.get("created_at", ""),
+        }
+
+    ordered = sorted(pulls, key=lambda pull: pull.get("created_at") or "")
+    payload = {
+        "latest": [row(pull) for pull in ordered[-10:][::-1]],
+        "oldest": [row(pull) for pull in ordered[:10]],
+    }
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    with open(json_path, "w", encoding="utf-8") as stream:
+        json.dump(payload, stream, indent=2)
+        stream.write("\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -134,9 +160,12 @@ def main(argv: list[str] | None = None) -> int:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     repo_name = args.repo.split("/", 1)[-1]
     csv_path = os.path.join(args.cache_dir, repo_name, "pr_activity.csv")
+    json_path = os.path.join(args.cache_dir, repo_name, "open_pulls.json")
     _log(f"collecting weekly PR activity for {args.repo}")
-    snapshot = collect_snapshot(args.repo, token)
+    open_pulls = list(iter_pulls(args.repo, "open", token))
+    snapshot = collect_snapshot(args.repo, token, open_pulls=open_pulls)
     write_snapshot(csv_path, snapshot)
+    write_open_pull_tables(json_path, open_pulls)
     _log(
         f"saved {csv_path}: open={snapshot['open_prs']}, "
         f"merged_7d={snapshot['merged_prs_7d']}, "
