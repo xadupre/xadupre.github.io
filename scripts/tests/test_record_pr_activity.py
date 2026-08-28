@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import json
 import os
 import sys
 import tempfile
@@ -26,6 +27,9 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn("merged_prs_7d", text)
             self.assertIn("avg_open_age_days", text)
             self.assertIn("loadChartJs()", text)
+            self.assertIn("open_pulls.json", text)
+            self.assertIn("10 latest open pull requests", text)
+            self.assertIn("10 oldest open pull requests", text)
 
         with open(os.path.join(root, "index.html"), encoding="utf-8") as stream:
             index = stream.read()
@@ -44,6 +48,7 @@ class TestRecordPrActivity(unittest.TestCase):
         self.assertIn('cron: "53 4 * * 1"', text)
         self.assertIn("python -u scripts/record_pr_activity.py", text)
         self.assertIn("cache_data/onnxruntime/pr_activity.csv", text)
+        self.assertIn("cache_data/onnxruntime/open_pulls.json", text)
 
         onnx_workflow = os.path.join(
             root, ".github", "workflows", "record_onnx_pr_activity.yml"
@@ -55,6 +60,7 @@ class TestRecordPrActivity(unittest.TestCase):
             "python -u scripts/record_pr_activity.py --repo onnx/onnx", text
         )
         self.assertIn("cache_data/onnx/pr_activity.csv", text)
+        self.assertIn("cache_data/onnx/open_pulls.json", text)
 
     def test_collect_snapshot(self):
         now = dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc)
@@ -129,6 +135,24 @@ class TestRecordPrActivity(unittest.TestCase):
             with open(path, newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows, [second])
+
+    def test_write_open_pull_tables_sorts_by_creation_date(self):
+        pulls = [
+            {
+                "number": number,
+                "title": f"PR {number}",
+                "user": {"login": f"user{number}"},
+                "created_at": f"2026-08-{number:02d}T00:00:00Z",
+            }
+            for number in range(1, 13)
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "repo", "open_pulls.json")
+            rpa.write_open_pull_tables(path, pulls)
+            with open(path, encoding="utf-8") as stream:
+                tables = json.load(stream)
+        self.assertEqual([pull["number"] for pull in tables["latest"]], list(range(12, 2, -1)))
+        self.assertEqual([pull["number"] for pull in tables["oldest"]], list(range(1, 11)))
 
     def test_default_repository_is_onnxruntime(self):
         self.assertEqual(rpa.DEFAULT_REPO, "microsoft/onnxruntime")
