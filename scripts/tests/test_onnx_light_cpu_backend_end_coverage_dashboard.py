@@ -52,6 +52,13 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
         self.assertIn('<option value="succeeding">succeeding tests</option>', text)
         self.assertIn("state.statusFilter", text)
 
+    def test_page_can_hide_succeeded_results(self):
+        text = _read(PAGE)
+        self.assertIn('id="hideSucceeded"', text)
+        self.assertIn("hide succeeded tests", text)
+        self.assertIn("hideSucceeded: false", text)
+        self.assertIn("state.hideSucceeded && row.onnx_light_cpu", text)
+
     def test_page_shortens_missing_kernel_error(self):
         text = _read(PAGE)
         self.assertIn('return "no kernel";', text)
