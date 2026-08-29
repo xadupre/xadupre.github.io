@@ -1,4 +1,4 @@
-"""Record a weekly snapshot of pull request activity for ONNX Runtime.
+"""Record a daily snapshot of pull request activity for ONNX Runtime.
 
 The snapshot contains the current number of open pull requests, the number
 merged during the preceding seven days, and the average age in days of the
@@ -161,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_name = args.repo.split("/", 1)[-1]
     csv_path = os.path.join(args.cache_dir, repo_name, "pr_activity.csv")
     json_path = os.path.join(args.cache_dir, repo_name, "open_pulls.json")
-    _log(f"collecting weekly PR activity for {args.repo}")
+    _log(f"collecting daily PR activity for {args.repo}")
     open_pulls = list(iter_pulls(args.repo, "open", token))
     snapshot = collect_snapshot(args.repo, token, open_pulls=open_pulls)
     write_snapshot(csv_path, snapshot)

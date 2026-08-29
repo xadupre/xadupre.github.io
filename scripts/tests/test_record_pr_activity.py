@@ -136,6 +136,22 @@ class TestRecordPrActivity(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows, [second])
 
+    def test_write_snapshot_preserves_prior_days(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "onnxruntime", "pr_activity.csv")
+            first = {
+                "date": "2026-08-27T08:00:00Z",
+                "open_prs": "100",
+                "merged_prs_7d": "20",
+                "avg_open_age_days": "30.00",
+            }
+            second = dict(first, date="2026-08-28T08:00:00Z", open_prs="101")
+            rpa.write_snapshot(path, first)
+            rpa.write_snapshot(path, second)
+            with open(path, newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows, [first, second])
+
     def test_write_open_pull_tables_sorts_by_creation_date(self):
         pulls = [
             {
