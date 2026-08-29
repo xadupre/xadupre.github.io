@@ -47,6 +47,7 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn("baselineByRun.get(row.run_id) / Number(row[metric])", text)
         self.assertIn("CHARTS.forEach(renderSpeedupChart)", text)
         self.assertEqual(text.count('type:"logarithmic"'), 2)
+        self.assertEqual(text.count('time:{unit:"day"}'), 2)
         self.assertEqual(text.count('"Machine: " + item.raw.machine'), 2)
 
         with open(DATA, newline="", encoding="utf-8") as stream:
