@@ -63,11 +63,11 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Examples" href="../examples.html" />
-    <link rel="prev" title="CDist (CPU)" href="../kernels_generated/com_microsoft_cdist_cpu.html" />
+    <link rel="prev" title="GroupQueryAttention (CPU)" href="../kernels_generated/com_microsoft_groupqueryattention_cpu.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 28, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 29, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -989,7 +989,48 @@ generated <a class="reference internal" href="../byop.html#l-cpu-by-op"><span cl
 </pre></div>
 </div>
 </p>
-<p>The metric derivative is <code class="docutils literal notranslate"><span class="pre">dC</span> <span class="pre">/</span> <span class="pre">C</span></code> for Euclidean distance (zero where <code class="docutils literal notranslate"><span class="pre">C</span> <span class="pre">==</span> <span class="pre">0</span></code>), and <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">dC</span></code> for squared Euclidean distance. </p>
+<p>The metric derivative is <code class="docutils literal notranslate"><span class="pre">dC</span> <span class="pre">/</span> <span class="pre">C</span></code> for Euclidean distance (zero where <code class="docutils literal notranslate"><span class="pre">C</span> <span class="pre">==</span> <span class="pre">0</span></code>), and <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">*</span> <span class="pre">dC</span></code> for squared Euclidean distance.</p>
+<p>GroupQueryAttention gradient: <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">Q</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">V</span> <span class="o">---&gt;</span> <span class="o">+------------+</span> <span class="o">---&gt;</span> <span class="o">+--------------------+</span> <span class="o">---&gt;</span> <span class="n">probabilities</span>
+             <span class="o">|</span> <span class="n">Cast</span> <span class="n">FLOAT</span> <span class="o">|</span>      <span class="o">|</span> <span class="n">Attention</span> <span class="p">(</span><span class="n">mode</span> <span class="mi">3</span><span class="p">)</span> <span class="o">|</span>
+             <span class="o">+------------+</span>      <span class="o">+--------------------+</span>
+
+<span class="n">dY</span> <span class="o">--------&gt;</span> <span class="o">+------------+</span> <span class="o">---&gt;</span> <span class="nb">float</span> <span class="n">dY</span>
+             <span class="o">|</span> <span class="n">Cast</span> <span class="n">FLOAT</span> <span class="o">|</span>
+             <span class="o">+------------+</span>
+
+<span class="n">probabilities</span><span class="p">,</span> <span class="nb">float</span> <span class="n">dY</span><span class="p">,</span> <span class="n">expanded</span> <span class="n">V</span>
+             <span class="o">|</span>
+             <span class="n">v</span>
+       <span class="o">+------------------+</span>
+       <span class="o">|</span> <span class="n">Softmax</span> <span class="n">backward</span> <span class="o">|</span>
+       <span class="o">+------------------+</span>
+             <span class="o">|</span>
+             <span class="n">v</span>
+       <span class="o">+---------------+</span>
+       <span class="o">|</span> <span class="n">scale</span> <span class="n">dScores</span> <span class="o">|</span>
+       <span class="o">+---------------+</span>
+          <span class="o">|</span>         <span class="o">|</span>
+          <span class="n">v</span>         <span class="n">v</span>
+    <span class="o">+-----------+</span> <span class="o">+-----------+</span>
+    <span class="o">|</span> <span class="n">MatMul</span> <span class="n">K</span>  <span class="o">|</span> <span class="o">|</span> <span class="n">MatMul</span> <span class="n">Q</span>  <span class="o">|</span>
+    <span class="o">+-----------+</span> <span class="o">+-----------+</span>
+          <span class="o">|</span>         <span class="o">|</span>
+          <span class="n">v</span>         <span class="n">v</span>
+    <span class="o">+------------+</span> <span class="o">+---------------+</span>
+    <span class="o">|</span> <span class="n">reshape</span> <span class="n">dQ</span> <span class="o">|</span> <span class="o">|</span> <span class="n">reduce</span> <span class="n">groups</span> <span class="o">|</span>
+    <span class="o">+------------+</span> <span class="o">+---------------+</span>
+          <span class="o">|</span>          <span class="o">|</span>          <span class="o">|</span>
+          <span class="n">v</span>          <span class="n">v</span>          <span class="n">v</span>
+    <span class="o">+-------------+</span> <span class="o">+-------------+</span> <span class="o">+-------------+</span>
+    <span class="o">|</span> <span class="n">CastLike</span><span class="p">(</span><span class="n">Q</span><span class="p">)</span> <span class="o">|</span> <span class="o">|</span> <span class="n">CastLike</span><span class="p">(</span><span class="n">K</span><span class="p">)</span> <span class="o">|</span> <span class="o">|</span> <span class="n">CastLike</span><span class="p">(</span><span class="n">V</span><span class="p">)</span> <span class="o">|</span>
+    <span class="o">+-------------+</span> <span class="o">+-------------+</span> <span class="o">+-------------+</span>
+          <span class="o">|</span>              <span class="o">|</span>               <span class="o">|</span>
+          <span class="n">v</span>              <span class="n">v</span>               <span class="n">v</span>
+         <span class="n">dQ</span>             <span class="n">dK</span>              <span class="n">dV</span>
+</pre></div>
+</div>
+</p>
+<p>The score scale is replayed from the forward attribute. When omitted, the graph computes <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">sqrt(Shape(Q)[2]</span> <span class="pre">/</span> <span class="pre">num_heads)</span></code> dynamically. Grouped K/V head gradients are summed back to their original head count. </p>
 </dd></dl>
 
 <dl class="cpp class">
@@ -1569,12 +1610,12 @@ the <code class="docutils literal notranslate"><span class="pre">&quot;single&qu
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="../kernels_generated/com_microsoft_cdist_cpu.html"
+       href="../kernels_generated/com_microsoft_groupqueryattention_cpu.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">CDist (CPU)</p>
+        <p class="prev-next-title">GroupQueryAttention (CPU)</p>
       </div>
     </a>
     <a class="right-next"
@@ -1797,7 +1838,7 @@ the <code class="docutils literal notranslate"><span class="pre">&quot;single&qu
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 28, 2026.
+  Last updated on Aug 29, 2026.
   <br/>
 </p></div>
       
