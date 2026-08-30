@@ -47,6 +47,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import record_onnx_backend_test_coverage as _base  # noqa: E402
+from backend_test_metadata import kind_name, tag_name  # noqa: E402
 
 DEFAULT_RTOL = _base.DEFAULT_RTOL
 DEFAULT_ATOL = _base.DEFAULT_ATOL
@@ -120,7 +121,7 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
     for name, tc in cases.items():
         if not name:
             continue
-        case_kind = getattr(tc, "kind", None)
+        case_kind = kind_name(getattr(tc, "kind", None))
         if kinds and case_kind not in kinds:
             continue
         model = getattr(tc, "model", None)
@@ -143,13 +144,13 @@ def discover_node_tests(kind: str = "node") -> List[Dict[str, Any]]:
             )
             for inputs, outputs in data_sets
         ]
-        tag = getattr(tc, "tag", None) or ""
+        tag = tag_name(getattr(tc, "tag", None))
         discovered.append(
             {
                 "name": str(name),
                 "model": onnx_model,
                 "data_sets": converted_data_sets,
-                "tag": str(tag),
+                "tag": tag,
             }
         )
     discovered.sort(key=lambda d: d["name"])

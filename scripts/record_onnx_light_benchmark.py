@@ -83,6 +83,8 @@ import time
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from backend_test_metadata import kind_name, tag_name
+
 # ---------------------------------------------------------------------------
 # Configuration constants
 # ---------------------------------------------------------------------------
@@ -330,7 +332,7 @@ def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
         # correctness inputs.
         if not str(name).endswith(BENCHMARK_NAME_SUFFIX):
             continue
-        case_kind = getattr(tc, "kind", None)
+        case_kind = kind_name(getattr(tc, "kind", None))
         if kinds and case_kind not in kinds:
             continue
         model = getattr(tc, "model", None)
@@ -340,13 +342,13 @@ def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
         data_sets = _cc_data_sets_to_python(tc)
         if not data_sets:
             continue
-        tag = getattr(tc, "tag", None) or ""
+        tag = tag_name(getattr(tc, "tag", None))
         discovered.append(
             {
                 "name": str(name),
                 "model": onnx_model,
                 "data_sets": data_sets,
-                "tag": str(tag),
+                "tag": tag,
             }
         )
     discovered.sort(key=lambda d: d["name"])
@@ -524,7 +526,7 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
     for name, tc in cases.items():
         if not name:
             continue
-        case_kind = getattr(tc, "kind", None)
+        case_kind = kind_name(getattr(tc, "kind", None))
         if kinds and case_kind not in kinds:
             continue
         model = getattr(tc, "model", None)
@@ -547,13 +549,13 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
             )
             for inputs, outputs in data_sets
         ]
-        tag = getattr(tc, "tag", None) or ""
+        tag = tag_name(getattr(tc, "tag", None))
         discovered.append(
             {
                 "name": str(name),
                 "model": onnx_model,
                 "data_sets": converted_data_sets,
-                "tag": str(tag),
+                "tag": tag,
             }
         )
     discovered.sort(key=lambda d: d["name"])

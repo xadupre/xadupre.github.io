@@ -28,6 +28,8 @@ import sys
 import urllib.request
 from typing import Iterable
 
+from backend_test_metadata import kind_name
+
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 
 CSV_FIELDS = (
@@ -159,7 +161,7 @@ def count_node_test_cases() -> int:
         count = sum(
             1
             for name, tc in cases.items()
-            if name and getattr(tc, "kind", None) == "node"
+            if name and kind_name(getattr(tc, "kind", None)) == "node"
         )
         if count:
             return count
