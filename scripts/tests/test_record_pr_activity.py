@@ -27,6 +27,7 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn("merged_prs_7d", text)
             self.assertIn("avg_open_age_days", text)
             self.assertIn("loadChartJs()", text)
+            self.assertIn('unit: "day"', text)
             self.assertIn("open_pulls.json", text)
             self.assertIn("10 latest open pull requests", text)
             self.assertIn("10 oldest open pull requests", text)
