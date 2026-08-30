@@ -24,6 +24,8 @@ class TestRecordPrActivity(unittest.TestCase):
             with open(page, encoding="utf-8") as stream:
                 text = stream.read()
             self.assertIn("open_prs", text)
+            self.assertIn("opened_prs_7d", text)
+            self.assertIn("closed_prs_7d", text)
             self.assertIn("merged_prs_7d", text)
             self.assertIn("avg_open_age_days", text)
             self.assertIn("loadChartJs()", text)
@@ -68,7 +70,7 @@ class TestRecordPrActivity(unittest.TestCase):
         responses = {
             "open": [
                 {
-                    "created_at": "2026-08-18T08:00:00Z",
+                    "created_at": "2026-08-25T08:00:00Z",
                     "updated_at": "2026-08-28T07:00:00Z",
                 },
                 {
@@ -78,14 +80,20 @@ class TestRecordPrActivity(unittest.TestCase):
             ],
             "closed": [
                 {
+                    "created_at": "2026-08-25T08:00:00Z",
+                    "closed_at": "2026-08-27T08:00:00Z",
                     "merged_at": "2026-08-27T08:00:00Z",
                     "updated_at": "2026-08-27T08:00:00Z",
                 },
                 {
+                    "created_at": "2026-08-23T08:00:00Z",
+                    "closed_at": "2026-08-26T08:00:00Z",
                     "merged_at": None,
                     "updated_at": "2026-08-26T08:00:00Z",
                 },
                 {
+                    "created_at": "2026-08-15T08:00:00Z",
+                    "closed_at": "2026-08-20T07:59:00Z",
                     "merged_at": "2026-08-20T07:59:00Z",
                     "updated_at": "2026-08-20T07:59:00Z",
                 },
@@ -101,8 +109,10 @@ class TestRecordPrActivity(unittest.TestCase):
 
         self.assertEqual(snapshot["date"], "2026-08-28T08:00:00Z")
         self.assertEqual(snapshot["open_prs"], "2")
+        self.assertEqual(snapshot["opened_prs_7d"], "3")
+        self.assertEqual(snapshot["closed_prs_7d"], "2")
         self.assertEqual(snapshot["merged_prs_7d"], "1")
-        self.assertEqual(snapshot["avg_open_age_days"], "15.00")
+        self.assertEqual(snapshot["avg_open_age_days"], "11.50")
 
     def test_iter_pulls_handles_pagination(self):
         calls = []
@@ -127,6 +137,8 @@ class TestRecordPrActivity(unittest.TestCase):
             first = {
                 "date": "2026-08-28T08:00:00Z",
                 "open_prs": "100",
+                "opened_prs_7d": "10",
+                "closed_prs_7d": "15",
                 "merged_prs_7d": "20",
                 "avg_open_age_days": "30.00",
             }
@@ -143,6 +155,8 @@ class TestRecordPrActivity(unittest.TestCase):
             first = {
                 "date": "2026-08-27T08:00:00Z",
                 "open_prs": "100",
+                "opened_prs_7d": "10",
+                "closed_prs_7d": "15",
                 "merged_prs_7d": "20",
                 "avg_open_age_days": "30.00",
             }
