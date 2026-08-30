@@ -34,6 +34,8 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn('id="chartOpen"', text)
             self.assertIn('id="chartActivity"', text)
             self.assertIn('id="chartAge"', text)
+            self.assertIn('id="chartAgeDistribution"', text)
+            self.assertIn("ages_days", text)
             self.assertIn(
                 'for (const id of ["chartOpen", "chartActivity", "chartAge"])', text
             )
@@ -188,7 +190,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows, [first, second])
 
-    def test_write_open_pull_tables_sorts_by_creation_date(self):
+    def test_write_open_pull_tables_sorts_by_creation_date_and_records_ages(self):
         pulls = [
             {
                 "number": number,
@@ -200,11 +202,14 @@ class TestRecordPrActivity(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "repo", "open_pulls.json")
-            rpa.write_open_pull_tables(path, pulls)
+            rpa.write_open_pull_tables(
+                path, pulls, now=dt.datetime(2026, 8, 13, tzinfo=dt.timezone.utc)
+            )
             with open(path, encoding="utf-8") as stream:
                 tables = json.load(stream)
         self.assertEqual([pull["number"] for pull in tables["latest"]], list(range(12, 2, -1)))
         self.assertEqual([pull["number"] for pull in tables["oldest"]], list(range(1, 11)))
+        self.assertEqual(tables["ages_days"], [13.0 - number for number in range(1, 13)])
 
     def test_default_repository_is_onnxruntime(self):
         self.assertEqual(rpa.DEFAULT_REPO, "microsoft/onnxruntime")
