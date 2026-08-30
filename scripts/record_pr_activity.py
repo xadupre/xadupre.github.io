@@ -1,8 +1,8 @@
 """Record a daily snapshot of pull request activity for ONNX Runtime.
 
-The snapshot contains the current number of open pull requests, the number
-merged during the preceding seven days, and the average age in days of the
-pull requests that are still open. Rows are stored in
+The snapshot contains the current number of open pull requests; the numbers
+opened, closed, and merged during the preceding seven days; and the average
+age in days of the pull requests that are still open. Rows are stored in
 ``cache_data/onnxruntime/pr_activity.csv``.
 
 Usage::
@@ -24,7 +24,14 @@ from collections.abc import Iterator
 from record_build_durations import GITHUB_API, _format_iso, _log, _parse_iso, _request
 
 DEFAULT_REPO = "microsoft/onnxruntime"
-CSV_FIELDS = ("date", "open_prs", "merged_prs_7d", "avg_open_age_days")
+CSV_FIELDS = (
+    "date",
+    "open_prs",
+    "opened_prs_7d",
+    "closed_prs_7d",
+    "merged_prs_7d",
+    "avg_open_age_days",
+)
 
 
 def iter_pulls(repo: str, state: str, token: str | None) -> Iterator[dict]:
@@ -47,6 +54,16 @@ def iter_pulls(repo: str, state: str, token: str | None) -> Iterator[dict]:
         if len(payload) < per_page:
             return
         page += 1
+
+
+def _is_at_or_after(value: str | None, since: dt.datetime) -> bool:
+    """Return whether an ISO timestamp is on or after ``since``."""
+    if not value:
+        return False
+    try:
+        return _parse_iso(value) >= since
+    except ValueError:
+        return False
 
 
 def collect_snapshot(
@@ -77,7 +94,12 @@ def collect_snapshot(
         ages.append(max(0.0, (now - created).total_seconds() / 86400))
 
     since = now - dt.timedelta(days=7)
+    opened = 0
+    closed = 0
     merged = 0
+    for pr in open_pulls:
+        if _is_at_or_after(pr.get("created_at"), since):
+            opened += 1
     for pr in iter_pulls(repo, "closed", token):
         updated_at = pr.get("updated_at")
         if updated_at:
@@ -86,19 +108,19 @@ def collect_snapshot(
                     break
             except ValueError:
                 pass
-        merged_at = pr.get("merged_at")
-        if not merged_at:
-            continue
-        try:
-            if _parse_iso(merged_at) >= since:
-                merged += 1
-        except ValueError:
-            continue
+        if _is_at_or_after(pr.get("created_at"), since):
+            opened += 1
+        if _is_at_or_after(pr.get("closed_at"), since):
+            closed += 1
+        if _is_at_or_after(pr.get("merged_at"), since):
+            merged += 1
 
     average_age = sum(ages) / len(ages) if ages else 0.0
     return {
         "date": _format_iso(now),
         "open_prs": str(len(open_pulls)),
+        "opened_prs_7d": str(opened),
+        "closed_prs_7d": str(closed),
         "merged_prs_7d": str(merged),
         "avg_open_age_days": f"{average_age:.2f}",
     }
@@ -168,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
     write_open_pull_tables(json_path, open_pulls)
     _log(
         f"saved {csv_path}: open={snapshot['open_prs']}, "
+        f"opened_7d={snapshot['opened_prs_7d']}, "
+        f"closed_7d={snapshot['closed_prs_7d']}, "
         f"merged_7d={snapshot['merged_prs_7d']}, "
         f"average_open_age={snapshot['avg_open_age_days']} days"
     )

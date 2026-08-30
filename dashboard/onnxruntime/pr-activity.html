@@ -25,7 +25,7 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .nav { font-size: 0.9em; margin-bottom: 0.5em; }
 .summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  grid-template-columns: repeat(5, minmax(160px, 1fr));
   gap: 0.8em;
   width: 100%;
   max-width: 1100px;
@@ -83,18 +83,20 @@ td { font-family: monospace; }
 </header>
 <p class="description">
   Weekly snapshots of <a href="https://github.com/microsoft/onnxruntime/pulls">microsoft/onnxruntime</a>.
-  The merged count covers the seven days preceding each snapshot; open PR age
-  is measured from creation time to the snapshot.
+  Opened, closed, and merged counts cover the seven days preceding each
+  snapshot; open PR age is measured from creation time to the snapshot.
 </p>
 <div class="notice" style="max-width:1100px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
 <div id="message" class="message"></div>
 <div id="summary" class="summary" style="display:none;">
   <div class="metric"><div class="label">open PRs</div><div id="latestOpen" class="value">0</div></div>
+  <div class="metric"><div class="label">opened in preceding 7 days</div><div id="latestOpened" class="value">0</div></div>
+  <div class="metric"><div class="label">closed in preceding 7 days</div><div id="latestClosed" class="value">0</div></div>
   <div class="metric"><div class="label">merged in preceding 7 days</div><div id="latestMerged" class="value">0</div></div>
   <div class="metric"><div class="label">average age of open PRs</div><div id="latestAge" class="value">0 days</div></div>
 </div>
 <div class="chart-wrap">
-  <h2 class="chart-title">open and merged pull requests</h2>
+  <h2 class="chart-title">pull request counts</h2>
   <div class="chart-container"><canvas id="chartCounts"></canvas></div>
   <div class="hint">Drag to pan, mouse wheel or pinch to zoom. Double-click to reset.</div>
 </div>
@@ -106,7 +108,7 @@ td { font-family: monospace; }
 <div id="observations" class="observations" style="display:none;">
   <h2>Latest snapshots</h2>
   <table>
-    <thead><tr><th>date</th><th>open PRs</th><th>merged (7d)</th><th>average open age (days)</th></tr></thead>
+    <thead><tr><th>date</th><th>open PRs</th><th>opened (7d)</th><th>closed (7d)</th><th>merged (7d)</th><th>average open age (days)</th></tr></thead>
     <tbody id="observationsBody"></tbody>
   </table>
 </div>
@@ -142,6 +144,8 @@ function parseCSV(text) {
   const index = {
     date: header.indexOf("date"),
     open: header.indexOf("open_prs"),
+    opened: header.indexOf("opened_prs_7d"),
+    closed: header.indexOf("closed_prs_7d"),
     merged: header.indexOf("merged_prs_7d"),
     age: header.indexOf("avg_open_age_days"),
   };
@@ -150,11 +154,14 @@ function parseCSV(text) {
     return {
       date: columns[index.date],
       open: Number(columns[index.open]),
+      opened: Number(columns[index.opened]),
+      closed: Number(columns[index.closed]),
       merged: Number(columns[index.merged]),
       age: Number(columns[index.age]),
     };
   }).filter(row =>
-    row.date && Number.isFinite(row.open) &&
+    row.date && Number.isFinite(row.open) && Number.isFinite(row.opened) &&
+    Number.isFinite(row.closed) &&
     Number.isFinite(row.merged) && Number.isFinite(row.age)
   ).sort((a, b) => new Date(a.date) - new Date(b.date));
 }
@@ -188,6 +195,8 @@ const commonOptions = {
 function render(rows) {
   const latest = rows[rows.length - 1];
   document.getElementById("latestOpen").textContent = latest.open.toLocaleString();
+  document.getElementById("latestOpened").textContent = latest.opened.toLocaleString();
+  document.getElementById("latestClosed").textContent = latest.closed.toLocaleString();
   document.getElementById("latestMerged").textContent = latest.merged.toLocaleString();
   document.getElementById("latestAge").textContent = latest.age.toFixed(1) + " days";
   document.getElementById("summary").style.display = "";
@@ -197,6 +206,8 @@ function render(rows) {
     type: "line",
     data: { datasets: [
       { label: "open PRs", data: points("open"), borderColor: "#58a6ff", backgroundColor: "#58a6ff", tension: 0.15 },
+      { label: "opened in preceding 7 days", data: points("opened"), borderColor: "#d2a8ff", backgroundColor: "#d2a8ff", tension: 0.15 },
+      { label: "closed in preceding 7 days", data: points("closed"), borderColor: "#f85149", backgroundColor: "#f85149", tension: 0.15 },
       { label: "merged in preceding 7 days", data: points("merged"), borderColor: "#3fb950", backgroundColor: "#3fb950", tension: 0.15 },
     ] },
     options: commonOptions,
@@ -215,6 +226,8 @@ function render(rows) {
     for (const value of [
       row.date.slice(0, 10),
       row.open.toLocaleString(),
+      row.opened.toLocaleString(),
+      row.closed.toLocaleString(),
       row.merged.toLocaleString(),
       row.age.toFixed(2),
     ]) {
