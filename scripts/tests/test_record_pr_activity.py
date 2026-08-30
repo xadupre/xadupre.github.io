@@ -6,6 +6,7 @@ import csv
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,26 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn("avg_open_age_days", text)
             self.assertIn("loadChartJs()", text)
             self.assertIn('unit: "day"', text)
+            self.assertIn('id="chartOpen"', text)
+            self.assertIn('id="chartActivity"', text)
+            self.assertIn('id="chartAge"', text)
+            self.assertIn(
+                'for (const id of ["chartOpen", "chartActivity", "chartAge"])', text
+            )
+            self.assertRegex(
+                text,
+                r'(?s)getElementById\("chartOpen"\).*?'
+                r'label: "open PRs".*?'
+                r'getElementById\("chartActivity"\).*?'
+                r'label: "opened in preceding 7 days"',
+            )
+            open_chart = re.search(
+                r'(?s)getElementById\("chartOpen"\)(.*?)'
+                r'getElementById\("chartActivity"\)',
+                text,
+            )
+            self.assertIsNotNone(open_chart)
+            self.assertNotIn("preceding 7 days", open_chart.group(1))
             self.assertIn("open_pulls.json", text)
             self.assertIn("10 latest open pull requests", text)
             self.assertIn("10 oldest open pull requests", text)
