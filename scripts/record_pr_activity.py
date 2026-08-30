@@ -168,7 +168,7 @@ def write_open_pull_tables(
 
     ordered = sorted(pulls, key=lambda pull: pull.get("created_at") or "")
     ages = []
-    for pull in pulls:
+    for pull in ordered:
         created_at = pull.get("created_at")
         if not created_at:
             continue
