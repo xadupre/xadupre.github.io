@@ -20,6 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 import record_onnx_light_benchmark as rlb
+from backend_test_metadata import kind_name
 
 BENCHMARK_BACKENDS = ("onnx_light_cpu", "onnxruntime")
 BENCHMARK_TYPES = (
@@ -90,7 +91,7 @@ def discover_benchmark_tests(
             benchmark_type is None
             or benchmark_type_from_name(str(test.name)) == benchmark_type
         )
-        and (not kinds or getattr(test, "kind", None) in kinds)
+        and (not kinds or kind_name(getattr(test, "kind", None)) in kinds)
     ]
 
 

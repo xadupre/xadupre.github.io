@@ -53,6 +53,8 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from backend_test_metadata import tag_name
+
 # Order matters: it drives the column order in the dashboard.
 BACKENDS: Tuple[str, ...] = (
     "onnx-light",
@@ -424,7 +426,7 @@ def discover_inference_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     for name, tc in cases.items():
         if not name:
             continue
-        case_tags = _normalize_tags(getattr(tc, "tag", "") or "")
+        case_tags = _normalize_tags(tag_name(getattr(tc, "tag", None)))
         if tags and not any(t in tags for t in case_tags):
             continue
         model = getattr(tc, "model", None)

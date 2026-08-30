@@ -35,6 +35,8 @@ import sys
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from backend_test_metadata import tag_name
+
 DEFAULT_TAGS: Tuple[str, ...] = ("constant",)
 DEFAULT_TAG: str = ",".join(DEFAULT_TAGS)
 # Metadata key written by onnx-light's ``write_constant_info_to_metadata``.
@@ -428,7 +430,7 @@ def discover_constant_info_tests(tag=DEFAULT_TAGS) -> List[Dict[str, Any]]:
     for name, tc in cases.items():
         if not name:
             continue
-        case_tags = _normalize_tags(getattr(tc, "tag", "") or "")
+        case_tags = _normalize_tags(tag_name(getattr(tc, "tag", None)))
         model = getattr(tc, "model", None)
         if model is None:
             continue
