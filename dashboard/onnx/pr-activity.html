@@ -85,6 +85,11 @@ td { font-family: monospace; }
   <div class="chart-container"><canvas id="chartAge"></canvas></div>
   <div class="hint">Age in days at each daily snapshot.</div>
 </div>
+<div class="chart-wrap">
+  <h2 class="chart-title">distribution of open pull request ages</h2>
+  <div class="chart-container"><canvas id="chartAgeDistribution"></canvas></div>
+  <div class="hint">Number of currently open pull requests by age in days.</div>
+</div>
 <div id="observations" class="observations" style="display:none;">
   <h2>Latest snapshots</h2>
   <table>
@@ -216,6 +221,29 @@ function renderOpenPulls(tables) {
       body.appendChild(tr);
     }
   }
+  const ages = (tables.ages_days || []).filter(Number.isFinite);
+  const bucketSize = 7;
+  const buckets = new Map();
+  for (const age of ages) {
+    const start = Math.floor(age / bucketSize) * bucketSize;
+    buckets.set(start, (buckets.get(start) || 0) + 1);
+  }
+  const starts = [...buckets.keys()].sort((a, b) => a - b);
+  new Chart(document.getElementById("chartAgeDistribution"), {
+    type: "bar",
+    data: {
+      labels: starts.map(start => `${start}-${start + bucketSize - 1}`),
+      datasets: [{ label: "open PRs", data: starts.map(start => buckets.get(start)), backgroundColor: "#d2a8ff" }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#c9d1d9" } } },
+      scales: {
+        x: { title: { display: true, text: "age (days)", color: "#c9d1d9" }, ticks: { color: "#c9d1d9" }, grid: { color: "rgba(139,148,158,0.25)" } },
+        y: { beginAtZero: true, title: { display: true, text: "open PRs", color: "#c9d1d9" }, ticks: { color: "#c9d1d9", precision: 0 }, grid: { color: "rgba(139,148,158,0.25)" } },
+      },
+    },
+  });
   document.getElementById("openPulls").style.display = "";
 }
 
@@ -248,7 +276,7 @@ fetch(OPEN_PULLS_URL, { cache: "no-store" })
     if (!response.ok) throw new Error("HTTP " + response.status);
     return response.json();
   })
-  .then(renderOpenPulls)
+  .then(tables => loadChartJs().then(() => renderOpenPulls(tables)))
   .catch(() => {});
 </script>
 </body>

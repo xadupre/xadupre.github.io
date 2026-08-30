@@ -146,8 +146,16 @@ def write_snapshot(csv_path: str, snapshot: dict[str, str]) -> None:
         writer.writerows(rows)
 
 
-def write_open_pull_tables(json_path: str, pulls: list[dict]) -> None:
-    """Write the newest and oldest currently open pull requests."""
+def write_open_pull_tables(
+    json_path: str, pulls: list[dict], now: dt.datetime | None = None
+) -> None:
+    """Write the newest and oldest currently open pull requests and their ages."""
+    if now is None:
+        now = dt.datetime.now(tz=dt.timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    else:
+        now = now.astimezone(dt.timezone.utc)
 
     def row(pull: dict) -> dict:
         user = pull.get("user")
@@ -159,9 +167,20 @@ def write_open_pull_tables(json_path: str, pulls: list[dict]) -> None:
         }
 
     ordered = sorted(pulls, key=lambda pull: pull.get("created_at") or "")
+    ages = []
+    for pull in ordered:
+        created_at = pull.get("created_at")
+        if not created_at:
+            continue
+        try:
+            created = _parse_iso(created_at)
+        except ValueError:
+            continue
+        ages.append(max(0.0, (now - created).total_seconds() / 86400))
     payload = {
         "latest": [row(pull) for pull in ordered[-10:][::-1]],
         "oldest": [row(pull) for pull in ordered[:10]],
+        "ages_days": ages,
     }
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w", encoding="utf-8") as stream:
@@ -185,9 +204,10 @@ def main(argv: list[str] | None = None) -> int:
     json_path = os.path.join(args.cache_dir, repo_name, "open_pulls.json")
     _log(f"collecting daily PR activity for {args.repo}")
     open_pulls = list(iter_pulls(args.repo, "open", token))
-    snapshot = collect_snapshot(args.repo, token, open_pulls=open_pulls)
+    now = dt.datetime.now(tz=dt.timezone.utc)
+    snapshot = collect_snapshot(args.repo, token, now=now, open_pulls=open_pulls)
     write_snapshot(csv_path, snapshot)
-    write_open_pull_tables(json_path, open_pulls)
+    write_open_pull_tables(json_path, open_pulls, now=now)
     _log(
         f"saved {csv_path}: open={snapshot['open_prs']}, "
         f"opened_7d={snapshot['opened_prs_7d']}, "
