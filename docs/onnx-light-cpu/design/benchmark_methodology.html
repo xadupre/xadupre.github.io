@@ -63,11 +63,11 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Kernels" href="kernels/index.html" />
-    <link rel="prev" title="Registering kernels" href="registering_kernels.html" />
+    <link rel="prev" title="Kernel and implementation selection" href="kernel_selection.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 29, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 31, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -178,7 +178,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -314,7 +314,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -391,6 +391,8 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="registering_kernels.html">Registering kernels</a></li>
+<li class="toctree-l1"><a class="reference internal" href="parallel_execution.html">Parallel kernel execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="kernel_selection.html">Kernel and implementation selection</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Benchmark Methodology</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="kernels/index.html">Kernels</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="kernels/unary_kernel_design.html">Unary Kernel Design</a></li>
@@ -462,177 +464,68 @@
                   
   <section id="benchmark-methodology">
 <span id="l-benchmark-methodology"></span><h1>Benchmark Methodology<a class="headerlink" href="#benchmark-methodology" title="Link to this heading">#</a></h1>
-<p>CPU inference benchmarks are easy to invalidate because kernel registration,
-thread pools, allocator arenas, packed weights, and runtime sessions all retain
-process-wide or session-wide state. This page lists the requirements for
-benchmarks published by <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> and the pitfalls we have already hit.</p>
-<section id="choose-the-measurement-layer">
-<h2>Choose the measurement layer<a class="headerlink" href="#choose-the-measurement-layer" title="Link to this heading">#</a></h2>
-<p>State which layer answers the question before writing the benchmark.</p>
-<dl class="simple">
-<dt>Kernel throughput</dt><dd><p>Call the typed kernel with preallocated inputs and outputs. This isolates
-arithmetic, packing, and conversion, but not model dispatch, output
-allocation, or runtime lifetime management.</p>
-</dd>
-<dt>End-to-end steady state</dt><dd><p>Reuse a prepared <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> or equivalent session and time one
-inference, including every allocation, arena lease, and dispatch cost.
-Exclude model parsing, kernel registration, session construction, and
-first-run preparation unless the benchmark is explicitly about startup.</p>
-</dd>
-<dt>Startup</dt><dd><p>Report model serialization, registration, session construction, first run,
-and cache loading separately. Do not fold startup into steady-state samples.</p>
-</dd>
-</dl>
-<p>At least one end-to-end measurement must accompany an isolated kernel result: a
-fast micro-kernel does not prove the registered operator is fast.</p>
-</section>
-<section id="verify-what-is-executing">
-<h2>Verify what is executing<a class="headerlink" href="#verify-what-is-executing" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> changes a process-wide dispatch table, and a runtime
-session resolves and caches a kernel on its first run. Consequently:</p>
+<p>This is a reference for results published by <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>. It records
+the safeguards needed to interpret this project’s kernels and runtimes; it is
+not a general CPU benchmarking guide.</p>
+<section id="choose-the-measurement">
+<h2>Choose the measurement<a class="headerlink" href="#choose-the-measurement" title="Link to this heading">#</a></h2>
+<p>Label the result with exactly one of these layers:</p>
 <ul class="simple">
-<li><p>resolve a built-in baseline before registering <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>;</p></li>
-<li><p>create accelerated sessions after registration;</p></li>
-<li><p>enable kernel-usage recording for an untimed probe and assert the exact
-library-qualified kernel name, then disable it during timing;</p></li>
-<li><p>print the detected SIMD level, selected algorithm or tuning profile, and
-effective thread count;</p></li>
-<li><p>treat a missing integration extension as a skipped backend, not a successful
-accelerated measurement.</p></li>
+<li><p><strong>Kernel throughput:</strong> call a typed kernel with preallocated inputs and
+outputs. It measures arithmetic, packing, and conversions, but not runtime
+dispatch or allocations.</p></li>
+<li><p><strong>Steady-state end-to-end:</strong> reuse a prepared evaluator/session and time
+inference. Exclude parsing, registration, construction, and first-run setup.</p></li>
+<li><p><strong>Startup:</strong> report serialization, registration, session construction,
+first-run preparation, and cache loading separately.</p></li>
 </ul>
-<p>Correct output is necessary but does not prove the intended kernel ran. Verify
-both dispatch identity and numerical results.</p>
+<p>An isolated kernel result needs a steady-state end-to-end companion: it does
+not establish the cost of the registered operator. Use the
+<a class="reference internal" href="../examples.html"><span class="doc">examples gallery</span></a> or the parity drivers in
+<code class="docutils literal notranslate"><span class="pre">tools/benchmark_*_parity.py</span></code> as the starting point.</p>
 </section>
-<section id="control-persistent-executors">
-<h2>Control persistent executors<a class="headerlink" href="#control-persistent-executors" title="Link to this heading">#</a></h2>
-<p>ONNX Runtime, <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>, NumPy, and the BLAS selected by
-NumPy may each own a persistent worker pool whose idle workers spin, retain
-affinity, and perturb a different backend without appearing in its timed
-interval. On shared or uncontrolled machines, measure backends in isolated global
-phases:</p>
-<ol class="arabic simple">
-<li><p>prepare identical models and inputs without constructing competing runtime
-sessions;</p></li>
-<li><p>run every <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> and built-in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> case;</p></li>
-<li><p>release all of those sessions;</p></li>
-<li><p>measure NumPy in its own phase when it may initialize a threaded BLAS;</p></li>
-<li><p>only then construct and run every ONNX Runtime session;</p></li>
-<li><p>perform cross-backend correctness checks after every timed phase.</p></li>
-</ol>
-<p>Regenerate identical inputs from the same seed in each phase. For strict
-isolation, run one backend per child process. Alternating candidates in one
-process is appropriate only on a dedicated, pinned host after proving they leave
-no competing spinning pools. Keep each runtime’s documented default spin policy;
-phase separation, rather than disabling spin, prevents cross-runtime pollution.
-Never run independent CPU benchmarks concurrently on the same cores.</p>
-</section>
-<section id="threads-affinity-and-spinning">
-<h2>Threads, affinity, and spinning<a class="headerlink" href="#threads-affinity-and-spinning" title="Link to this heading">#</a></h2>
-<p>Published results use each backend’s documented default unless the experiment
-is explicitly about thread scaling. Do not reduce ONNX Runtime’s thread count to
-make a comparison look better. Record the requested and effective participant
-counts (including the calling thread), the CPU topology (physical cores, logical
-threads, SMT, hybrid P/E cores), the process CPU set and worker affinities, the
-spin-before-park policy, and whether nested parallelism is disabled. A profile
-calibrated for one effective thread count must not run on a pool using another.</p>
-</section>
-<section id="build-and-machine-state">
-<h2>Build and machine state<a class="headerlink" href="#build-and-machine-state" title="Link to this heading">#</a></h2>
-<p>Performance extensions and benchmark binaries must be built in <code class="docutils literal notranslate"><span class="pre">Release</span></code>.
-Report the compiler, optimization flags, enabled ISA translation units, and the
-runtime ISA selected by dispatch; a Debug extension can be correct yet several
-times slower.</p>
-<p>Ideally publishable evidence would also pin the CPU microarchitecture, cache
-sizes, NUMA topology, OS and kernel, frequency governor and turbo policy, and the
-exact package versions of <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, ONNX Runtime,
-NumPy, and BLAS. In practice this microarchitecture record is <strong>not</strong> captured
-automatically here: reliable capture is machine-specific and the probing itself
-steals time and can perturb the very measurement it documents. Note the machine
-manually when it matters instead of trusting an automated snapshot.</p>
-<p>Shared CI and development machines provide diagnostics, not parity gates.
-Unexpected dispersion or changing NumPy times are evidence of contention, not an
-invitation to select the best observation.</p>
-</section>
-<section id="warmup-and-sampling">
-<h2>Warmup and sampling<a class="headerlink" href="#warmup-and-sampling" title="Link to this heading">#</a></h2>
-<p>Warm up until lazy preparation, allocation growth, packing caches, and worker
-creation have completed, and keep warmup outside every timed sample.</p>
-<p>Bound each repeated gallery measurement by both a maximum repetition count and
-two seconds of cumulative measured execution. Stop at whichever limit is
-reached first, allowing a call already in progress to finish.</p>
-<p>Retain raw samples and report at least the median and a dispersion measure
-(interquartile range or percentiles). Use enough work per sample that timer and
-scheduler resolution are negligible: batch nearby short calls and divide by the
-batch size, reduce repetitions for large workloads without dropping below a
-documented minimum, and synchronize asynchronous backends before stopping the
-timer. Never report only the minimum or the fastest rerun. The batch must repeat
-the same public operation; moving packing, conversion, or allocation outside the
-batch changes the measured layer and requires a separate label.</p>
-</section>
-<section id="inputs-and-correctness">
-<h2>Inputs and correctness<a class="headerlink" href="#inputs-and-correctness" title="Link to this heading">#</a></h2>
-<p>Use identical logical inputs, shapes, attributes, and transposition flags.
-Generate in a common high-precision type before rounding independently to each
-tested dtype, preserving the same seed and generation order in every phase.</p>
-<p>Validate after timing: exact results where the operator contract is bit-exact;
-signed zero, infinities, NaNs, integer limits, empty tensors, and SIMD tails
-where relevant; explicit dtype- and reduction-length-dependent tolerances for
-floating-point reductions; and the complete output, not a prefix or checksum.
-Different accumulation precision can require different tolerances without
-invalidating the comparison, but document the difference rather than silently
-widening tolerance until a failing backend passes.</p>
-</section>
-<section id="memory-and-lifetime">
-<h2>Memory and lifetime<a class="headerlink" href="#memory-and-lifetime" title="Link to this heading">#</a></h2>
-<p>Confirm whether inputs are borrowed or copied and whether outputs come from the
-execution arena, I/O arena, or a backend allocator. For zero-copy claims, assert
-the input address or allocator counters; for arena-reuse claims, release the
-output, verify the lease count, rerun the same shape, and compare addresses.</p>
-<p>Distinguish dynamic from constant weights: a constant-weight benchmark may
-prepack once, while a dynamic-input benchmark must include packing on every call.
-Do not compare one policy against the other without labeling it. Watch peak
-memory when regenerating large inputs, and exclude garbage collection from timed
-intervals.</p>
-</section>
-<section id="issues-already-faced">
-<h2>Issues already faced<a class="headerlink" href="#issues-already-faced" title="Link to this heading">#</a></h2>
-<p>The requirements above come from concrete failures. Watch for these:</p>
+<section id="prove-the-selected-kernel-ran">
+<h2>Prove the selected kernel ran<a class="headerlink" href="#prove-the-selected-kernel-ran" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> changes process-wide dispatch, while sessions resolve
+and cache kernels on their first run. Therefore:</p>
 <ul class="simple">
-<li><p>Small-size timing checks are flaky on shared CI runners: the smallest shapes
-are dominated by scheduler and timer noise, so a SIMD kernel does not reliably
-beat the built-in one at tiny sizes. Retry a few times rather than failing on a
-single observation.</p></li>
-<li><p>NumPy/BLAS invoked before the accelerated phase left a spinning worker pool
-that penalized the next backend measured on the same cores.</p></li>
-<li><p>A kernel resolved before <code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> kept dispatching to the
-built-in implementation, so a “fast” number was never produced by the
-accelerated kernel.</p></li>
-<li><p>Correct output was mistaken for correct dispatch; only kernel-usage recording
-revealed the wrong kernel had run.</p></li>
-<li><p>A Debug build produced correct but multiples-slower results that were reported
-as a regression.</p></li>
-<li><p>Emulated ISA runs (for example QEMU SVE at a non-power-of-two vector length)
-were far slower than native and skewed comparisons.</p></li>
-<li><p>Prepacked constant weights were compared against dynamic-input packing without
-labeling the difference, hiding per-call packing cost.</p></li>
+<li><p>Resolve a built-in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> baseline before registration and construct
+accelerated sessions after it.</p></li>
+<li><p>For an untimed probe, enable kernel-usage recording and assert the expected
+library-qualified kernel name; disable it while timing because its mutex
+changes per-call cost.</p></li>
+<li><p>Report detected SIMD level, selected algorithm/tuning profile when relevant,
+and the effective thread count. A missing integration extension is <code class="docutils literal notranslate"><span class="pre">not</span>
+<span class="pre">supported</span></code>, not an accelerated result.</p></li>
+<li><p>Check complete outputs after every backend phase, using the operator’s
+exact contract or an explicit dtype- and reduction-size-appropriate
+tolerance. Correct output alone does not prove dispatch.</p></li>
 </ul>
 </section>
-<section id="review-checklist">
-<h2>Review checklist<a class="headerlink" href="#review-checklist" title="Link to this heading">#</a></h2>
-<p>Before accepting benchmark evidence, verify all of the following:</p>
-<ul class="simple">
-<li><p>Release build and exact commits are recorded.</p></li>
-<li><p>The expected accelerated kernel and ISA are asserted outside timing.</p></li>
-<li><p>Setup, first run, and steady state are separated.</p></li>
-<li><p>Competing persistent pools do not coexist during a timed phase.</p></li>
-<li><p>NumPy/BLAS has not been invoked before the accelerated phase.</p></li>
-<li><p>Threads, affinity, spin policy, and CPU set are reported truthfully.</p></li>
-<li><p>Inputs and outputs are copied or borrowed as claimed.</p></li>
-<li><p>Every backend is validated with an explicit numerical contract.</p></li>
-<li><p>Raw samples, median, and dispersion are retained.</p></li>
-<li><p>Unsupported dtype/backend combinations are reported as <code class="docutils literal notranslate"><span class="pre">not</span> <span class="pre">supported</span></code>.</p></li>
-<li><p>Shared-runner results are labeled diagnostic.</p></li>
-</ul>
+<section id="keep-executors-separate">
+<h2>Keep executors separate<a class="headerlink" href="#keep-executors-separate" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>, <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, ONNX Runtime, NumPy, and BLAS can retain
+worker pools. Do not construct or run competing backends during a timed phase.
+Run the <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code>/built-in phase, release its sessions, then measure
+NumPy and ONNX Runtime in separate phases; regenerate inputs from the same seed
+per phase. Use separate child processes when strict isolation is required.</p>
+<p>Report the requested and effective participant counts (including the caller)
+and relevant CPU configuration: CPU model/topology, process CPU set or
+affinity, and any non-default spin or nested-parallelism setting. Use a
+<code class="docutils literal notranslate"><span class="pre">Release</span></code> build and identify the selected ISA. Shared-runner measurements
+are diagnostic, not parity gates.</p>
+</section>
+<section id="use-the-script-safeguards">
+<h2>Use the script safeguards<a class="headerlink" href="#use-the-script-safeguards" title="Link to this heading">#</a></h2>
+<p>Keep the benchmark scripts’ default <code class="docutils literal notranslate"><span class="pre">--warmup</span></code>, <code class="docutils literal notranslate"><span class="pre">--repeat</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">--max-repeat-time</span></code> settings unless the experiment documents a reason to
+change them. Warmups and timed samples are separately bounded; do not time
+first-run preparation. Retain the raw samples and report their median plus the
+dispersion the driver emits (for example, IQR or percentiles), rather than a
+best observation.</p>
+<p>Use identical models, inputs, shapes, and attributes for every backend. If
+constant weights are prepacked, label that result separately from dynamic
+weights, whose packing belongs in every invocation.</p>
 </section>
 </section>
 
@@ -647,12 +540,12 @@ labeling the difference, hiding per-call packing cost.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="registering_kernels.html"
+       href="kernel_selection.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Registering kernels</p>
+        <p class="prev-next-title">Kernel and implementation selection</p>
       </div>
     </a>
     <a class="right-next"
@@ -683,16 +576,10 @@ labeling the difference, hiding per-call packing cost.</p></li>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-the-measurement-layer">Choose the measurement layer</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#verify-what-is-executing">Verify what is executing</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#control-persistent-executors">Control persistent executors</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#threads-affinity-and-spinning">Threads, affinity, and spinning</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-and-machine-state">Build and machine state</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#warmup-and-sampling">Warmup and sampling</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#inputs-and-correctness">Inputs and correctness</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#memory-and-lifetime">Memory and lifetime</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issues-already-faced">Issues already faced</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#review-checklist">Review checklist</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#choose-the-measurement">Choose the measurement</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prove-the-selected-kernel-ran">Prove the selected kernel ran</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#keep-executors-separate">Keep executors separate</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#use-the-script-safeguards">Use the script safeguards</a></li>
 </ul>
   </nav></div>
 
@@ -727,7 +614,7 @@ labeling the difference, hiding per-call packing cost.</p></li>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 29, 2026.
+  Last updated on Aug 31, 2026.
   <br/>
 </p></div>
       

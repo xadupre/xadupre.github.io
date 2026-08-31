@@ -48,7 +48,7 @@ Setup
 Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 ``1=SSE2``, ``2=AVX``, ``3=AVX2`` and ``4=AVX512``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 31-80
+.. GENERATED FROM PYTHON SOURCE LINES 31-85
 
 .. code-block:: Python
 
@@ -85,16 +85,21 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
     from onnx_light_cpu import (
         clear_used_kernel_names,
+        detect_simd_level,
+        has_cpu_kernels,
         register_kernels,
+        SimdLevel,
         set_kernel_usage_recording,
         used_kernel_names,
     )
-    from onnx_light_cpu.onnx_py._cpukernels import (
-        detect_simd_level,
-        has_cpu_kernels,
-    )
 
-    _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
+    _SIMD_NAMES = {
+        SimdLevel.NONE: "scalar",
+        SimdLevel.SSE2: "SSE2",
+        SimdLevel.AVX: "AVX",
+        SimdLevel.AVX2: "AVX2",
+        SimdLevel.AVX512: "AVX-512",
+    }
 
     assert has_cpu_kernels()
     level = detect_simd_level()
@@ -114,7 +119,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 81-87
+.. GENERATED FROM PYTHON SOURCE LINES 86-92
 
 Build the shared ONNX model
 ---------------------------
@@ -123,7 +128,7 @@ A single ``Abs`` node operating on a 1-D ``float32`` tensor of dynamic length
 is enough to benchmark the runtimes. The exact same model is fed to
 onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
-.. GENERATED FROM PYTHON SOURCE LINES 87-107
+.. GENERATED FROM PYTHON SOURCE LINES 92-112
 
 .. code-block:: Python
 
@@ -154,12 +159,12 @@ onnxruntime and to onnx-light so the comparison is apples-to-apples.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 108-110
+.. GENERATED FROM PYTHON SOURCE LINES 113-115
 
 Sizes benchmarked
 -----------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 110-142
+.. GENERATED FROM PYTHON SOURCE LINES 115-147
 
 .. code-block:: Python
 
@@ -202,7 +207,7 @@ Sizes benchmarked
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 143-151
+.. GENERATED FROM PYTHON SOURCE LINES 148-156
 
 Prepare the built-in (un-accelerated) onnx-light Abs kernel
 -------------------------------------------------------------
@@ -213,7 +218,7 @@ uses on its *first* run. This baseline therefore uses its own model/session
 and runs once **before** ``register_kernels()`` is called below. Its cached
 built-in kernel can then be timed in a separate phase on the same inputs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 151-157
+.. GENERATED FROM PYTHON SOURCE LINES 156-162
 
 .. code-block:: Python
 
@@ -236,7 +241,7 @@ built-in kernel can then be timed in a separate phase on the same inputs.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 158-164
+.. GENERATED FROM PYTHON SOURCE LINES 163-169
 
 Build the onnx-light evaluator
 ------------------------------
@@ -245,7 +250,7 @@ Build the onnx-light evaluator
 onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
 the model dispatches to the SIMD-accelerated kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 164-225
+.. GENERATED FROM PYTHON SOURCE LINES 169-230
 
 .. code-block:: Python
 
@@ -319,12 +324,12 @@ the model dispatches to the SIMD-accelerated kernel.
  .. code-block:: none
 
     onnx-light session thread count: 2
-    verified onnx-light arenas: distinct ExecutionArena/IOArena, IO buffer reused at 0x564cf82ebde0; NumPy input is zero-copy
+    verified onnx-light arenas: distinct ExecutionArena/IOArena, IO buffer reused at 0x55fb45ea6960; NumPy input is zero-copy
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 226-241
+.. GENERATED FROM PYTHON SOURCE LINES 231-246
 
 Setup cost: ReferenceEvaluator stays lightweight
 -------------------------------------------------
@@ -342,7 +347,7 @@ Kernel registration is process-wide and independent of evaluator construction,
 so it is timed separately rather than incorrectly attributing its first-import
 cost to ``ReferenceEvaluator``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 241-245
+.. GENERATED FROM PYTHON SOURCE LINES 246-250
 
 .. code-block:: Python
 
@@ -358,13 +363,13 @@ cost to ``ReferenceEvaluator``.
 
  .. code-block:: none
 
-    setup: onnx-light ReferenceEvaluator = 0.29 ms
-    setup: onnx-light-cpu kernel registration = 0.07 ms
+    setup: onnx-light ReferenceEvaluator = 0.25 ms
+    setup: onnx-light-cpu kernel registration = 0.13 ms
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 246-253
+.. GENERATED FROM PYTHON SOURCE LINES 251-258
 
 Run the benchmark
 -----------------
@@ -374,7 +379,7 @@ onnx-light phases prevents its persistent worker pool from perturbing them.
 Likewise, the accelerated phase finishes before the built-in onnx-light pool
 is first used. Batched samples report steady-state time per inference.
 
-.. GENERATED FROM PYTHON SOURCE LINES 253-317
+.. GENERATED FROM PYTHON SOURCE LINES 258-322
 
 .. code-block:: Python
 
@@ -450,20 +455,20 @@ is first used. Batched samples report steady-state time per inference.
 
  .. code-block:: none
 
-    setup: onnxruntime InferenceSession = 0.80 ms
-    size=      100 | numpy=      0.58 us | onnx-light=      2.54 us | onnx-light-cpu=      2.54 us | cpu vs built-in= 1.00x | onnxruntime=      8.61 us | cpu vs onnxruntime= 3.39x
-    size=     1000 | numpy=      0.84 us | onnx-light=      2.60 us | onnx-light-cpu=      2.60 us | cpu vs built-in= 1.00x | onnxruntime=      8.83 us | cpu vs onnxruntime= 3.40x
-    size=    10000 | numpy=      1.60 us | onnx-light=      3.43 us | onnx-light-cpu=      3.45 us | cpu vs built-in= 0.99x | onnxruntime=     10.56 us | cpu vs onnxruntime= 3.06x
-    size=   100000 | numpy=     14.74 us | onnx-light=     11.34 us | onnx-light-cpu=     10.27 us | cpu vs built-in= 1.10x | onnxruntime=     21.20 us | cpu vs onnxruntime= 2.06x
-    size=  1000000 | numpy=    136.31 us | onnx-light=     59.96 us | onnx-light-cpu=     59.18 us | cpu vs built-in= 1.01x | onnxruntime=     70.39 us | cpu vs onnxruntime= 1.19x
-    size= 10000000 | numpy=   3469.15 us | onnx-light=   1438.98 us | onnx-light-cpu=   1383.49 us | cpu vs built-in= 1.04x | onnxruntime=   1504.05 us | cpu vs onnxruntime= 1.09x
-    size=100000000 | numpy=  39181.70 us | onnx-light=  20604.97 us | onnx-light-cpu=  20546.58 us | cpu vs built-in= 1.00x | onnxruntime=  21433.80 us | cpu vs onnxruntime= 1.04x
+    setup: onnxruntime InferenceSession = 1.65 ms
+    size=      100 | numpy=      0.45 us | onnx-light=      2.24 us | onnx-light-cpu=      2.24 us | cpu vs built-in= 1.00x | onnxruntime=      7.54 us | cpu vs onnxruntime= 3.37x
+    size=     1000 | numpy=      0.72 us | onnx-light=      2.31 us | onnx-light-cpu=      2.30 us | cpu vs built-in= 1.00x | onnxruntime=      7.65 us | cpu vs onnxruntime= 3.32x
+    size=    10000 | numpy=      1.60 us | onnx-light=      3.24 us | onnx-light-cpu=      3.23 us | cpu vs built-in= 1.01x | onnxruntime=      9.04 us | cpu vs onnxruntime= 2.80x
+    size=   100000 | numpy=     11.20 us | onnx-light=      8.57 us | onnx-light-cpu=      8.48 us | cpu vs built-in= 1.01x | onnxruntime=     14.02 us | cpu vs onnxruntime= 1.65x
+    size=  1000000 | numpy=    117.38 us | onnx-light=     66.10 us | onnx-light-cpu=     69.21 us | cpu vs built-in= 0.96x | onnxruntime=     76.43 us | cpu vs onnxruntime= 1.10x
+    size= 10000000 | numpy=   3440.46 us | onnx-light=   1408.79 us | onnx-light-cpu=   1492.48 us | cpu vs built-in= 0.94x | onnxruntime=   1580.81 us | cpu vs onnxruntime= 1.06x
+    size=100000000 | numpy=  34894.32 us | onnx-light=  20922.20 us | onnx-light-cpu=  20801.77 us | cpu vs built-in= 1.01x | onnxruntime=  21274.62 us | cpu vs onnxruntime= 1.02x
     verified onnx-light-cpu Abs dispatch
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 318-329
+.. GENERATED FROM PYTHON SOURCE LINES 323-334
 
 Plot the timings
 ----------------
@@ -477,7 +482,7 @@ flat line at ``1`` by construction. The speed-up panel uses a logarithmic
 y-axis so that a given ratio and its reciprocal are equidistant from the
 ``1`` baseline.
 
-.. GENERATED FROM PYTHON SOURCE LINES 329-399
+.. GENERATED FROM PYTHON SOURCE LINES 334-404
 
 .. code-block:: Python
 
@@ -566,7 +571,7 @@ y-axis so that a given ratio and its reciprocal are equidistant from the
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 8.473 seconds)
+   **Total running time of the script:** (0 minutes 8.520 seconds)
 
 
 .. _sphx_glr_download_auto_examples_benchmarks_plot_abs_benchmark.py:

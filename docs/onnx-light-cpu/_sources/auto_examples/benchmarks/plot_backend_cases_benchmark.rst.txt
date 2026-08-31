@@ -51,7 +51,7 @@ is of interest and ``--max-cases`` controls how many matching cases run.
 onnx-light uses unpinned workers, matching ONNX Runtime when its thread count
 is explicit, so the comparison does not mix different affinity policies.
 
-.. GENERATED FROM PYTHON SOURCE LINES 34-162
+.. GENERATED FROM PYTHON SOURCE LINES 34-227
 
 .. code-block:: Python
 
@@ -61,6 +61,7 @@ is explicit, so the comparison does not mix different affinity policies.
     import os
     import re
     import time
+    from dataclasses import dataclass
 
     import matplotlib.pyplot as plt
     import numpy as np
@@ -98,7 +99,9 @@ is explicit, so the comparison does not mix different affinity policies.
         help="regular expression a case name must additionally match, e.g. '^test_cpu_gemm_'",
     )
     parser.add_argument(
+        "--max-case",
         "--max-cases",
+        dest="max_cases",
         type=int,
         default=20,
         help="maximum number of matching cases to run (default: 20; 0 disables the limit)",
@@ -154,24 +157,86 @@ is explicit, so the comparison does not mix different affinity policies.
         return np.frombuffer(tensor.raw_data(), dtype=dtype).reshape(shape)
 
 
+    _CASE_GROUP_SUFFIXES = (
+        "bfloat16",
+        "float16",
+        "float32",
+        "float64",
+        "int8",
+        "int16",
+        "int32",
+        "int64",
+        "uint8",
+        "uint16",
+        "uint32",
+        "uint64",
+        "bool",
+        "benchmark",
+    )
+
+
+    def _case_group_key(name):
+        """Derives a cheap, name-only grouping key used to spread ``--max-cases``
+        truncation across operators.
+
+        This must not touch ``tc.model``: building the ONNX model (and the
+        tensors it references) for every collected case -- rather than only for
+        the small subset that ``--max-cases`` keeps -- can exhaust memory on CI
+        runners once the backend test corpus grows. The real ``op_type`` for
+        each *selected* case is still derived from its model later, once, when
+        it is actually measured.
+        """
+        stem = name
+        if stem.startswith("test_cpu_"):
+            stem = stem[len("test_cpu_") :]
+        tokens = stem.split("_")
+        while tokens and (
+            tokens[-1] in _CASE_GROUP_SUFFIXES or re.fullmatch(r"[a-z]?\d+", tokens[-1])
+        ):
+            tokens.pop()
+        return "_".join(tokens) or stem
+
+
     def _collect_cases():
         """Registers and collects every "test_cpu_*_benchmark" backend test case.
 
         Every operator and element type onnx-light-cpu ships a BENCHMARK variant
         for is included; ``--filter`` and ``--max-cases`` are the only further
-        restrictions applied here.
+        restrictions applied here. When ``--max-cases`` truncates the collected
+        cases, the truncation round-robins across operators (instead of taking a
+        contiguous prefix of whatever order they were collected in) so a small
+        ``--max-cases`` still yields a representative, multi-operator sample
+        rather than being dominated by whichever operator happens to sort first
+        or have the most benchmark variants -- e.g. Attention, which ONNX Runtime
+        rejects for several onnx-light-cpu benchmark cases (see below), would
+        otherwise fill the whole default selection and leave nothing comparable
+        to plot.
         """
         register_backend_test_cases()
         max_cases = (
             10 if os.environ.get("UNITTEST_GOING", "0") in ("1", "true", "True") else args.max_cases
         )
-        cases = []
-        for tc in collect_test_cases_by_name("^test_cpu_.*_benchmark$", mode=TestMode.BENCHMARK):
+        cases_by_group = {}
+        for tc in collect_test_cases_by_name(
+            "^test_cpu_.*_benchmark$",
+            mode=TestMode.BENCHMARK,
+            generate_benchmark_expected_outputs=False,
+        ):
             if _name_filter is not None and not _name_filter.search(tc.name):
                 continue
-            cases.append(tc)
-        if max_cases:
-            cases = cases[:max_cases]
+            cases_by_group.setdefault(_case_group_key(tc.name), []).append(tc)
+        if not max_cases:
+            return [tc for group in cases_by_group.values() for tc in group]
+        cases = []
+        while len(cases) < max_cases and any(cases_by_group.values()):
+            for group_key in list(cases_by_group):
+                group = cases_by_group[group_key]
+                if not group:
+                    del cases_by_group[group_key]
+                    continue
+                cases.append(group.pop(0))
+                if len(cases) >= max_cases:
+                    break
         return cases
 
 
@@ -197,7 +262,7 @@ is explicit, so the comparison does not mix different affinity policies.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 163-169
+.. GENERATED FROM PYTHON SOURCE LINES 228-234
 
 Timing helper
 -------------
@@ -206,7 +271,7 @@ Each candidate gets up to ``--warmup`` untimed calls, then up to ``--repeat``
 measured calls. Both phases stop once ``--max-repeat-time`` cumulative
 seconds have elapsed, and the median wall-clock time is retained.
 
-.. GENERATED FROM PYTHON SOURCE LINES 169-192
+.. GENERATED FROM PYTHON SOURCE LINES 234-257
 
 .. code-block:: Python
 
@@ -240,7 +305,7 @@ seconds have elapsed, and the median wall-clock time is retained.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 193-199
+.. GENERATED FROM PYTHON SOURCE LINES 258-264
 
 Run every case through onnx-light-cpu and ONNX Runtime
 -------------------------------------------------------
@@ -249,7 +314,7 @@ Run every case through onnx-light-cpu and ONNX Runtime
 process-wide dispatch table before any of the onnx-light-cpu sessions below
 run for the first time.
 
-.. GENERATED FROM PYTHON SOURCE LINES 199-354
+.. GENERATED FROM PYTHON SOURCE LINES 264-419
 
 .. code-block:: Python
 
@@ -419,34 +484,34 @@ run for the first time.
     -- register_kernels
     -- benchmark onnx-light-cpu
     -- timing warmup=8 repeat=40 max_repeat_time=1s
-    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n65536_float16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n65536_bfloat16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n131072_float32_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n131072_float64_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n131072_float16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:00<00:00, 143.83case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]    benchmarking backend cases: 100%|██████████| 20/20 [00:00<00:00, 102.89case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
+    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_abs_n1024_float32_benchmark]       benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark]          benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_matmul_square_64_float32_benchmark]                                        benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_matmul_skinny_m_float32_benchmark]     benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 13.86case/s, test_cpu_matmul_skinny_m_float32_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 13.86case/s, test_cpu_matmul_skinny_n_float32_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:01<00:00, 13.86case/s, test_cpu_matmul_large_k_float32_benchmark]     benchmarking backend cases:  65%|██████▌   | 13/20 [00:01<00:00,  7.79case/s, test_cpu_matmul_large_k_float32_benchmark]    benchmarking backend cases:  65%|██████▌   | 13/20 [00:01<00:00,  7.79case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]    benchmarking backend cases:  70%|███████   | 14/20 [00:03<00:02,  2.94case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]    benchmarking backend cases:  70%|███████   | 14/20 [00:03<00:02,  2.94case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:04<00:02,  2.12case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]    benchmarking backend cases:  75%|███████▌  | 15/20 [00:04<00:02,  2.12case/s, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]    benchmarking backend cases:  80%|████████  | 16/20 [00:07<00:04,  1.01s/case, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]    benchmarking backend cases:  80%|████████  | 16/20 [00:07<00:04,  1.01s/case, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]       benchmarking backend cases:  85%|████████▌ | 17/20 [00:11<00:04,  1.51s/case, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]    benchmarking backend cases:  85%|████████▌ | 17/20 [00:11<00:04,  1.51s/case, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]    benchmarking backend cases:  90%|█████████ | 18/20 [00:40<00:15,  7.72s/case, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]    benchmarking backend cases:  90%|█████████ | 18/20 [00:40<00:15,  7.72s/case, test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark]               benchmarking backend cases:  90%|█████████ | 18/20 [00:40<00:15,  7.72s/case, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]    benchmarking backend cases: 100%|██████████| 20/20 [00:40<00:00,  2.01s/case, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
     -- benchmark ONNX Runtime
-    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n32768_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65535_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n65536_bfloat16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n131072_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n131072_float64_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n131072_float16_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]    benchmarking backend cases: 100%|██████████| 20/20 [00:00<00:00, 2350.47case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
-    SwiGLU | test_cpu_swiglu_n1024_float32_benchmark    | shapes=1024,1024     | dtype=float32,float32   | onnx-light-cpu=      3.94 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n1024_float64_benchmark    | shapes=1024,1024     | dtype=float64,float64   | onnx-light-cpu=      5.89 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n1024_float16_benchmark    | shapes=1024,1024     | dtype=float16,float16   | onnx-light-cpu=      4.15 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n1024_bfloat16_benchmark   | shapes=1024,1024     | dtype=bfloat16,bfloat16 | onnx-light-cpu=      8.62 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n32768_float32_benchmark   | shapes=32768,32768   | dtype=float32,float32   | onnx-light-cpu=     27.77 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n32768_float64_benchmark   | shapes=32768,32768   | dtype=float64,float64   | onnx-light-cpu=     94.10 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n32768_float16_benchmark   | shapes=32768,32768   | dtype=float16,float16   | onnx-light-cpu=     31.97 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n32768_bfloat16_benchmark  | shapes=32768,32768   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     38.52 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65535_float32_benchmark   | shapes=65535,65535   | dtype=float32,float32   | onnx-light-cpu=     59.19 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65535_float64_benchmark   | shapes=65535,65535   | dtype=float64,float64   | onnx-light-cpu=    184.24 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65535_float16_benchmark   | shapes=65535,65535   | dtype=float16,float16   | onnx-light-cpu=     61.72 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65535_bfloat16_benchmark  | shapes=65535,65535   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     70.38 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65536_float32_benchmark   | shapes=65536,65536   | dtype=float32,float32   | onnx-light-cpu=     52.02 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65536_float64_benchmark   | shapes=65536,65536   | dtype=float64,float64   | onnx-light-cpu=    184.61 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65536_float16_benchmark   | shapes=65536,65536   | dtype=float16,float16   | onnx-light-cpu=     61.69 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n65536_bfloat16_benchmark  | shapes=65536,65536   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     70.65 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n131072_float32_benchmark  | shapes=131072,131072 | dtype=float32,float32   | onnx-light-cpu=    100.24 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n131072_float64_benchmark  | shapes=131072,131072 | dtype=float64,float64   | onnx-light-cpu=    364.60 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n131072_float16_benchmark  | shapes=131072,131072 | dtype=float16,float16   | onnx-light-cpu=    119.98 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-    SwiGLU | test_cpu_swiglu_n131072_bfloat16_benchmark | shapes=131072,131072 | dtype=bfloat16,bfloat16 | onnx-light-cpu=    132.03 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
+    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_abs_n1024_float32_benchmark]       benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark]     benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark]    benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark]          benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_matmul_square_64_float32_benchmark]                                        benchmarking backend cases:   0%|          | 0/20 [00:00<?, ?case/s, test_cpu_matmul_skinny_m_float32_benchmark]     benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 84.20case/s, test_cpu_matmul_skinny_m_float32_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 84.20case/s, test_cpu_matmul_skinny_n_float32_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 84.20case/s, test_cpu_matmul_large_k_float32_benchmark]     benchmarking backend cases:  55%|█████▌    | 11/20 [00:00<00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:01<00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:02<00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:04<00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]       benchmarking backend cases:  55%|█████▌    | 11/20 [00:05<00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]    benchmarking backend cases:  55%|█████▌    | 11/20 [00:09<00:00, 84.20case/s, test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark]               benchmarking backend cases:  55%|█████▌    | 11/20 [00:09<00:00, 84.20case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]    benchmarking backend cases: 100%|██████████| 20/20 [00:09<00:00,  1.69case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]    benchmarking backend cases: 100%|██████████| 20/20 [00:09<00:00,  2.02case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
+                       SwiGLU | test_cpu_swiglu_n1024_float32_benchmark                                               | shapes=1024,1024              | dtype=float32,float32                         | onnx-light-cpu=      3.50 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
+                          Abs | test_cpu_abs_n1024_float32_benchmark                                                  | shapes=1024                   | dtype=float32                                 | onnx-light-cpu=      2.33 us | onnxruntime=      8.36 us | speed-up=  3.58x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark            | shapes=256x128                | dtype=float32                                 | onnx-light-cpu=     34.10 us | onnxruntime=     38.41 us | speed-up=  1.13x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark            | shapes=64x32                  | dtype=float32                                 | onnx-light-cpu=      4.11 us | onnxruntime=      9.35 us | speed-up=  2.28x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark        | shapes=8x32x128               | dtype=float32                                 | onnx-light-cpu=     46.72 us | onnxruntime=     53.66 us | speed-up=  1.15x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark     | shapes=8x32x16x16             | dtype=float32                                 | onnx-light-cpu=     90.35 us | onnxruntime=     92.73 us | speed-up=  1.03x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark      | shapes=4x16x32x8              | dtype=float32                                 | onnx-light-cpu=     16.85 us | onnxruntime=     21.98 us | speed-up=  1.30x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark | shapes=2x8x4x8x8              | dtype=float32                                 | onnx-light-cpu=      7.93 us | onnxruntime=     14.54 us | speed-up=  1.83x
+    MeanVarianceNormalization | test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark       | shapes=4x16x8x8               | dtype=float16                                 | onnx-light-cpu=     26.11 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : Type Err
+                       MatMul | test_cpu_matmul_square_64_float32_benchmark                                           | shapes=64x64,64x64            | dtype=float32,float32                         | onnx-light-cpu=     11.20 us | onnxruntime=     14.39 us | speed-up=  1.28x
+                       MatMul | test_cpu_matmul_skinny_m_float32_benchmark                                            | shapes=1x4096,4096x4096       | dtype=float32,float32                         | onnx-light-cpu=   3577.06 us | onnxruntime=   1678.07 us | speed-up=  0.47x
+                       MatMul | test_cpu_matmul_skinny_n_float32_benchmark                                            | shapes=4096x4096,4096x1       | dtype=float32,float32                         | onnx-light-cpu=   1345.45 us | onnxruntime=   1129.10 us | speed-up=  0.84x
+                       MatMul | test_cpu_matmul_large_k_float32_benchmark                                             | shapes=32x8192,8192x32        | dtype=float32,float32                         | onnx-light-cpu=    142.73 us | onnxruntime=    191.29 us | speed-up=  1.34x
+                       MatMul | test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark                     | shapes=1x1x4096,4096x6144     | dtype=float16,float16                         | onnx-light-cpu=  14031.73 us | onnxruntime=  32168.73 us | speed-up=  2.29x
+                       MatMul | test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark                  | shapes=1x1x4096,4096x4096     | dtype=float16,float16                         | onnx-light-cpu=   9570.70 us | onnxruntime=  21254.72 us | speed-up=  2.22x
+                       MatMul | test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark                | shapes=1x1x4096,4096x12288    | dtype=float16,float16                         | onnx-light-cpu=  28234.56 us | onnxruntime=  64343.47 us | speed-up=  2.28x
+                       MatMul | test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark                   | shapes=1x1x12288,12288x4096   | dtype=float16,float16                         | onnx-light-cpu=  31431.55 us | onnxruntime=  63754.42 us | speed-up=  2.03x
+                       MatMul | test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark               | shapes=1x1x4096,4096x151936   | dtype=float16,float16                         | onnx-light-cpu= 212414.63 us | onnxruntime= 794757.73 us | speed-up=  3.74x
+           BatchNormalization | test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark                          | shapes=32x128,128,128,128,128 | dtype=float32,float32,float32,float32,float32 | onnx-light-cpu=     15.14 us | onnxruntime=     40.38 us | speed-up=  2.67x
+           BatchNormalization | test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark                        | shapes=8x16x64,16,16,16,16    | dtype=float32,float32,float32,float32,float32 | onnx-light-cpu=      5.28 us | onnxruntime=     14.37 us | speed-up=  2.72x
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 355-361
+.. GENERATED FROM PYTHON SOURCE LINES 420-426
 
 Excel export
 ------------
@@ -455,7 +520,7 @@ The full results table -- one row per benchmark case -- is also written to
 an ``.xlsx`` workbook so it can be inspected, filtered, or archived outside
 this script, alongside the printed table and the plot below.
 
-.. GENERATED FROM PYTHON SOURCE LINES 361-379
+.. GENERATED FROM PYTHON SOURCE LINES 426-444
 
 .. code-block:: Python
 
@@ -484,7 +549,7 @@ this script, alongside the printed table and the plot below.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 380-389
+.. GENERATED FROM PYTHON SOURCE LINES 445-458
 
 Plot the speed-ups
 -------------------
@@ -493,38 +558,92 @@ One bar per case, grouped and colored by operator, showing onnx-light-cpu's
 speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
 The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 from the ``1`` baseline. Cases ONNX Runtime failed to run (ort_time is
-None, see the try/except above) are left out of the plot since they have no
-speed-up to show.
+None, see the try/except above) are left out of the plot -- they have no
+speed-up to show -- but not out of the table/xlsx output above, where their
+error is still reported. If every case was rejected or failed, there is
+nothing to plot: :func:`prepare_plot_data` raises rather than silently
+rendering an empty chart, since that would look identical to a build that
+ran fine.
 
-.. GENERATED FROM PYTHON SOURCE LINES 389-427
+.. GENERATED FROM PYTHON SOURCE LINES 458-555
 
 .. code-block:: Python
 
 
-    _plotted_rows = [row for row in rows if row[5] is not None]
-    _unique_op_types = sorted({op_type for op_type, *_ in _plotted_rows})
-    _COLOR_MAP = plt.get_cmap("turbo", len(_unique_op_types))
-    _COLORS = {op_type: _COLOR_MAP(index) for index, op_type in enumerate(_unique_op_types)}
+
+    class NoPlottableCasesError(RuntimeError):
+        """Raised when no collected row has a comparable ONNX Runtime timing.
+
+        A chart with zero bars is not a useful (nor a correct) rendering of "no
+        comparable case was found": it looks identical to "the build silently
+        produced an empty page". Raising here instead turns that situation into a
+        build failure with the offending case names/errors attached.
+        """
+
+
+    @dataclass
+    class PlotData:
+        """Everything the chart needs, derived once from the plottable rows."""
+
+        plotted_rows: list
+        labels: list
+        speedups: np.ndarray
+        colors: list
+        colors_by_op_type: dict
 
 
     def _short_label(name):
+        """Strips the common ``test_cpu_*_benchmark`` case-name affixes."""
         label = name.removeprefix("test_cpu_")
         return label.removesuffix("_benchmark")
 
 
-    labels = [_short_label(name) for _, name, *_ in _plotted_rows]
-    speedups = np.array(
-        [ort_time / light_time for _, _, _, _, light_time, ort_time, _ in _plotted_rows]
-    )
-    colors = [_COLORS[op_type] for op_type, *_ in _plotted_rows]
+    def prepare_plot_data(rows):
+        """Turns collected benchmark ``rows`` into the values the chart plots.
 
-    fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plotted_rows))))
-    positions = np.arange(len(_plotted_rows))
-    ax.barh(positions, speedups, color=colors)
+        Each row is ``(op_type, name, shapes, dtypes, light_time, ort_time,
+        ort_error)`` -- the same tuples appended to ``rows`` above. Rows whose
+        ``ort_time`` (index 5) is ``None`` are excluded from the returned plot
+        data. Raises :class:`NoPlottableCasesError` -- naming every rejected case
+        and its error -- when that leaves nothing to plot, rather than letting
+        the caller render an empty chart.
+        """
+        plotted_rows = [row for row in rows if row[5] is not None]
+        if not plotted_rows:
+            if rows:
+                details = "; ".join(f"{row[1]} ({row[6] or 'no error message'})" for row in rows)
+            else:
+                details = "no benchmark case was collected"
+            raise NoPlottableCasesError(
+                "no benchmark case produced a comparable ONNX Runtime timing; every "
+                f"collected case was rejected or failed: {details}"
+            )
+        unique_op_types = sorted({row[0] for row in plotted_rows})
+        color_map = plt.get_cmap("turbo", len(unique_op_types))
+        colors_by_op_type = {
+            op_type: color_map(index) for index, op_type in enumerate(unique_op_types)
+        }
+        labels = [_short_label(row[1]) for row in plotted_rows]
+        speedups = np.array([row[5] / row[4] for row in plotted_rows])
+        colors = [colors_by_op_type[row[0]] for row in plotted_rows]
+        return PlotData(
+            plotted_rows=plotted_rows,
+            labels=labels,
+            speedups=speedups,
+            colors=colors,
+            colors_by_op_type=colors_by_op_type,
+        )
+
+
+    _plot_data = prepare_plot_data(rows)
+
+    fig, ax = plt.subplots(figsize=(8, max(5, 0.4 * len(_plot_data.plotted_rows))))
+    positions = np.arange(len(_plot_data.plotted_rows))
+    ax.barh(positions, _plot_data.speedups, color=_plot_data.colors)
     ax.axvline(1.0, color="grey", linewidth=0.8, linestyle=":")
     ax.set_xscale("log")
-    ax.set_yticks(positions, labels, fontsize=7)
-    for tick_label, speedup in zip(ax.get_yticklabels(), speedups, strict=True):
+    ax.set_yticks(positions, _plot_data.labels, fontsize=7)
+    for tick_label, speedup in zip(ax.get_yticklabels(), _plot_data.speedups, strict=True):
         if speedup <= 0.5:
             tick_label.set_color("red")
         elif speedup < 0.95:
@@ -532,8 +651,17 @@ speed-up to show.
     ax.set_xlabel("speed-up vs onnxruntime")
     ax.set_title("onnx-light-cpu speed-up over onnxruntime on backend cases")
 
-    handles = [plt.Rectangle((0, 0), 1, 1, color=color) for color in _COLORS.values()]
-    ax.legend(handles, _COLORS.keys(), title="operator", loc="upper left", fontsize=8, ncols=3)
+    handles = [
+        plt.Rectangle((0, 0), 1, 1, color=color) for color in _plot_data.colors_by_op_type.values()
+    ]
+    ax.legend(
+        handles,
+        _plot_data.colors_by_op_type.keys(),
+        title="operator",
+        loc="upper left",
+        fontsize=8,
+        ncols=3,
+    )
 
     fig.tight_layout()
     fig.savefig("plot_backend_cases_benchmark.png")
@@ -553,7 +681,7 @@ speed-up to show.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 1.620 seconds)
+   **Total running time of the script:** (0 minutes 51.909 seconds)
 
 
 .. _sphx_glr_download_auto_examples_benchmarks_plot_backend_cases_benchmark.py:

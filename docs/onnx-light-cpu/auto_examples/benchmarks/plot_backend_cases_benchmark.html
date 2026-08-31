@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 29, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 31, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -178,7 +178,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -314,7 +314,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -481,7 +481,7 @@ to download the full example code.</p>
 <span id="sphx-glr-auto-examples-benchmarks-plot-backend-cases-benchmark-py"></span><h1>Benchmark backend test cases against ONNX Runtime<a class="headerlink" href="#benchmark-backend-test-cases-against-onnx-runtime" title="Link to this heading">#</a></h1>
 <p>onnx-light-cpu ships its own ONNX backend test cases – named <code class="docutils literal notranslate"><span class="pre">test_cpu_*</span></code>
 – in a dedicated C++ registration library
-(<code class="docutils literal notranslate"><span class="pre">lib_onnx_light_cpu_backend_test</span></code>, see <a class="reference internal" href="../../api/index.html#onnx_light_cpu.register_backend_test_cases" title="onnx_light_cpu.register_backend_test_cases"><code class="xref py py-func docutils literal notranslate"><span class="pre">onnx_light_cpu.register_backend_test_cases()</span></code></a>).
+(<code class="docutils literal notranslate"><span class="pre">lib_onnx_light_cpu_backend_test</span></code>, see <code class="xref py py-func docutils literal notranslate"><span class="pre">onnx_light_cpu.register_backend_test_cases()</span></code>).
 Every case that has an accelerated kernel also has a <code class="docutils literal notranslate"><span class="pre">TestMode.BENCHMARK</span></code>
 variant: the same operator and attributes, but with inputs large enough that a
 single evaluation takes a measurable amount of time. This example collects
@@ -508,6 +508,7 @@ is explicit, so the comparison does not mix different affinity policies.</p>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">re</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -545,7 +546,9 @@ is explicit, so the comparison does not mix different affinity policies.</p>
     <span class="n">help</span><span class="o">=</span><span class="s2">"regular expression a case name must additionally match, e.g. '^test_cpu_gemm_'"</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
+    <span class="s2">"--max-case"</span><span class="p">,</span>
     <span class="s2">"--max-cases"</span><span class="p">,</span>
+    <span class="n">dest</span><span class="o">=</span><span class="s2">"max_cases"</span><span class="p">,</span>
     <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
     <span class="n">default</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
     <span class="n">help</span><span class="o">=</span><span class="s2">"maximum number of matching cases to run (default: 20; 0 disables the limit)"</span><span class="p">,</span>
@@ -601,24 +604,86 @@ is explicit, so the comparison does not mix different affinity policies.</p>
     <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">frombuffer</span><span class="p">(</span><span class="n">tensor</span><span class="o">.</span><span class="n">raw_data</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">shape</span><span class="p">)</span>
 
 
+<span class="n">_CASE_GROUP_SUFFIXES</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="s2">"bfloat16"</span><span class="p">,</span>
+    <span class="s2">"float16"</span><span class="p">,</span>
+    <span class="s2">"float32"</span><span class="p">,</span>
+    <span class="s2">"float64"</span><span class="p">,</span>
+    <span class="s2">"int8"</span><span class="p">,</span>
+    <span class="s2">"int16"</span><span class="p">,</span>
+    <span class="s2">"int32"</span><span class="p">,</span>
+    <span class="s2">"int64"</span><span class="p">,</span>
+    <span class="s2">"uint8"</span><span class="p">,</span>
+    <span class="s2">"uint16"</span><span class="p">,</span>
+    <span class="s2">"uint32"</span><span class="p">,</span>
+    <span class="s2">"uint64"</span><span class="p">,</span>
+    <span class="s2">"bool"</span><span class="p">,</span>
+    <span class="s2">"benchmark"</span><span class="p">,</span>
+<span class="p">)</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">_case_group_key</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Derives a cheap, name-only grouping key used to spread ``--max-cases``</span>
+<span class="sd">    truncation across operators.</span>
+
+<span class="sd">    This must not touch ``tc.model``: building the ONNX model (and the</span>
+<span class="sd">    tensors it references) for every collected case -- rather than only for</span>
+<span class="sd">    the small subset that ``--max-cases`` keeps -- can exhaust memory on CI</span>
+<span class="sd">    runners once the backend test corpus grows. The real ``op_type`` for</span>
+<span class="sd">    each *selected* case is still derived from its model later, once, when</span>
+<span class="sd">    it is actually measured.</span>
+<span class="sd">    """</span>
+    <span class="n">stem</span> <span class="o">=</span> <span class="n">name</span>
+    <span class="k">if</span> <span class="n">stem</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"test_cpu_"</span><span class="p">):</span>
+        <span class="n">stem</span> <span class="o">=</span> <span class="n">stem</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="s2">"test_cpu_"</span><span class="p">)</span> <span class="p">:]</span>
+    <span class="n">tokens</span> <span class="o">=</span> <span class="n">stem</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"_"</span><span class="p">)</span>
+    <span class="k">while</span> <span class="n">tokens</span> <span class="ow">and</span> <span class="p">(</span>
+        <span class="n">tokens</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="n">_CASE_GROUP_SUFFIXES</span> <span class="ow">or</span> <span class="n">re</span><span class="o">.</span><span class="n">fullmatch</span><span class="p">(</span><span class="sa">r</span><span class="s2">"[a-z]?\d+"</span><span class="p">,</span> <span class="n">tokens</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+    <span class="p">):</span>
+        <span class="n">tokens</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
+    <span class="k">return</span> <span class="s2">"_"</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span> <span class="ow">or</span> <span class="n">stem</span>
+
+
 <span class="k">def</span><span class="w"> </span><span class="nf">_collect_cases</span><span class="p">():</span>
 <span class="w">    </span><span class="sd">"""Registers and collects every "test_cpu_*_benchmark" backend test case.</span>
 
 <span class="sd">    Every operator and element type onnx-light-cpu ships a BENCHMARK variant</span>
 <span class="sd">    for is included; ``--filter`` and ``--max-cases`` are the only further</span>
-<span class="sd">    restrictions applied here.</span>
+<span class="sd">    restrictions applied here. When ``--max-cases`` truncates the collected</span>
+<span class="sd">    cases, the truncation round-robins across operators (instead of taking a</span>
+<span class="sd">    contiguous prefix of whatever order they were collected in) so a small</span>
+<span class="sd">    ``--max-cases`` still yields a representative, multi-operator sample</span>
+<span class="sd">    rather than being dominated by whichever operator happens to sort first</span>
+<span class="sd">    or have the most benchmark variants -- e.g. Attention, which ONNX Runtime</span>
+<span class="sd">    rejects for several onnx-light-cpu benchmark cases (see below), would</span>
+<span class="sd">    otherwise fill the whole default selection and leave nothing comparable</span>
+<span class="sd">    to plot.</span>
 <span class="sd">    """</span>
     <span class="n">register_backend_test_cases</span><span class="p">()</span>
     <span class="n">max_cases</span> <span class="o">=</span> <span class="p">(</span>
         <span class="mi">10</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"UNITTEST_GOING"</span><span class="p">,</span> <span class="s2">"0"</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"1"</span><span class="p">,</span> <span class="s2">"true"</span><span class="p">,</span> <span class="s2">"True"</span><span class="p">)</span> <span class="k">else</span> <span class="n">args</span><span class="o">.</span><span class="n">max_cases</span>
     <span class="p">)</span>
-    <span class="n">cases</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">collect_test_cases_by_name</span><span class="p">(</span><span class="s2">"^test_cpu_.*_benchmark$"</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="n">TestMode</span><span class="o">.</span><span class="n">BENCHMARK</span><span class="p">):</span>
+    <span class="n">cases_by_group</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">collect_test_cases_by_name</span><span class="p">(</span>
+        <span class="s2">"^test_cpu_.*_benchmark$"</span><span class="p">,</span>
+        <span class="n">mode</span><span class="o">=</span><span class="n">TestMode</span><span class="o">.</span><span class="n">BENCHMARK</span><span class="p">,</span>
+        <span class="n">generate_benchmark_expected_outputs</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+    <span class="p">):</span>
         <span class="k">if</span> <span class="n">_name_filter</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">_name_filter</span><span class="o">.</span><span class="n">search</span><span class="p">(</span><span class="n">tc</span><span class="o">.</span><span class="n">name</span><span class="p">):</span>
             <span class="k">continue</span>
-        <span class="n">cases</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tc</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">max_cases</span><span class="p">:</span>
-        <span class="n">cases</span> <span class="o">=</span> <span class="n">cases</span><span class="p">[:</span><span class="n">max_cases</span><span class="p">]</span>
+        <span class="n">cases_by_group</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="n">_case_group_key</span><span class="p">(</span><span class="n">tc</span><span class="o">.</span><span class="n">name</span><span class="p">),</span> <span class="p">[])</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">tc</span><span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">max_cases</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">[</span><span class="n">tc</span> <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">cases_by_group</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">for</span> <span class="n">tc</span> <span class="ow">in</span> <span class="n">group</span><span class="p">]</span>
+    <span class="n">cases</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">cases</span><span class="p">)</span> <span class="o">&lt;</span> <span class="n">max_cases</span> <span class="ow">and</span> <span class="nb">any</span><span class="p">(</span><span class="n">cases_by_group</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
+        <span class="k">for</span> <span class="n">group_key</span> <span class="ow">in</span> <span class="nb">list</span><span class="p">(</span><span class="n">cases_by_group</span><span class="p">):</span>
+            <span class="n">group</span> <span class="o">=</span> <span class="n">cases_by_group</span><span class="p">[</span><span class="n">group_key</span><span class="p">]</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">group</span><span class="p">:</span>
+                <span class="k">del</span> <span class="n">cases_by_group</span><span class="p">[</span><span class="n">group_key</span><span class="p">]</span>
+                <span class="k">continue</span>
+            <span class="n">cases</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">group</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">cases</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="n">max_cases</span><span class="p">:</span>
+                <span class="k">break</span>
     <span class="k">return</span> <span class="n">cases</span>
 
 
@@ -829,71 +894,79 @@ run for the first time.</p>
 
 benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s]
 benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float16_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n65536_float16_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n65536_bfloat16_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n131072_float32_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n131072_float64_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n131072_float16_benchmark]
-benchmarking backend cases:  75%|███████▌  | 15/20 [00:00&lt;00:00, 143.83case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
-benchmarking backend cases: 100%|██████████| 20/20 [00:00&lt;00:00, 102.89case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_abs_n1024_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_matmul_square_64_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_matmul_skinny_m_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 13.86case/s, test_cpu_matmul_skinny_m_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 13.86case/s, test_cpu_matmul_skinny_n_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:01&lt;00:00, 13.86case/s, test_cpu_matmul_large_k_float32_benchmark]
+benchmarking backend cases:  65%|██████▌   | 13/20 [00:01&lt;00:00,  7.79case/s, test_cpu_matmul_large_k_float32_benchmark]
+benchmarking backend cases:  65%|██████▌   | 13/20 [00:01&lt;00:00,  7.79case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]
+benchmarking backend cases:  70%|███████   | 14/20 [00:03&lt;00:02,  2.94case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]
+benchmarking backend cases:  70%|███████   | 14/20 [00:03&lt;00:02,  2.94case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]
+benchmarking backend cases:  75%|███████▌  | 15/20 [00:04&lt;00:02,  2.12case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]
+benchmarking backend cases:  75%|███████▌  | 15/20 [00:04&lt;00:02,  2.12case/s, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]
+benchmarking backend cases:  80%|████████  | 16/20 [00:07&lt;00:04,  1.01s/case, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]
+benchmarking backend cases:  80%|████████  | 16/20 [00:07&lt;00:04,  1.01s/case, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]
+benchmarking backend cases:  85%|████████▌ | 17/20 [00:11&lt;00:04,  1.51s/case, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]
+benchmarking backend cases:  85%|████████▌ | 17/20 [00:11&lt;00:04,  1.51s/case, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]
+benchmarking backend cases:  90%|█████████ | 18/20 [00:40&lt;00:15,  7.72s/case, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]
+benchmarking backend cases:  90%|█████████ | 18/20 [00:40&lt;00:15,  7.72s/case, test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark]
+benchmarking backend cases:  90%|█████████ | 18/20 [00:40&lt;00:15,  7.72s/case, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
+benchmarking backend cases: 100%|██████████| 20/20 [00:40&lt;00:00,  2.01s/case, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
 -- benchmark ONNX Runtime
 
 benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s]
 benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n1024_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n32768_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65535_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n65536_bfloat16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n131072_float32_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n131072_float64_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n131072_float16_benchmark]
-benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
-benchmarking backend cases: 100%|██████████| 20/20 [00:00&lt;00:00, 2350.47case/s, test_cpu_swiglu_n131072_bfloat16_benchmark]
-SwiGLU | test_cpu_swiglu_n1024_float32_benchmark    | shapes=1024,1024     | dtype=float32,float32   | onnx-light-cpu=      3.94 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n1024_float64_benchmark    | shapes=1024,1024     | dtype=float64,float64   | onnx-light-cpu=      5.89 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n1024_float16_benchmark    | shapes=1024,1024     | dtype=float16,float16   | onnx-light-cpu=      4.15 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n1024_bfloat16_benchmark   | shapes=1024,1024     | dtype=bfloat16,bfloat16 | onnx-light-cpu=      8.62 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n32768_float32_benchmark   | shapes=32768,32768   | dtype=float32,float32   | onnx-light-cpu=     27.77 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n32768_float64_benchmark   | shapes=32768,32768   | dtype=float64,float64   | onnx-light-cpu=     94.10 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n32768_float16_benchmark   | shapes=32768,32768   | dtype=float16,float16   | onnx-light-cpu=     31.97 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n32768_bfloat16_benchmark  | shapes=32768,32768   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     38.52 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65535_float32_benchmark   | shapes=65535,65535   | dtype=float32,float32   | onnx-light-cpu=     59.19 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65535_float64_benchmark   | shapes=65535,65535   | dtype=float64,float64   | onnx-light-cpu=    184.24 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65535_float16_benchmark   | shapes=65535,65535   | dtype=float16,float16   | onnx-light-cpu=     61.72 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65535_bfloat16_benchmark  | shapes=65535,65535   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     70.38 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65536_float32_benchmark   | shapes=65536,65536   | dtype=float32,float32   | onnx-light-cpu=     52.02 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65536_float64_benchmark   | shapes=65536,65536   | dtype=float64,float64   | onnx-light-cpu=    184.61 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65536_float16_benchmark   | shapes=65536,65536   | dtype=float16,float16   | onnx-light-cpu=     61.69 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n65536_bfloat16_benchmark  | shapes=65536,65536   | dtype=bfloat16,bfloat16 | onnx-light-cpu=     70.65 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n131072_float32_benchmark  | shapes=131072,131072 | dtype=float32,float32   | onnx-light-cpu=    100.24 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n131072_float64_benchmark  | shapes=131072,131072 | dtype=float64,float64   | onnx-light-cpu=    364.60 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n131072_float16_benchmark  | shapes=131072,131072 | dtype=float16,float16   | onnx-light-cpu=    119.98 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
-SwiGLU | test_cpu_swiglu_n131072_bfloat16_benchmark | shapes=131072,131072 | dtype=bfloat16,bfloat16 | onnx-light-cpu=    132.03 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_abs_n1024_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_matmul_square_64_float32_benchmark]
+benchmarking backend cases:   0%|          | 0/20 [00:00&lt;?, ?case/s, test_cpu_matmul_skinny_m_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 84.20case/s, test_cpu_matmul_skinny_m_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 84.20case/s, test_cpu_matmul_skinny_n_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 84.20case/s, test_cpu_matmul_large_k_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:00&lt;00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:01&lt;00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:02&lt;00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:04&lt;00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:05&lt;00:00, 84.20case/s, test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:09&lt;00:00, 84.20case/s, test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark]
+benchmarking backend cases:  55%|█████▌    | 11/20 [00:09&lt;00:00, 84.20case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
+benchmarking backend cases: 100%|██████████| 20/20 [00:09&lt;00:00,  1.69case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
+benchmarking backend cases: 100%|██████████| 20/20 [00:09&lt;00:00,  2.02case/s, test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark]
+                   SwiGLU | test_cpu_swiglu_n1024_float32_benchmark                                               | shapes=1024,1024              | dtype=float32,float32                         | onnx-light-cpu=      3.50 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : /onnxrun
+                      Abs | test_cpu_abs_n1024_float32_benchmark                                                  | shapes=1024                   | dtype=float32                                 | onnx-light-cpu=      2.33 us | onnxruntime=      8.36 us | speed-up=  3.58x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_r256_w128_axes1_rank2_float32_benchmark            | shapes=256x128                | dtype=float32                                 | onnx-light-cpu=     34.10 us | onnxruntime=     38.41 us | speed-up=  1.13x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_r64_w32_axes0_1_rank2_float32_benchmark            | shapes=64x32                  | dtype=float32                                 | onnx-light-cpu=      4.11 us | onnxruntime=      9.35 us | speed-up=  2.28x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_n8_c32_l128_axes0_2_rank3_float32_benchmark        | shapes=8x32x128               | dtype=float32                                 | onnx-light-cpu=     46.72 us | onnxruntime=     53.66 us | speed-up=  1.15x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_n8_c32_h16_w16_default_rank4_float32_benchmark     | shapes=8x32x16x16             | dtype=float32                                 | onnx-light-cpu=     90.35 us | onnxruntime=     92.73 us | speed-up=  1.03x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_n4_c16_h32_w8_axes2_3_rank4_float32_benchmark      | shapes=4x16x32x8              | dtype=float32                                 | onnx-light-cpu=     16.85 us | onnxruntime=     21.98 us | speed-up=  1.30x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_n2_c8_d4_h8_w8_axes0_2_3_4_rank5_float32_benchmark | shapes=2x8x4x8x8              | dtype=float32                                 | onnx-light-cpu=      7.93 us | onnxruntime=     14.54 us | speed-up=  1.83x
+MeanVarianceNormalization | test_cpu_meanvariancenormalization_n4_c16_h8_w8_default_rank4_float16_benchmark       | shapes=4x16x8x8               | dtype=float16                                 | onnx-light-cpu=     26.11 us | onnxruntime=        error | speed-up=    n/a | onnxruntime_error=[ONNXRuntimeError] : 1 : FAIL : Type Err
+                   MatMul | test_cpu_matmul_square_64_float32_benchmark                                           | shapes=64x64,64x64            | dtype=float32,float32                         | onnx-light-cpu=     11.20 us | onnxruntime=     14.39 us | speed-up=  1.28x
+                   MatMul | test_cpu_matmul_skinny_m_float32_benchmark                                            | shapes=1x4096,4096x4096       | dtype=float32,float32                         | onnx-light-cpu=   3577.06 us | onnxruntime=   1678.07 us | speed-up=  0.47x
+                   MatMul | test_cpu_matmul_skinny_n_float32_benchmark                                            | shapes=4096x4096,4096x1       | dtype=float32,float32                         | onnx-light-cpu=   1345.45 us | onnxruntime=   1129.10 us | speed-up=  0.84x
+                   MatMul | test_cpu_matmul_large_k_float32_benchmark                                             | shapes=32x8192,8192x32        | dtype=float32,float32                         | onnx-light-cpu=    142.73 us | onnxruntime=    191.29 us | speed-up=  1.34x
+                   MatMul | test_cpu_matmul_llm_qwen3_8b_qkv_m1_k4096_n6144_float16_benchmark                     | shapes=1x1x4096,4096x6144     | dtype=float16,float16                         | onnx-light-cpu=  14031.73 us | onnxruntime=  32168.73 us | speed-up=  2.29x
+                   MatMul | test_cpu_matmul_llm_qwen3_8b_o_proj_m1_k4096_n4096_float16_benchmark                  | shapes=1x1x4096,4096x4096     | dtype=float16,float16                         | onnx-light-cpu=   9570.70 us | onnxruntime=  21254.72 us | speed-up=  2.22x
+                   MatMul | test_cpu_matmul_llm_qwen3_8b_gate_up_m1_k4096_n12288_float16_benchmark                | shapes=1x1x4096,4096x12288    | dtype=float16,float16                         | onnx-light-cpu=  28234.56 us | onnxruntime=  64343.47 us | speed-up=  2.28x
+                   MatMul | test_cpu_matmul_llm_qwen3_8b_down_m1_k12288_n4096_float16_benchmark                   | shapes=1x1x12288,12288x4096   | dtype=float16,float16                         | onnx-light-cpu=  31431.55 us | onnxruntime=  63754.42 us | speed-up=  2.03x
+                   MatMul | test_cpu_matmul_llm_qwen3_8b_lm_head_m1_k4096_n151936_float16_benchmark               | shapes=1x1x4096,4096x151936   | dtype=float16,float16                         | onnx-light-cpu= 212414.63 us | onnxruntime= 794757.73 us | speed-up=  3.74x
+       BatchNormalization | test_cpu_batchnormalization_n32_c128_rank2_float32_benchmark                          | shapes=32x128,128,128,128,128 | dtype=float32,float32,float32,float32,float32 | onnx-light-cpu=     15.14 us | onnxruntime=     40.38 us | speed-up=  2.67x
+       BatchNormalization | test_cpu_batchnormalization_n8_c16_l64_rank3_float32_benchmark                        | shapes=8x16x64,16,16,16,16    | dtype=float32,float32,float32,float32,float32 | onnx-light-cpu=      5.28 us | onnxruntime=     14.37 us | speed-up=  2.72x
 </pre></div>
 </div>
 </section>
@@ -927,32 +1000,85 @@ this script, alongside the printed table and the plot below.</p>
 speed-up over ONNX Runtime (values above 1 mean onnx-light-cpu is faster).
 The x-axis is logarithmic so a speed-up and its reciprocal are equidistant
 from the <code class="docutils literal notranslate"><span class="pre">1</span></code> baseline. Cases ONNX Runtime failed to run (ort_time is
-None, see the try/except above) are left out of the plot since they have no
-speed-up to show.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">_plotted_rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span> <span class="k">if</span> <span class="n">row</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">]</span>
-<span class="n">_unique_op_types</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">({</span><span class="n">op_type</span> <span class="k">for</span> <span class="n">op_type</span><span class="p">,</span> <span class="o">*</span><span class="n">_</span> <span class="ow">in</span> <span class="n">_plotted_rows</span><span class="p">})</span>
-<span class="n">_COLOR_MAP</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">get_cmap</span><span class="p">(</span><span class="s2">"turbo"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">_unique_op_types</span><span class="p">))</span>
-<span class="n">_COLORS</span> <span class="o">=</span> <span class="p">{</span><span class="n">op_type</span><span class="p">:</span> <span class="n">_COLOR_MAP</span><span class="p">(</span><span class="n">index</span><span class="p">)</span> <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">op_type</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">_unique_op_types</span><span class="p">)}</span>
+None, see the try/except above) are left out of the plot – they have no
+speed-up to show – but not out of the table/xlsx output above, where their
+error is still reported. If every case was rejected or failed, there is
+nothing to plot: <code class="xref py py-func docutils literal notranslate"><span class="pre">prepare_plot_data()</span></code> raises rather than silently
+rendering an empty chart, since that would look identical to a build that
+ran fine.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">NoPlottableCasesError</span><span class="p">(</span><span class="ne">RuntimeError</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Raised when no collected row has a comparable ONNX Runtime timing.</span>
+
+<span class="sd">    A chart with zero bars is not a useful (nor a correct) rendering of "no</span>
+<span class="sd">    comparable case was found": it looks identical to "the build silently</span>
+<span class="sd">    produced an empty page". Raising here instead turns that situation into a</span>
+<span class="sd">    build failure with the offending case names/errors attached.</span>
+<span class="sd">    """</span>
+
+
+<span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">PlotData</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Everything the chart needs, derived once from the plottable rows."""</span>
+
+    <span class="n">plotted_rows</span><span class="p">:</span> <span class="nb">list</span>
+    <span class="n">labels</span><span class="p">:</span> <span class="nb">list</span>
+    <span class="n">speedups</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span>
+    <span class="n">colors</span><span class="p">:</span> <span class="nb">list</span>
+    <span class="n">colors_by_op_type</span><span class="p">:</span> <span class="nb">dict</span>
 
 
 <span class="k">def</span><span class="w"> </span><span class="nf">_short_label</span><span class="p">(</span><span class="n">name</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Strips the common ``test_cpu_*_benchmark`` case-name affixes."""</span>
     <span class="n">label</span> <span class="o">=</span> <span class="n">name</span><span class="o">.</span><span class="n">removeprefix</span><span class="p">(</span><span class="s2">"test_cpu_"</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">label</span><span class="o">.</span><span class="n">removesuffix</span><span class="p">(</span><span class="s2">"_benchmark"</span><span class="p">)</span>
 
 
-<span class="n">labels</span> <span class="o">=</span> <span class="p">[</span><span class="n">_short_label</span><span class="p">(</span><span class="n">name</span><span class="p">)</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">name</span><span class="p">,</span> <span class="o">*</span><span class="n">_</span> <span class="ow">in</span> <span class="n">_plotted_rows</span><span class="p">]</span>
-<span class="n">speedups</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
-    <span class="p">[</span><span class="n">ort_time</span> <span class="o">/</span> <span class="n">light_time</span> <span class="k">for</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">light_time</span><span class="p">,</span> <span class="n">ort_time</span><span class="p">,</span> <span class="n">_</span> <span class="ow">in</span> <span class="n">_plotted_rows</span><span class="p">]</span>
-<span class="p">)</span>
-<span class="n">colors</span> <span class="o">=</span> <span class="p">[</span><span class="n">_COLORS</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span> <span class="k">for</span> <span class="n">op_type</span><span class="p">,</span> <span class="o">*</span><span class="n">_</span> <span class="ow">in</span> <span class="n">_plotted_rows</span><span class="p">]</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">prepare_plot_data</span><span class="p">(</span><span class="n">rows</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">"""Turns collected benchmark ``rows`` into the values the chart plots.</span>
 
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mf">0.4</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">_plotted_rows</span><span class="p">))))</span>
-<span class="n">positions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">_plotted_rows</span><span class="p">))</span>
-<span class="n">ax</span><span class="o">.</span><span class="n">barh</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">speedups</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">colors</span><span class="p">)</span>
+<span class="sd">    Each row is ``(op_type, name, shapes, dtypes, light_time, ort_time,</span>
+<span class="sd">    ort_error)`` -- the same tuples appended to ``rows`` above. Rows whose</span>
+<span class="sd">    ``ort_time`` (index 5) is ``None`` are excluded from the returned plot</span>
+<span class="sd">    data. Raises :class:`NoPlottableCasesError` -- naming every rejected case</span>
+<span class="sd">    and its error -- when that leaves nothing to plot, rather than letting</span>
+<span class="sd">    the caller render an empty chart.</span>
+<span class="sd">    """</span>
+    <span class="n">plotted_rows</span> <span class="o">=</span> <span class="p">[</span><span class="n">row</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span> <span class="k">if</span> <span class="n">row</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">plotted_rows</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">rows</span><span class="p">:</span>
+            <span class="n">details</span> <span class="o">=</span> <span class="s2">"; "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> (</span><span class="si">{</span><span class="n">row</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span><span class="w"> </span><span class="ow">or</span><span class="w"> </span><span class="s1">'no error message'</span><span class="si">}</span><span class="s2">)"</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">rows</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">details</span> <span class="o">=</span> <span class="s2">"no benchmark case was collected"</span>
+        <span class="k">raise</span> <span class="n">NoPlottableCasesError</span><span class="p">(</span>
+            <span class="s2">"no benchmark case produced a comparable ONNX Runtime timing; every "</span>
+            <span class="sa">f</span><span class="s2">"collected case was rejected or failed: </span><span class="si">{</span><span class="n">details</span><span class="si">}</span><span class="s2">"</span>
+        <span class="p">)</span>
+    <span class="n">unique_op_types</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">({</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">plotted_rows</span><span class="p">})</span>
+    <span class="n">color_map</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">get_cmap</span><span class="p">(</span><span class="s2">"turbo"</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">unique_op_types</span><span class="p">))</span>
+    <span class="n">colors_by_op_type</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="n">op_type</span><span class="p">:</span> <span class="n">color_map</span><span class="p">(</span><span class="n">index</span><span class="p">)</span> <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">op_type</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">unique_op_types</span><span class="p">)</span>
+    <span class="p">}</span>
+    <span class="n">labels</span> <span class="o">=</span> <span class="p">[</span><span class="n">_short_label</span><span class="p">(</span><span class="n">row</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">plotted_rows</span><span class="p">]</span>
+    <span class="n">speedups</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="n">row</span><span class="p">[</span><span class="mi">5</span><span class="p">]</span> <span class="o">/</span> <span class="n">row</span><span class="p">[</span><span class="mi">4</span><span class="p">]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">plotted_rows</span><span class="p">])</span>
+    <span class="n">colors</span> <span class="o">=</span> <span class="p">[</span><span class="n">colors_by_op_type</span><span class="p">[</span><span class="n">row</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span> <span class="k">for</span> <span class="n">row</span> <span class="ow">in</span> <span class="n">plotted_rows</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">PlotData</span><span class="p">(</span>
+        <span class="n">plotted_rows</span><span class="o">=</span><span class="n">plotted_rows</span><span class="p">,</span>
+        <span class="n">labels</span><span class="o">=</span><span class="n">labels</span><span class="p">,</span>
+        <span class="n">speedups</span><span class="o">=</span><span class="n">speedups</span><span class="p">,</span>
+        <span class="n">colors</span><span class="o">=</span><span class="n">colors</span><span class="p">,</span>
+        <span class="n">colors_by_op_type</span><span class="o">=</span><span class="n">colors_by_op_type</span><span class="p">,</span>
+    <span class="p">)</span>
+
+
+<span class="n">_plot_data</span> <span class="o">=</span> <span class="n">prepare_plot_data</span><span class="p">(</span><span class="n">rows</span><span class="p">)</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span> <span class="mf">0.4</span> <span class="o">*</span> <span class="nb">len</span><span class="p">(</span><span class="n">_plot_data</span><span class="o">.</span><span class="n">plotted_rows</span><span class="p">))))</span>
+<span class="n">positions</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">_plot_data</span><span class="o">.</span><span class="n">plotted_rows</span><span class="p">))</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">barh</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">_plot_data</span><span class="o">.</span><span class="n">speedups</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">_plot_data</span><span class="o">.</span><span class="n">colors</span><span class="p">)</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">axvline</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s2">"grey"</span><span class="p">,</span> <span class="n">linewidth</span><span class="o">=</span><span class="mf">0.8</span><span class="p">,</span> <span class="n">linestyle</span><span class="o">=</span><span class="s2">":"</span><span class="p">)</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">)</span>
-<span class="n">ax</span><span class="o">.</span><span class="n">set_yticks</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">labels</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">tick_label</span><span class="p">,</span> <span class="n">speedup</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">ax</span><span class="o">.</span><span class="n">get_yticklabels</span><span class="p">(),</span> <span class="n">speedups</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_yticks</span><span class="p">(</span><span class="n">positions</span><span class="p">,</span> <span class="n">_plot_data</span><span class="o">.</span><span class="n">labels</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">tick_label</span><span class="p">,</span> <span class="n">speedup</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">ax</span><span class="o">.</span><span class="n">get_yticklabels</span><span class="p">(),</span> <span class="n">_plot_data</span><span class="o">.</span><span class="n">speedups</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
     <span class="k">if</span> <span class="n">speedup</span> <span class="o">&lt;=</span> <span class="mf">0.5</span><span class="p">:</span>
         <span class="n">tick_label</span><span class="o">.</span><span class="n">set_color</span><span class="p">(</span><span class="s2">"red"</span><span class="p">)</span>
     <span class="k">elif</span> <span class="n">speedup</span> <span class="o">&lt;</span> <span class="mf">0.95</span><span class="p">:</span>
@@ -960,15 +1086,24 @@ speed-up to show.</p>
 <span class="n">ax</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"speed-up vs onnxruntime"</span><span class="p">)</span>
 <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"onnx-light-cpu speed-up over onnxruntime on backend cases"</span><span class="p">)</span>
 
-<span class="n">handles</span> <span class="o">=</span> <span class="p">[</span><span class="n">plt</span><span class="o">.</span><span class="n">Rectangle</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">color</span><span class="p">)</span> <span class="k">for</span> <span class="n">color</span> <span class="ow">in</span> <span class="n">_COLORS</span><span class="o">.</span><span class="n">values</span><span class="p">()]</span>
-<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">handles</span><span class="p">,</span> <span class="n">_COLORS</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span> <span class="n">title</span><span class="o">=</span><span class="s2">"operator"</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="s2">"upper left"</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span> <span class="n">ncols</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+<span class="n">handles</span> <span class="o">=</span> <span class="p">[</span>
+    <span class="n">plt</span><span class="o">.</span><span class="n">Rectangle</span><span class="p">((</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">color</span><span class="p">)</span> <span class="k">for</span> <span class="n">color</span> <span class="ow">in</span> <span class="n">_plot_data</span><span class="o">.</span><span class="n">colors_by_op_type</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+<span class="p">]</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span>
+    <span class="n">handles</span><span class="p">,</span>
+    <span class="n">_plot_data</span><span class="o">.</span><span class="n">colors_by_op_type</span><span class="o">.</span><span class="n">keys</span><span class="p">(),</span>
+    <span class="n">title</span><span class="o">=</span><span class="s2">"operator"</span><span class="p">,</span>
+    <span class="n">loc</span><span class="o">=</span><span class="s2">"upper left"</span><span class="p">,</span>
+    <span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">,</span>
+    <span class="n">ncols</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
 <span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_backend_cases_benchmark.png"</span><span class="p">)</span>
 <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-<img src="../../_images/sphx_glr_plot_backend_cases_benchmark_001.png" srcset="../../_images/sphx_glr_plot_backend_cases_benchmark_001.png" alt="onnx-light-cpu speed-up over onnxruntime on backend cases" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.620 seconds)</p>
+<img src="../../_images/sphx_glr_plot_backend_cases_benchmark_001.png" srcset="../../_images/sphx_glr_plot_backend_cases_benchmark_001.png" alt="onnx-light-cpu speed-up over onnxruntime on backend cases" class = "sphx-glr-single-img"/><p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 51.909 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-benchmarks-plot-backend-cases-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/4532898a0e958327f2b5463647e238e8/plot_backend_cases_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_backend_cases_benchmark.ipynb</span></code></a></p>
@@ -1070,7 +1205,7 @@ speed-up to show.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 29, 2026.
+  Last updated on Aug 31, 2026.
   <br/>
 </p></div>
       

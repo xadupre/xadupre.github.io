@@ -188,20 +188,20 @@ It does not mean that every cache at a given level has one global instance.
 
  .. code-block:: none
 
-    processor=AMD EPYC 7763 64-Core Processor
+    processor=AMD EPYC 9V74 80-Core Processor
     platform=linux compiler=gcc
     timer=std::chrono::steady_clock schema_version=2
     logical_threads=4 physical_cores=2 performance_cores=2 efficiency_cores=0 cache_topology_detected=True
       L1 data      size=     32768 bytes line= 64 sharing_threads=  2 confidence=detected
       L1 instruction size=     32768 bytes line= 64 sharing_threads=  2 confidence=detected
-      L2 unified   size=    524288 bytes line= 64 sharing_threads=  2 confidence=detected
+      L2 unified   size=   1048576 bytes line= 64 sharing_threads=  2 confidence=detected
       L3 unified   size=  33554432 bytes line= 64 sharing_threads=  4 confidence=detected
 
     selected affinities and working-set sizes (memory levels):
       L1  single   participants=1  affinity_pinned=True  working_set=     16384 bytes
       L1  physical participants=2  affinity_pinned=True  working_set=     16384 bytes
-      L2  single   participants=1  affinity_pinned=True  working_set=    262144 bytes
-      L2  physical participants=2  affinity_pinned=True  working_set=    262144 bytes
+      L2  single   participants=1  affinity_pinned=True  working_set=    524288 bytes
+      L2  physical participants=2  affinity_pinned=True  working_set=    524288 bytes
       L3  single   participants=1  affinity_pinned=True  working_set=  16777216 bytes
       L3  physical participants=2  affinity_pinned=True  working_set=  16777216 bytes
       RAM single   participants=1  affinity_pinned=True  working_set=  75497472 bytes
@@ -327,7 +327,38 @@ its bar is only the working set used by the benchmark.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 228-235
+.. GENERATED FROM PYTHON SOURCE LINES 228-256
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One group of bars per memory level (``L1``, ``L2``, ``L3``, ``RAM``), on a
+logarithmic byte scale. The two bars measure different things and are *not*
+two estimates of the same quantity:
+
+* **detected cache** (left bar) is the capacity of the cache instance
+  reported by the CPU topology for that level (``cache.size_bytes``). Its
+  annotation adds the sharing scope read from ``sharing_thread_count``:
+  either private to one logical processor, or shared by *N* logical
+  processors. It is a hardware property, not something measured here.
+* **measured working set** (right bar) is the amount of data *one benchmark
+  participant* deliberately walks during the measurement
+  (``working_set_bytes``). It is a benchmark input size chosen so the traffic
+  lands in the intended level, not a second estimate of the cache capacity.
+
+"Per participant" matters because each worker owns disjoint storage: with the
+``physical`` policy, the total footprint is this working set multiplied by
+the number of participants.
+
+The two values differ on purpose. For ``L1``/``L2``/``L3`` the working set is
+chosen comfortably *below* the detected capacity so the data stays resident
+in that level once warmed (leaving room for the other data structures and for
+a cache shared with sibling threads). For ``RAM`` the working set is chosen
+*above* the last-level cache so the traffic really reaches memory; RAM has no
+detected capacity, so only the working-set bar is drawn. A missing left bar
+therefore means "no cache descriptor at this level", never "capacity zero".
+
+.. GENERATED FROM PYTHON SOURCE LINES 258-265
 
 Compact measurement table
 -------------------------
@@ -337,7 +368,7 @@ One line per available (level/policy) bandwidth+latency measurement and per
 raw samples retained in the profile; all figures are effective measurements
 on this host, not a hardware specification.
 
-.. GENERATED FROM PYTHON SOURCE LINES 235-259
+.. GENERATED FROM PYTHON SOURCE LINES 265-289
 
 .. code-block:: Python
 
@@ -376,23 +407,23 @@ on this host, not a hardware specification.
 
     memory bandwidth (effective, median of raw samples):
       level policy    read GB/s  write GB/s  copy GB/s
-      L1   single        50.43       25.70      99.35
-      L1   physical     100.31       50.94     194.52
-      L2   single        51.23       25.48     102.15
-      L2   physical     102.04       50.69     202.91
-      L3   single        50.39       26.51      59.44
-      L3   physical      99.52       48.97     103.60
-      RAM  single        24.92       29.84      39.19
+      L1   single        44.70       22.75      90.71
+      L1   physical      89.23       45.19     180.00
+      L2   single        45.43       22.30      90.89
+      L2   physical      90.84       44.34     180.88
+      L3   single        44.95       23.59      69.79
+      L3   physical      89.72       43.59     100.14
+      RAM  single        37.89       19.38      41.08
 
     compute throughput (effective, median of raw samples, GOP/s):
       dtype     impl            single    physical
-      float32   AVX2             34.20       67.97
-      float64   AVX2             17.11       34.03
+      float32   AVX2             30.37       60.54
+      float64   AVX2             15.18       30.24
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 260-268
+.. GENERATED FROM PYTHON SOURCE LINES 290-298
 
 Plot 2: bandwidth by memory level
 ----------------------------------
@@ -403,7 +434,7 @@ for copy. Useful bytes are divided by elapsed monotonic wall-clock time, then
 the plot uses the median across recorded samples. Each participant owns
 disjoint storage; ``physical`` values are aggregate bandwidth.
 
-.. GENERATED FROM PYTHON SOURCE LINES 268-296
+.. GENERATED FROM PYTHON SOURCE LINES 298-326
 
 .. code-block:: Python
 
@@ -447,7 +478,36 @@ disjoint storage; ``physical`` values are aggregate bandwidth.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 297-303
+.. GENERATED FROM PYTHON SOURCE LINES 327-353
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One panel per thread policy, one group of bars per memory level, three series
+per group:
+
+* **read** streams the working set with loads only;
+* **write** streams it with cached stores only;
+* **copy** streams one source *and* one destination, so it touches twice as
+  many bytes per element as read or write.
+
+The vertical axis is **effective GB/s**: useful bytes divided by the elapsed
+wall-clock time of the timed region, then the median over the recorded
+samples (``median_gbps``). "Effective" means it is what this host actually
+delivered for that access pattern, including any hardware prefetching and
+coherence traffic -- it is not a datasheet peak, and it can legitimately be
+lower than a theoretical bus rate. Higher is better.
+
+The two panels are not comparable one-to-one. The ``single`` panel is the
+throughput of a single worker (pinned when affinity is available). The
+``physical`` panel is **aggregate** throughput summed over one worker per
+process-visible physical core, each on its own disjoint buffer; it typically
+scales with core count in the private caches (``L1``, ``L2``) and flattens in
+``L3``/``RAM`` where the resource is shared. A zero-height bar means that
+traffic mode was unavailable for that level/policy; ``profile.warnings``
+printed above says why.
+
+.. GENERATED FROM PYTHON SOURCE LINES 355-361
 
 Plot 3: aggregate read bandwidth scaling by core count
 -------------------------------------------------------
@@ -456,7 +516,7 @@ The physical-core measurement also records intermediate powers of two, making
 cache and memory-bandwidth saturation visible instead of reporting only the
 one-core and all-core endpoints.
 
-.. GENERATED FROM PYTHON SOURCE LINES 303-323
+.. GENERATED FROM PYTHON SOURCE LINES 361-381
 
 .. code-block:: Python
 
@@ -492,7 +552,30 @@ one-core and all-core endpoints.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 324-330
+.. GENERATED FROM PYTHON SOURCE LINES 382-402
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One curve per cache level, taken from ``entry.read_scaling`` of the
+``physical`` policy. The horizontal axis (log base 2) is the number of
+concurrent participants, i.e. physical cores actually running the read
+stream, from one up to the process-visible physical core count; the vertical
+axis is the **aggregate** effective read bandwidth of all those participants
+combined, each on its own disjoint working set of the size shown in the first
+figure.
+
+Read the *shape*, not only the endpoint. A curve that keeps following a
+straight line of slope one on this log axis means the level scales: each
+added core contributes roughly the same bandwidth, so the resource is
+private. A curve that bends and flattens marks **saturation**: past that
+participant count the shared resource (a shared last-level cache, the ring or
+mesh interconnect, the memory controllers) is the limit, and adding cores
+buys nothing. The knee is the practical parallelism budget for a kernel whose
+traffic lives at that level. A missing curve means no scaling series was
+recorded for that level.
+
+.. GENERATED FROM PYTHON SOURCE LINES 404-410
 
 Plot 4: dependent-load latency by memory level
 ------------------------------------------------
@@ -501,7 +584,7 @@ Latency uses a randomized single-cycle pointer permutation built before
 timing. Every load determines the address of the next, preventing overlap;
 the plotted value is the median nanoseconds per dependent load.
 
-.. GENERATED FROM PYTHON SOURCE LINES 330-350
+.. GENERATED FROM PYTHON SOURCE LINES 410-430
 
 .. code-block:: Python
 
@@ -537,7 +620,33 @@ the plotted value is the median nanoseconds per dependent load.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 351-358
+.. GENERATED FROM PYTHON SOURCE LINES 431-454
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One group of bars per memory level, one bar per thread policy. The value is
+``latency.median_ns_per_load``: the median **nanoseconds spent per dependent
+load**. Unlike the bandwidth figure, **lower is better** here.
+
+The measurement is a pointer chase. Before timing, the working set is
+arranged as a random cyclic permutation of pointers -- one chain visiting
+every element exactly once before closing on itself; the timed loop
+then follows that chain, so the address of load *n+1* is the value returned
+by load *n*. Neither the out-of-order engine nor the hardware prefetcher can
+overlap the accesses or guess the next address, which is why the result is a
+**serialized** latency -- the full time to resolve one access at that level
+-- and not a throughput divided by a queue depth.
+
+Values grow with the level (a few nanoseconds in ``L1``, tens of nanoseconds
+in ``RAM``), and the jumps between groups show where each level of the
+hierarchy starts. Comparing the two policies shows contention: ``physical``
+runs one independent chain per core, so a value visibly above the ``single``
+one means concurrent traffic is slowing individual accesses down. A
+zero-height bar means no latency measurement was available for that
+level/policy.
+
+.. GENERATED FROM PYTHON SOURCE LINES 456-463
 
 Plot 5: arithmetic throughput by element type and thread policy
 -------------------------------------------------------------------
@@ -547,7 +656,7 @@ so this measures arithmetic rather than memory traffic. Operations are
 divided by elapsed monotonic wall-clock time and medians are plotted; a fused
 multiply-add counts as two floating-point operations.
 
-.. GENERATED FROM PYTHON SOURCE LINES 358-381
+.. GENERATED FROM PYTHON SOURCE LINES 463-486
 
 .. code-block:: Python
 
@@ -586,7 +695,35 @@ multiply-add counts as two floating-point operations.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 382-391
+.. GENERATED FROM PYTHON SOURCE LINES 487-512
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+One group of bars per element type actually available on this host (the keys
+of ``profile.compute``, e.g. ``float32``, ``float64``, and the reduced
+precisions when supported), one bar per thread policy. The table printed
+above names, for each element type, the ``implementation_name`` -- the kernel
+variant the dispatcher selected, which is what makes wider vector types look
+faster.
+
+The vertical axis is **effective GOP/s**: the number of arithmetic operations
+issued divided by the elapsed wall-clock time, median over the recorded
+samples (``median_gops``). Higher is better. The counting convention is the
+usual one: a fused multiply-add counts as **two** operations (one multiply,
+one add), so an FMA-based kernel reports twice the operation count of a
+plain-add kernel doing the same number of instructions.
+
+The kernel keeps independent operands and accumulators in registers, so the
+figure isolates arithmetic capability from memory traffic: it is a compute
+ceiling for this host, again measured rather than derived from a clock
+frequency times a vector width. ``single`` is one worker; ``physical`` is the
+**aggregate** over one worker per physical core, so it is expected to be
+several times higher, and the ratio between the two bars shows how well
+arithmetic scales before shared front-end or power limits kick in. A missing
+bar means that element type was not measured for that policy.
+
+.. GENERATED FROM PYTHON SOURCE LINES 514-523
 
 Plot 6: Roofline
 ----------------
@@ -598,7 +735,7 @@ their crossover arithmetic intensity. These are *derived* quantities that
 still link back to the exact compute and memory measurements they were
 computed from -- not an idealized hardware Roofline.
 
-.. GENERATED FROM PYTHON SOURCE LINES 391-423
+.. GENERATED FROM PYTHON SOURCE LINES 523-555
 
 .. code-block:: Python
 
@@ -646,7 +783,40 @@ computed from -- not an idealized hardware Roofline.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 424-431
+.. GENERATED FROM PYTHON SOURCE LINES 556-586
+
+How to read this figure
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Both axes are logarithmic. The horizontal axis is **arithmetic intensity**:
+how many arithmetic operations a kernel performs per byte it moves from the
+given memory level. A kernel that reads a lot and computes little sits on the
+left; a kernel that reuses data heavily in registers and caches sits on the
+right.
+
+Each curve is one ``element type / policy / level`` combination from
+``profile.roofline`` and has two parts:
+
+* the **diagonal**, ``memory_read_gbps * intensity``, is the memory ceiling:
+  at that intensity, the read bandwidth measured for that level physically
+  cannot feed more operations per second;
+* the **plateau**, ``compute_gops``, is the compute ceiling: the arithmetic
+  throughput measured for that element type and policy in the previous
+  figure.
+
+The attainable rate is the lower of the two, so the curve is their minimum.
+The marker sits at ``arithmetic_intensity_crossover``, where the two ceilings
+meet. Left of it a kernel is **memory bound** -- the fix is fewer bytes
+(blocking, fusion, a smaller element type), not faster arithmetic. Right of
+it, a kernel is **compute bound** -- the fix is better vectorization or more
+cores.
+
+Both ceilings come from the measurements taken in this run, not from
+published hardware peaks, so a kernel plotted against these curves is
+compared to what this host actually delivered under this benchmark's access
+patterns.
+
+.. GENERATED FROM PYTHON SOURCE LINES 588-595
 
 Serialization
 -------------
@@ -656,7 +826,7 @@ the whole profile (metadata, topology, memory, compute, roofline, and
 warnings), suitable for archiving alongside a run or feeding a future
 optimal-transport GEMM tile-placement cost model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 431-436
+.. GENERATED FROM PYTHON SOURCE LINES 595-600
 
 .. code-block:: Python
 
@@ -675,7 +845,7 @@ optimal-transport GEMM tile-placement cost model.
 
 
     serialized profile keys: ['compute', 'memory', 'metadata', 'roofline', 'topology', 'warnings']
-    serialized JSON size: 28714 bytes
+    serialized JSON size: 28686 bytes
 
 
 
@@ -683,7 +853,7 @@ optimal-transport GEMM tile-placement cost model.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 38.530 seconds)
+   **Total running time of the script:** (0 minutes 43.527 seconds)
 
 
 .. _sphx_glr_download_auto_examples_processor_plot_processor_performance.py:

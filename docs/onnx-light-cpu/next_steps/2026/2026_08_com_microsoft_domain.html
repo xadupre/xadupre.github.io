@@ -66,7 +66,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 29, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 31, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -177,7 +177,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -313,7 +313,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -496,6 +496,72 @@ preserving the input shape and type.</p>
 </dd>
 </dl>
 </section>
+<section id="cdist-latency-parity">
+<h2>CDist latency parity<a class="headerlink" href="#cdist-latency-parity" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">tools/benchmark_cdist_parity.py</span></code> compares the optimized kernel directly
+with ONNX Runtime’s CPU execution provider for both metrics and both supported
+types.  The matrix reproduces the ONNX Runtime FLOAT and DOUBLE vectors and
+includes empty rows, singleton and rectangular inputs, feature counts around
+SIMD boundaries, repeated and near-identical points, a large feature tail,
+representative model shapes, and sizes immediately around each type’s
+parallel threshold.</p>
+<p>Both runtimes reuse the same inputs and receive the same thread count,
+affinity, warm-up, alternating sample order, output-allocation policy, and
+sequential execution mode.  Every JSON row retains raw samples, median, p90,
+interquartile range, candidate order, maximum numerical difference, and
+median/tail speed-up.  Run the benchmark on an idle pinned host, once at the
+base revision and once at the candidate revision:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/benchmark_cdist_parity.py<span class="w"> </span>--cpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--profile-runs<span class="w"> </span><span class="m">100</span><span class="w"> </span>--output<span class="w"> </span>cdist_parity_results.json<span class="w"> </span>--enforce
+</pre></div>
+</div>
+<p>Profiling calls are excluded from the timed samples.  <code class="docutils literal notranslate"><span class="pre">--profile-runs</span></code> adds
+the onnx-light-cpu Python/runtime call breakdown and ONNX Runtime’s native
+per-node trace, allowing setup and dispatch overhead to be separated from node
+computation.  The report records the revision, build flags, package versions,
+affinity, allocator policy, and effective execution policy.</p>
+<p>ONNX Runtime expands squared distance as
+<code class="docutils literal notranslate"><span class="pre">-2</span> <span class="pre">*</span> <span class="pre">A</span> <span class="pre">&#64;</span> <span class="pre">transpose(B)</span> <span class="pre">+</span> <span class="pre">sum(A**2)</span> <span class="pre">+</span> <span class="pre">sum(B**2)</span></code> and applies <code class="docutils literal notranslate"><span class="pre">abs</span></code> before
+returning it or taking <code class="docutils literal notranslate"><span class="pre">sqrt</span></code>.  The optimized onnx-light-cpu kernel
+deliberately retains direct squared-difference accumulation: it cannot produce
+a small negative distance and is more accurate for near-identical,
+large-magnitude points.  Ordinary cases use the command-line parity tolerance;
+only repeated and near-identical cases use a reported cancellation bound
+<code class="docutils literal notranslate"><span class="pre">8</span> <span class="pre">*</span> <span class="pre">eps</span> <span class="pre">*</span> <span class="pre">N</span> <span class="pre">*</span> <span class="pre">scale**2</span></code> (or its square root for <code class="docutils literal notranslate"><span class="pre">euclidean</span></code>).  Non-finite
+values follow IEEE propagation, and the generic kernel rejects a zero feature
+dimension like ONNX Runtime while permitting empty row dimensions.</p>
+</section>
+<section id="biasgelu-latency-parity">
+<h2>BiasGelu latency parity<a class="headerlink" href="#biasgelu-latency-parity" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">tools/benchmark_bias_gelu_parity.py</span></code> compares the optimized FLOAT kernel
+directly with ONNX Runtime’s CPU execution provider.  Its matrix includes
+empty and singleton tensors, sizes immediately around AVX2 and AVX-512 vector
+boundaries, transformer dimensions, a large outer dimension, and sizes around
+the 256 KiB parallel threshold.  Both runtimes receive the same input buffers,
+thread count, process affinity, warm-up count, alternating sample order, and
+default arena/memory-pattern allocation policy.  Each JSON row retains raw
+samples, median, p90, interquartile range, and median/tail speed-up.</p>
+<p>Use an idle pinned host and the same release build for published comparisons:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/benchmark_bias_gelu_parity.py<span class="w"> </span>--cpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--profile-runs<span class="w"> </span><span class="m">100</span><span class="w"> </span>--output<span class="w"> </span>bias_gelu_parity_results.json<span class="w"> </span>--enforce
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">--profile-runs</span></code> adds a separate cProfile call breakdown for onnx-light-cpu
+and ONNX Runtime’s native per-node trace to the report; these diagnostic calls
+are excluded from latency samples.  This distinguishes Python/runtime setup
+and dispatch from node computation instead of attributing a wall-clock gap to
+the kernel without evidence.  The report also records the revision, affinity,
+compiler flags, package versions, allocator policy, seed, and effective
+execution policy.  Shared CI validates the runner and direct numerical parity;
+latency enforcement belongs on a dedicated machine.</p>
+<p>FLOAT uses one runtime-selected scalar, AVX2/FMA, or AVX-512 implementation.
+SIMD remainders stay in vector registers and use the same polynomial and
+operation ordering as full vectors; dispatch selection is hoisted out of the
+row loop.  FLOAT16 and BFLOAT16 are intentional extensions beyond ONNX
+Runtime’s FLOAT CPU registration and remain checked against the independent
+naive kernel with dtype-specific tolerances.  DOUBLE is likewise validated
+independently rather than included in the ONNX Runtime latency gate.</p>
+</section>
 <section id="delivered-integration">
 <h2>Delivered integration<a class="headerlink" href="#delivered-integration" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -599,6 +665,8 @@ follow when another custom domain or operator is added.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator-contract">Operator contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cdist-latency-parity">CDist latency parity</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#biasgelu-latency-parity">BiasGelu latency parity</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#delivered-integration">Delivered integration</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation-and-completion">Validation and completion</a></li>
 </ul>
@@ -635,7 +703,7 @@ follow when another custom domain or operator is added.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 29, 2026.
+  Last updated on Aug 31, 2026.
   <br/>
 </p></div>
       

@@ -62,12 +62,12 @@
     <link rel="icon" href="../_static/logo.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="Benchmark Methodology" href="benchmark_methodology.html" />
+    <link rel="next" title="Parallel kernel execution" href="parallel_execution.html" />
     <link rel="prev" title="Design" href="index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Aug 29, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 31, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -178,7 +178,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -314,7 +314,7 @@
 
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../api/index.html">
-    API
+    API reference
   </a>
 </li>
 
@@ -391,6 +391,8 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Registering kernels</a></li>
+<li class="toctree-l1"><a class="reference internal" href="parallel_execution.html">Parallel kernel execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="kernel_selection.html">Kernel and implementation selection</a></li>
 <li class="toctree-l1"><a class="reference internal" href="benchmark_methodology.html">Benchmark Methodology</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="kernels/index.html">Kernels</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
 <li class="toctree-l2"><a class="reference internal" href="kernels/unary_kernel_design.html">Unary Kernel Design</a></li>
@@ -478,35 +480,67 @@ and how to avoid that.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_kernels</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">MicrosoftKernelImplementation</span><span class="p">,</span>
+    <span class="n">register_kernel_for_session</span><span class="p">,</span>
+    <span class="n">register_kernel_global</span><span class="p">,</span>
+    <span class="n">register_kernels_global</span><span class="p">,</span>
+<span class="p">)</span>
 
 <span class="c1"># Install the SIMD kernels into onnx-light's dispatch table. Import</span>
 <span class="c1"># onnx-light *before* calling this so its built-in kernels are already</span>
 <span class="c1"># registered; the onnx-light-cpu kernels then override them.</span>
-<span class="n">register_kernels</span><span class="p">()</span>
+<span class="n">register_kernels_global</span><span class="p">()</span>
 <span class="n">sess</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>  <span class="c1"># any model containing an Abs node</span>
 <span class="p">(</span><span class="n">y</span><span class="p">,)</span> <span class="o">=</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="p">{</span><span class="s2">"x"</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="o">-</span><span class="mf">1.0</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">,</span> <span class="o">-</span><span class="mf">3.0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)})</span>
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">register_kernels</span></code> is only available in builds compiled with the onnx-light
 integration (<code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON</span></code>); it wraps the compiled
-<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu.onnx_py._cpuregister.register_all_kernels()</span></code> binding.</p>
-<p><code class="docutils literal notranslate"><span class="pre">register_kernels()</span></code> installs the kernels <strong>process-wide</strong>: it populates
+internal registration binding.</p>
+<p><code class="docutils literal notranslate"><span class="pre">register_kernels_global()</span></code> installs the kernels <strong>process-wide</strong>: it populates
 onnx-light’s shared dispatch table, so every <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> created in
-the process afterwards uses them. To override an operator for a single session
-only — without touching the shared table — use onnx-light’s per-session
-<code class="xref py py-meth docutils literal notranslate"><span class="pre">register_custom_kernel()</span></code>
-hook instead:</p>
+the process afterwards uses them. Existing sessions that have already resolved
+their nodes retain the cached factories. Register only one global kernel with
+<code class="docutils literal notranslate"><span class="pre">register_kernel_global(domain,</span> <span class="pre">op_type)</span></code>.</p>
+<p>To install the same native compiled implementation for a single session only,
+without touching the shared table, use <code class="docutils literal notranslate"><span class="pre">register_kernel_for_session</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">sess</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
-<span class="n">sess</span><span class="o">.</span><span class="n">register_custom_kernel</span><span class="p">(</span><span class="s2">""</span><span class="p">,</span> <span class="s2">"Abs"</span><span class="p">,</span> <span class="n">my_abs</span><span class="p">)</span>  <span class="c1"># this session only</span>
+<span class="n">register_kernel_for_session</span><span class="p">(</span><span class="n">sess</span><span class="p">,</span> <span class="s2">""</span><span class="p">,</span> <span class="s2">"Abs"</span><span class="p">)</span>  <span class="c1"># this session only</span>
+</pre></div>
+</div>
+<p>The evaluator’s runtime context owns that registration and releases it with the
+evaluator. Other evaluators are unchanged. <code class="docutils literal notranslate"><span class="pre">register_kernels_for_session</span></code>
+provides the equivalent all-kernels operation.</p>
+<p>The default installs the optimized <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> family. Tests and
+diagnostic callers can explicitly install the complete scalar reference
+family instead:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">register_kernels_global</span><span class="p">(</span>
+    <span class="n">microsoft_implementation</span><span class="o">=</span><span class="n">MicrosoftKernelImplementation</span><span class="o">.</span><span class="n">NAIVE</span>
+<span class="p">)</span>
 </pre></div>
 </div>
 <p>From C++:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;onnx_light_cpu/kernels/register_kernels.h&gt;</span>
 
-<span class="n">onnx_light_cpu</span><span class="o">::</span><span class="n">RegisterAllKernels</span><span class="p">();</span><span class="w">  </span><span class="c1">// the shipped kernels now use the SIMD implementations</span>
+<span class="n">onnx_light_cpu</span><span class="o">::</span><span class="n">RegisterKernelGlobal</span><span class="p">(</span><span class="s">""</span><span class="p">,</span><span class="w"> </span><span class="s">"Abs"</span><span class="p">);</span>
+<span class="n">onnx_light_cpu</span><span class="o">::</span><span class="n">RegisterAllKernelsGlobal</span><span class="p">();</span>
+
+<span class="n">onnx_light</span><span class="o">::</span><span class="n">core</span><span class="o">::</span><span class="n">runtime</span><span class="o">::</span><span class="n">RuntimeContext</span><span class="w"> </span><span class="nf">session</span><span class="p">(</span><span class="n">kernel_context</span><span class="p">);</span>
+<span class="n">onnx_light_cpu</span><span class="o">::</span><span class="n">RegisterKernelForSession</span><span class="p">(</span><span class="n">session</span><span class="p">,</span><span class="w"> </span><span class="s">""</span><span class="p">,</span><span class="w"> </span><span class="s">"Abs"</span><span class="p">);</span>
+<span class="n">onnx_light_cpu</span><span class="o">::</span><span class="n">RegisterAllKernelsForSession</span><span class="p">(</span><span class="n">session</span><span class="p">);</span>
 </pre></div>
 </div>
+<p>Global registration replaces an existing entry by default and is owned by the
+process-wide dispatch table. Session registration replaces an entry on that
+<code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> by default and must occur before a runtime session resolves
+its nodes. Pass <code class="docutils literal notranslate"><span class="pre">replace=false</span></code> to either scope to keep an existing entry;
+the function then reports no installation. Repeated calls are therefore
+idempotent in state, whether they replace the same implementation or retain it.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RegisterMicrosoftKernels</span></code> installs exactly one complete implementation
+family for the <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> domain. Mixing families in one registration
+pass is intentionally unsupported, so one operator cannot silently replace a
+different variant registered earlier in that pass.</p>
 <p>The registration overrides the built-in entry for the default ONNX domain, and
 it wins <strong>regardless of the order</strong> in which the built-in and the onnx-light-cpu
 kernels are registered: <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s bulk built-in registration never
@@ -590,6 +624,12 @@ the corresponding built-in operator.</p></li>
 <p>Then add <code class="docutils literal notranslate"><span class="pre">RegisterMyKernel()</span></code> to <code class="docutils literal notranslate"><span class="pre">RegisterAllKernels</span></code> in
 <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/kernels/register_kernels.cc</span></code> so it is installed together with
 the other kernels.</p>
+<p>Every new <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> operator must instead provide two independent
+<code class="docutils literal notranslate"><span class="pre">KernelBase</span></code> adapters: a readable scalar <code class="docutils literal notranslate"><span class="pre">Naive*Kernel</span></code> correctness oracle
+and a production optimized kernel. Add both registrars to the corresponding
+branch of <code class="docutils literal notranslate"><span class="pre">RegisterMicrosoftKernels</span></code> and add differential tests covering
+their complete shared contract. Backend <code class="docutils literal notranslate"><span class="pre">TEST</span></code> cases generate expectations
+with the naive implementation; <code class="docutils literal notranslate"><span class="pre">BENCHMARK</span></code> cases use the optimized one.</p>
 <p>For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s per-evaluator
 <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator.register_custom_kernel(domain,</span> <span class="pre">op_type,</span> <span class="pre">fn)</span></code> hook instead;
@@ -651,11 +691,11 @@ onnx-light Python package to share state with).</p>
       </div>
     </a>
     <a class="right-next"
-       href="benchmark_methodology.html"
+       href="parallel_execution.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Benchmark Methodology</p>
+        <p class="prev-next-title">Parallel kernel execution</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -716,7 +756,7 @@ onnx-light Python package to share state with).</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Aug 29, 2026.
+  Last updated on Aug 31, 2026.
   <br/>
 </p></div>
       
