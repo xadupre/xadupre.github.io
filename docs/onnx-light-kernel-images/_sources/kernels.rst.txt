@@ -12,4 +12,5 @@ repository actually adds.
 
 Each kernel is registered for the given operator, ONNX domain and device. The
 ``ImageDecoder`` kernel decodes encoded image bytestreams into ``(H, W, C)``
-``tensor(uint8)`` arrays and supports the BMP, TIFF, JPEG, PNG and PNM formats.
+``tensor(uint8)`` arrays and supports BMP, TIFF, JPEG, JPEG2000, PNG, WebP and
+PNM.
