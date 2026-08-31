@@ -1,0 +1,508 @@
+:nosearch:
+
+.. _op_ai_onnx_DequantizeLinear-25:
+
+DequantizeLinear - version 25
+=============================
+
+This page documents version **25** of operator **DequantizeLinear**. See :doc:`DequantizeLinear` for the latest version (since version 28).
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 25
+
+The linear dequantization operator. It consumes a quantized tensor, a scale, and a zero point to compute the
+full-precision tensor. The dequantization formula is ``y = (x - x_zero_point) * x_scale``. ``x_scale`` and ``x_zero_point``
+must have the same shape, determining the quantization's granularity: a scalar for per-tensor/per-layer quantization,
+a 1-D tensor for per-axis quantization, or have a rank identical to the input for blocked quantization.
+See QuantizeLinear for details on quantization granularity.
+
+``x_zero_point`` and ``x`` must have the same type. ``x`` and ``y`` must have the same shape. In the case of dequantizing
+``int32``, there's no zero point (zero point is supposed to be 0).
+``zero-point`` is usually not used in the case of float8 and 4-bit types quantization, but the dequantization formula remains the same
+for consistency. The output type is determined by the attribute ``output_dtype``. If ``output_dtype`` is not supplied then the output type
+is the same as ``x_scale``. The output type also determines the precision of the multiplication operation.
+
+**Inputs**
+
+- **x** (*T1*): N-D quantized input tensor to be de-quantized.
+- **x_scale** (*T2*): Scale for input ``x``. For per-tensor/layer dequantization the scale is a scalar, for per per-axis dequantization it is a 1-D Tensor and for blocked dequantization it has the same shape as the input, except for one dimension in which blocking is performed.
+- **x_zero_point** (*T1*): Zero point for input ``x``. Shape must match x_scale. It's optional. Zero point is 0 when it's not specified.
+
+**Outputs**
+
+- **y** (*T3*): N-D full precision output tensor. It has the same shape as input ``x``. The data type is specified by the ``output_dtype`` attribute or, in its absence, the type of ``x_scale``.
+
+**Type Constraints**
+
+- **T1**: The type of the inputs 'x_zero_point' and 'x'.
+  Allowed types: tensor(float4e2m1), tensor(float8e4m3fn), tensor(float8e4m3fnuz), tensor(float8e5m2), tensor(float8e5m2fnuz), tensor(int16), tensor(int2), tensor(int32), tensor(int4), tensor(int8), tensor(uint16), tensor(uint2), tensor(uint4), tensor(uint8).
+- **T2**: The type of the input 'x_scale'.
+  Allowed types: tensor(bfloat16), tensor(float), tensor(float16), tensor(float8e8m0).
+- **T3**: The type of the output 'y'.
+  Allowed types: tensor(bfloat16), tensor(float), tensor(float16).
+
+Examples
+--------
+
+**test_cc_dequantizelinear**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=uint8
+        [  0,   3, 128, 255]
+      x_scale: shape=(), dtype=float32
+        2.
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [  0.,   6., 256., 510.]
+
+**test_cc_dequantizelinear_axis_no_zero_point**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale) -> (y)
+      Attributes:
+        axis = 1
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(1, 3, 3, 2), dtype=uint8
+        [[[[  3,  89],
+           [ 34, 200],
+           [ 74,  59]],
+        
+          [[  5,  24],
+           [ 24,  87],
+           [ 32,  13]],
+        
+          [[245,  99],
+           [  4, 142],
+           [121, 102]]]]
+      x_scale: shape=(3,), dtype=float32
+        [2., 4., 5.]
+
+    Outputs:
+      y: shape=(1, 3, 3, 2), dtype=float32
+        [[[[   6.,  178.],
+           [  68.,  400.],
+           [ 148.,  118.]],
+        
+          [[  20.,   96.],
+           [  96.,  348.],
+           [ 128.,   52.]],
+        
+          [[1225.,  495.],
+           [  20.,  710.],
+           [ 605.,  510.]]]]
+
+**test_cc_dequantizelinear_int8**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=int8
+        [-10,  -9,   0, 127]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(), dtype=int8
+        -10
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [  0.,   2.,  20., 274.]
+
+**test_dequantizelinear**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=uint8
+        [  0,   3, 128, 255]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(), dtype=uint8
+        128
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [-256., -250.,    0.,  254.]
+
+**test_dequantizelinear_axis**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(1, 3, 3, 2), dtype=uint8
+        [[[[  3,  89],
+           [ 34, 200],
+           [ 74,  59]],
+        
+          [[  5,  24],
+           [ 24,  87],
+           [ 32,  13]],
+        
+          [[245,  99],
+           [  4, 142],
+           [121, 102]]]]
+      x_scale: shape=(3,), dtype=float32
+        [2., 4., 5.]
+      x_zero_point: shape=(3,), dtype=uint8
+        [ 84,  24, 196]
+
+    Outputs:
+      y: shape=(1, 3, 3, 2), dtype=float32
+        [[[[-162.,   10.],
+           [-100.,  232.],
+           [ -20.,  -50.]],
+        
+          [[ -76.,    0.],
+           [   0.,  252.],
+           [  32.,  -44.]],
+        
+          [[ 245., -485.],
+           [-960., -270.],
+           [-375., -470.]]]]
+
+**test_dequantizelinear_blocked**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 1
+        block_size = 2
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(1, 4, 3, 2), dtype=uint8
+        [[[[  3,  89],
+           [ 34, 200],
+           [ 74,  59]],
+        
+          [[  5,  24],
+           [ 24,  87],
+           [ 32,  13]],
+        
+          [[  5,  12],
+           [ 12,  33],
+           [ 65,  42]],
+        
+          [[245,  99],
+           [  4, 142],
+           [121, 102]]]]
+      x_scale: shape=(1, 2, 3, 2), dtype=float32
+        [[[[3., 2.],
+           [4., 1.],
+           [2., 2.]],
+        
+          [[5., 2.],
+           [4., 3.],
+           [5., 2.]]]]
+      x_zero_point: shape=(1, 2, 3, 2), dtype=uint8
+        [[[[ 1,  0],
+           [ 0,  1],
+           [ 2, 20]],
+        
+          [[ 3,  2],
+           [ 4,  3],
+           [15,  2]]]]
+
+    Outputs:
+      y: shape=(1, 4, 3, 2), dtype=float32
+        [[[[   6.,  178.],
+           [ 136.,  199.],
+           [ 144.,   78.]],
+        
+          [[  12.,   48.],
+           [  96.,   86.],
+           [  60.,  -14.]],
+        
+          [[  10.,   20.],
+           [  32.,   90.],
+           [ 250.,   80.]],
+        
+          [[1210.,  194.],
+           [   0.,  417.],
+           [ 530.,  200.]]]]
+
+**test_dequantizelinear_e4m3fn**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=float8_e4m3fn
+        [0, 0.5, 1, 448, -104]
+      x_scale: shape=(), dtype=float32
+        2.
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [   0.,    1.,    2.,  896., -208.]
+
+**test_dequantizelinear_e4m3fn_float16**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=float8_e4m3fn
+        [0, 0.5, 1, 448, -104]
+      x_scale: shape=(), dtype=float16
+        2.
+
+    Outputs:
+      y: shape=(5,), dtype=float16
+        [   0.,    1.,    2.,  896., -208.]
+
+**test_dequantizelinear_e4m3fn_zero_point**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=float8_e4m3fn
+        [0, 0.5, 1, 448, -104]
+      x_scale: shape=(), dtype=float32
+        2.
+      zero_point: shape=(1,), dtype=float8_e4m3fn
+        [0]
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [   0.,    1.,    2.,  896., -208.]
+
+**test_dequantizelinear_e5m2**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=float8_e5m2
+        [0, 0.5, 1, 49152, -96]
+      x_scale: shape=(), dtype=float32
+        2.
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [ 0.0000e+00,  1.0000e+00,  2.0000e+00,  9.8304e+04, -1.9200e+02]
+
+**test_dequantizelinear_float4e2m1**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=float4_e2m1fn
+        [0, 1, -1, 1.5, -4]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(1,), dtype=float4_e2m1fn
+        [0]
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [ 0.,  2., -2.,  3., -8.]
+
+**test_dequantizelinear_int16**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=int16
+        [ -300,   -30, -1025,  1270]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(), dtype=int16
+        -1024
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [ 1.448e+03,  1.988e+03, -2.000e+00,  4.588e+03]
+
+**test_dequantizelinear_int2**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=int2
+        [0, 1, -1, -2]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(1,), dtype=int2
+        [1]
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [-2.,  0., -4., -6.]
+
+**test_dequantizelinear_int4**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=int4
+        [0, 1, 7, -4, -8]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(1,), dtype=int4
+        [1]
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [ -2.,   0.,  12., -10., -18.]
+
+**test_dequantizelinear_uint16**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=uint16
+        [30000, 31000, 32768, 33000]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(), dtype=uint16
+        32767
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [-5.534e+03, -3.534e+03,  2.000e+00,  4.660e+02]
+
+**test_dequantizelinear_uint2**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(4,), dtype=uint2
+        [0, 1, 2, 3]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(1,), dtype=uint2
+        [1]
+
+    Outputs:
+      y: shape=(4,), dtype=float32
+        [-2.,  0.,  2.,  4.]
+
+**test_dequantizelinear_uint4**
+
+.. code-block:: text
+
+    Node:
+      DequantizeLinear(x, x_scale, x_zero_point) -> (y)
+      Attributes:
+        axis = 0
+
+.. code-block:: text
+
+    Inputs:
+      x: shape=(5,), dtype=uint4
+        [0, 1, 7, 10, 15]
+      x_scale: shape=(), dtype=float32
+        2.
+      x_zero_point: shape=(1,), dtype=uint4
+        [1]
+
+    Outputs:
+      y: shape=(5,), dtype=float32
+        [-2.,  0., 12., 18., 28.]
+
+Differences with previous version (24)
+--------------------------------------
+
+**SchemaDiff**: ``DequantizeLinear`` (domain ``'ai.onnx'``)
+
+* old version: 24
+* new version: 25
+* breaking: no
+
+**Type constraints:**
+
+* changed 'T1': added types: ['tensor(int2)', 'tensor(uint2)']

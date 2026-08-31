@@ -32,14 +32,17 @@ Two *flavours* are available:
   (``oh.make_model(oh.make_graph([...], ...))``).
 * ``api="builder"`` — an incremental script driving the
   :class:`~onnx_light.onnx_core.graph_builder.GraphBuilder`
-  (``g.make_input(...)``, ``g.make_node(...)``, ``g.to_onnx(...)``).
+  (``g.inp(...)``, ``g.init(...)``, ``g.op.<operator>(...)``,
+  ``g.out(...)``, ``g.to_onnx(...)``).
+* ``api="cpp"`` — a C++ function that rebuilds the model with
+  :cpp:class:`~onnx_light::core::builder::GraphBuilder`.
 
 :func:`~onnx_light.tools.translate_header` returns the matching import
 header, so ``translate_header(api) + translate(model, api)`` is a fully
 runnable Python snippet.  The example below builds a small model, prints
 both flavours and then executes the generated code to rebuild the model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 23-38
+.. GENERATED FROM PYTHON SOURCE LINES 26-41
 
 .. code-block:: Python
 
@@ -65,7 +68,7 @@ both flavours and then executes the generated code to rebuild the model.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 39-44
+.. GENERATED FROM PYTHON SOURCE LINES 42-47
 
 Build the model
 +++++++++++++++
@@ -73,7 +76,7 @@ Build the model
 A tiny graph ``Y = Add(Mul(X, W), B)`` with two initializers so the
 translation exercises nodes, inputs/outputs and initializers.
 
-.. GENERATED FROM PYTHON SOURCE LINES 44-61
+.. GENERATED FROM PYTHON SOURCE LINES 47-64
 
 .. code-block:: Python
 
@@ -101,7 +104,7 @@ translation exercises nodes, inputs/outputs and initializers.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 62-68
+.. GENERATED FROM PYTHON SOURCE LINES 65-71
 
 onnx-compact flavour
 ++++++++++++++++++++
@@ -110,7 +113,7 @@ onnx-compact flavour
 ``translate(model, api="onnx-compact")`` the nested ``oh.make_model``
 expression.
 
-.. GENERATED FROM PYTHON SOURCE LINES 68-74
+.. GENERATED FROM PYTHON SOURCE LINES 71-77
 
 .. code-block:: Python
 
@@ -160,15 +163,16 @@ expression.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 75-80
+.. GENERATED FROM PYTHON SOURCE LINES 78-84
 
 builder flavour
 +++++++++++++++
 
-The ``builder`` flavour rebuilds the same model step by step with the
-:class:`~onnx_light.onnx_core.graph_builder.GraphBuilder`.
+The ``builder`` flavour rebuilds the same model step by step with the compact
+:class:`~onnx_light.onnx_core.graph_builder.GraphBuilder` API
+(``g.inp``, ``g.init``, ``g.op`` and ``g.out``).
 
-.. GENERATED FROM PYTHON SOURCE LINES 80-86
+.. GENERATED FROM PYTHON SOURCE LINES 84-90
 
 .. code-block:: Python
 
@@ -196,34 +200,99 @@ The ``builder`` flavour rebuilds the same model step by step with the
     from onnx_light.onnx_core.graph_builder import GraphBuilder
     g = GraphBuilder('linear')
     g.set_opset_version('', 18)
-    g.make_input(oh.make_tensor_value_info('X', onnx.TensorProto.FLOAT, ('N', 3)))
-    g.make_initializer(onh.from_array(np.array([1.0, 2.0, 3.0], dtype=np.float32), name='W'))
-    g.make_initializer(onh.from_array(np.array([0.5, 0.5, 0.5], dtype=np.float32), name='B'))
-    g.make_node('Mul', ['X', 'W'], outputs=['XW'])
-    g.make_node('Add', ['XW', 'B'], outputs=['Y'])
-    g.make_output(oh.make_tensor_value_info('Y', onnx.TensorProto.FLOAT, ('N', 3)))
+    g.inp('X', onnx.TensorProto.FLOAT, ('N', 3))
+    g.init(np.array([1.0, 2.0, 3.0], dtype=np.float32), name='W')
+    g.init(np.array([0.5, 0.5, 0.5], dtype=np.float32), name='B')
+    g.op.Mul('X', 'W', outputs=['XW'])
+    g.op.Add('XW', 'B', outputs=['Y'])
+    g.out('Y', onnx.TensorProto.FLOAT, ('N', 3))
     model = g.to_onnx('model', ir_version=8)
 
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 87-93
+.. GENERATED FROM PYTHON SOURCE LINES 91-96
+
+C++ flavour
++++++++++++
+
+The ``cpp`` flavour emits a standalone ``BuildModel`` function using the
+native :cpp:class:`~onnx_light::core::builder::GraphBuilder`.
+
+.. GENERATED FROM PYTHON SOURCE LINES 96-102
+
+.. code-block:: Python
+
+
+    cpp_code = translate_header("cpp") + translate(model, api="cpp")
+    print("\n=== cpp ===")
+    print(cpp_code)
+
+
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+
+    === cpp ===
+    #include "onnx_core/builder/graph_builder.h"
+    #include "onnx_op/operator_sets.h"
+
+    #include <limits>
+    #include <string>
+    #include <vector>
+
+    namespace onnx_light = ONNX_LIGHT_NAMESPACE;
+    onnx_light::ModelProto BuildModel() {
+      onnx_light::core::builder::GraphBuilder g(
+          "linear", [](const std::string &op_type) {
+            return onnx_light::onnx_op::GetAllOnnxOpSchemasWithHistory(op_type, false);
+          });
+      g.SetOpsetVersion("", 18);
+      g.MakeInput("X", onnx_light::core::symbolic::TensorType::kFloat, onnx_light::core::symbolic::SymShape{onnx_light::core::symbolic::SymDim('N'), onnx_light::core::symbolic::SymDim(3)});
+      onnx_light::TensorProto initializer_0;
+      initializer_0.set_name("W");
+      initializer_0.set_data_type(onnx_light::TensorProto::DataType::FLOAT);
+      initializer_0.add_dims(3);
+      initializer_0.set_raw_data(std::string({static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(128)), static_cast<char>(static_cast<unsigned char>(63)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(64)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(64)), static_cast<char>(static_cast<unsigned char>(64))}));
+      g.MakeInitializer(initializer_0);
+      onnx_light::TensorProto initializer_1;
+      initializer_1.set_name("B");
+      initializer_1.set_data_type(onnx_light::TensorProto::DataType::FLOAT);
+      initializer_1.add_dims(3);
+      initializer_1.set_raw_data(std::string({static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(63)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(63)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(0)), static_cast<char>(static_cast<unsigned char>(63))}));
+      g.MakeInitializer(initializer_1);
+      g.MakeNode("Mul", {"X", "W"}, {"XW"});
+      g.MakeNode("Add", {"XW", "B"}, {"Y"});
+      g.MakeOutput("Y", onnx_light::core::symbolic::TensorType::kFloat, onnx_light::core::symbolic::SymShape{onnx_light::core::symbolic::SymDim('N'), onnx_light::core::symbolic::SymDim(3)});
+      return g.ToModel(8);
+    }
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 103-109
 
 Round-trip
 ++++++++++
 
 The generated code is plain Python: executing it rebuilds an equivalent
-model.  Here we run the ``onnx-compact`` snippet and check that the
+model.  Here we run the ``builder`` snippet and check that the
 rebuilt graph has the same nodes as the original.
 
-.. GENERATED FROM PYTHON SOURCE LINES 93-104
+.. GENERATED FROM PYTHON SOURCE LINES 109-120
 
 .. code-block:: Python
 
 
     namespace: dict = {}
-    exec(compact_code, namespace)  # noqa: S102
+    exec(builder_code, namespace)  # noqa: S102
     rebuilt = namespace["model"]
 
     original_ops = [node.op_type for node in model.graph.node]
@@ -251,7 +320,7 @@ rebuilt graph has the same nodes as the original.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.006 seconds)
+   **Total running time of the script:** (0 minutes 0.010 seconds)
 
 
 .. _sphx_glr_download_auto_examples_proto_plot_translate.py:
