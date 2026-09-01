@@ -1,9 +1,9 @@
 """Record a daily snapshot of pull request activity for ONNX Runtime.
 
 The snapshot contains the current number of open pull requests; the numbers
-opened, closed, and merged during the preceding seven days; and the average
-age in days of the pull requests that are still open. Rows are stored in
-``cache_data/onnxruntime/pr_activity.csv``.
+opened, closed, and merged during the preceding day and seven days; and the
+average age in days of the pull requests that are still open. Rows are stored
+in ``cache_data/onnxruntime/pr_activity.csv``.
 
 Usage::
 
@@ -30,6 +30,9 @@ CSV_FIELDS = (
     "opened_prs_7d",
     "closed_prs_7d",
     "merged_prs_7d",
+    "opened_prs_1d",
+    "closed_prs_1d",
+    "merged_prs_1d",
     "avg_open_age_days",
 )
 
@@ -94,12 +97,18 @@ def collect_snapshot(
         ages.append(max(0.0, (now - created).total_seconds() / 86400))
 
     since = now - dt.timedelta(days=7)
+    since_day = now - dt.timedelta(days=1)
     opened = 0
     closed = 0
     merged = 0
+    opened_day = 0
+    closed_day = 0
+    merged_day = 0
     for pr in open_pulls:
         if _is_at_or_after(pr.get("created_at"), since):
             opened += 1
+        if _is_at_or_after(pr.get("created_at"), since_day):
+            opened_day += 1
     for pr in iter_pulls(repo, "closed", token):
         updated_at = pr.get("updated_at")
         if updated_at:
@@ -110,10 +119,16 @@ def collect_snapshot(
                 pass
         if _is_at_or_after(pr.get("created_at"), since):
             opened += 1
+        if _is_at_or_after(pr.get("created_at"), since_day):
+            opened_day += 1
         if _is_at_or_after(pr.get("closed_at"), since):
             closed += 1
+        if _is_at_or_after(pr.get("closed_at"), since_day):
+            closed_day += 1
         if _is_at_or_after(pr.get("merged_at"), since):
             merged += 1
+        if _is_at_or_after(pr.get("merged_at"), since_day):
+            merged_day += 1
 
     average_age = sum(ages) / len(ages) if ages else 0.0
     return {
@@ -122,6 +137,9 @@ def collect_snapshot(
         "opened_prs_7d": str(opened),
         "closed_prs_7d": str(closed),
         "merged_prs_7d": str(merged),
+        "opened_prs_1d": str(opened_day),
+        "closed_prs_1d": str(closed_day),
+        "merged_prs_1d": str(merged_day),
         "avg_open_age_days": f"{average_age:.2f}",
     }
 
