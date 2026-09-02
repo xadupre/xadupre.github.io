@@ -22,8 +22,14 @@ class TestRecordSizeOnnxLightCpuWorkflow(unittest.TestCase):
         )
 
     def test_records_shared_library_sizes(self):
-        self.assertIn("cache_data/onnx-light-cpu/so_sizes.csv", self.content)
-        self.assertIn("onnx_light_cpu/onnx_py", self.content)
+        self.assertIn('out="${out_dir}/so_sizes.csv"', self.content)
+        self.assertIn('"${GITHUB_WORKSPACE}/wheel-out"/*.whl', self.content)
+        self.assertIn("zipfile.ZipFile(wheel)", self.content)
+        self.assertNotIn("find onnx_light_cpu/onnx_py", self.content)
+        self.assertLess(
+            self.content.index("python -m pip wheel ."),
+            self.content.index("- name: Record wheel binary sizes"),
+        )
 
     def test_records_wheel_sizes(self):
         self.assertIn("cache_data/onnx-light-cpu/wheel_sizes.csv", self.content)
