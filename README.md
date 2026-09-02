@@ -48,14 +48,17 @@ the rule. The following setups are known to work with this repository:
    checkout/push steps in the workflows with that token, e.g.:
 
    ```yaml
-   - uses: actions/checkout@v6
+   - uses: actions/checkout@v5
      with:
        fetch-depth: 0
        token: ${{ secrets.BOT_TOKEN }}
    ```
 
    The `git push` step then uses `BOT_TOKEN` instead of the default
-   `GITHUB_TOKEN` and the protection rule lets it through.
+   `GITHUB_TOKEN` and the protection rule lets it through. The primary
+   checkout intentionally remains on v5 because v6 stores credentials in a
+   temporary conditional Git configuration that has proved unavailable to
+   later push steps; secondary read-only checkouts may still use v6.
 
 In every case the workflows already retry the push after rebasing on top of
 `origin/main`, so transient races with other commits do not require any
