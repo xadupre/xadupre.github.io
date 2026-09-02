@@ -62,12 +62,12 @@
     <link rel="icon" href="../../_static/logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Conv Performance Roadmap" href="2026_08_conv.html" />
+    <link rel="next" title="Qwen3 Non-MatMulNBits Operator Slice" href="2026_09_qwen3_operator_slice.html" />
     <link rel="prev" title="Exp and Log ONNX Runtime Parity Roadmap" href="2026_08_exp_log_parity.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 01, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 02, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -394,6 +394,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_attention.html">Attention Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_exp_log_parity.html">Exp and Log ONNX Runtime Parity Roadmap</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Qwen3 CPU Inference Critical Path</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_qwen3_operator_slice.html">Qwen3 Non-MatMulNBits Operator Slice</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_conv.html">Conv Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_unary_elementwise.html">Unary Elementwise Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_binary_elementwise.html">Binary Elementwise and Broadcasting Performance Roadmap</a></li>
@@ -596,7 +597,7 @@ fully quantized tied-embedding QDQ contract described below.</p>
 <h3>Exact kernel inventory<a class="headerlink" href="#exact-kernel-inventory" title="Link to this heading">#</a></h3>
 <p>The table is exhaustive for this graph. <code class="docutils literal notranslate"><span class="pre">Registered</span></code> means a kernel is present
 in the current <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> registration inventory, not merely that an
-ONNX reference implementation may exist. All twelve rows marked <code class="docutils literal notranslate"><span class="pre">Missing</span></code>
+ONNX reference implementation may exist. Every row still marked <code class="docutils literal notranslate"><span class="pre">Missing</span></code>
 must receive either a CPU kernel or an explicit, tested <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> core
 execution path before the artifact can run without an untracked fallback.</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -691,12 +692,11 @@ keep weights compressed and cover GEMV decode plus GEMM prefill.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> v1</p></td>
 <td><p>28</p></td>
-<td><p>Missing and blocking</p></td>
-<td><p>FP32 causal GQA with 16 query heads, 8 KV heads, head size 128,
-<code class="docutils literal notranslate"><span class="pre">scale=1/sqrt(128)</span></code>, integrated half-split RoPE, external FP32
-cos/sin caches, tensor past/present K/V, and three outputs. Adapt this
-contract to the shared Attention planner instead of creating a second
-attention engine.</p></td>
+<td><p>Registered (#494, #507)</p></td>
+<td><p>The delivered CPU adapter covers FP32 causal GQA with 16 query heads,
+8 KV heads, head size 128, <code class="docutils literal notranslate"><span class="pre">scale=1/sqrt(128)</span></code>, integrated half-split
+RoPE, external FP32 cos/sin caches, tensor past/present K/V, and three
+outputs through the shared Attention engine.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">com.microsoft::SkipSimplifiedLayerNormalization</span></code> v1</p></td>
 <td><p>56</p></td>
@@ -754,17 +754,17 @@ the portable serialization.</p></td>
 <td><p>Float8, full integer parity, float64, and generic PR10.5.</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
-<td><p>Completed ExpLog PR01-PR03 plus Qwen PR04</p></td>
+<td><p>Completed ExpLog PR01–PR03 plus <a class="reference internal" href="2026_09_qwen3_operator_slice.html"><span class="doc">Qwen3 non-MatMulNBits operators</span></a> (Qwen PR04)</p></td>
 <td><p>The exact standard-operator inventory above: Gather, Cast, ReduceSum,
 Shape, Reshape, Split, Sigmoid, SimplifiedLayerNormalization, and the
 SkipSimplifiedLayerNormalization adapter.</p></td>
 <td><p>Non-Qwen unary/binary operator matrices and graph fusions.</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
-<td><p>Attention PR11-PR14 plus Qwen PR05 integration</p></td>
-<td><p>Adapt the audited <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> contract to the shared
-materialized and online Attention engines for batch-1 causal GQA,
-integrated RoPE, tensor-cache prefill, and single-token decode.</p></td>
+<td><p>Completed #494/#507 plus Qwen PR05 integration</p></td>
+<td><p>Integrate the delivered <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> adapter with the frozen
+graph and retain shared materialized and online Attention execution for
+batch-1 causal prefill and decode.</p></td>
 <td><p>The generic Attention PR15 performance gate.</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
@@ -1063,6 +1063,9 @@ CPU. Persistent packed storage, including tied-weight plans, stays within
 </section>
 <section id="phase-q2-one-complete-qwen-block">
 <h2>Phase Q2: one complete Qwen block<a class="headerlink" href="#phase-q2-one-complete-qwen-block" title="Link to this heading">#</a></h2>
+<p>The implementation-ready sequence, ownership boundaries, tests and acceptance
+gates for this phase are maintained in
+<a class="reference internal" href="2026_09_qwen3_operator_slice.html"><span class="doc">Qwen3 non-MatMulNBits operators</span></a>.</p>
 <p>Implement the minimum standard-operator slice needed to run one decoder block:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code> for FP32 embeddings and the INT64 shape scalar;</p></li>
@@ -1095,12 +1098,11 @@ Q and K use their respective frozen head counts.</p>
 <section id="phase-q3-narrow-causal-gqa">
 <h2>Phase Q3: narrow causal GQA<a class="headerlink" href="#phase-q3-narrow-causal-gqa" title="Link to this heading">#</a></h2>
 <p>Qwen PR05 does not create a second attention descriptor, planner, graph
-matcher, or compute engine. It first adapts the audited
-<code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> node, then integrates the portable
-standard graph with the shared
+matcher, or compute engine. It integrates the delivered
+<code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> adapter and the portable standard graph
+with the shared
 <code class="docutils literal notranslate"><span class="pre">AttentionDescriptor</span></code>, per-invocation <code class="docutils literal notranslate"><span class="pre">AttentionPlan</span></code>, materialized
-fallback, and online engine delivered by Attention PR11 through PR14. The
-Qwen priority subset is:</p>
+fallback, and online engine. The Qwen priority subset is:</p>
 <ul class="simple">
 <li><p>batch 1;</p></li>
 <li><p>Qwen3 query-head/KV-head geometry;</p></li>
@@ -1399,19 +1401,17 @@ regressing decode or exceeding the memory bound.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Qwen PR04</p></td>
 <td><p>Qwen block operator slice.</p></td>
-<td><p>Every missing standard-domain row in the audited inventory plus the
-Simplified/SkipSimplified normalization adapters runs one complete
-native INT4 block; the portable RMSNorm, RoPE, Gather, SiLU, Softmax,
-and layout paths remain differential coverage.</p></td>
-<td><p>Qwen PR02; completed ExpLog PR01-PR03</p></td>
+<td><p>The dedicated <a class="reference internal" href="2026_09_qwen3_operator_slice.html"><span class="doc">non-MatMulNBits operator plan</span></a> is complete and runs one Qwen block;
+the portable RMSNorm, RoPE, Gather, SiLU, Softmax, and layout paths
+remain differential coverage.</p></td>
+<td><p>Qwen PR01; completed ExpLog PR01-PR03</p></td>
 <td><p>Pending</p></td>
 </tr>
 <tr class="row-even"><td><p>Qwen PR05</p></td>
 <td><p>Frozen-graph integration with shared Attention.</p></td>
-<td><p>Native <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> and standard <code class="docutils literal notranslate"><span class="pre">Attention</span></code> dispatch to
-the shared descriptor, planner, materialized fallback, and online
-engine. Batch-1 causal prefill/decode use zero-copy query/KV-head
-grouping; no Qwen-only compute engine is introduced.</p></td>
+<td><p>The delivered native <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> adapter and standard
+<code class="docutils literal notranslate"><span class="pre">Attention</span></code> execute from the frozen graph through the shared engine.
+Batch-1 causal prefill/decode retain zero-copy query/KV-head grouping.</p></td>
 <td><p>Qwen PR04; Attention PR14 / #391</p></td>
 <td><p>Pending</p></td>
 </tr>
@@ -1496,11 +1496,11 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
       </div>
     </a>
     <a class="right-next"
-       href="2026_08_conv.html"
+       href="2026_09_qwen3_operator_slice.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Conv Performance Roadmap</p>
+        <p class="prev-next-title">Qwen3 Non-MatMulNBits Operator Slice</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -1581,7 +1581,7 @@ distinguishes full-attention layers and their KV-cache handling.</p></li>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 01, 2026.
+  Last updated on Sep 02, 2026.
   <br/>
 </p></div>
       

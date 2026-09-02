@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 01, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 02, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -394,6 +394,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_attention.html">Attention Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_exp_log_parity.html">Exp and Log ONNX Runtime Parity Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_qwen3_inference.html">Qwen3 CPU Inference Critical Path</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_qwen3_operator_slice.html">Qwen3 Non-MatMulNBits Operator Slice</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_conv.html">Conv Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_unary_elementwise.html">Unary Elementwise Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_binary_elementwise.html">Binary Elementwise and Broadcasting Performance Roadmap</a></li>
@@ -473,6 +474,9 @@
 <dt class="field-odd">Date<span class="colon">:</span></dt>
 <dd class="field-odd"><p>2026-08</p>
 </dd>
+<dt class="field-even">Updated<span class="colon">:</span></dt>
+<dd class="field-even"><p>2026-09-02</p>
+</dd>
 </dl>
 <p><strong>in progress</strong></p>
 <p>PR <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/307">#307</a>
@@ -480,7 +484,7 @@ delivered the shared MatMul kernel and the original parity corpus. The
 correctness foundations are complete, including the FP16/BF16, integer,
 compact-format, and tuning paths. The expanded benchmark corpus has since
 exposed weak float32 scaling under default runtime policies, so issue
-<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/374">#374</a> reopens the
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/374">#374</a> reopened the
 performance work.</p>
 <section id="current-status">
 <h2>Current status<a class="headerlink" href="#current-status" title="Link to this heading">#</a></h2>
@@ -507,7 +511,8 @@ multi-core shapes.</p>
 <tr class="row-even"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/374">#374</a></p></td>
 <td><p>Default-policy float32 profiling, scaling correction, parity-runner
 semantics, and this roadmap correction.</p></td>
-<td><p>In progress; exactly one implementation PR must close this issue.</p></td>
+<td><p>Closed by the implementation sequence through #575; dedicated-machine
+parity remains optional validation.</p></td>
 </tr>
 <tr class="row-odd"><td><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/341">#341</a></p></td>
 <td><p>FP16/BF16 kernels, tuning, correctness coverage, and isolated benchmark
@@ -1936,8 +1941,9 @@ cross-machine validation.</p></td>
 </tbody>
 </table>
 </div>
-<p>Roadmap PR10.5 delivered the original controlled-thread validation tooling. It
-did not complete the default-policy parity gate now tracked by #374.</p>
+<p>Roadmap PR10.5 delivered the original controlled-thread validation tooling.
+The later default-policy corrective work is recorded under the now-closed
+#374.</p>
 <p>The reproducible gate command is <code class="docutils literal notranslate"><span class="pre">tools/benchmark_gemm_parity.py</span>
 <span class="pre">--operator</span> <span class="pre">all</span> <span class="pre">--dtype</span> <span class="pre">all</span> <span class="pre">--output</span> <span class="pre">gemm_matmul_parity_results.json</span></code>.
 It measures the registered CPU kernel and ONNX Runtime in separate session
@@ -1949,9 +1955,12 @@ selection to each runtime. Explicit <code class="docutils literal notranslate"><
 controlled scaling diagnostics; pass <code class="docutils literal notranslate"><span class="pre">--enforce</span></code> only when publishing a
 completed dedicated-machine result.</p>
 </section>
-<section id="issue-374-corrective-pass">
-<h3>Issue #374 corrective pass<a class="headerlink" href="#issue-374-corrective-pass" title="Link to this heading">#</a></h3>
-<p>The corrective pass keeps dynamic B packing in the invocation, but distributes
+<section id="issue-374-corrective-passes">
+<h3>Issue #374 corrective passes<a class="headerlink" href="#issue-374-corrective-passes" title="Link to this heading">#</a></h3>
+<p>The corrective sequence is implemented by <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/560">#560</a>, <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/561">#561</a>, <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/566">#566</a>, <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/567">#567</a>, and <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/575">#575</a>. It adds medium
+AVX-512 tiles, cached and skinny-M MatMul execution, fused bias, productive
+participant scheduling, and worker-local dynamic-B packing.</p>
+<p>The final pass keeps dynamic B packing in the invocation, but distributes
 native float32 panels of at least 131,072 elements across the session executor.
 This provisional threshold is deliberately left for a later dedicated-machine
 tuning pass. All micro-panels in one B-panel wave share one dispatch, and
@@ -1959,12 +1968,12 @@ smaller panels stay inline. The multiplication phase assigns balanced tile
 intervals only when equal-size scheduler blocks would lose participants: for
 example, 12 tiles with 10 requested blocks previously collapsed to only 6
 effective blocks. Otherwise the existing task distribution is retained.</p>
-<p>On the local i7-13800H diagnostic, pinned four-thread square-1024 latency drops
-from approximately 14.1 ms on <code class="docutils literal notranslate"><span class="pre">main</span></code> to 6.9 ms, while the one-thread
-square-128 path remains approximately 60 us. These are diagnostic A/B results,
-not a completed parity claim. The default-policy float32 corpus still misses
-the 1.0x median / 0.9x minimum gate, especially on skinny-N and constant-weight
-transformer cases, so the roadmap remains open.</p>
+<p>On the local i7-13800H diagnostic, #575 reduces dynamic-B square-512
+four-thread median latency from 2.345 ms to 0.855 ms and improves 1-to-4-thread
+scaling from 1.67x to 3.94x. These are diagnostic A/B results, not a
+cross-machine parity claim. Issue #374 is closed because the identified
+default-policy scheduling and packing defects are implemented; the
+reproducible dedicated-machine gate remains available for validation.</p>
 </section>
 <section id="roadmap-pr10-5-final-validation-pass">
 <h3>Roadmap PR10.5 final validation pass<a class="headerlink" href="#roadmap-pr10-5-final-validation-pass" title="Link to this heading">#</a></h3>
@@ -2270,7 +2279,7 @@ targets without changing the completed implementation status.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#acceptance-criteria">Acceptance criteria</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementation-order-and-dependencies">Implementation order and dependencies</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-pull-request-sequence">Remaining pull-request sequence</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-374-corrective-pass">Issue #374 corrective pass</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-374-corrective-passes">Issue #374 corrective passes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#roadmap-pr10-5-final-validation-pass">Roadmap PR10.5 final validation pass</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#roadmap-pr10-4-follow-up-validation-record">Roadmap PR10.4 follow-up validation record</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#roadmap-pr10-3-tuning-record">Roadmap PR10.3 tuning record</a></li>
@@ -2311,7 +2320,7 @@ targets without changing the completed implementation status.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 01, 2026.
+  Last updated on Sep 02, 2026.
   <br/>
 </p></div>
       

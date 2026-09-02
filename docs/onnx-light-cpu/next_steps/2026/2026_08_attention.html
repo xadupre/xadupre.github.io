@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 01, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 02, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -394,6 +394,7 @@
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Attention Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_exp_log_parity.html">Exp and Log ONNX Runtime Parity Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_qwen3_inference.html">Qwen3 CPU Inference Critical Path</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_qwen3_operator_slice.html">Qwen3 Non-MatMulNBits Operator Slice</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_conv.html">Conv Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_unary_elementwise.html">Unary Elementwise Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_binary_elementwise.html">Binary Elementwise and Broadcasting Performance Roadmap</a></li>
@@ -473,13 +474,22 @@
 <dt class="field-odd">Date<span class="colon">:</span></dt>
 <dd class="field-odd"><p>2026-08</p>
 </dd>
+<dt class="field-even">Updated<span class="colon">:</span></dt>
+<dd class="field-even"><p>2026-09-02</p>
+</dd>
 </dl>
-<p><strong>complete</strong> (Attention PR15 parity, memory, and reproducibility gate)</p>
+<p><strong>in progress</strong> (the published parity gate is not yet met)</p>
 <p><code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> provides materialized and bounded-memory streaming Attention
-for the roadmap types and cache modes. The registered backend corpus and
-<code class="docutils literal notranslate"><span class="pre">tools/benchmark_attention_parity.py</span></code> provide the final reproducible
-equal-thread gate against ONNX Runtime. Dedicated-machine reports, rather
-than shared CI timings, decide the narrow performance thresholds.</p>
+for the roadmap types and cache modes. The 2026-09-01 dashboard reopened this
+roadmap: the FP32 and FP16 medians and several priority cases remained below
+the stated parity thresholds. The current optimization pass adds a
+single-key value-copy path, tiled execution starting at query length 8,
+shape-adaptive query/KV blocks, and a tiled FP16 prefill path which converts
+half inputs while packing GEMM panels instead of widening complete Q and K
+tensors. These follow-ups were delivered by <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/559">#559</a>, <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/569">#569</a>, and <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/578">#578</a>. The registered backend corpus and
+<code class="docutils literal notranslate"><span class="pre">tools/benchmark_attention_parity.py</span></code> remain the reproducible equal-thread
+gate against ONNX Runtime. Dedicated-machine reports, rather than shared CI
+timings, decide the narrow performance thresholds.</p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>The objective is a correct, bounded-memory CPU implementation of tensor-based
@@ -556,6 +566,12 @@ cache, ISA, compiler, and build metadata.</p></li>
 4096, and 8192 when machine memory permits; MHA <code class="docutils literal notranslate"><span class="pre">12/12</span></code>, GQA <code class="docutils literal notranslate"><span class="pre">16/4</span></code>,
 and MQA <code class="docutils literal notranslate"><span class="pre">16/1</span></code> query/KV-head ratios; head dimensions 64 and 128; rank-3
 and rank-4 layouts; and FP32, FP16, and BF16.</p></li>
+<li><p>Include full-attention layers from Qwen3.6-27B (24 query heads, 4 KV heads)
+and Qwen3.6-35B-A3B (16 query heads, 2 KV heads), both with head dimension
+256, using rank-3 FP16 prefill and tensor-cache decode cases. These
+geometries come from the published model configurations; the 128/1024/4096
+sequence points are serving-oriented benchmark choices rather than model
+configuration values.</p></li>
 <li><p>Pair the full attribute and mask matrix with small correctness cases. The
 timed priority corpus covers no mask, causal, boolean, additive, v24
 <code class="docutils literal notranslate"><span class="pre">nonpad_kv_seqlen</span></code>, and internal tensor-cache cases without taking their
@@ -586,6 +602,8 @@ rank-3/rank-4 layout, MHA/GQA/MQA geometry, query and KV lengths, cache and
 mask mode, and element type;</p></li>
 <li><p>include the complete timed priority corpus defined above, including KV length
 8192 only in the opt-in large corpus when machine memory permits.</p></li>
+<li><p>include Qwen3-8B and both published Qwen3.6 full-attention geometries, with
+one 128-token prefill case and decode cache lengths 128, 1024, and 4096.</p></li>
 </ul>
 <p>Unit tests execute bounded representative benchmark cases through the
 registered CPU kernel. Metadata tests cover the complete corpus without
@@ -811,13 +829,17 @@ reaches at least <code class="docutils literal notranslate"><span class="pre">1.
 priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>. Raw equal-thread samples and environment
 metadata are published; controlled-thread runs remain diagnostic.</p></td>
 <td><p>PR14 / #391</p></td>
-<td><p>Complete</p></td>
+<td><p>Implementation delivered through #578; dedicated-machine acceptance
+remains in progress</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Roadmap PR15 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/390">#390</a>) completed the
-Attention roadmap.</p>
+<p>Roadmap PR15 (<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/390">#390</a>) and the #578
+corrective pass delivered the implementation, benchmarking, and memory work.
+Subsequent published measurements showed that the performance thresholds were
+not sustained. The roadmap remains open as a performance gate until a
+dedicated-machine run satisfies those thresholds for every priority type.</p>
 </section>
 </section>
 
@@ -912,7 +934,7 @@ Attention roadmap.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 01, 2026.
+  Last updated on Sep 02, 2026.
   <br/>
 </p></div>
       
