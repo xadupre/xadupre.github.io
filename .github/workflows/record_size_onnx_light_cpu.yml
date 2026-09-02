@@ -124,8 +124,7 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
         run: |
-          # Build the compiled CPU kernel extensions in-place so their sizes
-          # can be recorded below: the package ships
+          # Build and install the compiled CPU kernel extensions: the package ships
           # ``onnx_light_cpu.onnx_py._cpukernels`` and ``_cpuregister``
           # (nanobind extensions). Build with the onnx-light integration
           # enabled (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``) so the released
@@ -142,37 +141,6 @@ jobs:
 
       - name: pip freeze
         run: pip freeze
-
-      - name: Record onnx_py shared library sizes
-        working-directory: onnx-light-cpu
-        run: |
-          # Record the size of every shared library produced in onnx_py/ so
-          # that the evolution of the compiled extension size can be tracked
-          # over time. The data is appended (one CSV row per .so file) to
-          # cache_data/onnx-light-cpu/so_sizes.csv inside the xadupre.github.io
-          # checkout so that the "Commit and push cache data" step below picks
-          # it up and pushes it back to this repository.
-          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu"
-          mkdir -p "$out_dir"
-          out="${out_dir}/so_sizes.csv"
-          if [ ! -f "$out" ]; then
-            echo "date,commit,size,name" > "$out"
-          fi
-          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          commit_sha="$(git rev-parse HEAD)"
-          found=0
-          # Track every shared library shipped in the onnx_py package (.so on
-          # Linux/macOS, .dylib on macOS, .pyd on Windows just in case).
-          while IFS= read -r -d '' f; do
-            size="$(wc -c < "$f")"
-            name="$(basename "$f")"
-            echo "${date_iso},${commit_sha},${size},${name}" >> "$out"
-            found=1
-            echo "Recorded ${name} (${size} bytes) at ${commit_sha}."
-          done < <(find onnx_light_cpu/onnx_py -maxdepth 2 -type f \( -name '*.so' -o -name '*.so.*' -o -name '*.dylib' -o -name '*.pyd' \) -print0)
-          if [ "$found" -eq 0 ]; then
-            echo "No shared library found under onnx_light_cpu/onnx_py/; nothing to record."
-          fi
 
       - name: Build and record onnx-light-cpu wheel size
         working-directory: onnx-light-cpu
@@ -223,6 +191,43 @@ jobs:
             echo "No wheel was produced by 'pip wheel .'; nothing to record." >&2
             exit 1
           fi
+
+      - name: Record wheel binary sizes
+        working-directory: onnx-light-cpu
+        run: |
+          # Record the uncompressed size of every shared library shipped in the
+          # wheel. Editable installs keep these files outside the source tree,
+          # so inspect the distributable wheel built above.
+          out_dir="${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu"
+          mkdir -p "$out_dir"
+          out="${out_dir}/so_sizes.csv"
+          date_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          commit_sha="$(git rev-parse HEAD)"
+          python - "$out" "$date_iso" "$commit_sha" "${GITHUB_WORKSPACE}/wheel-out"/*.whl <<'PY'
+          import csv
+          import os
+          import sys
+          import zipfile
+
+          out, date_iso, commit_sha, *wheels = sys.argv[1:]
+          rows = []
+          for wheel in wheels:
+              with zipfile.ZipFile(wheel) as archive:
+                  for info in archive.infolist():
+                      name = os.path.basename(info.filename)
+                      if name.endswith((".so", ".dylib", ".pyd")):
+                          rows.append((date_iso, commit_sha, info.file_size, name))
+          if not rows:
+              raise RuntimeError("No shared library found in the onnx-light-cpu wheel.")
+          exists = os.path.exists(out)
+          with open(out, "a", newline="", encoding="utf-8") as stream:
+              writer = csv.writer(stream)
+              if not exists:
+                  writer.writerow(("date", "commit", "size", "name"))
+              writer.writerows(rows)
+          for _, _, size, name in rows:
+              print(f"Recorded {name} ({size} bytes) at {commit_sha}.")
+          PY
 
       - name: Record Python and C++ lines of code
         run: |
