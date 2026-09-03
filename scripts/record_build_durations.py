@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -160,9 +161,21 @@ def _request(url: str, token: str | None) -> tuple[dict, dict]:
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp:  # noqa: S310 - api.github.com
-        payload = json.loads(resp.read().decode("utf-8"))
-        return payload, dict(resp.headers)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req) as resp:  # noqa: S310 - api.github.com
+                payload = json.loads(resp.read().decode("utf-8"))
+                return payload, dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {500, 502, 503, 504} or attempt == 2:
+                raise
+            delay = 2**attempt
+            _log(
+                f"GitHub API returned HTTP {exc.code}; retrying in {delay}s "
+                f"(attempt {attempt + 2}/3)"
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 # GitHub's ``/actions/runs`` endpoint silently caps the total number of

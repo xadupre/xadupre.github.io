@@ -17,6 +17,46 @@ import record_build_durations as rbd  # noqa: E402
 
 
 class TestRecordBuildDurations(unittest.TestCase):
+    def test_request_retries_transient_server_error(self):
+        calls = 0
+        sleeps = []
+
+        class Response:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                return b'{"workflow_runs": []}'
+
+        def fake_urlopen(request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url, 502, "Bad Gateway", hdrs=None, fp=None
+                )
+            return Response()
+
+        original_urlopen = rbd.urllib.request.urlopen
+        original_sleep = rbd.time.sleep
+        rbd.urllib.request.urlopen = fake_urlopen
+        rbd.time.sleep = sleeps.append
+        try:
+            payload, headers = rbd._request("https://api.github.com/test", None)
+        finally:
+            rbd.urllib.request.urlopen = original_urlopen
+            rbd.time.sleep = original_sleep
+
+        self.assertEqual(payload, {"workflow_runs": []})
+        self.assertEqual(headers, {})
+        self.assertEqual(calls, 2)
+        self.assertEqual(sleeps, [1])
+
     def test_parse_and_format_iso(self):
         parsed = rbd._parse_iso("2024-01-02T03:04:05Z")
         self.assertEqual(parsed.tzinfo, dt.timezone.utc)
