@@ -569,12 +569,8 @@ def discover_node_tests(kind: str = DEFAULT_KIND) -> List[Dict[str, Any]]:
 def _make_onnxruntime_runner(model) -> Callable[[List[Any]], List[Any]]:
     import onnxruntime
 
-    session_options = onnxruntime.SessionOptions()
-    session_options.intra_op_num_threads = 1
-    session_options.inter_op_num_threads = 1
     sess = onnxruntime.InferenceSession(
         model.SerializeToString(),
-        sess_options=session_options,
         providers=["CPUExecutionProvider"],
     )
     input_names = [i.name for i in sess.get_inputs()]

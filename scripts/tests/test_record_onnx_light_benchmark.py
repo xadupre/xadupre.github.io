@@ -17,7 +17,7 @@ import record_onnx_light_benchmark as rlb  # noqa: E402
 
 
 class TestOnnxruntimeRunner(unittest.TestCase):
-    """``_make_onnxruntime_runner`` builds a single-threaded CPU session.
+    """``_make_onnxruntime_runner`` builds a plain CPU session and never edits the model.
 
     Models come as-is from the packages the benchmark measures, so the runner
     must pass the serialized model through unchanged and let any session-build
@@ -51,8 +51,6 @@ class TestOnnxruntimeRunner(unittest.TestCase):
         class _SessionOptions:
             def __init__(self):
                 self.entries = {}
-                self.intra_op_num_threads = None
-                self.inter_op_num_threads = None
 
             def add_session_config_entry(self, key, value):
                 self.entries[key] = value
@@ -78,8 +76,7 @@ class TestOnnxruntimeRunner(unittest.TestCase):
         # The serialized model is passed through unchanged on the CPU provider.
         self.assertEqual(created[0][0], b"corpus-model")
         self.assertEqual(created[0][2], ["CPUExecutionProvider"])
-        self.assertEqual(created[0][1].intra_op_num_threads, 1)
-        self.assertEqual(created[0][1].inter_op_num_threads, 1)
+        self.assertIsNone(created[0][1])
         self.assertEqual(runner([]), ["output"])
 
     def test_session_error_propagates(self):
