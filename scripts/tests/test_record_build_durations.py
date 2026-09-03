@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import io
 import json
 import os
 import sys
@@ -17,6 +19,46 @@ import record_build_durations as rbd  # noqa: E402
 
 
 class TestRecordBuildDurations(unittest.TestCase):
+    def test_request_retries_transient_server_error(self):
+        calls = 0
+        sleeps = []
+
+        class Response:
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                return False
+
+            def read(self):
+                return b'{"workflow_runs": []}'
+
+        def fake_urlopen(request):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url, 502, "Bad Gateway", hdrs=None, fp=None
+                )
+            return Response()
+
+        original_urlopen = rbd.urllib.request.urlopen
+        original_sleep = rbd.time.sleep
+        rbd.urllib.request.urlopen = fake_urlopen
+        rbd.time.sleep = sleeps.append
+        try:
+            payload, headers = rbd._request("https://api.github.com/test", None)
+        finally:
+            rbd.urllib.request.urlopen = original_urlopen
+            rbd.time.sleep = original_sleep
+
+        self.assertEqual(payload, {"workflow_runs": []})
+        self.assertEqual(headers, {})
+        self.assertEqual(calls, 2)
+        self.assertEqual(sleeps, [1])
+
     def test_parse_and_format_iso(self):
         parsed = rbd._parse_iso("2024-01-02T03:04:05Z")
         self.assertEqual(parsed.tzinfo, dt.timezone.utc)
@@ -553,6 +595,41 @@ class TestRecordBuildDurations(unittest.TestCase):
         # code must be 0 because at least one repository succeeded.
         self.assertEqual(calls, ["owner/good1", "owner/bad", "owner/good2"])
         self.assertEqual(rc, 0)
+
+    def test_main_fails_and_highlights_permission_error(self):
+        calls: list[str] = []
+
+        def fake_process(repo, cache_dir, months, token, since_override=None):
+            calls.append(repo)
+            if repo == "owner/forbidden":
+                raise urllib.error.HTTPError(
+                    "http://x", 403, "Forbidden", hdrs=None, fp=None
+                )
+            return 1
+
+        original = rbd.process_repo
+        rbd.process_repo = fake_process
+        try:
+            with tempfile.TemporaryDirectory() as tmp, io.StringIO() as stderr:
+                with contextlib.redirect_stderr(stderr):
+                    rc = rbd.main(
+                        [
+                            "--cache-dir",
+                            tmp,
+                            "--repo",
+                            "owner/forbidden",
+                            "--repo",
+                            "owner/good",
+                        ]
+                    )
+                error_output = stderr.getvalue()
+        finally:
+            rbd.process_repo = original
+
+        self.assertEqual(calls, ["owner/forbidden", "owner/good"])
+        self.assertEqual(rc, 1)
+        self.assertIn("::error title=GitHub API access denied::", error_output)
+        self.assertIn("HTTP 403 Forbidden", error_output)
 
     def test_process_repo_writes_jobs_index_even_on_fetch_error(self):
         # Regression test: when ``iter_workflow_runs`` raises partway

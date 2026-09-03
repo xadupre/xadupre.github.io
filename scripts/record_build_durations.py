@@ -38,6 +38,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -160,9 +161,21 @@ def _request(url: str, token: str | None) -> tuple[dict, dict]:
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp:  # noqa: S310 - api.github.com
-        payload = json.loads(resp.read().decode("utf-8"))
-        return payload, dict(resp.headers)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req) as resp:  # noqa: S310 - api.github.com
+                payload = json.loads(resp.read().decode("utf-8"))
+                return payload, dict(resp.headers)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in {500, 502, 503, 504} or attempt == 2:
+                raise
+            delay = 2**attempt
+            _log(
+                f"GitHub API returned HTTP {exc.code}; retrying in {delay}s "
+                f"(attempt {attempt + 2}/3)"
+            )
+            time.sleep(delay)
+    raise AssertionError("unreachable")
 
 
 # GitHub's ``/actions/runs`` endpoint silently caps the total number of
@@ -776,6 +789,7 @@ def main(argv: list[str] | None = None) -> int:
     overall_started = dt.datetime.now(tz=dt.timezone.utc)
     total = 0
     failures = 0
+    access_failures = 0
     for index, repo in enumerate(repos, start=1):
         _log(f"==> [{index}/{len(repos)}] processing repository {repo}")
         try:
@@ -785,11 +799,20 @@ def main(argv: list[str] | None = None) -> int:
             # for previous repositories (and for this one, thanks to the
             # try/finally in ``process_repo``) is preserved and committed.
             failures += 1
-            print(
-                f"[{repo}] HTTP error {exc.code}: {exc.reason}; "
-                "continuing with next repository.",
-                file=sys.stderr,
-            )
+            if exc.code in {401, 403}:
+                access_failures += 1
+                print(
+                    "::error title=GitHub API access denied::"
+                    f"[{repo}] HTTP {exc.code} {exc.reason}. Check that "
+                    "GITHUB_TOKEN/GH_TOKEN can read Actions for this repository.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"[{repo}] HTTP error {exc.code}: {exc.reason}; "
+                    "continuing with next repository.",
+                    file=sys.stderr,
+                )
             _log(
                 f"[{repo}] aborted with HTTP {exc.code}: {exc.reason}; "
                 "moving on to next repository"
@@ -814,9 +837,9 @@ def main(argv: list[str] | None = None) -> int:
         f"({failures} repository failure(s))."
     )
     print(f"Done. {total} new run(s) recorded in total.")
-    # Exit non-zero only if every repository failed, so the workflow can
-    # still commit whatever partial data was successfully saved.
-    if failures and failures == len(repos):
+    # Access failures are always fatal; otherwise keep partial results when at
+    # least one repository succeeded.
+    if access_failures or (failures and failures == len(repos)):
         return 1
     return 0
 
