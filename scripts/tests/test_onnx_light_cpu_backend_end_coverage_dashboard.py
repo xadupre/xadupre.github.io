@@ -85,8 +85,7 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
 
     def test_recording_workflow_does_not_require_github_cache_service(self):
         text = _read(WORKFLOW)
-        self.assertIn("CMAKE_CXX_COMPILER_LAUNCHER=sccache", text)
-        self.assertNotIn("SCCACHE_GHA_ENABLED", text)
+        self.assertNotIn("sccache", text)
 
 
 if __name__ == "__main__":
