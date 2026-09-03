@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import io
 import json
 import os
 import sys
@@ -593,6 +595,41 @@ class TestRecordBuildDurations(unittest.TestCase):
         # code must be 0 because at least one repository succeeded.
         self.assertEqual(calls, ["owner/good1", "owner/bad", "owner/good2"])
         self.assertEqual(rc, 0)
+
+    def test_main_fails_and_highlights_permission_error(self):
+        calls: list[str] = []
+
+        def fake_process(repo, cache_dir, months, token, since_override=None):
+            calls.append(repo)
+            if repo == "owner/forbidden":
+                raise urllib.error.HTTPError(
+                    "http://x", 403, "Forbidden", hdrs=None, fp=None
+                )
+            return 1
+
+        original = rbd.process_repo
+        rbd.process_repo = fake_process
+        try:
+            with tempfile.TemporaryDirectory() as tmp, io.StringIO() as stderr:
+                with contextlib.redirect_stderr(stderr):
+                    rc = rbd.main(
+                        [
+                            "--cache-dir",
+                            tmp,
+                            "--repo",
+                            "owner/forbidden",
+                            "--repo",
+                            "owner/good",
+                        ]
+                    )
+                error_output = stderr.getvalue()
+        finally:
+            rbd.process_repo = original
+
+        self.assertEqual(calls, ["owner/forbidden", "owner/good"])
+        self.assertEqual(rc, 1)
+        self.assertIn("::error title=GitHub API access denied::", error_output)
+        self.assertIn("HTTP 403 Forbidden", error_output)
 
     def test_process_repo_writes_jobs_index_even_on_fetch_error(self):
         # Regression test: when ``iter_workflow_runs`` raises partway
