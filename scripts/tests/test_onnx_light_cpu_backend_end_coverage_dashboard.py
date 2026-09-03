@@ -83,6 +83,11 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
         self.assertIn("cache_data/onnx-light/backend_test_coverage.json", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
 
+    def test_recording_workflow_does_not_require_github_cache_service(self):
+        text = _read(WORKFLOW)
+        self.assertIn("CMAKE_CXX_COMPILER_LAUNCHER=sccache", text)
+        self.assertNotIn("SCCACHE_GHA_ENABLED", text)
+
 
 if __name__ == "__main__":
     unittest.main()
