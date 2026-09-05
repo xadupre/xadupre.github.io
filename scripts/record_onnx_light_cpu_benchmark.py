@@ -188,18 +188,20 @@ def _make_cpu_suite_runner_factory() -> (
 def _group_measurements(
     measurements: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Groups measured dimensions by operator and first-input element type."""
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    """Groups measured dimensions by domain, operator and first-input element type."""
+    groups: dict[tuple[str, str, str], dict[str, Any]] = {}
     for measurement in measurements:
         row = measurement["row"]
+        domain = measurement["domain"]
         operator = measurement["operator"]
         input_type = row["input_type"]
-        key = (operator, input_type)
+        key = (domain, operator, input_type)
         group = groups.setdefault(
             key,
             {
                 "name": f"{operator}_{input_type}_benchmark",
                 "title": f"{operator} ({input_type}): onnxruntime vs onnx-light-cpu",
+                "domain": domain,
                 "op": operator,
                 "backends": list(BENCHMARK_BACKENDS),
                 "rows": [],
@@ -251,9 +253,20 @@ def _group_measurements(
         examples,
         key=lambda example: (
             example["op"].lower(),
+            example["domain"].lower(),
             example["rows"][0]["input_type"].lower(),
         ),
     )
+
+
+def _operator_domain(model: Any) -> str:
+    """Returns the domain (or ``+``-joined domains) exercised by a model."""
+    domains = []
+    for node in model.graph.node:
+        domain = node.domain or "ai.onnx"
+        if domain not in domains:
+            domains.append(domain)
+    return "+".join(domains)
 
 
 def run_tests(
@@ -294,6 +307,7 @@ def run_tests(
         first_inputs = loaded["data_sets"][0][0]
         metadata.append(
             {
+                "domain": _operator_domain(loaded["model"]),
                 "operator": rlb._operator_name(loaded["model"]) or "?",
                 "inputs": _format_inputs(first_inputs),
                 "input_elements": _first_input_element_count(first_inputs),
@@ -329,6 +343,7 @@ def run_tests(
         row["input_elements"] = details["input_elements"]
         measurements.append(
             {
+                "domain": details["domain"],
                 "operator": details["operator"],
                 "test_name": test["name"],
                 "row": row,
