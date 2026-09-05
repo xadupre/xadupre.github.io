@@ -41,7 +41,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_page_renders_examples_and_speedup(self):
         text = _read(PAGE)
-        self.assertIn("function renderExample(example, cats, benchmarkDate)", text)
+        self.assertIn("function renderExample(example, benchmarkDate)", text)
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
         self.assertIn(
@@ -101,7 +101,7 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn('["date", formatBenchmarkDate(benchmarkDate), ""]', text)
         self.assertIn('dateTh.textContent = "date";', text)
         self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
-        self.assertIn("renderExample(ex, cats, payload.date)", text)
+        self.assertIn("renderExample(ex, payload.date)", text)
         self.assertIn("return date.toISOString().slice(0, 10);", text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
@@ -167,32 +167,17 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn(".legend .swatch.neutral { background: #bc8cff; }", text)
         self.assertIn('class="swatch neutral"', text)
 
-    def test_page_classifies_operators_into_small_mid_big(self):
+    def test_page_shows_domain_instead_of_categories(self):
         text = _read(PAGE)
-        self.assertIn("function classifyExample(example)", text)
-        # SMALL/MID/BIG derive from the speed-up on the first/last/middle sizes.
-        self.assertIn("cats.small = first !== null && first > 1;", text)
-        self.assertIn("cats.big = last !== null && last > 1;", text)
-        self.assertIn("cats.mid = minIdx > 0 && minIdx < rows.length - 1;", text)
-
-    def test_page_has_category_checkbox_column(self):
-        text = _read(PAGE)
-        self.assertIn("categories", text)
-        self.assertIn('catCell.className = "summary-categories summary-value";', text)
-        self.assertIn('catValue.className = "category-boxes";', text)
-        self.assertIn('[["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]]', text)
-        # The per-operator category boxes are read-only indicators.
-        self.assertIn("input.disabled = true;", text)
+        self.assertEqual(text.count("<span>domain</span>"), 1)
+        self.assertIn('["domain", example.domain || "ai.onnx", ""]', text)
+        self.assertNotIn("categories", text)
+        self.assertNotIn("function classifyExample(example)", text)
 
     def test_page_has_filter_tool(self):
         text = _read(PAGE)
         self.assertIn('id="filterPanel"', text)
         self.assertIn("function setupFilter(rendered)", text)
-        for value in ("small", "mid", "big"):
-            self.assertIn(
-                f'<input type="checkbox" class="filter-check" value="{value}" />',
-                text,
-            )
         self.assertIn('id="filterCount"', text)
         self.assertIn("operators shown", text)
 
@@ -209,6 +194,18 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
             text,
         )
         self.assertIn('typeSelect.addEventListener("change", apply);', text)
+
+    def test_page_filters_operators_by_domain(self):
+        text = _read(PAGE)
+        self.assertIn('id="domainFilter"', text)
+        self.assertIn('<option value="">all domains</option>', text)
+        self.assertIn(
+            "const domains = [...new Set(rendered.map(item => item.domain))]", text
+        )
+        self.assertIn(
+            'const domainMatch = domain === "" || panelDomain === domain;', text
+        )
+        self.assertIn('domainSelect.addEventListener("change", apply);', text)
 
     def test_page_filters_operators_with_slow_tests(self):
         text = _read(PAGE)

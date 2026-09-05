@@ -83,22 +83,6 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .operator-summary .faster { color: #3fb950; }
 .operator-summary .slower { color: #f85149; }
 .operator-summary .neutral { color: #bc8cff; }
-.category-boxes {
-  display: flex;
-  flex-wrap: nowrap;
-  gap: 0.2em 0.5em;
-  font-weight: normal;
-}
-.category-box {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15em;
-  font-size: 0.68em;
-  color: #8b949e;
-  white-space: nowrap;
-}
-.category-box input { accent-color: #3fb950; }
-.category-box input:checked + span { color: #3fb950; font-weight: bold; }
 .filter {
   display: flex;
   flex-wrap: wrap;
@@ -110,7 +94,8 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
 .filter label { display: inline-flex; align-items: center; gap: 0.35em; cursor: pointer; }
 .filter label input { accent-color: #58a6ff; }
 .filter #nameFilter,
-.filter #typeFilter {
+.filter #typeFilter,
+.filter #domainFilter {
   background: #0d1117;
   border: 1px solid rgba(139, 148, 158, 0.4);
   border-radius: 6px;
@@ -119,10 +104,11 @@ h1 { margin: 0.2em 0; font-size: 1.4em; }
   padding: 0.3em 0.5em;
   min-width: 12em;
 }
-.filter #typeFilter { min-width: 10em; }
+.filter #typeFilter,
+.filter #domainFilter { min-width: 10em; }
 .filter #nameFilter:focus-visible,
-.filter #typeFilter:focus-visible { outline: 2px solid #58a6ff; outline-offset: -1px; }
-.filter .filter-desc { color: #8b949e; }
+.filter #typeFilter:focus-visible,
+.filter #domainFilter:focus-visible { outline: 2px solid #58a6ff; outline-offset: -1px; }
 .filter #filterCount { color: #8b949e; margin-left: auto; }
 .operator-details {
   border-top: 1px solid rgba(139, 148, 158, 0.2);
@@ -168,7 +154,6 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
   .operator-header { display: none !important; }
   .operator-summary { grid-template-columns: 1fr 1fr; }
   .operator-summary .operator-name { grid-column: 1 / -1; }
-  .operator-summary .summary-categories { grid-column: 1 / -1; }
   .filter #filterCount { margin-left: 0; }
 }
 </style>
@@ -227,27 +212,15 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
         <option value="">all input types</option>
       </select>
     </label>
+    <label title="Filter operators by domain">
+      <select id="domainFilter">
+        <option value="">all domains</option>
+      </select>
+    </label>
     <label title="Keep operators with at least one test slower than onnxruntime">
       <input type="checkbox" id="slowFilter" />
       <span>slow tests only (speed-up &lt; 1)</span>
     </label>
-    <label title="onnx-light-cpu is faster on the smallest input">
-      <input type="checkbox" class="filter-check" value="small" />
-      <span><strong>SMALL</strong></span>
-    </label>
-    <label title="onnx-light-cpu is faster on the smallest and largest inputs but slowest in a middle input">
-      <input type="checkbox" class="filter-check" value="mid" />
-      <span><strong>MID</strong></span>
-    </label>
-    <label title="onnx-light-cpu is faster on the largest input">
-      <input type="checkbox" class="filter-check" value="big" />
-      <span><strong>BIG</strong></span>
-    </label>
-    <span class="filter-desc">
-      <strong>SMALL</strong>: faster on the smallest input &middot;
-      <strong>MID</strong>: faster on the smallest &amp; largest inputs but slowest
-      in a middle input &middot; <strong>BIG</strong>: faster on the largest input.
-    </span>
     <span id="filterCount"></span>
   </div>
 </div>
@@ -260,7 +233,7 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
   <span>average speed-up</span>
   <span>best speed-up</span>
   <span>worst speed-up</span>
-  <span>categories</span>
+  <span>domain</span>
 </div>
 <div id="examples"></div>
 
@@ -334,39 +307,6 @@ function speedupClass(value) {
   return value >= 1 ? "faster" : "slower";
 }
 
-// Classify an operator by where onnx-light-cpu is faster than onnxruntime
-// (speed-up > 1). Rows are ordered from the smallest to the largest input.
-//   SMALL: faster on the first (smallest) input.
-//   BIG:   faster on the last (largest) input.
-//   MID:   faster on both the first and the last input but its lowest speed-up
-//          (the "slowest" measurement of the sweep) falls on a middle input.
-function classifyExample(example) {
-  const rows = example.rows || [];
-  const cats = { small: false, mid: false, big: false };
-  if (rows.length === 0) return cats;
-  const speedup = i => {
-    const v = rows[i].speedup_cpu;
-    return (v === null || v === undefined || Number.isNaN(v)) ? null : v;
-  };
-  const first = speedup(0);
-  const last = speedup(rows.length - 1);
-  cats.small = first !== null && first > 1;
-  cats.big = last !== null && last > 1;
-  if (rows.length >= 3 && cats.small && cats.big) {
-    let minIdx = -1;
-    let minVal = Infinity;
-    for (let i = 0; i < rows.length; i++) {
-      const v = speedup(i);
-      if (v !== null && v < minVal) {
-        minVal = v;
-        minIdx = i;
-      }
-    }
-    cats.mid = minIdx > 0 && minIdx < rows.length - 1;
-  }
-  return cats;
-}
-
 function firstInputTensor(row) {
   const value = (row.inputs !== undefined && row.inputs !== null)
     ? row.inputs
@@ -432,7 +372,7 @@ function makeSortable(table) {
   });
 }
 
-function renderExample(example, cats, benchmarkDate) {
+function renderExample(example, benchmarkDate) {
   const panel = document.createElement("details");
   panel.className = "panel operator-panel";
 
@@ -453,6 +393,7 @@ function renderExample(example, cats, benchmarkDate) {
       speedupClass(summary.max_speedup_cpu)],
     ["worst speed-up", fmtSpeedup(summary.min_speedup_cpu),
       speedupClass(summary.min_speedup_cpu)],
+    ["domain", example.domain || "ai.onnx", ""],
   ];
   summaryValues.forEach(([, value, cls]) => {
     const cell = document.createElement("span");
@@ -461,25 +402,6 @@ function renderExample(example, cats, benchmarkDate) {
     summaryRow.appendChild(cell);
   });
 
-  const catCell = document.createElement("span");
-  catCell.className = "summary-categories summary-value";
-  const catValue = document.createElement("span");
-  catValue.className = "category-boxes";
-  [["small", "SMALL"], ["mid", "MID"], ["big", "BIG"]].forEach(([key, text]) => {
-    const box = document.createElement("label");
-    box.className = "category-box";
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = !!(cats && cats[key]);
-    input.disabled = true;
-    const span = document.createElement("span");
-    span.textContent = text;
-    box.appendChild(input);
-    box.appendChild(span);
-    catValue.appendChild(box);
-  });
-  catCell.appendChild(catValue);
-  summaryRow.appendChild(catCell);
   panel.appendChild(summaryRow);
 
   const details = document.createElement("div");
@@ -595,9 +517,9 @@ function renderExample(example, cats, benchmarkDate) {
 function setupFilter(rendered) {
   const filterPanel = document.getElementById("filterPanel");
   filterPanel.style.display = "block";
-  const checks = Array.from(document.querySelectorAll(".filter-check"));
   const nameInput = document.getElementById("nameFilter");
   const typeSelect = document.getElementById("typeFilter");
+  const domainSelect = document.getElementById("domainFilter");
   const slowCheck = document.getElementById("slowFilter");
   const count = document.getElementById("filterCount");
   const inputTypes = [...new Set(rendered.flatMap(item => item.inputTypes))]
@@ -608,25 +530,34 @@ function setupFilter(rendered) {
     option.textContent = inputType;
     typeSelect.appendChild(option);
   });
+  const domains = [...new Set(rendered.map(item => item.domain))]
+    .sort((a, b) => a.localeCompare(b));
+  domains.forEach(domain => {
+    const option = document.createElement("option");
+    option.value = domain;
+    option.textContent = domain;
+    domainSelect.appendChild(option);
+  });
   function apply() {
-    const active = checks.filter(c => c.checked).map(c => c.value);
     const term = nameInput.value.trim().toLowerCase();
     const inputType = typeSelect.value;
+    const domain = domainSelect.value;
     let shown = 0;
-    rendered.forEach(({ panel, cats, name, inputTypes: panelInputTypes, hasSlow }) => {
-      const catMatch = active.length === 0 || active.some(key => cats[key]);
+    rendered.forEach(({ panel, name, inputTypes: panelInputTypes,
+                        domain: panelDomain, hasSlow }) => {
       const nameMatch = term === "" || name.includes(term);
       const typeMatch = inputType === "" || panelInputTypes.includes(inputType);
+      const domainMatch = domain === "" || panelDomain === domain;
       const slowMatch = !slowCheck.checked || hasSlow;
-      const match = catMatch && nameMatch && typeMatch && slowMatch;
+      const match = nameMatch && typeMatch && domainMatch && slowMatch;
       panel.style.display = match ? "" : "none";
       if (match) shown += 1;
     });
     count.textContent = shown + " / " + rendered.length + " operators shown";
   }
-  checks.forEach(c => c.addEventListener("change", apply));
   nameInput.addEventListener("input", apply);
   typeSelect.addEventListener("change", apply);
+  domainSelect.addEventListener("change", apply);
   slowCheck.addEventListener("change", apply);
   apply();
 }
@@ -671,10 +602,10 @@ fetch(JSON_URL, { cache: "no-store" })
         .localeCompare(String(b.name || "").toLowerCase());
     });
     sorted.forEach(ex => {
-      const cats = classifyExample(ex);
-      const panel = renderExample(ex, cats, payload.date);
+      const panel = renderExample(ex, payload.date);
       container.appendChild(panel);
       const name = String(ex.op || ex.title || ex.name || "").toLowerCase();
+      const domain = ex.domain || "ai.onnx";
       const inputTypes = [...new Set(
         (ex.rows || []).map(firstInputType).filter(Boolean)
       )];
@@ -682,7 +613,7 @@ fetch(JSON_URL, { cache: "no-store" })
         row.speedup_cpu !== null && row.speedup_cpu !== undefined &&
         !Number.isNaN(row.speedup_cpu) && row.speedup_cpu < 1
       );
-      rendered.push({ panel, cats, name, inputTypes, hasSlow });
+      rendered.push({ panel, name, inputTypes, domain, hasSlow });
     });
     setupFilter(rendered);
   })

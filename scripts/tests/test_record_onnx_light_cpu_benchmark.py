@@ -171,6 +171,7 @@ class TestRows(unittest.TestCase):
     def test_groups_dimensions_by_operator_and_first_input_type(self):
         measurements = [
             {
+                "domain": "ai.onnx",
                 "operator": "Abs",
                 "test_name": "test_cpu_abs_n65536_benchmark",
                 "row": {
@@ -183,6 +184,7 @@ class TestRows(unittest.TestCase):
                 },
             },
             {
+                "domain": "ai.onnx",
                 "operator": "Abs",
                 "test_name": "test_cpu_abs_n1024_benchmark",
                 "row": {
@@ -195,6 +197,7 @@ class TestRows(unittest.TestCase):
                 },
             },
             {
+                "domain": "ai.onnx",
                 "operator": "Abs",
                 "test_name": "test_cpu_abs_float64_benchmark",
                 "row": {
@@ -206,13 +209,27 @@ class TestRows(unittest.TestCase):
                     "speedup_cpu": 0.5,
                 },
             },
+            {
+                "domain": "ai.onnx.ml",
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_ml_benchmark",
+                "row": {
+                    "inputs": "float32[1024]",
+                    "input_type": "float32",
+                    "input_elements": 1024,
+                    "onnx_light_cpu_ms": 1.0,
+                    "onnxruntime_ms": 1.0,
+                    "speedup_cpu": 1.0,
+                },
+            },
         ]
 
         examples = rcb._group_measurements(measurements)
 
-        self.assertEqual(len(examples), 2)
+        self.assertEqual(len(examples), 3)
         float32 = examples[0]
         self.assertEqual(float32["name"], "Abs_float32_benchmark")
+        self.assertEqual(float32["domain"], "ai.onnx")
         self.assertEqual(
             [row["inputs"] for row in float32["rows"]],
             ["float32[1024]", "float32[65536]"],
@@ -229,9 +246,22 @@ class TestRows(unittest.TestCase):
         self.assertEqual(float32["summary"]["min_speedup_cpu"], 1.0)
         self.assertEqual(float32["summary"]["max_speedup_cpu"], 2.0)
         self.assertEqual(examples[1]["rows"][0]["input_type"], "float64")
+        self.assertEqual(examples[2]["domain"], "ai.onnx.ml")
 
 
 class TestPayload(unittest.TestCase):
+    def test_operator_domain_normalizes_and_combines_domains(self):
+        model = types.SimpleNamespace(
+            graph=types.SimpleNamespace(
+                node=[
+                    types.SimpleNamespace(domain=""),
+                    types.SimpleNamespace(domain="ai.onnx.ml"),
+                    types.SimpleNamespace(domain=""),
+                ]
+            )
+        )
+        self.assertEqual(rcb._operator_domain(model), "ai.onnx+ai.onnx.ml")
+
     def test_payload_uses_discovered_tests(self):
         calls = {}
 
