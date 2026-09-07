@@ -11,6 +11,8 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from typing import ClassVar
+from unittest.mock import patch
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -19,6 +21,85 @@ import record_build_durations as rbd  # noqa: E402
 
 
 class TestRecordBuildDurations(unittest.TestCase):
+    def test_request_recovers_from_rate_limits(self):
+        cases = [
+            (
+                403,
+                {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1100"},
+                b"",
+                101,
+            ),
+            (403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "900"}, b"", 1),
+            (403, {"Retry-After": "12", "X-RateLimit-Remaining": "0"}, b"", 12),
+            (429, {"retry-after": "15"}, b"", 15),
+            (429, {}, b"", 60),
+            (403, {}, b'{"message": "You have exceeded a secondary rate limit."}', 60),
+            (403, {"X-RateLimit-Remaining": "0"}, b"", 60),
+        ]
+
+        class Response(io.BytesIO):
+            headers: ClassVar[dict[str, str]] = {"content-type": "application/json"}
+
+        for code, headers, body, delay in cases:
+            with self.subTest(code=code, headers=headers, body=body):
+                error = urllib.error.HTTPError(
+                    "https://api.github.com/test",
+                    code,
+                    "limited",
+                    headers,
+                    io.BytesIO(body),
+                )
+                response = Response(b'{"jobs": []}')
+                with (
+                    patch.object(
+                        rbd.urllib.request, "urlopen", side_effect=[error, response]
+                    ) as request,
+                    patch.object(rbd.time, "sleep") as sleep,
+                    patch.object(rbd.time, "time", return_value=1000),
+                ):
+                    payload, response_headers = rbd._request(error.url, None)
+                self.assertEqual(payload, {"jobs": []})
+                self.assertEqual(response_headers, Response.headers)
+                self.assertEqual(request.call_count, 2)
+                sleep.assert_called_once_with(delay)
+                self.assertIs(
+                    request.call_args_list[0].args[0], request.call_args_list[1].args[0]
+                )
+
+    def test_request_rate_limit_retries_are_bounded(self):
+        errors = [
+            urllib.error.HTTPError(
+                "https://api.github.com/test", 429, "limited", {}, None
+            )
+            for _ in range(3)
+        ]
+        with (
+            patch.object(rbd.urllib.request, "urlopen", side_effect=errors) as request,
+            patch.object(rbd.time, "sleep") as sleep,
+            self.assertRaises(rbd.GitHubRateLimitError),
+        ):
+            rbd._request(errors[0].url, None)
+        self.assertEqual(request.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [60, 120])
+
+    def test_request_does_not_retry_access_errors(self):
+        for code in (401, 403, 404):
+            with self.subTest(code=code):
+                error = urllib.error.HTTPError(
+                    "https://api.github.com/test", code, "Forbidden", {}, None
+                )
+                with (
+                    patch.object(
+                        rbd.urllib.request, "urlopen", side_effect=error
+                    ) as request,
+                    patch.object(rbd.time, "sleep") as sleep,
+                    self.assertRaises(urllib.error.HTTPError) as caught,
+                ):
+                    rbd._request(error.url, None)
+                self.assertIs(caught.exception, error)
+                request.assert_called_once()
+                sleep.assert_not_called()
+
     def test_request_retries_transient_server_error(self):
         calls = 0
         sleeps = []
@@ -124,12 +205,16 @@ class TestRecordBuildDurations(unittest.TestCase):
         override = dt.datetime(2023, 1, 1, tzinfo=dt.timezone.utc)
         latest = dt.datetime(2024, 5, 1, tzinfo=dt.timezone.utc)
         # Even though ``latest`` is more recent, ``since_override`` wins.
-        self.assertEqual(rbd.determine_since(latest, 6, since_override=override), override)
+        self.assertEqual(
+            rbd.determine_since(latest, 6, since_override=override), override
+        )
 
     def test_determine_since_override_ignores_months_fallback(self):
         override = dt.datetime(2020, 6, 1, tzinfo=dt.timezone.utc)
         # Cache is empty (latest=None) but override still takes precedence.
-        self.assertEqual(rbd.determine_since(None, 6, since_override=override), override)
+        self.assertEqual(
+            rbd.determine_since(None, 6, since_override=override), override
+        )
 
     def test_iter_workflow_runs_splits_saturated_windows(self):
         # Simulate a repository with > 1000 runs per week so that the initial
@@ -631,6 +716,50 @@ class TestRecordBuildDurations(unittest.TestCase):
         self.assertIn("::error title=GitHub API access denied::", error_output)
         self.assertIn("HTTP 403 Forbidden", error_output)
 
+    def test_main_stops_after_rate_limit_exhaustion(self):
+        error = rbd.GitHubRateLimitError(
+            "https://api.github.com/test", 403, "Forbidden", {}, None
+        )
+        with (
+            patch.object(rbd, "process_repo", side_effect=error) as process,
+            io.StringIO() as stderr,
+            contextlib.redirect_stderr(stderr),
+        ):
+            rc = rbd.main(["--repo", "owner/first", "--repo", "owner/second"])
+            output = stderr.getvalue()
+        self.assertEqual(rc, 1)
+        process.assert_called_once()
+        self.assertIn("::error title=GitHub API rate limit::", output)
+        self.assertNotIn("access denied", output)
+
+    def test_process_repo_stops_fetching_jobs_after_rate_limit_exhaustion(self):
+        runs = [
+            {
+                "id": run_id,
+                "name": "Build",
+                "status": "completed",
+                "conclusion": "success",
+                "created_at": "2026-09-01T00:00:00Z",
+                "updated_at": "2026-09-01T00:01:00Z",
+            }
+            for run_id in (1, 2, 3)
+        ]
+        error = rbd.GitHubRateLimitError(
+            "https://api.github.com/test", 403, "Forbidden", {}, None
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(rbd, "iter_workflow_runs", return_value=iter(runs)),
+            patch.object(rbd, "record_jobs_for_run", side_effect=[1, error]) as jobs,
+        ):
+            with self.assertRaises(rbd.GitHubRateLimitError):
+                rbd.process_repo("owner/myrepo", tmp, months=6, token=None)
+            seen, _ = rbd.read_existing(
+                os.path.join(tmp, "myrepo", "build_durations.csv")
+            )
+            self.assertEqual(seen, {"1"})
+            self.assertEqual(jobs.call_count, 2)
+
     def test_process_repo_writes_jobs_index_even_on_fetch_error(self):
         # Regression test: when ``iter_workflow_runs`` raises partway
         # through (e.g. a transient GitHub API error), ``process_repo``
@@ -668,9 +797,7 @@ class TestRecordBuildDurations(unittest.TestCase):
         pages = [
             os.path.join(root, "dashboard", "onnx", "build-durations.html"),
             os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
-            os.path.join(
-                root, "dashboard", "onnx-light-cpu", "build-durations.html"
-            ),
+            os.path.join(root, "dashboard", "onnx-light-cpu", "build-durations.html"),
             os.path.join(
                 root,
                 "dashboard",
@@ -696,9 +823,7 @@ class TestRecordBuildDurations(unittest.TestCase):
         pages = [
             os.path.join(root, "dashboard", "onnx", "build-durations.html"),
             os.path.join(root, "dashboard", "onnx-light", "build-durations.html"),
-            os.path.join(
-                root, "dashboard", "onnx-light-cpu", "build-durations.html"
-            ),
+            os.path.join(root, "dashboard", "onnx-light-cpu", "build-durations.html"),
             os.path.join(
                 root,
                 "dashboard",
