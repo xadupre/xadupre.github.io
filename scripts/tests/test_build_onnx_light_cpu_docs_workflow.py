@@ -9,6 +9,14 @@ WORKFLOW = os.path.join(
 
 
 class TestBuildOnnxLightCpuDocsWorkflow(unittest.TestCase):
+    def test_build_parallelism_is_memory_safe(self):
+        with open(WORKFLOW, encoding="utf-8") as fh:
+            content = fh.read()
+        step = content.split("- name: Configure build parallelism", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn('echo "CMAKE_BUILD_PARALLEL_LEVEL=2" >> "$GITHUB_ENV"', step)
+
     def test_python_build_uses_sccache(self):
         with open(WORKFLOW, encoding="utf-8") as fh:
             content = fh.read()
