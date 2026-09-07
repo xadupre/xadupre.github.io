@@ -421,12 +421,11 @@
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="2026-08_kernel_parallelization.html">Kernel parallelization and tuning sequence</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_onnxruntime_fast_model_loading.html">Using <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> fast loading in <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured views over byte buffers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured types and prepared values</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_model_resolution.html">Model resolution before weight loading</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_split_wheels.html">Splitting <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into composable wheels</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="2026-08_fast_loading_sequence.html">Fast-loading implementation sequence</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -534,10 +533,9 @@ Qwen: shared packed projection weights plus independent mutable KV caches
 for successive decode requests.</p>
 <p>This roadmap replaces the independent implementation sequences in:</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured views over byte buffers</span></a>;</p></li>
+<li><p><a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured types and prepared values</span></a>, including typed prepared/compiled caches;</p></li>
 <li><p><a class="reference internal" href="2026-08_quantization.html#l-next-steps-quantization"><span class="std std-ref">Quantization</span></a>;</p></li>
 <li><p><a class="reference internal" href="2026-08_graph_builder_quantized_tensor.html#l-next-steps-graph-builder-quantized-tensor"><span class="std std-ref">Quantized values in GraphBuilder</span></a>;</p></li>
-<li><p><a class="reference internal" href="2026-08_compiled_tensor.html#l-next-steps-compiled-tensor"><span class="std std-ref">CompiledTensorProto</span></a>;</p></li>
 <li><p><a class="reference internal" href="2026-08_mutable_cache.html#l-next-steps-mutable-cache"><span class="std std-ref">Mutable execution cache</span></a>.</p></li>
 </ul>
 <p>Those pages remain design history and format examples. Where their proposals
@@ -635,11 +633,12 @@ finalized in PR01; no ONNX-standard status is implied.</p>
 <td><p>Describes one fixed-size physical element: fields, nested records,
 fixed arrays and bit packing. Internal counts are concrete,
 references are acyclic and size arithmetic is checked. The number of
-repeated elements belongs to the value, not this type.</p></td>
+repeated elements is derived from the value’s byte extent, not stored
+in this type.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code></p></td>
 <td><p>One value container with optional logical tensor type/shape, a layout
-choice, physical <code class="docutils literal notranslate"><span class="pre">storage_shape</span></code> and owned or external payload.
+choice and owned or external payload with a known byte extent.
 Layout is either a small built-in dense/affine form or a concrete
 <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> reference. INT8 and blockwise INT4 are
 configurations, not distinct messages.</p></td>
@@ -663,6 +662,12 @@ interpretation, rather than merely indicating that bytes are stored.
 <code class="docutils literal notranslate"><span class="pre">Value</span></code> permits custom records containing multiple buffers as well as
 logical tensors. The name applies equally to packed weights and KV blocks;
 it does not imply immutability or disk persistence.</p>
+<p>Keep the name <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> for every value example and proposed
+API. <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> would suggest that every value must instantiate a
+<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>, whereas built-in layouts need not do so. Reserve
+<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> for the reusable structured element description,
+including its constants. Do not introduce a <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> alias, base
+class, nested value wrapper or parallel value category.</p>
 <p>The affine layout parameters are a small nested descriptor, not a growing
 <code class="docutils literal notranslate"><span class="pre">QuantizationDescriptorProto</span></code> hierarchy. Source INT4 weights, their custom
 prepacked form, and an INT4 KV block use the same container with different
@@ -702,16 +707,25 @@ lifetime and layout compatibility are proved.</p>
 type catalogue. Only true format constants belong to the type. Registered
 validation and decoding are explicit operations; merely loading a descriptor
 must not execute arbitrary decoder code.</p>
+<p>The examples in <a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured types and prepared values</span></a> distinguish parameters stored
+as constants in the type from parameters stored as scalar fields in each
+payload. Outside the byte buffer does not mean outside the type: constant
+scale and zero point are serialized once in the shared <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>
+declaration, while each value stores only codes. The decoder combines those
+codes with the type’s constants to expose a logical FLOAT tensor. All values
+of that type share the same parameters; varying them without changing the
+type requires the per-value payload form.</p>
 </section>
-<section id="one-element-type-many-storage-shapes">
-<h2>One element type, many storage shapes<a class="headerlink" href="#one-element-type-many-storage-shapes" title="Link to this heading">#</a></h2>
-<p>Follow the existing tensor distinction between element type and shape.
-<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> defines one encoded element, which can itself be a
-fixed-size block. <code class="docutils literal notranslate"><span class="pre">EncodedValueProto.storage_shape</span></code> specifies how many
-such elements are stored and their physical array dimensions. Changing that
-shape does not instantiate or create a new type.</p>
+<section id="one-element-type-many-payload-lengths">
+<h2>One element type, many payload lengths<a class="headerlink" href="#one-element-type-many-payload-lengths" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> defines one encoded element, which can itself be a
+fixed-size block. <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> stores a flat sequence of such
+elements. The payload byte length and the resolved element byte size
+determine the number of records; a different count does not instantiate or
+create a new type. No physical shape or redundant record count is serialized.</p>
 <p>For example, the shared catalogue contains one block declaration:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>ModelProto.struct_types[3] = StructTypeProto {
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>StructTypeProto {                 // declaration in ModelProto.struct_types
+    type_id: 2001
     name: "Int4Block"
     structure: {
         codes: INT4[32]
@@ -720,15 +734,13 @@ shape does not instantiate or create a new type.</p>
 }
 
 EncodedValueProto {
-    struct_type: { type_index: 3 }
-    storage_shape: [128]
+    struct_type: { type_ref: 2001 }
     logical_type: FLOAT[4096]
     raw_data: ...                 // 128 * 20 = 2560 bytes
 }
 
 EncodedValueProto {
-    struct_type: { type_index: 3 }
-    storage_shape: [256]
+    struct_type: { type_ref: 2001 }
     logical_type: FLOAT[8192]
     raw_data: ...                 // 256 * 20 = 5120 bytes
 }
@@ -742,48 +754,73 @@ and remain in the payload; the declaration only specifies their placement.</p>
 <p>There are three distinct quantities:</p>
 <ul class="simple">
 <li><p><strong>element type:</strong> the fixed physical layout of one <code class="docutils literal notranslate"><span class="pre">Int4Block</span></code>;</p></li>
-<li><p><strong>storage shape:</strong> the physical array of those blocks;</p></li>
+<li><p><strong>payload byte length:</strong> the extent of the flat sequence of blocks, from
+which their count is derived;</p></li>
 <li><p><strong>logical shape:</strong> the dimensions exposed by the decoder or consuming
 kernel, not the number of physical records.</p></li>
 </ul>
 <p>For the structured branch, require:</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>element_bytes = checked_size(resolved_struct_type)
-payload_bytes = checked_product(storage_shape) * element_bytes
+payload_bytes = raw_data.size()        // inline payload
+// Or external_data.length for a validated external payload extent.
+require(element_bytes &gt; 0)
+require(payload_bytes % element_bytes == 0)
+element_count = payload_bytes / element_bytes
 </pre></div>
 </div>
-<p>The concrete element must be byte-aligned; explicit padding is part of its
-type. Storage dimensions are non-negative concrete integers. An empty
-<code class="docutils literal notranslate"><span class="pre">storage_shape</span></code> means one scalar record; any zero dimension means zero
-records. There is no <code class="docutils literal notranslate"><span class="pre">-1</span></code> dimension, inferred count from payload length or
-automatic padding. Validate all dimensions and arithmetic before allocation
-or access, then require the exact inline/external payload length.</p>
-<p>The first version stores records densely in a documented row-major order.
+<p>The concrete root element must have a strictly positive, byte-aligned size;
+explicit padding is part of its type. Validate its fixed dimensions and size
+arithmetic before allocation or access. The two buffers above therefore
+contain <code class="docutils literal notranslate"><span class="pre">2560</span> <span class="pre">/</span> <span class="pre">20</span> <span class="pre">=</span> <span class="pre">128</span></code> and <code class="docutils literal notranslate"><span class="pre">5120</span> <span class="pre">/</span> <span class="pre">20</span> <span class="pre">=</span> <span class="pre">256</span></code> records of the same type.
+An empty payload means zero records; exactly one element’s byte size means
+one record. Reject partial records rather than rounding their count.</p>
+<p>Reject a zero-sized encoded root because its payload length cannot determine
+its number of instances. Zero-sized nested structures, such as constant-only
+field groups, remain allowed within a positive-sized root.</p>
+<p>Inline length is already carried by <code class="docutils literal notranslate"><span class="pre">raw_data</span></code>. External data must provide
+an explicit length and a valid backing-file extent; do not infer the length
+from the remainder of a file or accept conflicting payload sources.
+Do not add a second serialized byte-count field.</p>
+<p>The first version stores records densely in buffer order.
 Layouts requiring internal strides, tile padding or multiple fields express
 them in the fixed element structure or a supported built-in layout, not in
 an implicit reshape. Built-in dense/affine layouts have their own explicit
 size rules, including parameter storage; do not apply the struct formula
 blindly to them.</p>
-<p>Logical dimensions are checked by the format/decoder contract and may differ
-from <code class="docutils literal notranslate"><span class="pre">storage_shape</span></code>. They never make a tensor-only operator accept encoded
-bytes implicitly.</p>
+<p>Logical dimensions remain optional value information checked by the
+format/decoder contract against the derived record count. A byte length does
+not determine tensor rank or shape. Logical dimensions never make a
+tensor-only operator accept encoded bytes implicitly.</p>
 </section>
 <section id="shared-catalogue-not-template-instantiations">
 <h2>Shared catalogue, not template instantiations<a class="headerlink" href="#shared-catalogue-not-template-instantiations" title="Link to this heading">#</a></h2>
-<p>Model values reference a declaration in <code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code> via
-<code class="docutils literal notranslate"><span class="pre">type_index</span></code>. The value’s reference may select that declaration, while the
-resolved declaration must be concrete. An inline declaration remains useful
-for standalone values; import/export should share equivalent declarations
-without merging different decoding semantics.</p>
+<p>Concrete declarations in <code class="docutils literal notranslate"><span class="pre">ModelProto.struct_types</span></code> carry a nonzero
+<code class="docutils literal notranslate"><span class="pre">uint64</span> <span class="pre">type_id</span></code>. Model values reference that stable number through
+<code class="docutils literal notranslate"><span class="pre">struct_type:</span> <span class="pre">{</span> <span class="pre">type_ref:</span> <span class="pre">id</span> <span class="pre">}</span></code>; they never reference a declaration’s
+position in the repeated field. The resolved declaration must be concrete.
+An inline declaration remains useful for standalone values.</p>
+<p>Producers assign IDs through a shared type registry so the same type can
+keep the same number in different models. List order and payload length do
+not affect the ID. Reusing a number requires identical physical layout,
+format constants, and decoding/encoding semantics; names alone are not
+identities. A different definition requires a different ID. The illustrative
+numbers in these examples do not reserve global IDs.</p>
+<p>Each model includes its referenced declarations. Reject missing references,
+zero IDs, duplicate IDs within a model and conflicting definitions under
+one ID when combining catalogues. Import/export must not silently renumber
+a conflict or merge different decoding semantics.</p>
 <p>Resolve and validate each type once in its catalogue scope. Values with
-different storage shapes share that resolved type; do not create a cache of
+different payload lengths share that resolved type; do not create a cache of
 <code class="docutils literal notranslate"><span class="pre">(type,</span> <span class="pre">template_arguments)</span></code> instantiations. They retain their own
-shape/extent checks and payload owners.</p>
+logical-shape/byte-extent checks and payload owners.</p>
 <p>Dynamic KV values use a session-owned catalogue with stable resolved type
 handles. The model catalogue is read-only; additional session types are
 interned without mutating it or duplicating a declaration for every page.
-Indices are catalogue-local, not process-global identities. Export of a
-session-created value includes or remaps its referenced declarations;
-an index from another catalogue cannot be consumed without resolution.</p>
+Serialized type IDs retain their meaning across compatible catalogues;
+runtime handles or dense lookup indices remain catalogue-local. Export of a
+session-created value includes its declarations and preserves their IDs.
+Import resolves those IDs against the destination catalogue, sharing matching
+declarations and rejecting conflicts instead of remapping their identity.</p>
 <p>Do not add generic template parameters, argument lists or an expression
 language to the initial proto contract. Fixed arrays inside a record remain
 part of its element type. If a later use case requires variable dimensions
@@ -961,9 +998,11 @@ global cache descriptor. K and V formats may differ, but their logical token
 ranges must agree. For a given layer/head mapping, the decoder output types
 and geometry must satisfy the shared Attention contract even when physical
 layouts differ.</p>
-<p>For a structured block, <code class="docutils literal notranslate"><span class="pre">storage_shape</span></code> determines the allocated physical
-records, not the current valid token count. Pages with different capacities
-can share the same element type while carrying different storage shapes.
+<p>For a structured block, the payload byte extent divided by the element byte
+size determines the allocated physical records, not the current valid token
+count. Pages with different capacities can share the same element type while
+carrying different byte extents. Spare allocation beyond the declared payload
+extent is not part of the encoded value.
 Appending a token changes request validity and data, not the type catalogue.
 Mapping quantization groups and padding to valid tokens remains an explicit
 layout/Attention contract.</p>
@@ -1030,9 +1069,9 @@ do not add an independent quantization registry in <code class="docutils literal
 Known logical dimensions do not permit a tensor-only operator to consume
 structured bytes implicitly: use an explicit decoder or a matching schema.</p>
 <p><code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> preserves structured source initializers, type references,
-physical storage shapes, external payload ownership and quantization metadata
+byte extents, external payload ownership and quantization metadata
 through import/export, functions and subgraphs. Deduplication considers
-semantic profiles as well as bytes and both physical and logical shapes.
+semantic profiles as well as payload bytes, layout and optional logical shapes.
 Rewrites that change any preparation dependency invalidate the corresponding
 compiled binding.</p>
 <p>Prefer an optional companion compiled store for the first implementation.
@@ -1048,15 +1087,15 @@ drop authoritative structured values or state effects.</p>
 <p>The first concrete implementation is the <strong>structured representation</strong>:
 <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> and the structured-layout branch of <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code>.
 PR01 first freezes their minimal contract and the proto-size budget. PR02
-implements checked fields, arrays, bit packing, type references, payload
-ownership, per-value storage shapes and serialization before adding the
-small built-in affine subset.
+implements checked typed/constant fields, arrays, bit packing, type references,
+payload ownership, byte extents, derived record counts and serialization
+before adding the small built-in affine subset.
 Custom packed weights and heterogeneous KV-block fixtures must work through
 structures without requiring a catalogue of native quantized types.</p>
-<p>Use <a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured views over byte buffers</span></a> as physical-layout design material, not
-as a separate roadmap to implement verbatim: its old <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> value
-container is replaced by <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code>. Typed prepacking, graph
-integration and persistent-state consumers build on this common foundation.</p>
+<p>Use <a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured types and prepared values</span></a> as physical-layout design material, not
+as a separate roadmap to implement verbatim. Its examples use the same
+<code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> container. Typed prepacking, graph integration and
+persistent-state consumers build on this common foundation.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 8.0%" />
@@ -1075,8 +1114,8 @@ integration and persistent-state consumers build on this common foundation.</p>
 <tr class="row-even"><td><p>PR01</p></td>
 <td><p>Representation and lifetime contracts</p></td>
 <td><p>Freeze the small built-in affine subset, struct-based extension path,
-element-type/storage-shape separation, catalogue identities, native
-bindings and request state effects, including heterogeneous K/V block
+fixed element types and payload-derived counts, catalogue identities,
+native bindings and request state effects, including heterogeneous K/V block
 descriptors. Record the
 minimal proto size baseline and agree a size budget before PR02.</p></td>
 <td><p>Existing runtime APIs</p></td>
@@ -1086,8 +1125,9 @@ minimal proto size baseline and agree a size budget before PR02.</p></td>
 <td><p>Implement StructTypeProto and EncodedValueProto’s structured branch
 first; then add common INT8/INT4 layouts. Round-trip custom records,
 codebook/mixed-bit formats and a heterogeneous KV-block fixture.
-Prove one type is shared by different storage shapes; check scalar,
-empty, overflow, catalogue resolution and exact payload-size cases.
+Prove one type is shared by different payload lengths; check single-record,
+empty, zero-sized-root rejection, overflow, catalogue resolution and
+exact payload-divisibility cases.
 Report proto binary-size growth within the PR01 budget; no
 format-specific decoder is linked into the proto target.</p></td>
 <td><p>PR01</p></td>
@@ -1172,11 +1212,19 @@ tensor-cache execution with the same numerical contract. Test concurrent
 preparation, active pins during eviction, changed scales with unchanged code
 bytes, incompatible ISA/ABI, missing consumers, reset, invalid capacities,
 failed mutations and independent requests.</p>
-<p>Type/value tests also round-trip two encoded values with the same catalogue
-reference but different storage shapes and payloads. Verify a single shared
-resolved descriptor, scalar and zero-size storage, malformed lengths,
-arithmetic overflow, external payload extents and session-to-model catalogue
-remapping without copying type declarations per KV block.</p>
+<p>Type/value tests also round-trip two encoded values with the same stable type
+ID but different payload lengths and derived record counts. Include two models
+with reordered catalogues and unchanged references, per-value scale/zero-point parameters,
+missing and duplicate IDs, and conflicting definitions under the same ID.
+Round-trip constants inside the shared type declaration without including
+them in value-buffer sizes. Reject fields with both or neither of <code class="docutils literal notranslate"><span class="pre">type</span></code>
+and <code class="docutils literal notranslate"><span class="pre">constant</span></code>, invalid tensor constants, and physical fields of unknown size.
+Verify a single shared resolved descriptor, one-record and empty payloads,
+zero-sized-root rejection, allowed constant-only nested structures, partial
+records, arithmetic overflow, explicit external lengths and validated extents,
+logical shapes inconsistent with derived record counts, and
+session-to-model catalogue resolution preserving IDs without copying type
+declarations per KV block.</p>
 <p>Structural gates are explicit: a reused prepared object has no repeat
 prepacking, a compatible verified disk hit does not read portable payloads,
 and a fixed-capacity decode step neither allocates nor copies a full KV cache.
@@ -1237,7 +1285,7 @@ and state-management cost.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#existing-foundations-and-missing-integration">Existing foundations and missing integration</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#three-independent-decisions">Three independent decisions</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#representation-model-a-small-quantized-core-plus-generic-structs">Representation model: a small quantized core plus generic structs</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#one-element-type-many-storage-shapes">One element type, many storage shapes</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#one-element-type-many-payload-lengths">One element type, many payload lengths</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-catalogue-not-template-instantiations">Shared catalogue, not template instantiations</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#proto-library-size-gate">Proto-library size gate</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepacking-prepare-once-share-only-when-compatible">Prepacking: prepare once, share only when compatible</a></li>

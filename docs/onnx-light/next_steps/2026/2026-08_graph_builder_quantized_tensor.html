@@ -421,12 +421,11 @@
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="2026-08_kernel_parallelization.html">Kernel parallelization and tuning sequence</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_onnxruntime_fast_model_loading.html">Using <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> fast loading in <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured views over byte buffers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026-08_custom_types.html">Structured types and prepared values</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Quantized values in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_mutable_cache.html">Mutable execution cache</a></li>
-<li class="toctree-l1"><a class="reference internal" href="2026-08_compiled_tensor.html">CompiledTensorProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_model_resolution.html">Model resolution before weight loading</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_split_wheels.html">Splitting <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> into composable wheels</a></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="2026-08_fast_loading_sequence.html">Fast-loading implementation sequence</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -524,31 +523,32 @@
 <p class="admonition-title">Note</p>
 <p>GraphBuilder integration is PR05 of
 <a class="reference internal" href="2026-09_prepared_values_and_persistent_state.html#l-next-steps-prepared-values-and-persistent-state"><span class="std std-ref">Prepared values, custom representations, and persistent state</span></a>. The API sketches
-below are historical proposals, not existing interfaces. Use the unified
+below are proposals, not existing interfaces. Use the unified
 plan for the representation, ownership and implementation sequence.
-In particular, preserve <code class="docutils literal notranslate"><span class="pre">EncodedValueProto.storage_shape</span></code> separately
-from the decoded logical shape and share <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> declarations
-across values. A different physical array size does not create a new type.</p>
+In particular, preserve payload byte extents separately from the decoded
+logical shape and share <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> declarations across values.
+A different payload length does not create a new type; the number of
+structured records is derived by exact division by the element byte size.</p>
 </div>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> must preserve quantized initializers without converting them
 to <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code> or dequantizing them.</p>
-<p>The recommended representation is <code class="docutils literal notranslate"><span class="pre">StructProto</span></code> plus <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code>,
-as defined in <a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured views over byte buffers</span></a>. If
-<code class="docutils literal notranslate"><span class="pre">QuantizedTensorProto</span></code> is retained, the same design applies with specialized
-names.</p>
+<p>The representation is <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code>. Its structured layout uses
+<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> as defined in <a class="reference internal" href="2026-08_custom_types.html#l-next-steps-custom-types"><span class="std std-ref">Structured types and prepared values</span></a>; the same
+value container also supports the small built-in layout subset. There is no
+separate structured or quantized value container.</p>
 </section>
 <section id="graph-storage">
 <h2>Graph storage<a class="headerlink" href="#graph-storage" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">GraphProto</span></code> needs a field parallel to <code class="docutils literal notranslate"><span class="pre">initializer</span></code>:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>repeated StructProto structured_initializer = &lt;N&gt;;
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>repeated EncodedValueProto encoded_initializer = &lt;N&gt;;
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> stores these protos unchanged and exposes:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="nf">MakeStructuredInitializer</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">StructProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">value</span><span class="p">);</span>
-<span class="k">const</span><span class="w"> </span><span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">StructProto</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span>
-<span class="n">StructuredInitializers</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">noexcept</span><span class="p">;</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="w"> </span><span class="o">&amp;</span><span class="nf">MakeEncodedInitializer</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">EncodedValueProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">value</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">EncodedValueProto</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span>
+<span class="n">EncodedInitializers</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="k">noexcept</span><span class="p">;</span>
 </pre></div>
 </div>
 <p>Names are shared with inputs, ordinary initializers, and node outputs.
@@ -561,10 +561,9 @@ contains tensors, sequences, opsets, functions, constraints, and subgraph
 contexts. Quantized information must be added there, not in a second
 <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> registry.</p>
 <p>Add a symbolic descriptor:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">SymStruct</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">SymEncodedValue</span><span class="w"> </span><span class="p">{</span>
 <span class="k">public</span><span class="o">:</span>
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">StructTypeRef</span><span class="w"> </span><span class="o">&amp;</span><span class="n">PhysicalType</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
-<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">Dims</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">EncodedLayoutRef</span><span class="w"> </span><span class="o">&amp;</span><span class="n">PhysicalLayout</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <span class="w">  </span><span class="kt">uint64_t</span><span class="w"> </span><span class="nf">ByteSize</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">TypeProto</span><span class="w"> </span><span class="o">*</span><span class="nf">LogicalType</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 <span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">SymTensor</span><span class="w"> </span><span class="o">*</span><span class="nf">LogicalTensor</span><span class="p">()</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
@@ -572,58 +571,64 @@ contexts. Quantized information must be added there, not in a second
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">ShapesContext</span></code> then owns:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">unordered_map</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">,</span><span class="w"> </span><span class="n">SymStruct</span><span class="o">&gt;</span><span class="w"> </span><span class="n">structs_</span><span class="p">;</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">unordered_map</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">,</span><span class="w"> </span><span class="n">SymEncodedValue</span><span class="o">&gt;</span><span class="w"> </span><span class="n">encoded_values_</span><span class="p">;</span>
 <span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">StructTypeProto</span><span class="o">&gt;</span><span class="w"> </span><span class="n">struct_types_</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">unordered_map</span><span class="o">&lt;</span><span class="kt">uint64_t</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">struct_type_positions_</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>with <code class="docutils literal notranslate"><span class="pre">SetStruct</span></code>, <code class="docutils literal notranslate"><span class="pre">HasStruct</span></code>, <code class="docutils literal notranslate"><span class="pre">GetStruct</span></code>, <code class="docutils literal notranslate"><span class="pre">AddStructType</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">GetStructType</span></code>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">SymStruct</span></code> keeps both views of the value:</p>
+<p>with <code class="docutils literal notranslate"><span class="pre">SetEncodedValue</span></code>, <code class="docutils literal notranslate"><span class="pre">HasEncodedValue</span></code>, <code class="docutils literal notranslate"><span class="pre">GetEncodedValue</span></code>,
+<code class="docutils literal notranslate"><span class="pre">AddStructType</span></code>, and <code class="docutils literal notranslate"><span class="pre">GetStructType</span></code>. <code class="docutils literal notranslate"><span class="pre">EncodedLayoutRef</span></code> selects a
+built-in layout or a resolved structured type. Type lookup uses stable
+<code class="docutils literal notranslate"><span class="pre">type_id</span></code> values; catalogue positions are internal lookup details.</p>
+<p><code class="docutils literal notranslate"><span class="pre">SymEncodedValue</span></code> keeps both views of the value:</p>
 <ul class="simple">
-<li><p>physical type, dimensions, and checked byte size;</p></li>
+<li><p>physical layout and checked byte size, with structured record counts derived
+from the payload extent rather than a serialized physical shape;</p></li>
 <li><p>decoded logical type and, when applicable, its <code class="docutils literal notranslate"><span class="pre">SymTensor</span></code>.</p></li>
 </ul>
 <p>The payload itself remains in <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>. A value name appears in only
 one context map. Availability checks must cover tensors, sequences, and
-structures.</p>
+encoded values.</p>
 </section>
 <section id="inference">
 <h2>Inference<a class="headerlink" href="#inference" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">ComputeShapeModel</span></code> registers model-level structured types before the graph
-is processed. <code class="docutils literal notranslate"><span class="pre">ComputeShapeGraph</span></code> seeds structured initializers through the
-same helper used by <code class="docutils literal notranslate"><span class="pre">GraphBuilder::MakeStructuredInitializer</span></code>.</p>
-<p>For <code class="docutils literal notranslate"><span class="pre">StructProto</span></code>, the helper:</p>
+is processed. <code class="docutils literal notranslate"><span class="pre">ComputeShapeGraph</span></code> seeds encoded initializers through the
+same helper used by <code class="docutils literal notranslate"><span class="pre">GraphBuilder::MakeEncodedInitializer</span></code>.</p>
+<p>For <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code>, the helper:</p>
 <ol class="arabic simple">
-<li><p>resolves the inline or model-level physical type;</p></li>
-<li><p>binds <code class="docutils literal notranslate"><span class="pre">StructProto.dims</span></code>;</p></li>
-<li><p>validates the payload size;</p></li>
-<li><p>reads the decoder output type;</p></li>
-<li><p>creates and stores <code class="docutils literal notranslate"><span class="pre">SymStruct</span></code>.</p></li>
+<li><p>resolves the selected built-in layout or inline/ID-referenced structured type;</p></li>
+<li><p>obtains the inline byte length or validates the explicit external byte extent;</p></li>
+<li><p>validates the layout’s size rules, deriving structured record counts by exact division;</p></li>
+<li><p>validates the optional logical type against the decoder or registered layout;</p></li>
+<li><p>creates and stores <code class="docutils literal notranslate"><span class="pre">SymEncodedValue</span></code>.</p></li>
 </ol>
 <p>A tensor operator must not receive <code class="docutils literal notranslate"><span class="pre">LogicalTensor()</span></code> implicitly. It needs an
-explicit decoder, unless its schema accepts the structured value directly.
-<code class="docutils literal notranslate"><span class="pre">LightOpSchema::SchemaInputValue</span></code> must therefore support <code class="docutils literal notranslate"><span class="pre">SymStruct</span></code>.</p>
+explicit decoder, unless its schema accepts the encoded value directly.
+<code class="docutils literal notranslate"><span class="pre">LightOpSchema::SchemaInputValue</span></code> must therefore support <code class="docutils literal notranslate"><span class="pre">SymEncodedValue</span></code>.</p>
 </section>
 <section id="scopes">
 <h2>Scopes<a class="headerlink" href="#scopes" title="Link to this heading">#</a></h2>
-<p>Subgraph contexts inherit outer structured values and the structured-type
+<p>Subgraph contexts inherit outer encoded values and the structured-type
 catalogue. Local functions inherit the catalogue but not outer values.
-Function input and output binding copies the complete <code class="docutils literal notranslate"><span class="pre">SymStruct</span></code>.</p>
+Function input and output binding copies the complete <code class="docutils literal notranslate"><span class="pre">SymEncodedValue</span></code>.</p>
 </section>
 <section id="serialization-and-passes">
 <h2>Serialization and passes<a class="headerlink" href="#serialization-and-passes" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">ModelProto</span> <span class="pre">-&gt;</span> <span class="pre">GraphBuilder</span> <span class="pre">-&gt;</span> <span class="pre">ModelProto</span></code> must preserve payloads, types,
-dimensions, and model-level references. <code class="docutils literal notranslate"><span class="pre">ToModel</span></code> compacts the type
-catalogue and remaps indices. <code class="docutils literal notranslate"><span class="pre">ToGraph</span></code> rejects model-level references
-because a standalone graph cannot resolve them.</p>
-<p>Passes handling initializers must include structured initializers. Duplicate
-removal compares the resolved physical type, dimensions, payload, and
-interpretation metadata; equal bytes alone are insufficient.</p>
+byte extents, optional logical shapes, and stable type references. <code class="docutils literal notranslate"><span class="pre">ToModel</span></code> may
+compact unused catalogue entries but preserves their <code class="docutils literal notranslate"><span class="pre">type_id</span></code> values;
+conflicting definitions under the same ID are rejected, not silently
+renumbered. <code class="docutils literal notranslate"><span class="pre">ToGraph</span></code> rejects remaining model-level references unless their
+declarations are exported inline; a standalone graph has no model catalogue.</p>
+<p>Passes handling initializers must include encoded initializers. Duplicate
+removal compares the resolved physical layout, byte extents and logical shapes,
+payload, and interpretation metadata; equal bytes alone are insufficient.</p>
 </section>
 <section id="implementation-order">
 <h2>Implementation order<a class="headerlink" href="#implementation-order" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
-<li><p>Add the proto field and <code class="docutils literal notranslate"><span class="pre">SymStruct</span></code>.</p></li>
+<li><p>Add the proto field and <code class="docutils literal notranslate"><span class="pre">SymEncodedValue</span></code>.</p></li>
 <li><p>Extend <code class="docutils literal notranslate"><span class="pre">ShapesContext</span></code> and schema validation.</p></li>
 <li><p>Add <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> storage, import, and serialization.</p></li>
 <li><p>Extend subgraphs, functions, and initializer passes.</p></li>
