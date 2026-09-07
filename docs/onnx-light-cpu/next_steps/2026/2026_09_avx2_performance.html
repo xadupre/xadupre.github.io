@@ -579,6 +579,102 @@ acceptance gate remain pending.</p>
 </section>
 <section id="current-foundation">
 <h2>Current foundation<a class="headerlink" href="#current-foundation" title="Link to this heading">#</a></h2>
+<section id="september-7-dashboard-follow-up">
+<h3>September 7 dashboard follow-up<a class="headerlink" href="#september-7-dashboard-follow-up" title="Link to this heading">#</a></h3>
+<p>The registered <code class="docutils literal notranslate"><span class="pre">Sigmoid</span></code> and last-axis <code class="docutils literal notranslate"><span class="pre">Softmax</span></code> dispatchers could not
+reach their existing fused AVX2/FMA implementations: the implementation
+library’s <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_HAVE_AVX2_FMA</span></code> definition was private and absent
+from the separate registration library. The registration target now receives
+the availability definition when those kernels are built, without applying
+AVX2 compiler flags to its portable translation units. Runtime dispatch still
+requires both AVX2 and FMA. The scalar activation fallback also explicitly
+disables the exponential cost model so the outer activation scheduler owns
+parallelism.</p>
+<p>An integration regression compares registered FP32 output exactly with the
+direct fused implementation, rather than accepting a numerically close scalar
+fallback. It fails before the CMake correction. Reference, aliasing, tail,
+special-value and executor cases cover the newly reachable path, including
+exact sigmoid saturation at positive infinity.</p>
+<p>On a native AVX2 Intel Core i7-13800H, Windows/MSVC Release, ORT 1.29,
+one thread and process affinity fixed to logical CPU 4, the isolated-runtime
+backend runner measured the following FP32 medians. Each runtime exits before
+the other starts; each phase uses 50 warmups and up to 500 samples or 0.5 s.
+The baseline is the registration path without the availability fix.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Operator / shape</p></th>
+<th class="head"><p>Before (ms)</p></th>
+<th class="head"><p>After (ms)</p></th>
+<th class="head"><p>ORT (ms)</p></th>
+<th class="head"><p>Before / after</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Sigmoid / 65,536</p></td>
+<td><p>0.1792</p></td>
+<td><p>0.0424</p></td>
+<td><p>0.0314</p></td>
+<td><p>4.23x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid / 131,072</p></td>
+<td><p>0.4572</p></td>
+<td><p>0.0800</p></td>
+<td><p>0.0730</p></td>
+<td><p>5.71x</p></td>
+</tr>
+<tr class="row-even"><td><p>Sigmoid / 1,048,576</p></td>
+<td><p>3.0583</p></td>
+<td><p>1.2173</p></td>
+<td><p>0.4703</p></td>
+<td><p>2.51x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Softmax / 32 x 1,024</p></td>
+<td><p>0.1026</p></td>
+<td><p>0.0189</p></td>
+<td><p>0.0220</p></td>
+<td><p>5.43x</p></td>
+</tr>
+<tr class="row-even"><td><p>Softmax / 1,024 x 1,024</p></td>
+<td><p>3.2041</p></td>
+<td><p>0.8593</p></td>
+<td><p>0.5074</p></td>
+<td><p>3.73x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Attention additionally reuses its AVX2 online-softmax row kernel for short
+query bursts and its vector mask/softmax helpers in the tiled FP32 path.
+Alternating full <code class="docutils literal notranslate"><span class="pre">ComputeAttentionFloat32</span></code> measurements, with the matrix
+implementation held constant, improve Q8/KV1024/D64 causal/nonpad from
+7.240 to 1.347 ms and the Q128/KV128/D64 additive case from 1.824 to
+0.911 ms (batch 1, 12 heads, one thread). Unsupported mask layouts,
+softcap/window modes and other ISAs retain their existing paths.</p>
+<p>For Gemm/MatMul, non-transposed FP32 skinny-N matrices now reduce strided
+columns with bounded AVX2 gathers and independent FMA accumulators. FP64
+register kernels use masked vectors for their final one to three columns.
+At M1024/N7/K1024, alternating standalone runs improve FP32 from 4.820 to
+1.339 ms (3.60x) and FP64 from 4.978 to 2.203 ms (2.26x). Four-worker
+configurations also improve these cases, but the FP64 plan remains serial:
+these results do not establish a scheduling or scaling improvement.
+Aligned wide FP64 and FP32 M=1 GEMV are unchanged; experiments that regressed
+those paths were discarded.</p>
+<p>The existing throughput driver accepts a case substring and FP32/FP64
+selection for reproducing focused matrix measurements:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">gemm_throughput 1 dashboard_skinny_n7 fp32</span>
+<span class="go">gemm_throughput 1 dashboard_skinny_n7 fp64</span>
+<span class="go">gemm_throughput 4 dashboard fp32</span>
+</pre></div>
+</div>
+<p>These are diagnostic development-machine measurements, not completion of the
+parity gate. The registered optimized attention cases still measure about
+0.70–0.84x ORT, and the largest activation cases retain gaps. CPU affinity
+does not eliminate frequency variation or other host activity. In particular,
+the earlier direct-kernel activation measurements did not establish that the
+registered runtime actually reached those kernels.
+A six-participant run also leaves the selected attention and activation
+cases below parity (0.32–0.59x ORT); closing multithread scheduling and
+throughput gaps remains necessary.</p>
 <p>The <a class="reference internal" href="2026_09_avx2_matrix_kernel_improvements.html"><span class="doc">AVX2 Matrix Kernel Improvements</span></a> adds production AVX2
 FP16/FP32 single-row kernels and bounded FP16 panel widening, with controlled
 before/after measurements against ORT. Selected Qwen FP16 projections are
@@ -598,6 +694,7 @@ tails for one through seven columns.</p></li>
 not constitute a complete AVX2 parity sweep. The explicit SIMD ceiling now
 makes that sweep reproducible and prevents an AVX-512-capable development
 machine from hiding an AVX2 fallback.</p>
+</section>
 </section>
 <section id="work-sequence">
 <h2>Work sequence<a class="headerlink" href="#work-sequence" title="Link to this heading">#</a></h2>
@@ -746,7 +843,10 @@ to hide a missing AVX2 implementation.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measurement-contract">Measurement contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproducible-baseline">Reproducible baseline</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-foundation">Current foundation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-foundation">Current foundation</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#september-7-dashboard-follow-up">September 7 dashboard follow-up</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#work-sequence">Work sequence</a></li>
 </ul>
   </nav></div>
