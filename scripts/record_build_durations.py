@@ -19,6 +19,9 @@ are::
 The script is designed to be run from a GitHub Actions workflow. It reads the
 ``GITHUB_TOKEN`` (or ``GH_TOKEN``) environment variable when present in order
 to authenticate API requests and benefit from the higher rate limits.
+Rate-limited requests wait for ``Retry-After`` or the quota reset before
+retrying, with exponential backoff for secondary limits. If three attempts
+fail, recording stops with an error while preserving collected cache data.
 
 Usage::
 
@@ -152,6 +155,26 @@ def determine_since(
     return latest
 
 
+class GitHubRateLimitError(urllib.error.HTTPError):
+    """The GitHub API still rate-limits requests after bounded retries."""
+
+
+def _rate_limit_delay(exc: urllib.error.HTTPError, attempt: int) -> float | None:
+    """Distinguish quota exhaustion from permission errors and honor API delays."""
+    if exc.code not in {403, 429}:
+        return None
+    headers = {key.lower(): value for key, value in (exc.headers or {}).items()}
+    if "retry-after" in headers:
+        return max(1.0, float(headers["retry-after"]))
+    if headers.get("x-ratelimit-remaining") == "0":
+        if "x-ratelimit-reset" in headers:
+            return max(1.0, float(headers["x-ratelimit-reset"]) - time.time() + 1)
+        return 60.0 * 2**attempt
+    if exc.code == 429 or b"rate limit" in exc.read().lower():
+        return 60.0 * 2**attempt
+    return None
+
+
 def _request(url: str, token: str | None) -> tuple[dict, dict]:
     headers = {
         "Accept": "application/vnd.github+json",
@@ -167,6 +190,19 @@ def _request(url: str, token: str | None) -> tuple[dict, dict]:
                 payload = json.loads(resp.read().decode("utf-8"))
                 return payload, dict(resp.headers)
         except urllib.error.HTTPError as exc:
+            rate_delay = _rate_limit_delay(exc, attempt)
+            if rate_delay is not None:
+                if attempt == 2:
+                    raise GitHubRateLimitError(
+                        exc.url, exc.code, exc.reason, exc.headers, None
+                    ) from exc
+                _log(
+                    f"GitHub API rate limit (HTTP {exc.code}); waiting "
+                    f"{rate_delay:.0f}s before retrying (attempt {attempt + 2}/3)"
+                )
+                exc.close()
+                time.sleep(rate_delay)
+                continue
             if exc.code not in {500, 502, 503, 504} or attempt == 2:
                 raise
             delay = 2**attempt
@@ -602,8 +638,7 @@ def record_jobs_for_run(run: dict, repo: str, cache_dir: str, token: str | None)
                 added += _append_rows(path, rows, JOB_CSV_FIELDS)
             except Exception as exc:  # pragma: no cover - defensive
                 print(
-                    f"[{repo}] failed to save {len(rows)} job row(s) to "
-                    f"{path}: {exc}",
+                    f"[{repo}] failed to save {len(rows)} job row(s) to {path}: {exc}",
                     file=sys.stderr,
                 )
     return added
@@ -659,8 +694,6 @@ def process_repo(
             row = run_to_row(run)
             if row is None:
                 continue
-            new_rows.append(row)
-            seen.add(run_id)
             _log(
                 f"[{repo}] new run {run_id} "
                 f"workflow={row['workflow']!r} "
@@ -669,6 +702,9 @@ def process_repo(
             )
             try:
                 added_jobs = record_jobs_for_run(run, repo, cache_dir, token)
+            except GitHubRateLimitError:
+                # Do not keep requesting jobs while the token is blocked.
+                raise
             except Exception as exc:
                 # Recording jobs for one run must not abort the whole
                 # repository: log the failure and keep going so that the
@@ -681,9 +717,10 @@ def process_repo(
             else:
                 jobs_added += added_jobs
                 _log(
-                    f"[{repo}]   recorded {added_jobs} new job row(s) "
-                    f"for run {run_id}"
+                    f"[{repo}]   recorded {added_jobs} new job row(s) for run {run_id}"
                 )
+            new_rows.append(row)
+            seen.add(run_id)
     finally:
         # Always flush whatever we managed to collect, even if an exception
         # interrupted the loop above. This ensures partial progress is
@@ -717,7 +754,7 @@ def process_repo(
             _log(f"[{repo}] wrote jobs index with {n_indexed} entr(y/ies)")
         except Exception as exc:  # pragma: no cover - defensive
             print(
-                f"[{repo}] failed to write jobs index: " f"{type(exc).__name__}: {exc}",
+                f"[{repo}] failed to write jobs index: {type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
     elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()
@@ -778,7 +815,9 @@ def main(argv: list[str] | None = None) -> int:
     _log(f"  cache directory : {args.cache_dir}")
     _log(f"  months fallback : {args.months}")
     if since_override is not None:
-        _log(f"  since override  : {_format_iso(since_override)} (--since overrides cache and --months)")
+        _log(
+            f"  since override  : {_format_iso(since_override)} (--since overrides cache and --months)"
+        )
     _log(f"  repositories    : {', '.join(repos)}")
     if not token:
         _log("  authentication  : anonymous (no GITHUB_TOKEN/GH_TOKEN set)")
@@ -793,7 +832,17 @@ def main(argv: list[str] | None = None) -> int:
     for index, repo in enumerate(repos, start=1):
         _log(f"==> [{index}/{len(repos)}] processing repository {repo}")
         try:
-            total += process_repo(repo, args.cache_dir, args.months, token, since_override)
+            total += process_repo(
+                repo, args.cache_dir, args.months, token, since_override
+            )
+        except GitHubRateLimitError as exc:
+            print(
+                "::error title=GitHub API rate limit::"
+                f"[{repo}] HTTP {exc.code}: rate limit persists after 3 attempts. "
+                "Stopping requests; collected cache data has been saved.",
+                file=sys.stderr,
+            )
+            return 1
         except urllib.error.HTTPError as exc:
             # Do not abort: keep going so that whatever was already saved
             # for previous repositories (and for this one, thanks to the
