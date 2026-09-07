@@ -62,11 +62,12 @@
     <link rel="icon" href="../../_static/logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="AVX2 Isolated-Runtime Diagnostic Baseline" href="2026_09_avx2_diagnostic_baseline.html" />
     <link rel="prev" title="com.microsoft Domain Support" href="2026_08_com_microsoft_domain.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 06, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -395,6 +396,7 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_exp_log_parity.html">Exp and Log ONNX Runtime Parity Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_qwen3_inference.html">Qwen3 CPU Inference Critical Path</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_09_qwen3_operator_slice.html">Qwen3 Non-MatMulNBits Operator Slice</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_avx2_activation_normalization.html">AVX2 Activation and Normalization Gap Closure</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_09_qwen3_missing_kernels.html">Qwen3 Missing-Kernel Implementation Plan</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_conv.html">Conv Performance Roadmap</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_unary_elementwise.html">Unary Elementwise Performance Roadmap</a></li>
@@ -410,6 +412,8 @@
 <li class="toctree-l1"><a class="reference internal" href="2026_08_kernel_performance_improvements.html">Recent Kernel Performance Improvements</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026_08_com_microsoft_domain.html">com.microsoft Domain Support</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">AVX2 Kernel Performance Follow-up</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_avx2_diagnostic_baseline.html">AVX2 Isolated-Runtime Diagnostic Baseline</a></li>
+<li class="toctree-l1"><a class="reference internal" href="2026_09_avx2_matrix_kernel_improvements.html">AVX2 Matrix Kernel Improvements</a></li>
 </ul>
 </div>
 </nav></div>
@@ -529,23 +533,56 @@ python<span class="w"> </span>tools/benchmark_avx2_parity.py<span class="w"> </s
 GEMM/MatMul, Attention, activation and normalization, unary, and binary
 elementwise cases. It runs one-thread and process-visible physical-core policies
 with identical onnx-light-cpu and ONNX Runtime thread counts. Each runtime
-receives a separate timing phase, and the first runtime alternates between
-consecutive cases.</p>
+runs in its own process, which exits before the next runtime starts. The first
+runtime alternates between consecutive cases. Merely separating timing phases
+inside one process is insufficient: idle ORT workers can keep spinning while
+the CPU runtime is measured.</p>
+<p>Each case’s model and input bytes are serialized once, checksummed, and reused
+by both runtimes and both thread policies. Per-case scratch files are removed
+afterwards. The parent does not create a runtime execution pool, and normal ORT
+thread-pool policies remain unchanged.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>The <a class="reference internal" href="2026_09_avx2_diagnostic_baseline.html"><span class="doc">isolated-runtime diagnostic baseline</span></a> demonstrates substantial interference
+from idle ORT spinning in the original shared-process runner.
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/647">#647</a> now isolates
+the runtimes. Results collected with the older runner must not be used for
+parity decisions and remain diagnostic even when <code class="docutils literal notranslate"><span class="pre">--environment</span> <span class="pre">pinned</span></code>
+was set.
+Report the revision used to compile the binaries, not just HEAD at the
+end of the run.</p>
+</div>
 <p>The JSON records every raw sample, medians and dispersion, shapes, data types,
 loop families, CPU and affinity, SIMD ceiling and detected level, compiler,
 package versions, and timing order. Results are ranked by positive absolute
 latency gap and speedup, with Qwen decode and prefill rows labelled explicitly.
+Native Python extension paths and hashes are pinned and verified in CPU workers;
+on Linux, the loaded onnx-light and CPU shared-library paths and hashes are also
+checked. Shared-library discovery is explicitly unavailable on other platforms.
+Checkout HEAD and compiler environment are labelled as such: the tool cannot
+infer the compiled source revision from them. Capture the actual build revision
+alongside the report, and do not rebuild the runtime during measurement.
 The companion Markdown groups rows into <code class="docutils literal notranslate"><span class="pre">&lt;0.5x</span></code>, <code class="docutils literal notranslate"><span class="pre">0.5x-0.9x</span></code>,
 <code class="docutils literal notranslate"><span class="pre">0.9x-1.0x</span></code>, and <code class="docutils literal notranslate"><span class="pre">&gt;=1.0x</span></code> ONNX Runtime.</p>
 <p>Run the <code class="docutils literal notranslate"><span class="pre">AVX2</span> <span class="pre">parity</span> <span class="pre">baseline</span></code> workflow to publish the JSON, Markdown, and
 environment capture as one artifact. Generated results are not committed.
 Results from shared runners are diagnostic, especially within 5–10% of parity;
-only <code class="docutils literal notranslate"><span class="pre">--environment</span> <span class="pre">pinned</span></code> results collected on pinned native AVX2 hardware
-may make a final parity decision. Follow-up issues should be opened only for the
-ranked measured bottlenecks listed by the report.</p>
+only isolated-runtime results collected on pinned native AVX2 hardware and
+labelled <code class="docutils literal notranslate"><span class="pre">--environment</span> <span class="pre">pinned</span></code> may make a final parity decision. Follow-up
+issues should be opened only for measured bottlenecks confirmed without
+cross-runtime thread-pool interference.</p>
+<p>The <a class="reference internal" href="2026_09_avx2_diagnostic_baseline.html"><span class="doc">AVX2 Isolated-Runtime Diagnostic Baseline</span></a> records the September 6 isolated
+follow-up. FP16 matrix paths, FP32 M=1, compact integer matrices, multithread
+FP64 and long-context Attention remain priorities. Selected RMSNormalization
+and BiasGelu cases are ahead of ORT, but the full isolated corpus and final
+acceptance gate remain pending.</p>
 </section>
 <section id="current-foundation">
 <h2>Current foundation<a class="headerlink" href="#current-foundation" title="Link to this heading">#</a></h2>
+<p>The <a class="reference internal" href="2026_09_avx2_matrix_kernel_improvements.html"><span class="doc">AVX2 Matrix Kernel Improvements</span></a> adds production AVX2
+FP16/FP32 single-row kernels and bounded FP16 panel widening, with controlled
+before/after measurements against ORT. Selected Qwen FP16 projections are
+ahead of ORT; small and medium matrix gaps and the full parity gate remain.</p>
 <p>The first AVX2-specific passes are already merged:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/604">#604</a> adds fused
@@ -595,7 +632,8 @@ measure AVX2 paths on wider x86 hosts.</p></td>
 and loop-family results under the AVX2 ceiling. The report ranks gaps
 by absolute latency and ONNX Runtime ratio before further tuning.</p></td>
 <td><p>PR01</p></td>
-<td><p>Assigned in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/631">#631</a></p></td>
+<td><p>Tooling from <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/632">#632</a> now isolates
+runtime processes; the complete measured inventory remains pending</p></td>
 </tr>
 <tr class="row-even"><td><p>AVX2 PR02a</p></td>
 <td><p>FP32/FP64 GEMM and MatMul.</p></td>
@@ -610,7 +648,9 @@ delivered through #605 and #608</p></td>
 <td><p>FP16/BF16 conversion and integer/packed paths avoid scalar or
 full-tensor conversion bottlenecks on the priority shapes.</p></td>
 <td><p>PR01.1</p></td>
-<td><p>Assigned in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/634">#634</a></p></td>
+<td><p>Initial work in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/634">#634</a>; FP16 follow-up
+in <a class="reference internal" href="2026_09_avx2_matrix_kernel_improvements.html"><span class="doc">AVX2 Matrix Kernel Improvements</span></a>, full compact-type
+parity still pending</p></td>
 </tr>
 <tr class="row-even"><td><p>AVX2 PR03</p></td>
 <td><p>Attention.</p></td>
@@ -627,8 +667,9 @@ delivered through #605 and #608</p></td>
 conversion, scalar tails, and unproductive scheduling while retaining
 their numerical contracts.</p></td>
 <td><p>PR01.1</p></td>
-<td><p>Assigned in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/638">#638</a>; foundations
-delivered through #604</p></td>
+<td><p>Delivered in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/638">#638</a> (see
+<a class="reference internal" href="2026_09_avx2_activation_normalization.html"><span class="doc">AVX2 Activation and Normalization Gap Closure</span></a>); foundations delivered
+through #604</p></td>
 </tr>
 <tr class="row-even"><td><p>AVX2 PR04b</p></td>
 <td><p>Unary and binary elementwise kernels.</p></td>
@@ -673,6 +714,15 @@ to hide a missing AVX2 implementation.</p>
         <p class="prev-next-subtitle">previous</p>
         <p class="prev-next-title">com.microsoft Domain Support</p>
       </div>
+    </a>
+    <a class="right-next"
+       href="2026_09_avx2_diagnostic_baseline.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">AVX2 Isolated-Runtime Diagnostic Baseline</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
     </a>
 </div>
                 </footer>
@@ -732,7 +782,7 @@ to hide a missing AVX2 implementation.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 06, 2026.
+  Last updated on Sep 07, 2026.
   <br/>
 </p></div>
       
