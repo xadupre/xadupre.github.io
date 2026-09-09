@@ -374,6 +374,8 @@ def build_payload(
 
     level = int(detect_simd_level())
     timestamp = now or dt.datetime.now(tz=dt.timezone.utc)
+    date = timestamp.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    simd_name = _SIMD_NAMES.get(level, str(level))
     machine = machine or rlb.processor_name()
     examples = run(
         tests,
@@ -383,15 +385,24 @@ def build_payload(
         max_repeat_time_s=max_repeat_time_s,
     )
     return {
-        "date": timestamp.astimezone(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "date": date,
         "n_warmup": n_warmup,
         "n_measure": n_measure,
         "max_warmup_time_s": max_warmup_time_s,
         "max_repeat_time_s": max_repeat_time_s,
         "versions": versions(),
         "simd_level": level,
-        "simd_name": _SIMD_NAMES.get(level, str(level)),
-        "examples": [{**example, "machine": machine} for example in examples],
+        "simd_name": simd_name,
+        "examples": [
+            {
+                **example,
+                "date": date,
+                "machine": machine,
+                "simd_level": level,
+                "simd_name": simd_name,
+            }
+            for example in examples
+        ],
     }
 
 
@@ -410,9 +421,18 @@ def merge_payload(
     """Replace one type in a previous payload with freshly measured examples."""
     if benchmark_type is None:
         return current
+
+    def examples_with_metadata(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        metadata = {
+            key: payload[key]
+            for key in ("date", "simd_level", "simd_name")
+            if key in payload
+        }
+        return [{**metadata, **example} for example in payload.get("examples", [])]
+
     retained = [
         example
-        for example in previous.get("examples", [])
+        for example in examples_with_metadata(previous)
         if not any(
             benchmark_type_from_name(str(row.get("test_name", "")))
             == benchmark_type
@@ -421,7 +441,7 @@ def merge_payload(
     ]
     merged = dict(current)
     merged["examples"] = sorted(
-        retained + current["examples"],
+        retained + examples_with_metadata(current),
         key=lambda example: (
             str(example.get("op", "")).lower(),
             str(example.get("rows", [{}])[0].get("input_type", "")).lower(),

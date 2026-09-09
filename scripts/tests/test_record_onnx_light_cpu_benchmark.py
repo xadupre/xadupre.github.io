@@ -312,10 +312,15 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(payload["simd_name"], "AVX2")
         self.assertEqual(payload["date"], "2026-01-02T00:00:00Z")
         self.assertEqual(payload["examples"][0]["machine"], "Test machine")
+        self.assertEqual(payload["examples"][0]["simd_name"], "AVX2")
+        self.assertEqual(payload["examples"][0]["simd_level"], 3)
+        self.assertEqual(payload["examples"][0]["date"], "2026-01-02T00:00:00Z")
 
     def test_merge_payload_replaces_only_requested_type(self):
         previous = {
             "date": "old",
+            "simd_level": 2,
+            "simd_name": "AVX",
             "examples": [
                 {
                     "op": "Abs",
@@ -339,6 +344,8 @@ class TestPayload(unittest.TestCase):
         }
         current = {
             "date": "new",
+            "simd_level": 3,
+            "simd_name": "AVX2",
             "examples": [
                 {
                     "op": "Relu",
@@ -357,6 +364,13 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(merged["date"], "new")
         self.assertEqual(
             [example["op"] for example in merged["examples"]], ["Add", "Relu"]
+        )
+        self.assertEqual(
+            [
+                (example["date"], example["simd_level"], example["simd_name"])
+                for example in merged["examples"]
+            ],
+            [("old", 2, "AVX"), ("new", 3, "AVX2")],
         )
 
     def test_run_tests_uses_global_backend_phases(self):

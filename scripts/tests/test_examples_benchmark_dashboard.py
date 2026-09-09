@@ -41,7 +41,9 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_page_renders_examples_and_speedup(self):
         text = _read(PAGE)
-        self.assertIn("function renderExample(example, benchmarkDate)", text)
+        self.assertIn(
+            "function renderExample(example, fallbackDate, fallbackSimdName)", text
+        )
         self.assertIn("payload.examples", text)
         self.assertIn("speedup_cpu", text)
         self.assertIn(
@@ -97,11 +99,17 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
 
     def test_summary_and_rows_show_the_benchmark_date(self):
         text = _read(PAGE)
-        self.assertEqual(text.count("<span>date</span>"), 1)
-        self.assertIn('["date", formatBenchmarkDate(benchmarkDate), ""]', text)
+        self.assertEqual(text.count("<span>date / SIMD</span>"), 1)
+        self.assertIn("const benchmarkDate = example.date || fallbackDate;", text)
+        self.assertIn("const simdName = example.simd_name || fallbackSimdName;", text)
+        self.assertIn(
+            '["date / SIMD", formatBenchmarkDate(benchmarkDate) + " / " +', text
+        )
         self.assertIn('dateTh.textContent = "date";', text)
         self.assertIn("dateTd.textContent = formatBenchmarkDate(benchmarkDate);", text)
-        self.assertIn("renderExample(ex, payload.date)", text)
+        self.assertIn(
+            "renderExample(ex, payload.date, payload.simd_name)", text
+        )
         self.assertIn("return date.toISOString().slice(0, 10);", text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
