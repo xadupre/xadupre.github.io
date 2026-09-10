@@ -100,9 +100,11 @@ class TestLastUpdatedFooter(unittest.TestCase):
 
                 page_dir = os.path.dirname(full)
                 for src in sources:
-                    # Skip non-existing path checks for build-durations
-                    # which uses generated jobs/index.json that may not be
-                    # in the repo if no run has been recorded yet.
+                    # Cache data are served by the separate cache_data
+                    # repository's GitHub Pages project and are intentionally
+                    # absent from this checkout.
+                    if "/cache_data/" in src or src.startswith("cache_data/"):
+                        continue
                     resolved = os.path.normpath(os.path.join(page_dir, src))
                     parent = os.path.dirname(resolved)
                     self.assertTrue(

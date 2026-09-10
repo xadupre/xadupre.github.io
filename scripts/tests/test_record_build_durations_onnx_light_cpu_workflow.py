@@ -34,7 +34,11 @@ class TestRecordBuildDurationsOnnxLightCpuWorkflow(unittest.TestCase):
         self.assertIn("--repo xadupre/onnx-light-cpu", self.content)
 
     def test_commits_the_cache_data(self):
-        self.assertIn("git add cache_data", self.content)
+        self.assertIn(
+            'bash scripts/commit_cache_data.sh cache_data '
+            '"Update onnx-light-cpu build duration cache"',
+            self.content,
+        )
 
     def test_only_owner_or_schedule_runs(self):
         guard = self.data["jobs"]["record"]["if"]

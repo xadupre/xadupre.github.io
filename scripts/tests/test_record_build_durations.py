@@ -854,24 +854,25 @@ class TestRecordBuildDurations(unittest.TestCase):
         # unstaged changes") prevented the partially committed cache data
         # from ever being pushed. This test pins the two properties that
         # protect against that regression: a generous step timeout and a
-        # push retry loop that folds late writes into the commit and clears
-        # the working tree before rebasing.
+        # shared push helper that folds late writes into the commit before
+        # rebasing.
         root = os.path.dirname(os.path.dirname(HERE))
         path = os.path.join(root, ".github", "workflows", "record_build_durations.yml")
         with open(path, encoding="utf-8") as fh:
             content = fh.read()
         # Step must allow the bootstrap fetch enough time to complete.
         self.assertIn("timeout-minutes: 350", content)
-        # Late writes must be folded into the existing commit so they are
-        # not lost when the rebase clears the working tree.
-        self.assertIn("git commit --amend --no-edit", content)
-        # The working tree must be cleaned before rebasing so the rebase
-        # never aborts with "cannot rebase: You have unstaged changes."
-        self.assertIn("git checkout -- .", content)
-        self.assertIn("git clean -fd cache_data", content)
-        # The previous broken stash invocation (which silently stashed
-        # nothing because of the trailing ``--``) must not come back.
-        self.assertNotIn("git stash push --include-untracked --quiet --", content)
+        self.assertIn("bash scripts/commit_cache_data.sh cache_data", content)
+        helper = os.path.join(root, "scripts", "commit_cache_data.sh")
+        with open(helper, encoding="utf-8") as fh:
+            helper_content = fh.read()
+        # Late writes are folded into the existing commit before rebasing.
+        self.assertIn("git -C \"$data_repo\" commit --amend --no-edit", helper_content)
+        # During a rebase, ``theirs`` is the generated commit being replayed.
+        self.assertIn('rebase -X theirs "origin/${TARGET_BRANCH}"', helper_content)
+        # The helper must not discard broad parts of the data checkout.
+        self.assertNotIn("git clean", helper_content)
+        self.assertNotIn("git checkout -- .", helper_content)
 
     def test_default_repos_includes_onnx(self):
         # ``onnx/onnx`` must stay in the tracked list so the corresponding
