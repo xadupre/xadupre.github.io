@@ -56,6 +56,15 @@ jobs:
           # not configured.
           token: ${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}
 
+      - name: Checkout cache data
+        uses: actions/checkout@v6
+        with:
+          repository: xadupre/cache_data
+          path: site/cache_data
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.BOT_TOKEN }}
+
       - name: Checkout onnx-light-cpu
         uses: actions/checkout@v6
         with:
@@ -145,7 +154,7 @@ jobs:
           # Build a distributable wheel from the onnx-light-cpu checkout and
           # append one CSV row per .whl file produced to
           # cache_data/onnx-light-cpu/wheel_sizes.csv inside the
-          # xadupre.github.io checkout. The CSV columns
+          # cache-data checkout. The CSV columns
           # (date,commit,run_id,size,name) match the schema produced by
           # scripts/record_wheel_sizes.py so the dashboard can consume rows
           # from either source interchangeably.
@@ -228,71 +237,15 @@ jobs:
         run: |
           # Count the lines of Python and C++ source code in the
           # onnx-light-cpu checkout and append one row per language to
-          # cache_data/onnx-light-cpu/loc.csv inside the xadupre.github.io
-          # checkout. The "Commit and push cache data" step below will then
-          # publish the new rows alongside the shared-library and wheel sizes.
+          # cache_data/onnx-light-cpu/loc.csv inside the cache-data checkout.
+          # The "Commit and push cache data" step below publishes the new rows
+          # alongside the shared-library and wheel sizes.
           python "${GITHUB_WORKSPACE}/site/scripts/record_loc.py" \
             --source-dir "${GITHUB_WORKSPACE}/onnx-light-cpu" \
             --output "${GITHUB_WORKSPACE}/site/cache_data/onnx-light-cpu/loc.csv"
 
       - name: Commit and push cache data
-        working-directory: site
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cache_data/onnx-light-cpu
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-          else
-            built_sha="$(git -C ../onnx-light-cpu rev-parse HEAD)"
-            git commit -m "Update onnx-light-cpu size/loc data (from ${built_sha})"
-            # Retry the push a few times, rebasing on top of any new commits
-            # that may have landed on the remote in the meantime. This avoids
-            # "fetch first" / non-fast-forward push failures when another
-            # workflow run pushed to the same branch concurrently.
-            branch="${GITHUB_REF_NAME:-main}"
-            attempts=5
-            for i in $(seq 1 "$attempts"); do
-              push_err="$(mktemp)"
-              if git push origin "HEAD:${branch}" 2> >(tee "$push_err" >&2); then
-                echo "Push succeeded on attempt ${i}."
-                rm -f "$push_err"
-                exit 0
-              fi
-              # A permission error (HTTP 403) is not a transient race and will not be
-              # fixed by retrying. Fail fast with a pointer to the README section that
-              # explains which GitHub setting needs to be changed.
-              if grep -qE "error: 403|Permission to .* denied" "$push_err"; then
-                rm -f "$push_err"
-                echo "" >&2
-                echo "Push rejected by GitHub with HTTP 403 (permission denied)." >&2
-                echo "Retrying will not help: the authenticated user shown above is" >&2
-                echo "not allowed to push to ${branch}." >&2
-                echo "" >&2
-                echo "See the \"Troubleshooting\" section in README.md for the exact" >&2
-                echo "setting to change:" >&2
-                echo "  https://github.com/${GITHUB_REPOSITORY}#troubleshooting-none-of-the-actions-can-update-main" >&2
-                exit 1
-              fi
-              rm -f "$push_err"
-              echo "Push attempt ${i} failed; rebasing on origin/${branch} and retrying..."
-              # Drop any leftover working-tree or untracked changes so that
-              # the rebase below does not abort with "cannot rebase: You
-              # have unstaged changes." Everything we want to publish has
-              # already been committed above, so any remainder is safe to
-              # set aside.
-              git stash push --include-untracked --quiet -- || true
-              git fetch origin "${branch}"
-              # Rebase our single data commit on top of the latest remote
-              # state. Prefer our version for the cache data directory in
-              # case of conflicts, since we just regenerated it.
-              if ! git rebase -X ours "origin/${branch}"; then
-                echo "Rebase failed; aborting."
-                git rebase --abort || true
-                exit 1
-              fi
-              sleep $((i * 5))
-            done
-            echo "Failed to push after ${attempts} attempts." >&2
-            exit 1
-          fi
+          built_sha="$(git -C onnx-light-cpu rev-parse HEAD)"
+          bash site/scripts/commit_cache_data.sh site/cache_data \
+            "Update onnx-light-cpu size/loc data (from ${built_sha})"

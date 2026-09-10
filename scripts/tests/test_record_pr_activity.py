@@ -77,8 +77,12 @@ class TestRecordPrActivity(unittest.TestCase):
             text = stream.read()
         self.assertIn('cron: "53 4 * * *"', text)
         self.assertIn("python -u scripts/record_pr_activity.py", text)
-        self.assertIn("cache_data/onnxruntime/pr_activity.csv", text)
-        self.assertIn("cache_data/onnxruntime/open_pulls.json", text)
+        self.assertIn("repository: xadupre/cache_data", text)
+        self.assertIn(
+            'bash scripts/commit_cache_data.sh cache_data '
+            '"Update onnxruntime PR activity cache"',
+            text,
+        )
 
         onnx_workflow = os.path.join(
             root, ".github", "workflows", "record_onnx_pr_activity.yml"
@@ -89,8 +93,12 @@ class TestRecordPrActivity(unittest.TestCase):
         self.assertIn(
             "python -u scripts/record_pr_activity.py --repo onnx/onnx", text
         )
-        self.assertIn("cache_data/onnx/pr_activity.csv", text)
-        self.assertIn("cache_data/onnx/open_pulls.json", text)
+        self.assertIn("repository: xadupre/cache_data", text)
+        self.assertIn(
+            'bash scripts/commit_cache_data.sh cache_data '
+            '"Update onnx PR activity cache"',
+            text,
+        )
 
     def test_collect_snapshot(self):
         now = dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc)

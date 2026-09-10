@@ -1,7 +1,5 @@
 """Tests for the plot_onnx_time history dashboard."""
 
-import csv
-import datetime
 import os
 import unittest
 
@@ -9,9 +7,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 PAGE = os.path.join(ROOT, "dashboard", "onnx-light", "onnx-time.html")
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "record_onnx_time.yml")
 DOC_WORKFLOW = os.path.join(ROOT, ".github", "workflows", "build_onnx_light_docs.yml")
-DATA = os.path.join(ROOT, "cache_data", "onnx-light", "onnx_time.csv")
-
-
 class TestOnnxTimeDashboard(unittest.TestCase):
     def test_page_loads_history_and_links_example(self):
         with open(PAGE, encoding="utf-8") as stream:
@@ -50,15 +45,6 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertEqual(text.count('time:{unit:"day"}'), 2)
         self.assertEqual(text.count('"Machine: " + item.raw.machine'), 2)
 
-        with open(DATA, newline="", encoding="utf-8") as stream:
-            rows = list(csv.DictReader(stream))
-        self.assertTrue(rows)
-        names = {row["name"] for row in rows}
-        self.assertIn("load/1filex1/onnx", names)
-        self.assertIn("save/1filex1/onnx", names)
-        for row in rows:
-            datetime.datetime.fromisoformat(row["date"].replace("Z", "+00:00"))
-
     def test_dedicated_workflow_records_history(self):
         with open(WORKFLOW, encoding="utf-8") as stream:
             text = stream.read()
@@ -74,7 +60,11 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertIn("--output cache_data/onnx-light/onnx_time.csv", text)
         self.assertIn("--machine", text)
         self.assertIn("git -C onnx-light rev-parse HEAD", text)
-        self.assertIn("git add cache_data/onnx-light/onnx_time.csv", text)
+        self.assertIn(
+            'bash scripts/commit_cache_data.sh cache_data '
+            '"Update onnx-light timing cache"',
+            text,
+        )
 
     def test_documentation_workflow_records_machine(self):
         with open(DOC_WORKFLOW, encoding="utf-8") as stream:
