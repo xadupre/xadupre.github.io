@@ -24,6 +24,7 @@ class TestRecordPypiDownloads(unittest.TestCase):
             "onnxmltools",
             "onnxscript",
             "onnx-ir",
+            "mobius-onnx",
             "tf2onnx",
             "llama-cpp-python",
             "gguf",
