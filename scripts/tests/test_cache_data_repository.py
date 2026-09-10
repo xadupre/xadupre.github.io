@@ -59,9 +59,10 @@ class TestCacheDataWorkflowWiring(unittest.TestCase):
                 self.assertEqual((checkout.get("with") or {}).get("ref"), "main")
                 self.assertEqual((checkout.get("with") or {}).get("fetch-depth"), 0)
                 self.assertEqual(
-                    (checkout.get("with") or {}).get("token"),
-                    "${{ secrets.BOT_TOKEN }}",
+                    (checkout.get("with") or {}).get("ssh-key"),
+                    "${{ secrets.CACHE_DATA_SSH_KEY }}",
                 )
+                self.assertNotIn("token", checkout.get("with") or {})
 
                 helper_steps = [
                     step

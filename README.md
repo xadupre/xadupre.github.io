@@ -19,10 +19,10 @@ push to a default branch (`main`) on their own. Documentation workflows update
 repository instead. A classic branch protection rule that requires pull
 requests or status checks will block those pushes and break publication.
 
-The `BOT_TOKEN` secret is required for data publication because a workflow's
-`GITHUB_TOKEN` cannot push to another repository. It must grant **Contents:
-Read and write** access to both `xadupre/xadupre.github.io` and
-`xadupre/cache_data`.
+The `CACHE_DATA_SSH_KEY` secret contains a writable deploy key for
+`xadupre/cache_data`. It is used for data publication because a workflow's
+`GITHUB_TOKEN` cannot push to another repository. `BOT_TOKEN` remains available
+for documentation workflows that push to `xadupre/xadupre.github.io`.
 
 There is no way for a workflow to push to a branch that requires a pull
 request unless the actor performing the push is explicitly allowed to bypass
@@ -43,7 +43,7 @@ the rule. The following setups are known to work with this repository:
    - for documentation pushes to this repository, allow the **GitHub Actions**
      bypass actor when using the default `GITHUB_TOKEN`, or allow the
      `BOT_TOKEN` identity;
-   - for data pushes to `xadupre/cache_data`, allow the `BOT_TOKEN` identity
+   - for data pushes to `xadupre/cache_data`, allow its writable deploy key
      because the source repository's `GITHUB_TOKEN` cannot be used there;
    - the repository owner, so that manual maintenance pushes keep working.
 
@@ -52,10 +52,10 @@ the rule. The following setups are known to work with this repository:
 
 3. **Push with a dedicated identity that is allowed to bypass protection.**
    If your plan does not let GitHub Actions bypass a branch protection rule
-   directly, generate a fine-grained Personal Access Token (or a GitHub App
-   installation token) for an account that is on both repositories' bypass
-   lists and has **Contents: Read and write** access to both. Store it as the
-   `BOT_TOKEN` repository secret. A writable checkout uses it as follows:
+   directly, configure the `cache_data` deploy key as a bypass actor. The
+   private key is stored as the `CACHE_DATA_SSH_KEY` repository secret in this
+   repository, while the public key is registered with write access on
+   `xadupre/cache_data`. A writable checkout uses it as follows:
 
    ```yaml
    - uses: actions/checkout@v6
@@ -64,10 +64,10 @@ the rule. The following setups are known to work with this repository:
        path: cache_data
        ref: main
        fetch-depth: 0
-       token: ${{ secrets.BOT_TOKEN }}
+       ssh-key: ${{ secrets.CACHE_DATA_SSH_KEY }}
    ```
 
-   The data checkout uses v6 and its stored `BOT_TOKEN` credential. Primary
+   The data checkout uses v6 and its stored SSH credential. Primary
    checkouts of this site intentionally remain on v5 because later
    documentation push steps rely on its credential storage behavior.
 
@@ -102,12 +102,12 @@ therefore which setting is missing:
        **GitHub Actions** bypass actor as described in option 2 above.
        Plain *Branch protection rules* cannot grant this bypass; convert
        the rule to a *Ruleset* if needed.
-- **`denied to <your-username>`** — `BOT_TOKEN` cannot write the target
-  repository (`xadupre.github.io` for docs or `cache_data` for data). Check:
+- **`denied to <your-username>`** — `BOT_TOKEN` cannot write
+  `xadupre.github.io` for documentation updates. Check:
     1. The token has not expired (fine-grained PATs expire by default
        after a short period).
     2. For a fine-grained PAT: the token grants **Contents: Read and write**
-       on both repositories.
+       on this repository.
     3. For a classic PAT: the token has the `repo` scope (or at least
        `public_repo` for a public repository).
     4. The account that owns the PAT is on the target repository's *Bypass
