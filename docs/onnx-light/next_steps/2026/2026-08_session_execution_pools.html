@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Session execution policies and shared CPU pools &#8212; onnx-light 0.1.25 documentation</title>
+    <title>Session execution policies and shared CPU pools &#8212; onnx-light 0.1.27 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=cb8930eaaf36d9849b67" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=cb8930eaaf36d9849b67" />
 
-    <script src="../../_static/documentation_options.js?v=4fa33042"></script>
+    <script src="../../_static/documentation_options.js?v=dc233e31"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.25 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.25 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.27 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.27 documentation - Home"/>
   
   
 </a></div>
@@ -778,7 +778,7 @@ fallback must not remain in a path that claims to obey session parameters.</p>
 installs its leased executor through <code class="docutils literal notranslate"><span class="pre">CpuExecutorScope</span></code> and on
 <code class="docutils literal notranslate"><span class="pre">RuntimeContext::cpu_executor</span></code> for the duration of the run, and every
 participant of a parallel region keeps that view installed, so a nested region
-runs inline on the same executor. The free <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> dispatches through
+stays on the same executor. The free <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> dispatches through
 the installed executor and only falls back to the process-wide pool for
 standalone callers running outside any session. A nested session that did not
 receive an explicit policy inherits the executor already installed on the
@@ -799,15 +799,19 @@ PR07; a caller that wants them supplies an explicit policy today.</p>
 <li><p>application code invoking a session from its own pool;</p></li>
 <li><p>callbacks that enter BLAS, OpenMP, or another runtime pool.</p></li>
 </ul>
-<p>An executor marks its workers and caller-owned active regions. Pool PR02 always
-runs nested calls inline, including when the nesting flag is present in the
-sharing key. A nested call may reuse the current participants only if a later
-explicit composition design proves it deadlock-free and bounded; it must never
-wake an unrelated pool.</p>
-<p>Concurrent calls sharing one executor serialize only the parallel-region
-dispatch metadata, not complete inference runs. The design must measure and
-document whether one active region at a time is acceptable or whether the pool
-needs a bounded multi-region scheduler.</p>
+<p>An executor marks its workers and caller-owned active regions. With
+<code class="docutils literal notranslate"><span class="pre">allow_nested_parallelism=true</span></code>, a nested call may admit idle workers from
+that same pool. Admission never waits for busy workers, and a saturated pool
+runs the nested region inline. The caller is already a participant, so only
+the admitted idle workers count as additional participants. No new threads
+or unrelated pools are created, and the total stays within the resolved
+session limit. Kernel-specific limits and minimum-work thresholds still apply
+to each region. The default remains false because nested dispatch is usually
+less efficient. Entry from another thread pool stays inline to avoid cross-pool
+lock inversion and additional teams.</p>
+<p>Concurrent calls sharing one executor serialize outer regions, not complete
+inference runs. When nesting is enabled this includes inline outer regions,
+so their nested work cannot exceed the shared participant budget.</p>
 </section>
 <section id="spinning-and-parking">
 <h2>Spinning and parking<a class="headerlink" href="#spinning-and-parking" title="Link to this heading">#</a></h2>
@@ -867,7 +871,7 @@ migrated.</p>
 <li><p>no <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> worker is created by registered-kernel execution;</p></li>
 <li><p>the session’s effective threads equal observed participants;</p></li>
 <li><p>kernel-specific maximum participants are respected;</p></li>
-<li><p>nested calls remain inline;</p></li>
+<li><p>nested calls remain inline by default and respect the shared limit when enabled;</p></li>
 <li><p>standalone kernels retain their documented behavior.</p></li>
 </ul>
 </section>
