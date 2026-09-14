@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -479,28 +479,112 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="operator_schema_lookup">
 <span class="sig-name descname"><span class="pre">operator_schema_lookup</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">op_type</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#operator_schema_lookup" title="Link to this definition">#</a></dt>
-<dd><p>Returns standard ONNX schemas and this package’s custom schemas. Pass it as
+<dd><p>Returns standard ONNX schemas, Microsoft custom schemas, and this package’s
+experimental compatibility schemas. Pass it as
 <code class="docutils literal notranslate"><span class="pre">GraphBuilder(...,</span> <span class="pre">schema_lookup=operator_schema_lookup)</span></code>.</p>
 </dd></dl>
 
+<dl class="py function">
+<dt class="sig sig-object py" id="experimental_op_schemas">
+<span class="sig-name descname"><span class="pre">experimental_op_schemas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">op_type</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">''</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">init_doc</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#experimental_op_schemas" title="Link to this definition">#</a></dt>
+<dd><p>Returns experimental <code class="docutils literal notranslate"><span class="pre">ai.onnx</span></code> compatibility <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code> records.
+These adapters are separate from standardized ONNX schemas and from the
+Microsoft-only <a class="reference internal" href="#custom_op_schemas" title="custom_op_schemas"><code class="xref py py-func docutils literal notranslate"><span class="pre">custom_op_schemas()</span></code></a> provider.</p>
+</dd></dl>
+
+<section id="experimental-simplifiedlayernormalization">
+<h2>Experimental SimplifiedLayerNormalization<a class="headerlink" href="#experimental-simplifiedlayernormalization" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code> is an experimental ONNX Runtime compatibility
+operator in the default domain (<code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>, also spelled <code class="docutils literal notranslate"><span class="pre">&quot;ai.onnx&quot;</span></code>), since
+version 1. Use <a class="reference internal" href="#operator_schema_lookup" title="operator_schema_lookup"><code class="xref py py-func docutils literal notranslate"><span class="pre">operator_schema_lookup()</span></code></a> to load or incrementally construct
+its graph with <code class="docutils literal notranslate"><span class="pre">GraphBuilder.make_node</span></code>. Register shape and memory support
+with <a class="reference internal" href="#register_operator_support" title="register_operator_support"><code class="xref py py-func docutils literal notranslate"><span class="pre">register_operator_support()</span></code></a>; all global and session-local kernel
+registration helpers also register this support.</p>
+<p><code class="docutils literal notranslate"><span class="pre">X</span></code> and <code class="docutils literal notranslate"><span class="pre">Scale</span></code> independently support <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> (all sixteen pairs). Mandatory <code class="docutils literal notranslate"><span class="pre">Y</span></code> has the shape of <code class="docutils literal notranslate"><span class="pre">X</span></code>
+and the element type of <code class="docutils literal notranslate"><span class="pre">Scale</span></code>. <code class="docutils literal notranslate"><span class="pre">Scale</span></code> broadcasts right-aligned to the
+<strong>entire</strong> shape of <code class="docutils literal notranslate"><span class="pre">X</span></code>, not only the normalized suffix, and cannot expand
+the shape of <code class="docutils literal notranslate"><span class="pre">X</span></code>. <code class="docutils literal notranslate"><span class="pre">axis=-1</span></code> selects the first normalized dimension and
+<code class="docutils literal notranslate"><span class="pre">epsilon=1e-5</span></code> is added to the mean square. IEEE epsilon values, including
+negative and non-finite values, are permitted.</p>
+<p>The second output, <code class="docutils literal notranslate"><span class="pre">inv_std_var</span></code>, is optional and may be omitted or named
+with an empty string. <code class="docutils literal notranslate"><span class="pre">stash_type=1</span></code> saves it as <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>; <code class="docutils literal notranslate"><span class="pre">stash_type=11</span></code>
+saves it as <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code>. Other stash types are rejected. Its runtime-compatible
+shape is <code class="docutils literal notranslate"><span class="pre">X[:axis]</span> <span class="pre">+</span> <span class="pre">[1]</span> <span class="pre">*</span> <span class="pre">(rank(X)</span> <span class="pre">-</span> <span class="pre">axis)</span></code> after normalizing negative
+<code class="docutils literal notranslate"><span class="pre">axis</span></code>: <strong>every</strong> normalized dimension is one, unlike upstream schema
+inference which only replaces the axis dimension. <code class="docutils literal notranslate"><span class="pre">X</span></code> must have positive
+rank and a nonempty normalized suffix; empty outer rows are supported.</p>
+<p><code class="docutils literal notranslate"><span class="pre">stash_type</span></code> does not select arithmetic precision. Work uses FP64 if either
+<code class="docutils literal notranslate"><span class="pre">X</span></code> or <code class="docutils literal notranslate"><span class="pre">Scale</span></code> is <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code>, or if the shape of <code class="docutils literal notranslate"><span class="pre">Scale</span></code> is not exactly
+the normalized suffix <code class="docutils literal notranslate"><span class="pre">X.shape[axis:]</span></code>; otherwise it uses FP32. There is no intermediate
+low-precision rounding before multiplication by <code class="docutils literal notranslate"><span class="pre">Scale</span></code>. The FP32 suffix
+path reuses the optimized RMS mean-square and affine engine, saving optional
+statistics without repeating the reduction. CPU scratch memory is zero,
+excluding inputs and outputs. This is inference compatibility support: no
+gradient rules or fusion patterns are registered for this operator.</p>
+</section>
+<section id="microsoft-skipsimplifiedlayernormalization">
+<h2>Microsoft SkipSimplifiedLayerNormalization<a class="headerlink" href="#microsoft-skipsimplifiedlayernormalization" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::SkipSimplifiedLayerNormalization</span></code> version 1 adds <code class="docutils literal notranslate"><span class="pre">input</span></code>,
+<code class="docutils literal notranslate"><span class="pre">skip</span></code>, and optional <code class="docutils literal notranslate"><span class="pre">bias</span></code>, then normalizes the residual sum by
+<code class="docutils literal notranslate"><span class="pre">sqrt(mean(sum</span> <span class="pre">*</span> <span class="pre">sum,</span> <span class="pre">axis=-1,</span> <span class="pre">keepdims=True)</span> <span class="pre">+</span> <span class="pre">epsilon)</span></code> and multiplies
+by <code class="docutils literal notranslate"><span class="pre">gamma</span></code>. All inputs have the same <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> type.
+<code class="docutils literal notranslate"><span class="pre">input</span></code> has rank two or three, with shape <code class="docutils literal notranslate"><span class="pre">[S,</span> <span class="pre">H]</span></code> or <code class="docutils literal notranslate"><span class="pre">[B,</span> <span class="pre">S,</span> <span class="pre">H]</span></code>.
+<code class="docutils literal notranslate"><span class="pre">skip</span></code> matches that shape; for rank-three input only, <code class="docutils literal notranslate"><span class="pre">[S,</span> <span class="pre">H]</span></code> and
+<code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">S,</span> <span class="pre">H]</span></code> also broadcast over the batch dimension. Sequence and hidden
+dimensions do not broadcast. <code class="docutils literal notranslate"><span class="pre">gamma</span></code> and optional <code class="docutils literal notranslate"><span class="pre">bias</span></code> are rank-one
+tensors of length <code class="docutils literal notranslate"><span class="pre">H</span></code>. <code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;</span> <span class="pre">H</span> <span class="pre">&lt;=</span> <span class="pre">INT_MAX</span></code>; empty outer dimensions are valid.
+<code class="docutils literal notranslate"><span class="pre">epsilon</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1e-12</span></code> and must be finite and nonnegative.</p>
+<p>Mandatory output slot 0 has the input shape and type. Optional output slot 3,
+<code class="docutils literal notranslate"><span class="pre">input_skip_bias_sum</span></code>, contains the residual sum with the same shape and
+type. Request it with the ONNX output list
+<code class="docutils literal notranslate"><span class="pre">[&quot;Y&quot;,</span> <span class="pre">&quot;&quot;,</span> <span class="pre">&quot;&quot;,</span> <span class="pre">&quot;input_skip_bias_sum&quot;]</span></code>. Optional slot 1, <code class="docutils literal notranslate"><span class="pre">mean</span></code>, contains
+<code class="docutils literal notranslate"><span class="pre">FLOAT</span></code> zeros; optional slot 2, <code class="docutils literal notranslate"><span class="pre">inv_std_var</span></code>, contains the <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>
+inverse RMS. Both statistics have the input shape with the final dimension
+replaced by one. They are independently optional; for example,
+<code class="docutils literal notranslate"><span class="pre">[&quot;Y&quot;,</span> <span class="pre">&quot;&quot;,</span> <span class="pre">&quot;inv_std_var&quot;]</span></code> requests only the inverse RMS.
+The bias may be omitted or represented by an empty input name. Trailing
+optional output slots may likewise be omitted or left empty.</p>
+<p>Arithmetic matches the ONNX Runtime CPU contract: the inputs are widened to
+FP32 before residual addition, reduction, normalization, and scaling.
+<code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code> and <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> values are narrowed only when storing the final
+normalized and residual outputs, never before computing the mean square.
+Statistics use this unrounded FP32 residual. The mean output is zero because
+RMS normalization does not subtract a mean. This follows the
+<a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/f26e546fe25b04e737ec460f05a7d57f4938f23c/onnxruntime/contrib_ops/cpu/skip_layer_norm.cc">pinned ONNX Runtime CPU implementation</a>;
+older ONNX Runtime versions and GPU implementations may not support these
+statistics or BFLOAT16.</p>
+<p>Use <a class="reference internal" href="#custom_op_schemas" title="custom_op_schemas"><code class="xref py py-func docutils literal notranslate"><span class="pre">custom_op_schemas()</span></code></a> or <a class="reference internal" href="#operator_schema_lookup" title="operator_schema_lookup"><code class="xref py py-func docutils literal notranslate"><span class="pre">operator_schema_lookup()</span></code></a> as the native
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> schema lookup callback and <a class="reference internal" href="#register_operator_support" title="register_operator_support"><code class="xref py py-func docutils literal notranslate"><span class="pre">register_operator_support()</span></code></a>
+to register shape and memory support. Global and session-local kernel
+registration helpers also register this metadata. Shape inference preserves
+symbolic dimensions and records equality and batch-broadcast constraints.
+CPU scratch memory is zero, excluding inputs and outputs: the FLOAT path uses
+the normalized output buffer for the residual intermediate, while low-precision
+paths recompute the widened residual rather than allocating a temporary buffer.
+Saved statistics do not imply automatic differentiation support: no gradient
+rules or fusion patterns are registered.</p>
+</section>
+<section id="support-inventory">
+<h2>Support inventory<a class="headerlink" href="#support-inventory" title="Link to this heading">#</a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="OperatorSupport">
 <span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">OperatorSupport</span></span><a class="headerlink" href="#OperatorSupport" title="Link to this definition">#</a></dt>
 <dd><p>Immutable <code class="docutils literal notranslate"><span class="pre">NamedTuple</span></code> describing shape inference, peak memory, fusion
-patterns, and gradient availability for one custom operator.</p>
+patterns, and gradient availability for one custom or experimental operator.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="operator_support">
 <span class="sig-name descname"><span class="pre">operator_support</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="#OperatorSupport" title="OperatorSupport"><span class="pre">OperatorSupport</span></a><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#operator_support" title="Link to this definition">#</a></dt>
-<dd><p>Returns the custom operator support inventory without registering or
+<dd><p>Returns the custom and experimental operator support inventory without registering or
 executing an implementation.</p>
 </dd></dl>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="register_operator_support">
 <span class="sig-name descname"><span class="pre">register_operator_support</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#register_operator_support" title="Link to this definition">#</a></dt>
-<dd><p>Registers custom shape-inference, peak-memory, and fusion-pattern support.</p>
+<dd><p>Registers custom/experimental shape and peak-memory support and custom fusion patterns.</p>
 </dd></dl>
 
 <dl class="py function">
@@ -510,6 +594,7 @@ executing an implementation.</p>
 <code class="docutils literal notranslate"><span class="pre">GradRegistry</span></code> and returns it.</p>
 </dd></dl>
 
+</section>
 </section>
 
 
@@ -561,10 +646,16 @@ executing an implementation.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom_op_schemas"><code class="docutils literal notranslate"><span class="pre">custom_op_schemas()</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator_schema_lookup"><code class="docutils literal notranslate"><span class="pre">operator_schema_lookup()</span></code></a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#OperatorSupport"><code class="docutils literal notranslate"><span class="pre">OperatorSupport</span></code></a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator_support"><code class="docutils literal notranslate"><span class="pre">operator_support()</span></code></a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#register_operator_support"><code class="docutils literal notranslate"><span class="pre">register_operator_support()</span></code></a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#register_custom_gradients"><code class="docutils literal notranslate"><span class="pre">register_custom_gradients()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#experimental_op_schemas"><code class="docutils literal notranslate"><span class="pre">experimental_op_schemas()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#experimental-simplifiedlayernormalization">Experimental SimplifiedLayerNormalization</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-skipsimplifiedlayernormalization">Microsoft SkipSimplifiedLayerNormalization</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#support-inventory">Support inventory</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#OperatorSupport"><code class="docutils literal notranslate"><span class="pre">OperatorSupport</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#operator_support"><code class="docutils literal notranslate"><span class="pre">operator_support()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#register_operator_support"><code class="docutils literal notranslate"><span class="pre">register_operator_support()</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#register_custom_gradients"><code class="docutils literal notranslate"><span class="pre">register_custom_gradients()</span></code></a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -599,7 +690,7 @@ executing an implementation.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       

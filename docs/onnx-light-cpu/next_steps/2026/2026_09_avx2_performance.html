@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -579,6 +579,188 @@ acceptance gate remain pending.</p>
 </section>
 <section id="current-foundation">
 <h2>Current foundation<a class="headerlink" href="#current-foundation" title="Link to this heading">#</a></h2>
+<section id="september-8-full-activation-corpus-audit">
+<h3>September 8 full activation-corpus audit<a class="headerlink" href="#september-8-full-activation-corpus-audit" title="Link to this heading">#</a></h3>
+<p>The priority corpus alone was insufficient to establish Sigmoid/Softmax
+parity: it selected only CPU-specific FP32 benchmarks, omitting inherited
+<code class="docutils literal notranslate"><span class="pre">test_cc_*</span></code> cases, FP16/FP64, and ordinary backend cases. The isolated runner
+now offers a complete activation selection:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">python tools/benchmark_avx2_parity.py --corpus activations \</span>
+<span class="go">  --physical-threads 6 --repeat 10000 --warmup 40 \</span>
+<span class="go">  --max-repeat-time 0.2 --output activations.json</span>
+</pre></div>
+</div>
+<p>This selects both benchmark and regular cases, including large cases, and
+reads the actual model input type instead of guessing it from the test name.
+All four floating-point types are included unless <code class="docutils literal notranslate"><span class="pre">--dtype</span></code> narrows the
+selection. Unsupported ORT types remain explicit errors in the report, not
+parity wins. <code class="docutils literal notranslate"><span class="pre">--physical-threads</span></code> only controls the requested participant
+count; it does not pin the process. Pin the parent process to the intended
+cores before invoking the runner, and use the same affinity for both runtimes.
+The default priority corpus and its existing type selection are unchanged.</p>
+<p>The baseline at <code class="docutils literal notranslate"><span class="pre">aa405a9</span></code> contains 44 benchmark and 22 regular activation
+cases. On a native AVX2 i7-13800H, Windows/MSVC Release, Python 3.13 and
+ORT 1.29, the audit used CPU 4 for one-thread runs and logical CPUs
+0, 2, 4, 6, 8, 10 for six-thread runs. Windows topology identified these as
+six distinct performance cores. Each runtime ran in a separate process,
+with two alternating phases per case/thread policy and identical serialized
+fixtures. The baseline native binaries were preserved before rebuilding.</p>
+<p>There were 22 slower supported benchmark/thread combinations: six serial
+and sixteen multithread. Every supported regular case was ahead of ORT.
+Eleven benchmark and three regular BF16 cases were unsupported by ORT.
+The largest residuals were not all exponential-throughput problems:</p>
+<ul class="simple">
+<li><p>FP64 Sigmoid and Softmax still evaluated exponentials with scalar
+<code class="docutils literal notranslate"><span class="pre">std::exp</span></code> despite AVX2 availability.</p></li>
+<li><p>FP16 Sigmoid converted through two stack buffers every 256 elements.
+The new AVX2/FMA/F16C path converts directly in registers, with independent
+runtime F16C detection and bounded copies for the final one to seven values.</p></li>
+<li><p>Sigmoid’s 256 KiB minimum block left 65,535 FP32 values and 131,072
+FP16 values serial. FP64 at 65,535 values also remained serial, immediately
+before a two-participant discontinuity at 65,536.</p></li>
+<li><p>Simply assigning six participants to small activations regressed them:
+dispatch and coordination cost exceeded the work saved. Bounded small
+teams are required, not just a lower global parallel threshold.</p></li>
+<li><p>FP32 Sigmoid unnecessarily multiplied the negative exponential by a
+reciprocal after division. Selecting the numerator before one division
+removes that operation without changing the stable saturation formula.</p></li>
+<li><p>Normal FP32 Softmax rows repeated the same exponential range check for
+every vector. A row-level min/max eligibility check allows the normal
+exponential loop to omit those branches; exceptional and subnormal rows
+retain the full exponential path.</p></li>
+</ul>
+<p>Near-zero rational Sigmoid approximations and a reordered exponential
+polynomial were also measured and discarded. A narrow rational fast path
+improved small inputs but regressed larger Gaussian inputs through
+unpredictable per-vector branches. Neither small-case improvements nor
+direct preallocated-kernel timings establish end-to-end parity.</p>
+<p>The all-case parity gate remains open. In particular, large FP32 multithread
+activations require confirmation through the registered runtime, not an
+inference from serial SIMD throughput. These development-machine results
+remain diagnostic: process affinity does not eliminate frequency variation
+or other host activity.</p>
+<p>The final two-phase run covered all 132 case/thread combinations. Of the
+104 supported combinations, eight benchmark combinations remained below
+<code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ORT, down from 22 in the baseline. All measured FP64 and supported
+regular cases were ahead of ORT. Selected CPU latencies, in microseconds,
+are the median of the two phase medians:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Threads</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>Before / after</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Sigmoid FP64 / 1,048,576</p></td>
+<td><p>1</p></td>
+<td><p>7916.05</p></td>
+<td><p>1394.20</p></td>
+<td><p>5.68x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP64 / 1,048,576</p></td>
+<td><p>6</p></td>
+<td><p>2741.52</p></td>
+<td><p>440.60</p></td>
+<td><p>6.22x</p></td>
+</tr>
+<tr class="row-even"><td><p>Softmax FP64 / 1,024 x 1,024</p></td>
+<td><p>1</p></td>
+<td><p>7714.65</p></td>
+<td><p>1718.60</p></td>
+<td><p>4.49x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP16 / 131,072</p></td>
+<td><p>6</p></td>
+<td><p>81.95</p></td>
+<td><p>35.95</p></td>
+<td><p>2.28x</p></td>
+</tr>
+<tr class="row-even"><td><p>Sigmoid FP32 / 65,535</p></td>
+<td><p>6</p></td>
+<td><p>30.90</p></td>
+<td><p>18.70</p></td>
+<td><p>1.65x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The remaining combinations are listed without excluding inherited cases.
+<code class="docutils literal notranslate"><span class="pre">cc</span></code> identifies the inherited benchmark rather than the CPU-specific
+case of the same shape:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Threads</p></th>
+<th class="head"><p>CPU (us)</p></th>
+<th class="head"><p>ORT (us)</p></th>
+<th class="head"><p>ORT / CPU</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Softmax FP32 / 1,024 x 1,024</p></td>
+<td><p>6</p></td>
+<td><p>227.10</p></td>
+<td><p>103.80</p></td>
+<td><p>0.457x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP32 / 1,048,576</p></td>
+<td><p>6</p></td>
+<td><p>168.78</p></td>
+<td><p>83.05</p></td>
+<td><p>0.492x</p></td>
+</tr>
+<tr class="row-even"><td><p>Softmax FP32 / 2,048 x 2,048 (cc)</p></td>
+<td><p>6</p></td>
+<td><p>2135.80</p></td>
+<td><p>1054.98</p></td>
+<td><p>0.494x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP32 / 4,194,304 (cc)</p></td>
+<td><p>6</p></td>
+<td><p>1202.37</p></td>
+<td><p>596.50</p></td>
+<td><p>0.496x</p></td>
+</tr>
+<tr class="row-even"><td><p>Sigmoid FP16 / 1,048,576</p></td>
+<td><p>6</p></td>
+<td><p>195.02</p></td>
+<td><p>145.98</p></td>
+<td><p>0.749x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP32 / 131,072</p></td>
+<td><p>6</p></td>
+<td><p>29.60</p></td>
+<td><p>22.70</p></td>
+<td><p>0.767x</p></td>
+</tr>
+<tr class="row-even"><td><p>Sigmoid FP32 / 1,048,576</p></td>
+<td><p>1</p></td>
+<td><p>407.98</p></td>
+<td><p>382.45</p></td>
+<td><p>0.937x</p></td>
+</tr>
+<tr class="row-odd"><td><p>Sigmoid FP32 / 65,536</p></td>
+<td><p>6</p></td>
+<td><p>19.90</p></td>
+<td><p>19.80</p></td>
+<td><p>0.995x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Repeat measurements with the preserved baseline confirmed substantial
+large-case variability in both binaries. They do not establish a multithread
+FP16 gain, nor a stable regression for the inherited FP32 cases. No final
+parity claim should be inferred from these development-machine ratios.</p>
+<p>The worker protocol also now passes requests through standard input and uses
+unique result files. Reopening a command-line JSON request intermittently
+failed with Windows file-sharing violations after the preceding worker had
+exited. This transport change is outside the timed inference region and
+retains the separate-process and fixture-identity guarantees.</p>
+</section>
 <section id="september-7-dashboard-follow-up">
 <h3>September 7 dashboard follow-up<a class="headerlink" href="#september-7-dashboard-follow-up" title="Link to this heading">#</a></h3>
 <p>The registered <code class="docutils literal notranslate"><span class="pre">Sigmoid</span></code> and last-axis <code class="docutils literal notranslate"><span class="pre">Softmax</span></code> dispatchers could not
@@ -844,6 +1026,7 @@ to hide a missing AVX2 implementation.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measurement-contract">Measurement contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproducible-baseline">Reproducible baseline</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-foundation">Current foundation</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#september-8-full-activation-corpus-audit">September 8 full activation-corpus audit</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#september-7-dashboard-follow-up">September 7 dashboard follow-up</a></li>
 </ul>
 </li>
@@ -882,7 +1065,7 @@ to hide a missing AVX2 implementation.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       

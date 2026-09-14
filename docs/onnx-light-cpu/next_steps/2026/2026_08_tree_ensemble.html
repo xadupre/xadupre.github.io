@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 <dt class="field-even">Updated<span class="colon">:</span></dt>
-<dd class="field-even"><p>2026-09-02</p>
+<dd class="field-even"><p>2026-09-08</p>
 </dd>
 </dl>
 <p><strong>complete</strong> (large-batch performance follow-up in <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/580">#580</a>)</p>
@@ -547,6 +547,20 @@ another implementation or fail according to the normal dispatch contract.</p>
 </section>
 <section id="correctness-contract">
 <h2>Correctness contract<a class="headerlink" href="#correctness-contract" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">SOFTMAX_ZERO</span></code> retains the signed near-zero contributions and normalization
+of the <a class="reference external" href="https://github.com/onnx/onnx/blob/27d7d6890cb8bfa7ed5cda2f2656f82b6af0736a/onnx/reference/ops/aionnxml/_common_classifier.py#L15-L30">ONNX reference helper</a>,
+except when the normalization sum is zero (including all-zero scores and
+cancelling near-zero scores). In that case, this engine returns
+<code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">n_targets</span></code> for each target: finite, uniform scores summing to one,
+within output-type rounding. This preserves the two-target result of <code class="docutils literal notranslate"><span class="pre">0.5</span></code>
+and extends it to every positive target count.</p>
+<p>This is an explicit robustness policy for an edge case left unspecified by
+the <a class="reference external" href="https://github.com/onnx/onnx/blob/27d7d6890cb8bfa7ed5cda2f2656f82b6af0736a/onnx/defs/traditionalml/defs.cc#L943-L949">TreeEnsemble schema</a>,
+not a claim of degenerate-case runtime parity: the ONNX reference helper
+fills <code class="docutils literal notranslate"><span class="pre">0.5</span></code> regardless of target count, while <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/f2c39fe2f838cf35ce7da92824f5a5e3ee6e88a7/onnxruntime/core/providers/cpu/ml/ml_common.h#L307-L328">ONNX Runtime’s helper</a>
+excludes near-zero contributions from its denominator and divides without a
+zero-sum guard. Nonzero-sum behavior is unchanged; signed near-zero scores
+are not guaranteed to produce nonnegative probabilities.</p>
 <p>Model preparation validates all structural invariants before execution:</p>
 <ul class="simple">
 <li><p>every required attribute has the expected type, rank, and length;</p></li>
@@ -1111,6 +1125,87 @@ path to the row-parallel strategy and adds AVX2/AVX-512 traversal across 8 or
 median latency from 5.423 ms to 4.774 ms without reopening the completed
 functional roadmap.</p>
 </section>
+<section id="balanced-fp32-latency-follow-up">
+<h2>Balanced FP32 latency follow-up<a class="headerlink" href="#balanced-fp32-latency-follow-up" title="Link to this heading">#</a></h2>
+<p>The balanced, single-target <code class="docutils literal notranslate"><span class="pre">SUM</span></code> path now caches SIMD detection and writes
+single-row, single-participant results directly, preserving the existing
+base-value accumulation order without allocating a temporary output buffer.
+Other aggregate functions, post-transforms, missing-value routing modes, and
+unbalanced trees keep their existing dispatch.</p>
+<p>Tree-parallel partitions reuse the AVX-512 evaluator across 16 rows. The root
+node’s fields are broadcast rather than gathered separately in each lane;
+the remaining levels and scalar tails preserve the original traversal.
+Worker output slices are separated by a cache-line-sized gap to avoid false
+sharing even when the allocation is not cache-line aligned. This padding
+fits inside the existing tree-parallel workspace estimate.</p>
+<p>For AVX-512 batches of at least 64 rows, the balanced tree-parallel participant
+cap increases from 32 to 64, still bounded by the selected policy and runtime
+executor. Single-row forests retain the 32-participant cap: extending it to
+64 regressed the large single-row case. AVX2 and portable tree-parallel
+traversal remain unchanged, and nested calls do not create additional teams.</p>
+<p>End-to-end measurements against main commit <code class="docutils literal notranslate"><span class="pre">6937794</span></code> used an Intel Xeon
+Platinum 8480C, the AVX-512 build, and 96 configured runtime threads. The table
+reports the median of two run medians, with 100 measured iterations and 30
+warm-up iterations per run. Baseline and candidate runs alternated in both
+orders; timings include runtime output and workspace allocation.</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id3">
+<caption><span class="caption-text">Balanced float32 forests, before/after latency in seconds</span><a class="headerlink" href="#id3" title="Link to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Trees / features / rows</p></th>
+<th class="head"><p>Main</p></th>
+<th class="head"><p>Optimized</p></th>
+<th class="head"><p>Main / optimized</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>10 / 4 / 1</p></td>
+<td><p>0.000006272</p></td>
+<td><p>0.000002278</p></td>
+<td><p>2.75x</p></td>
+</tr>
+<tr class="row-odd"><td><p>100 / 64 / 8</p></td>
+<td><p>0.000011113</p></td>
+<td><p>0.000005511</p></td>
+<td><p>2.02x</p></td>
+</tr>
+<tr class="row-even"><td><p>1,000 / 1,024 / 32</p></td>
+<td><p>0.000128253</p></td>
+<td><p>0.000122892</p></td>
+<td><p>1.04x</p></td>
+</tr>
+<tr class="row-odd"><td><p>10,000 / 4,096 / 1</p></td>
+<td><p>0.000064695</p></td>
+<td><p>0.000067686</p></td>
+<td><p>0.96x</p></td>
+</tr>
+<tr class="row-even"><td><p>10,000 / 4,096 / 128</p></td>
+<td><p>0.000564157</p></td>
+<td><p>0.000291215</p></td>
+<td><p>1.94x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>These gains compare against main, not ONNX Runtime. In the same two candidate
+runs, the 10-tree case was 2.27–2.48x faster than ONNX Runtime and the
+10,000-tree, 128-row case was 1.44–1.59x faster. Without the cache-line gap,
+the latter fluctuated between approximately 0.00031 and 0.00054 seconds;
+isolating worker outputs reduced it consistently to 0.00027–0.00030 seconds.
+The large single-row case remains variable and is about 5% slower in the
+final paired comparison; its traversal and 32-participant cap are unchanged.
+Separate one-thread measurements preserved the other forest timings and
+improved the small single-row case by approximately 3.5x.</p>
+<p>Reproduce on both revisions with identically configured builds:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span>--dtype<span class="w"> </span>float32<span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--test<span class="w"> </span><span class="s1">'^test_cpu_treeensemble_t'</span><span class="w"> </span>--threads<span class="w"> </span><span class="m">96</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-r<span class="w"> </span><span class="m">100</span><span class="w"> </span>-w<span class="w"> </span><span class="m">30</span><span class="w"> </span>-t<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>-o<span class="w"> </span>treeensemble.xlsx
+</pre></div>
+</div>
+<p>Use <code class="docutils literal notranslate"><span class="pre">--threads</span> <span class="pre">1</span></code> for the serial comparison. Correctness coverage exercises
+depth-one and depth-four forests, every 16-row tail width, nonzero bases,
+NaN/infinity inputs, policy/runtime participant limits, and nested execution
+through both AVX-512 and AVX2-ceiling builds.</p>
+</section>
 </section>
 
 
@@ -1195,6 +1290,7 @@ functional roadmap.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#final-parity-gate">Final parity gate</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#post-completion-runtime-and-memory-validation">Post-completion runtime and memory validation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#completed-pull-request-sequence">Completed pull-request sequence</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#balanced-fp32-latency-follow-up">Balanced FP32 latency follow-up</a></li>
 </ul>
   </nav></div>
 
@@ -1229,7 +1325,7 @@ functional roadmap.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       

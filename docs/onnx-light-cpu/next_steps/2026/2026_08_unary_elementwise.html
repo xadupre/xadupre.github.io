@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -730,11 +730,23 @@ limits without changing this portable fallback.</p>
 Zero leaves the participant count automatic. A positive value requests that
 exact count once parallel execution is worthwhile, but the executor still
 clamps it to <code class="docutils literal notranslate"><span class="pre">parallel.max_participants</span></code> and the session limit.
-<code class="docutils literal notranslate"><span class="pre">Abs</span></code> also accepts <code class="docutils literal notranslate"><span class="pre">memory.streaming_store_threshold_bytes</span></code>; zero disables
+For streaming FP32 <code class="docutils literal notranslate"><span class="pre">Abs</span></code>, the AVX/AVX2 implementation distributes 64 KiB tiles
+among runtime-owned participants, allowing faster workers to finish tiles
+instead of waiting for one slow fixed range. Cached-store, single-threaded,
+and nested calls remain contiguous. Streaming participants are bounded by
+the <code class="docutils literal notranslate"><span class="pre">parallel.target_block_bytes</span></code> input-work budget (1 MiB by default for
+AVX/AVX2). Other cost-model decisions remain unchanged.</p>
+<p><code class="docutils literal notranslate"><span class="pre">Abs</span></code> also accepts <code class="docutils literal notranslate"><span class="pre">memory.streaming_store_threshold_bytes</span></code>; zero disables
 non-temporal stores, while a positive value enables them for FP32 tensors at
-or above that total input size. The portable default is zero: streaming stores
-remain opt-in because their benefit depends on worker range size and memory
-topology, and every worker must publish them with its own fence.</p>
+or above that total input size. AVX/AVX2 defaults to at least 16 MiB and requires
+the combined input and output to exceed the detected L3 cache. Unknown cache
+topology keeps streaming opt-in, so a threshold measured on a small-cache host
+is not imposed on a large-cache processor. Streaming writes cover only complete
+aligned cache lines; prefixes and tails use ordinary stores, and each worker
+publishes its streaming writes with its own fence. The AVX-512 portable default
+remains zero (opt-in); scalar and SSE2 retain ordinary stores.
+<code class="docutils literal notranslate"><span class="pre">DefaultAbsFloat32ExecutionTuning()</span></code> returns the defaults of the selected ISA,
+and the runtime tuning schema uses those same values.</p>
 <p>The portable defaults retain SIMD execution inline through the measured
 small/medium-tensor region:</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -754,7 +766,7 @@ small/medium-tensor region:</p>
 <tbody>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">Abs</span></code> FP32</p></td>
 <td><p>2 MiB</p></td>
-<td><p>256 KiB</p></td>
+<td><p>1 MiB (AVX/AVX2), 256 KiB otherwise</p></td>
 <td><p>32</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">Abs</span></code> INT32</p></td>
@@ -1038,7 +1050,7 @@ performance is at least 1.0x ONNX Runtime with no priority case below
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       

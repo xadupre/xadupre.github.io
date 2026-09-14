@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 <dt class="field-even">Updated<span class="colon">:</span></dt>
-<dd class="field-even"><p>2026-09-05</p>
+<dd class="field-even"><p>2026-09-08</p>
 </dd>
 </dl>
 <p><strong>complete</strong></p>
@@ -521,6 +521,30 @@ operator on one host, and ONNX Runtime timing dispersion was significant for
 some large broadcast cases. The complete unfiltered corpus must be rerun with
 raw samples, affinity, effective thread count, and selected tuning parameters
 recorded before accepting any optimization.</p>
+</section>
+<section id="fp32-fixed-exponent-broadcast-follow-up">
+<h2>FP32 fixed-exponent broadcast follow-up<a class="headerlink" href="#fp32-fixed-exponent-broadcast-follow-up" title="Link to this heading">#</a></h2>
+<p>The FP32 <code class="docutils literal notranslate"><span class="pre">Pow</span></code> scalar-exponent adapter already recognized exponents 2
+through 5, but its per-element finite/underflow checks prevented the
+repeated-multiplication loop from vectorizing. It now uses an AVX2
+fixed-exponent loop with vector validity masks and scalar <code class="docutils literal notranslate"><span class="pre">std::pow</span></code>
+repair only for exceptional lanes. The multiplication order, signed zeros,
+finite-boundary results, tails, and exact in-place operation match the
+existing scalar adapter. Integer-typed exponents, fractional exponents,
+and broadcast scheduling are unchanged.</p>
+<p>Registered-runtime measurements on an Intel Xeon Platinum 8480C, with 96
+configured threads and main <code class="docutils literal notranslate"><span class="pre">1fc3359</span></code> as the baseline, reduced the
+1,048,576-element <code class="docutils literal notranslate"><span class="pre">float32xfloat32</span></code> per-channel case from 0.000204432 s
+to 0.000097377 s (2.10x) and the swapped outer-broadcast case from
+0.000206468 s to 0.000073306 s (2.82x). These are before/after gains, not
+ONNX Runtime ratios. Routing through the general AVX-512 Pow kernel and a
+two-pass scalar validity scan were both rejected after end-to-end
+measurements showed no improvement.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span>--dtype<span class="w"> </span>float32<span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--test<span class="w"> </span><span class="s1">'^test_cpu_pow_v15_(outer_float32xfloat32_to_float32_swapped|per_channel_float32xfloat32_to_float32)_n1048576_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--threads<span class="w"> </span><span class="m">96</span><span class="w"> </span>-r<span class="w"> </span><span class="m">100</span><span class="w"> </span>-w<span class="w"> </span><span class="m">30</span><span class="w"> </span>-t<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>-o<span class="w"> </span>pow-broadcast.xlsx
+</pre></div>
+</div>
 </section>
 <section id="current-execution-and-tuning-contract">
 <h2>Current execution and tuning contract<a class="headerlink" href="#current-execution-and-tuning-contract" title="Link to this heading">#</a></h2>
@@ -821,6 +845,7 @@ Remaining AVX2-specific gaps are tracked by the
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measured-baseline">Measured baseline</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp32-fixed-exponent-broadcast-follow-up">FP32 fixed-exponent broadcast follow-up</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-execution-and-tuning-contract">Current execution and tuning contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#remaining-bottlenecks">Remaining bottlenecks</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#true-low-precision-simd">True low-precision SIMD</a></li>
@@ -868,7 +893,7 @@ Remaining AVX2-specific gaps are tracked by the
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       

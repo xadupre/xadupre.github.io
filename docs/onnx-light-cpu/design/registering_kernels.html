@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 07, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -512,6 +512,13 @@ without touching the shared table, use <code class="docutils literal notranslate
 <p>The evaluator’s runtime context owns that registration and releases it with the
 evaluator. Other evaluators are unchanged. <code class="docutils literal notranslate"><span class="pre">register_kernels_for_session</span></code>
 provides the equivalent all-kernels operation.</p>
+<p>Session-local callbacks retain prepared kernels across runs, including copies
+held by resolved nodes. Preparation is lazy and cached by node contents, input
+presence, types and shapes, opset, device, and allocator; changing only tensor
+values reuses the same kernel. Runs of a shared instance are synchronized to
+protect mutable plans, while different nodes/signatures can execute independently.
+Replacing a registration creates a fresh cache for future resolution; already
+resolved callbacks retain their previous cache until they are destroyed.</p>
 <p>The default installs the optimized <code class="docutils literal notranslate"><span class="pre">com.microsoft</span></code> family. Tests and
 diagnostic callers can explicitly install the complete scalar reference
 family instead:</p>
@@ -588,6 +595,13 @@ static <code class="docutils literal notranslate"><span class="pre">AbsKernel::k
 </section>
 <section id="add-a-new-kernel">
 <h2>Add a new kernel<a class="headerlink" href="#add-a-new-kernel" title="Link to this heading">#</a></h2>
+<p>Kernel implementations must follow the
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/blob/main/onnx_light_cpu/impl/execution.h">CpuExecutor bridge contract in impl/execution.h</a>:
+borrow the current executor only for the invocation, keep range callbacks
+non-throwing, and submit parallel work through the shared range helpers.
+The contract defines lifetime, failure propagation, nested execution, participant
+limits, and which scheduling state must not be retained. See also
+<a class="reference internal" href="parallel_execution.html"><span class="doc">Parallel kernel execution</span></a> for the execution flow.</p>
 <p>A brand new kernel is a subclass of <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s
 <code class="docutils literal notranslate"><span class="pre">onnx_light::core::runtime::KernelBase</span></code> that is registered into the dispatch
 table with <code class="docutils literal notranslate"><span class="pre">RegisterKernelFn</span></code>. The shipped kernels are the template to copy;
@@ -630,6 +644,14 @@ and a production optimized kernel. Add both registrars to the corresponding
 branch of <code class="docutils literal notranslate"><span class="pre">RegisterMicrosoftKernels</span></code> and add differential tests covering
 their complete shared contract. Backend <code class="docutils literal notranslate"><span class="pre">TEST</span></code> cases generate expectations
 with the naive implementation; <code class="docutils literal notranslate"><span class="pre">BENCHMARK</span></code> cases use the optimized one.</p>
+<p>For <code class="docutils literal notranslate"><span class="pre">com.microsoft::LinearAttention</span></code>, the test-only
+<code class="docutils literal notranslate"><span class="pre">NaiveMicrosoftLinearAttentionKernel</span></code> calls the concrete onnx-light
+<code class="docutils literal notranslate"><span class="pre">onnx_kernels::kernel::LinearAttention</span></code> reference kernel, not the optimized
+dispatcher. It expands shared query/key heads to the ONNX contract and preserves
+the Microsoft defaults, optional state, decay and beta layouts, and both outputs.
+No attention recurrence is duplicated in the adapter. FLOAT parity uses the
+backend tolerances (<code class="docutils literal notranslate"><span class="pre">rtol=1e-3</span></code>, <code class="docutils literal notranslate"><span class="pre">atol=1e-7</span></code>); default and global registration
+continue to select <code class="docutils literal notranslate"><span class="pre">MicrosoftLinearAttentionKernel</span></code>.</p>
 <p>For a kernel that only needs to run from Python — for example a quick,
 model-specific override written in NumPy — use <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s per-evaluator
 <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator.register_custom_kernel(domain,</span> <span class="pre">op_type,</span> <span class="pre">fn)</span></code> hook instead;
@@ -756,7 +778,7 @@ onnx-light Python package to share state with).</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 07, 2026.
+  Last updated on Sep 14, 2026.
   <br/>
 </p></div>
       
