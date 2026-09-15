@@ -484,16 +484,18 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         cpu = types.ModuleType("onnx_light_cpu")
         cpu.__path__ = []
         cpu.register_kernels = lambda: events.append("register")
-        cpu.clear_used_kernel_names = lambda: events.append("clear")
-        cpu.used_kernel_names = lambda: (
-            events.append("used") or ["onnx_light_cpu::Abs"]
+        # onnx-light-cpu#711 scopes the usage record to the evaluator: every
+        # helper takes the session it belongs to.
+        cpu.clear_used_kernel_names = lambda sess: events.append(("clear", sess))
+        cpu.used_kernel_names = lambda sess: (
+            events.append(("used", sess)) or ["onnx_light_cpu::Abs"]
+        )
+        cpu.set_kernel_usage_recording = (
+            lambda sess, enabled: events.append(("recording", sess, enabled))
         )
         cpu_py = types.ModuleType("onnx_light_cpu.onnx_py")
         cpu_py.__path__ = []
         cpu_register = types.ModuleType("onnx_light_cpu.onnx_py._cpuregister")
-        cpu_register.set_kernel_usage_recording = (
-            lambda enabled: events.append(("recording", enabled))
-        )
         modules = {
             "onnx_light_cpu": cpu,
             "onnx_light_cpu.onnx_py": cpu_py,
@@ -504,10 +506,13 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         try:
             sys.modules.update(modules)
             rbc._CPU_KERNELS_REGISTERED = False
+            def _run(inputs):
+                events.append("run")
+                return inputs
+
+            _run.session = "session"
             with mock.patch.object(
-                rbc,
-                "_run_with_onnx_light",
-                return_value=lambda inputs: events.append("run") or inputs,
+                rbc, "_run_with_onnx_light", return_value=_run
             ):
                 runner = rbc._run_with_onnx_light_cpu("abs-model")
                 self.assertEqual(runner(["input"]), ["input"])
@@ -523,11 +528,11 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
             events,
             [
                 "register",
-                ("recording", True),
-                "clear",
+                ("recording", "session", True),
+                ("clear", "session"),
                 "run",
-                "used",
-                ("recording", False),
+                ("used", "session"),
+                ("recording", "session", False),
             ],
         )
 
@@ -591,6 +596,9 @@ class TestRecordOnnxBackendTestCoverage(unittest.TestCase):
         self.assertEqual(constructed["proto"], model.SerializeToString())
         np.testing.assert_array_equal(constructed["feeds"]["x"], inputs[0])
         np.testing.assert_array_equal(actual[0], np.array([2.0, 4.0], dtype=np.float32))
+        # The evaluator stays reachable: onnx-light-cpu's usage helpers are
+        # scoped to it.
+        self.assertIsInstance(runner.session, _FakeEvaluator)
 
     def test_run_with_onnx_light_expands_map_inputs_to_keys_and_values(self):
         import types

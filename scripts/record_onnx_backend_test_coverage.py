@@ -628,6 +628,10 @@ def _run_with_onnx_light(model) -> Callable[[List[Any]], List[Any]]:
             feeds[name] = value
         return list(evaluator.run(None, feeds))
 
+    # onnx-light-cpu's kernel usage record is owned by the evaluator, so the
+    # session must stay reachable from the runner.
+    _run.session = evaluator  # type: ignore[attr-defined]
+
     return _run
 
 
@@ -641,23 +645,25 @@ def _run_with_onnx_light_cpu(model) -> Callable[[List[Any]], List[Any]]:
     from onnx_light_cpu import (
         clear_used_kernel_names,
         register_kernels,
+        set_kernel_usage_recording,
         used_kernel_names,
     )
-    from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
 
     if not _CPU_KERNELS_REGISTERED:
         register_kernels()
         _CPU_KERNELS_REGISTERED = True
     run = _run_with_onnx_light(model)
+    # The usage helpers are scoped to the evaluator (onnx-light-cpu#711).
+    session = run.session
 
     def _run(inputs: List[Any]) -> List[Any]:
-        set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(session, True)
+        clear_used_kernel_names(session)
         try:
             outputs = run(inputs)
-            used = used_kernel_names()
+            used = used_kernel_names(session)
         finally:
-            set_kernel_usage_recording(False)
+            set_kernel_usage_recording(session, False)
         if not used:
             raise RuntimeError("no onnx-light-cpu kernel ran")
         return outputs
