@@ -1336,6 +1336,7 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
             "registered": 0,
             "tensor_copies": [],
             "usage_recording": [],
+            "usage_sessions": [],
         }
 
         class _FakeModelProto:
@@ -1466,11 +1467,16 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
 
         cpu = types.ModuleType("onnx_light_cpu")
         cpu.register_kernels = _register_kernels
+
+        # onnx-light-cpu#711 scopes the kernel usage record to the evaluator:
+        # every usage helper takes the session it belongs to.
+        def _set_kernel_usage_recording(sess, enabled):
+            events["usage_sessions"].append(sess)
+            events["usage_recording"].append(enabled)
+
+        cpu.set_kernel_usage_recording = _set_kernel_usage_recording
         cpu_py = types.ModuleType("onnx_light_cpu.onnx_py")
         cpu_register = types.ModuleType("onnx_light_cpu.onnx_py._cpuregister")
-        cpu_register.set_kernel_usage_recording = (
-            lambda enabled: events["usage_recording"].append(enabled)
-        )
 
         modules = {
             "onnx_light": onnx_light,
@@ -1517,11 +1523,12 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         used = {"cleared": 0, "names": ["onnx_light_cpu::Abs"]}
         cpu = modules["onnx_light_cpu"]
 
-        def _clear():
+        def _clear(sess):
             used["cleared"] += 1
+            used["session"] = sess
 
         cpu.clear_used_kernel_names = _clear
-        cpu.used_kernel_names = lambda: list(used["names"])
+        cpu.used_kernel_names = lambda sess: list(used["names"])
         cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
 
         saved = {name: sys.modules.get(name) for name in modules}
@@ -1541,16 +1548,20 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         self.assertEqual(used["cleared"], 1)
         self.assertEqual(events["runs"], 2)
         self.assertEqual(events["usage_recording"], [True, False])
+        # The usage helpers are session-scoped: they receive the evaluator the
+        # runner wraps, not an empty argument list (onnx-light-cpu#711).
+        self.assertIs(used["session"], runner.session)
+        self.assertEqual(events["usage_sessions"], [runner.session] * 2)
         np.testing.assert_allclose(out[0], np.array([1.0, 2.0], dtype=np.float32))
 
     def test_cpu_runners_can_share_completed_verification(self):
         model, modules, events = self._install_fakes()
         used = {"cleared": 0}
         cpu = modules["onnx_light_cpu"]
-        cpu.clear_used_kernel_names = lambda: used.__setitem__(
+        cpu.clear_used_kernel_names = lambda sess: used.__setitem__(
             "cleared", used["cleared"] + 1
         )
-        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.used_kernel_names = lambda sess: ["onnx_light_cpu::Abs"]
         cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
         verification = {"done": False}
 
@@ -1608,9 +1619,9 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         reported as an onnx-light-cpu result."""
         model, modules, events = self._install_fakes()
         cpu = modules["onnx_light_cpu"]
-        cpu.clear_used_kernel_names = lambda: None
+        cpu.clear_used_kernel_names = lambda sess: None
         # A built-in onnx-light kernel ran, not the onnx-light-cpu one.
-        cpu.used_kernel_names = lambda: ["onnx_light::Abs"]
+        cpu.used_kernel_names = lambda sess: ["onnx_light::Abs"]
         cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
 
         saved = {name: sys.modules.get(name) for name in modules}
@@ -1635,8 +1646,8 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
         error instead of reporting built-in-kernel timings as cpu results."""
         model, modules, events = self._install_fakes()
         cpu = modules["onnx_light_cpu"]
-        cpu.clear_used_kernel_names = lambda: None
-        cpu.used_kernel_names = lambda: []
+        cpu.clear_used_kernel_names = lambda sess: None
+        cpu.used_kernel_names = lambda sess: []
         cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
 
         saved = {name: sys.modules.get(name) for name in modules}
@@ -1664,8 +1675,8 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
             session_used_kernels=["ai.onnx:Abs"]
         )
         cpu = modules["onnx_light_cpu"]
-        cpu.clear_used_kernel_names = lambda: None
-        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.clear_used_kernel_names = lambda sess: None
+        cpu.used_kernel_names = lambda sess: ["onnx_light_cpu::Abs"]
         cpu.registered_kernel_names = lambda: {"Abs": "onnx_light_cpu::Abs"}
 
         saved = {name: sys.modules.get(name) for name in modules}
@@ -1690,9 +1701,9 @@ class TestOnnxLightCpuRunner(unittest.TestCase):
             session_used_kernels=["ai.onnx:Abs", "ai.onnx:Exp"]
         )
         cpu = modules["onnx_light_cpu"]
-        cpu.clear_used_kernel_names = lambda: None
+        cpu.clear_used_kernel_names = lambda sess: None
         # Only Abs ran through onnx-light-cpu; Exp silently used the built-in.
-        cpu.used_kernel_names = lambda: ["onnx_light_cpu::Abs"]
+        cpu.used_kernel_names = lambda sess: ["onnx_light_cpu::Abs"]
         cpu.registered_kernel_names = lambda: {
             "Abs": "onnx_light_cpu::Abs",
             "Exp": "onnx_light_cpu::Exp",

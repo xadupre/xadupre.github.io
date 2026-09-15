@@ -41,6 +41,9 @@ N_WARMUP = 2
 N_MEASURE = rlb.N_MEASURE
 MAX_WARMUP_TIME_S = 0.05
 MAX_REPEAT_TIME_S = 0.2
+# Errors are stored per measurement, so they must stay short enough to keep the
+# published JSON small while still naming the failure.
+MAX_ERROR_LENGTH = 200
 _SIMD_NAMES = {0: "scalar", 1: "SSE2", 2: "AVX", 3: "AVX2", 4: "AVX-512"}
 
 
@@ -133,6 +136,15 @@ def _format_inputs(inputs: Any) -> str:
     return ", ".join(parts)
 
 
+def _error_message(result: dict[str, Any]) -> str:
+    """Return a short ``step: message`` description of a failed measurement."""
+    message = " ".join(str(result.get("error") or "unknown error").split())
+    if len(message) > MAX_ERROR_LENGTH:
+        message = message[: MAX_ERROR_LENGTH - 1] + "…"
+    step = result.get("error_step")
+    return f"{step}: {message}" if step else message
+
+
 def _row(inputs: str, cpu: dict[str, Any], ort: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {
         "inputs": inputs,
@@ -140,11 +152,21 @@ def _row(inputs: str, cpu: dict[str, Any], ort: dict[str, Any]) -> dict[str, Any
     }
     if cpu.get("success"):
         row["onnx_light_cpu_ms"] = round(float(cpu["avg_ms"]), 6)
+    else:
+        row["onnx_light_cpu_error"] = _error_message(cpu)
     if ort.get("success"):
         row["onnxruntime_ms"] = round(float(ort["avg_ms"]), 6)
+    else:
+        row["onnxruntime_error"] = _error_message(ort)
     if cpu.get("success") and ort.get("success") and cpu["avg_ms"] > 0:
         row["speedup_cpu"] = round(float(ort["avg_ms"]) / float(cpu["avg_ms"]), 4)
     return row
+
+
+def _log_failure(name: str, backend: str, result: dict[str, Any]) -> None:
+    """Logs why a measurement is missing instead of dropping it silently."""
+    if not result.get("success"):
+        rlb._log(f"  {backend} failed on {name}: {_error_message(result)}")
 
 
 def _first_input_element_count(inputs: Any) -> int:
@@ -183,6 +205,22 @@ def _make_cpu_suite_runner_factory() -> (
         )
 
     return factory
+
+
+def _common_cpu_error(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """Returns the dominant onnx-light-cpu error when no input was measured.
+
+    Without it a group with no onnx-light-cpu figure would look empty on the
+    dashboard with no explanation.
+    """
+    if any("onnx_light_cpu_ms" in row for row in rows):
+        return {}
+    errors = [
+        row["onnx_light_cpu_error"] for row in rows if "onnx_light_cpu_error" in row
+    ]
+    if not errors:
+        return {}
+    return {"cpu_error": max(set(errors), key=errors.count)}
 
 
 def _group_measurements(
@@ -226,6 +264,7 @@ def _group_measurements(
         group["summary"] = {
             "inputs": len(rows),
             "cpu_succeeded": len(speedups),
+            **_common_cpu_error(rows),
             **(
                 {
                     "avg_speedup_cpu": round(
@@ -296,14 +335,14 @@ def run_tests(
         }
         if cpu_runner_factory is not None:
             run_kwargs["runner_factory"] = cpu_runner_factory
-        cpu_results.append(
-            run(
-                loaded["model"],
-                loaded["data_sets"],
-                "onnx_light_cpu",
-                **run_kwargs,
-            )
+        cpu_result = run(
+            loaded["model"],
+            loaded["data_sets"],
+            "onnx_light_cpu",
+            **run_kwargs,
         )
+        _log_failure(test["name"], "onnx_light_cpu", cpu_result)
+        cpu_results.append(cpu_result)
         first_inputs = loaded["data_sets"][0][0]
         metadata.append(
             {
@@ -321,17 +360,17 @@ def run_tests(
     for index, test in enumerate(tests, start=1):
         loaded = test if "model" in test else load(test["name"])
         rlb._log(f"Benchmarking {index}/{total} tests (onnxruntime): {test['name']}")
-        ort_results.append(
-            run(
-                loaded["model"],
-                loaded["data_sets"],
-                "onnxruntime",
-                n_warmup=n_warmup,
-                n_measure=n_measure,
-                max_warmup_time_s=max_warmup_time_s,
-                max_repeat_time_s=max_repeat_time_s,
-            )
+        ort_result = run(
+            loaded["model"],
+            loaded["data_sets"],
+            "onnxruntime",
+            n_warmup=n_warmup,
+            n_measure=n_measure,
+            max_warmup_time_s=max_warmup_time_s,
+            max_repeat_time_s=max_repeat_time_s,
         )
+        _log_failure(test["name"], "onnxruntime", ort_result)
+        ort_results.append(ort_result)
         del loaded
         gc.collect()
 

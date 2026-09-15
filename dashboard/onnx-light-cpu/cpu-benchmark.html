@@ -133,7 +133,14 @@ table.benchmark th[aria-sort="descending"]::after { content: " ▼"; }
 table.benchmark td.faster { color: #3fb950; font-weight: bold; }
 table.benchmark td.slower { color: #f85149; font-weight: bold; }
 table.benchmark td.neutral { color: #bc8cff; font-weight: bold; }
+table.benchmark td.failed { color: #f85149; cursor: help; }
 table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
+.example-error {
+  color: #f85149;
+  font-size: 0.85em;
+  margin: 0 0 0.6em;
+  white-space: pre-wrap;
+}
 .message {
   max-width: 1000px;
   margin: 0 auto 1em;
@@ -187,6 +194,8 @@ table.benchmark tbody tr:hover { background: rgba(56, 139, 253, 0.08); }
     onnx&#8209;light&#8209;cpu is faster than onnxruntime. Select an operator
     summary row to expand its detailed measurements. The average speed-up is
     <code>sum(onnxruntime latency) / sum(onnx-light-cpu latency)</code>.
+    A measurement a backend could not produce shows <strong>failed</strong>;
+    hover it to read the recorded error.
   </p>
 </header>
 <div class="notice" style="max-width:1000px;width:100%;margin:0 auto 1em;padding:0.5em 1em;border-radius:8px;background:rgba(210,153,34,0.12);border:1px solid rgba(210,153,34,0.5);color:#d29922;font-size:0.85em;text-align:center;box-sizing:border-box;">⚠ The results displayed on this page are indicative and experimental.</div>
@@ -405,6 +414,10 @@ function renderExample(example, fallbackDate, fallbackSimdName) {
     summaryRow.appendChild(cell);
   });
 
+  if (summary.cpu_error) {
+    summaryRow.title = "onnx-light-cpu measured no input: " + summary.cpu_error;
+  }
+
   panel.appendChild(summaryRow);
 
   const details = document.createElement("div");
@@ -421,6 +434,14 @@ function renderExample(example, fallbackDate, fallbackSimdName) {
     desc.appendChild(document.createTextNode("."));
   }
   details.appendChild(desc);
+
+  if (summary.cpu_error) {
+    const failure = document.createElement("p");
+    failure.className = "example-error";
+    failure.textContent =
+      "onnx-light-cpu measured no input for this operator: " + summary.cpu_error;
+    details.appendChild(failure);
+  }
 
   const backends = Array.isArray(example.backends) && example.backends.length
     ? example.backends
@@ -492,9 +513,18 @@ function renderExample(example, fallbackDate, fallbackSimdName) {
     tr.appendChild(spTd);
     backends.forEach(b => {
       const td = document.createElement("td");
-      td.textContent = fmtMs(row[b + "_ms"]);
-      if (row[b + "_ms"] !== null && row[b + "_ms"] !== undefined) {
-        td.dataset.sortValue = row[b + "_ms"];
+      const value = row[b + "_ms"];
+      const error = row[b + "_error"];
+      if (value !== null && value !== undefined) {
+        td.textContent = fmtMs(value);
+        td.dataset.sortValue = value;
+      } else if (error) {
+        // A missing measurement always tells why it is missing.
+        td.textContent = "failed";
+        td.title = error;
+        td.className = "failed";
+      } else {
+        td.textContent = "—";
       }
       tr.appendChild(td);
     });

@@ -113,6 +113,30 @@ class TestExamplesBenchmarkDashboard(unittest.TestCase):
         self.assertIn("return date.toISOString().slice(0, 10);", text)
         self.assertIn("? formatBenchmarkDate(payload.date)", text)
 
+    def test_missing_measurements_show_their_error(self):
+        """A backend that failed is reported as such with the recorded reason,
+        instead of an unexplained empty cell."""
+        text = _read(PAGE)
+        self.assertIn('const error = row[b + "_error"];', text)
+        self.assertIn('td.textContent = "failed";', text)
+        self.assertIn("td.title = error;", text)
+        self.assertIn('td.className = "failed";', text)
+        self.assertIn("table.benchmark td.failed", text)
+
+    def test_operator_without_any_cpu_measurement_explains_why(self):
+        text = _read(PAGE)
+        self.assertIn("if (summary.cpu_error)", text)
+        self.assertIn(
+            '"onnx-light-cpu measured no input for this operator: " '
+            "+ summary.cpu_error;",
+            text,
+        )
+        self.assertIn(
+            'summaryRow.title = "onnx-light-cpu measured no input: " '
+            "+ summary.cpu_error;",
+            text,
+        )
+
     def test_operator_type_summary_shows_its_machine(self):
         text = _read(PAGE)
         self.assertIn("<span>machine</span>", text)

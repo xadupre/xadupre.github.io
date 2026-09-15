@@ -608,6 +608,9 @@ def _make_onnx_light_reference_runner(
         return list(evaluator.run(None, dict(zip(input_names, inputs))))
 
     _run.used_kernels = evaluator.used_kernels  # type: ignore[attr-defined]
+    # onnx-light-cpu's kernel usage recording is scoped to the evaluator, so
+    # the session must stay reachable from the runner.
+    _run.session = evaluator  # type: ignore[attr-defined]
 
     return _run
 
@@ -655,8 +658,11 @@ def _make_onnx_light_cpu_runner(
     runner checks — on its first invocation — that every kernel that actually
     ran is an onnx-light-cpu kernel (its library-qualified name appears in
     :func:`onnx_light_cpu.registered_kernel_names`), using
-    :func:`onnx_light_cpu.used_kernel_names`. It raises ``RuntimeError`` when no
-    onnx-light-cpu kernel ran, or when a name that is *not* an onnx-light-cpu
+    :func:`onnx_light_cpu.used_kernel_names`. That record is owned by the
+    evaluator, so the helpers receive the session the runner wraps
+    (``clear_used_kernel_names(session)``, ``used_kernel_names(session)`` and
+    ``set_kernel_usage_recording(session, enabled)``). It raises
+    ``RuntimeError`` when no onnx-light-cpu kernel ran, or when a name that is *not* an onnx-light-cpu
     kernel is recorded, so the backend records an error instead of silently
     reporting built-in-kernel timings as onnx-light-cpu results. Builds that do
     not expose the kernel-name introspection helpers skip the check.
@@ -667,7 +673,7 @@ def _make_onnx_light_cpu_runner(
     overrides was served by an
     onnx-light-cpu kernel. This catches the case where an overridable operator
     silently fell back to a built-in kernel (so onnx-light-cpu is *not* really
-    used where it should be), which the process-wide
+    used where it should be), which the
     :func:`onnx_light_cpu.used_kernel_names` record alone cannot detect.
 
     ``register_kernels=False`` and a shared ``verification_state`` let callers
@@ -687,11 +693,13 @@ def _make_onnx_light_cpu_runner(
     clear_used_kernel_names = getattr(onnx_light_cpu, "clear_used_kernel_names", None)
     used_kernel_names = getattr(onnx_light_cpu, "used_kernel_names", None)
     registered_kernel_names = getattr(onnx_light_cpu, "registered_kernel_names", None)
-    try:
-        from onnx_light_cpu.onnx_py._cpuregister import set_kernel_usage_recording
-    except ImportError:
-        set_kernel_usage_recording = None
-    if clear_used_kernel_names is None or used_kernel_names is None:
+    set_kernel_usage_recording = getattr(
+        onnx_light_cpu, "set_kernel_usage_recording", None
+    )
+    # The kernel usage record belongs to the evaluator the runner wraps
+    # (onnx-light-cpu#711): without it the usage helpers cannot be called.
+    session = getattr(runner, "session", None)
+    if clear_used_kernel_names is None or used_kernel_names is None or session is None:
         checked["done"] = True
         return runner
 
@@ -710,11 +718,11 @@ def _make_onnx_light_cpu_runner(
         if checked["done"]:
             return runner(inputs)
         if set_kernel_usage_recording is not None:
-            set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+            set_kernel_usage_recording(session, True)
+        clear_used_kernel_names(session)
         try:
             outputs = runner(inputs)
-            used = list(used_kernel_names())
+            used = list(used_kernel_names(session))
             if not used:
                 overridden = sorted(registered) if registered else []
                 raise RuntimeError(
@@ -752,7 +760,9 @@ def _make_onnx_light_cpu_runner(
             return outputs
         finally:
             if set_kernel_usage_recording is not None:
-                set_kernel_usage_recording(False)
+                set_kernel_usage_recording(session, False)
+
+    _run_checked.session = session  # type: ignore[attr-defined]
 
     return _run_checked
 

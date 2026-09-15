@@ -168,6 +168,103 @@ class TestRows(unittest.TestCase):
         self.assertEqual(row["input_type"], "float32")
         self.assertEqual(row["speedup_cpu"], 2.0)
 
+    def test_failed_measurements_record_their_error(self):
+        """A missing figure explains itself instead of vanishing silently."""
+        row = rcb._row(
+            "float32[4]",
+            {
+                "success": False,
+                "error": "no onnx-light-cpu kernel ran\nfor this model",
+                "error_step": "warmup",
+            },
+            {"success": True, "avg_ms": 2.0},
+        )
+        self.assertNotIn("onnx_light_cpu_ms", row)
+        self.assertNotIn("speedup_cpu", row)
+        self.assertEqual(
+            row["onnx_light_cpu_error"],
+            "warmup: no onnx-light-cpu kernel ran for this model",
+        )
+        self.assertNotIn("onnxruntime_error", row)
+
+    def test_recorded_errors_are_truncated(self):
+        row = rcb._row(
+            "float32[4]",
+            {"success": False, "error": "e" * (rcb.MAX_ERROR_LENGTH + 50)},
+            {"success": False, "error": "onnxruntime cannot run this model"},
+        )
+        self.assertEqual(len(row["onnx_light_cpu_error"]), rcb.MAX_ERROR_LENGTH)
+        self.assertTrue(row["onnx_light_cpu_error"].endswith("\u2026"))
+        self.assertEqual(
+            row["onnxruntime_error"], "onnxruntime cannot run this model"
+        )
+
+    def test_group_summary_reports_the_dominant_cpu_error(self):
+        measurements = [
+            {
+                "domain": "ai.onnx",
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n1024_float32_benchmark",
+                "row": {
+                    "inputs": "float32[1024]",
+                    "input_type": "float32",
+                    "input_elements": 1024,
+                    "onnx_light_cpu_error": "warmup: no onnx-light-cpu kernel ran",
+                    "onnxruntime_ms": 2.0,
+                },
+            },
+            {
+                "domain": "ai.onnx",
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n2048_float32_benchmark",
+                "row": {
+                    "inputs": "float32[2048]",
+                    "input_type": "float32",
+                    "input_elements": 2048,
+                    "onnx_light_cpu_error": "warmup: no onnx-light-cpu kernel ran",
+                    "onnxruntime_ms": 3.0,
+                },
+            },
+        ]
+
+        summary = rcb._group_measurements(measurements)[0]["summary"]
+
+        self.assertEqual(summary["cpu_succeeded"], 0)
+        self.assertEqual(summary["cpu_error"], "warmup: no onnx-light-cpu kernel ran")
+
+    def test_group_summary_omits_the_error_when_something_was_measured(self):
+        measurements = [
+            {
+                "domain": "ai.onnx",
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n1024_float32_benchmark",
+                "row": {
+                    "inputs": "float32[1024]",
+                    "input_type": "float32",
+                    "input_elements": 1024,
+                    "onnx_light_cpu_ms": 1.0,
+                    "onnxruntime_ms": 2.0,
+                    "speedup_cpu": 2.0,
+                },
+            },
+            {
+                "domain": "ai.onnx",
+                "operator": "Abs",
+                "test_name": "test_cpu_abs_n2048_float32_benchmark",
+                "row": {
+                    "inputs": "float32[2048]",
+                    "input_type": "float32",
+                    "input_elements": 2048,
+                    "onnx_light_cpu_error": "measure: kernel crashed",
+                    "onnxruntime_ms": 3.0,
+                },
+            },
+        ]
+
+        summary = rcb._group_measurements(measurements)[0]["summary"]
+
+        self.assertNotIn("cpu_error", summary)
+
     def test_groups_dimensions_by_operator_and_first_input_type(self):
         measurements = [
             {
@@ -423,6 +520,49 @@ class TestPayload(unittest.TestCase):
                 "Benchmarking 1/2 tests (onnxruntime): test_cpu_abs_0_benchmark",
                 "Benchmarking 2/2 tests (onnxruntime): test_cpu_abs_1_benchmark",
             ],
+        )
+
+    def test_run_tests_logs_why_a_backend_failed(self):
+        """The log names the failing backend and its error, so a campaign
+        without any onnx-light-cpu figure is diagnosable from the CI logs."""
+
+        def load(name):
+            return {
+                "name": name,
+                "model": types.SimpleNamespace(
+                    graph=types.SimpleNamespace(
+                        node=[types.SimpleNamespace(op_type="Abs", domain="")]
+                    )
+                ),
+                "data_sets": [
+                    ([types.SimpleNamespace(dtype="float32", shape=(1,))], [])
+                ],
+            }
+
+        def run(model, data_sets, backend, **kwargs):
+            if backend == "onnx_light_cpu":
+                return {
+                    "success": False,
+                    "error": "no onnx-light-cpu kernel ran",
+                    "error_step": "warmup",
+                }
+            return {"success": True, "avg_ms": 1.0}
+
+        with patch.object(rcb.rlb, "_log") as log:
+            examples = rcb.run_tests(
+                [{"name": "test_cpu_abs_n1024_float32_benchmark"}],
+                run=run,
+                load=load,
+            )
+
+        self.assertIn(
+            "  onnx_light_cpu failed on test_cpu_abs_n1024_float32_benchmark: "
+            "warmup: no onnx-light-cpu kernel ran",
+            [call.args[0] for call in log.call_args_list],
+        )
+        self.assertEqual(
+            examples[0]["summary"]["cpu_error"],
+            "warmup: no onnx-light-cpu kernel ran",
         )
 
     def test_run_tests_reloads_lazy_cases_for_each_backend(self):
