@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 14, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 15, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -567,12 +567,21 @@ kernels.</p>
 the same numbers whether it runs them or <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s built-in kernels. To
 tell them apart, every onnx-light-cpu kernel carries a unique,
 library-qualified <strong>name</strong> (for example <code class="docutils literal notranslate"><span class="pre">&quot;onnx_light_cpu::Abs&quot;</span></code>) that it
-records every time it runs. The names can be inspected from Python:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+can record when it runs. Recording is <strong>disabled by default</strong> and must be
+explicitly enabled for diagnostics on an individual session. Each session’s
+<code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> retains the first 1024 invocations after each clear; later
+records are dropped until cleared. Copies of that context, including subgraph
+and function execution contexts, share the recording state; independent
+sessions do not.
+Disabled calls only load an atomic flag, without locking or allocating.
+The names can be inspected from Python:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">clear_used_kernel_names</span><span class="p">,</span>
     <span class="n">register_kernels</span><span class="p">,</span>
     <span class="n">registered_kernel_names</span><span class="p">,</span>
     <span class="n">registered_kernels</span><span class="p">,</span>
+    <span class="n">set_kernel_usage_recording</span><span class="p">,</span>
     <span class="n">used_kernel_names</span><span class="p">,</span>
 <span class="p">)</span>
 
@@ -580,18 +589,45 @@ records every time it runs. The names can be inspected from Python:</p>
 <span class="n">registered_kernel_names</span><span class="p">()</span>  <span class="c1"># {'Abs': 'onnx_light_cpu::Abs', 'Exp': ...}</span>
 <span class="n">registered_kernels</span><span class="p">()</span>       <span class="c1"># (RegisteredKernel(domain='ai.onnx', op_type='Abs', ...), ...)</span>
 
-<span class="n">clear_used_kernel_names</span><span class="p">()</span>
-<span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span>      <span class="c1"># run a model containing e.g. an Abs node</span>
-<span class="n">used_kernel_names</span><span class="p">()</span>        <span class="c1"># ['onnx_light_cpu::Abs', ...] in run order</span>
+<span class="n">sess</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="n">sess</span><span class="p">,</span> <span class="kc">True</span><span class="p">)</span>
+<span class="n">clear_used_kernel_names</span><span class="p">(</span><span class="n">sess</span><span class="p">)</span>
+<span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span>  <span class="c1"># run a model containing e.g. an Abs node</span>
+<span class="n">set_kernel_usage_recording</span><span class="p">(</span><span class="n">sess</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+<span class="n">used_kernel_names</span><span class="p">(</span><span class="n">sess</span><span class="p">)</span>   <span class="c1"># ['onnx_light_cpu::Abs', ...]</span>
 </pre></div>
 </div>
-<p>If <code class="docutils literal notranslate"><span class="pre">used_kernel_names()</span></code> is empty after a run whose operators onnx-light-cpu
-overrides, the registration did not take effect — see
+<p>Retrieval returns an independent snapshot without consuming the log. Recording,
+retrieval, and reset share a mutex; concurrent records are ordered by mutex
+acquisition and may fall before or after a reset. Reset does not toggle recording.
+Disabling waits for active appends and preserves existing entries.</p>
+<p>Each recording function requires an explicit <code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> session;
+missing or invalid sessions raise <code class="docutils literal notranslate"><span class="pre">TypeError</span></code>. Enabling, disabling, or clearing
+one session’s log does not affect any independent session. Retrieval includes
+all backend kernel names recorded by that context, without filtering to
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu</span></code> names.</p>
+<p>The previous process-wide API without a session argument was intentionally
+removed; there is no global compatibility fallback. An updated <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>
+containing <a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4942">PR #4942</a> is required.
+That upstream change has not been released yet, so no minimum released version
+is specified.</p>
+<p>If <code class="docutils literal notranslate"><span class="pre">used_kernel_names(sess)</span></code> does not include the expected <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu</span></code>
+names after an explicitly recorded run whose operators onnx-light-cpu overrides,
+the registration did not take effect — see
 <a class="reference internal" href="#l-registration-ignored"><span class="std std-ref">Troubleshooting: the registration is ignored</span></a> below. The same names are available in C++ as the
 static <code class="docutils literal notranslate"><span class="pre">AbsKernel::kName</span></code> (etc.) members and through
-<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::RegisteredKernelNames()</span></code> /
-<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::UsedKernelNames()</span></code> in
-<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/kernels/kernel_usage.h</span></code>.</p>
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::RegisteredKernelNames()</span></code> in
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/kernels/kernel_usage.h</span></code>. C++ recording and retrieval use the
+session’s <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>, including <code class="docutils literal notranslate"><span class="pre">rt.RecordKernelUsage(kName)</span></code> and
+<code class="docutils literal notranslate"><span class="pre">rt.GetKernelUsage()</span></code> rather than process-wide recording functions. The
+recording bound is defined by <code class="docutils literal notranslate"><span class="pre">RuntimeContext::kKernelUsageLimit</span></code>.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">rt</span><span class="p">.</span><span class="n">set_kernel_usage_enabled</span><span class="p">(</span><span class="nb">true</span><span class="p">);</span>
+<span class="n">rt</span><span class="p">.</span><span class="n">ClearKernelUsage</span><span class="p">();</span>
+<span class="c1">// Run the session using rt.</span>
+<span class="n">rt</span><span class="p">.</span><span class="n">set_kernel_usage_enabled</span><span class="p">(</span><span class="nb">false</span><span class="p">);</span>
+<span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">names</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">rt</span><span class="p">.</span><span class="n">GetKernelUsage</span><span class="p">();</span>
+</pre></div>
+</div>
 </section>
 <section id="add-a-new-kernel">
 <h2>Add a new kernel<a class="headerlink" href="#add-a-new-kernel" title="Link to this heading">#</a></h2>
@@ -611,8 +647,8 @@ The three steps are:</p>
 <li><p>Derive from <code class="docutils literal notranslate"><span class="pre">KernelBase</span></code> and override <code class="docutils literal notranslate"><span class="pre">Run(RuntimeContext</span> <span class="pre">&amp;)</span></code> to read the
 node’s inputs and write its outputs (see <code class="docutils literal notranslate"><span class="pre">AbsKernel::Run</span></code>). Give the class a
 unique <code class="docutils literal notranslate"><span class="pre">static</span> <span class="pre">constexpr</span> <span class="pre">const</span> <span class="pre">char</span> <span class="pre">*kName</span></code> (for example
-<code class="docutils literal notranslate"><span class="pre">&quot;onnx_light_cpu::MyOp&quot;</span></code>) and call <code class="docutils literal notranslate"><span class="pre">RecordKernelUsage(kName)</span></code> at the top
-of <code class="docutils literal notranslate"><span class="pre">Run</span></code> so the kernel can be recognised in <code class="docutils literal notranslate"><span class="pre">UsedKernelNames()</span></code>; add its
+<code class="docutils literal notranslate"><span class="pre">&quot;onnx_light_cpu::MyOp&quot;</span></code>) and call <code class="docutils literal notranslate"><span class="pre">rt.RecordKernelUsage(kName)</span></code> at the top
+of <code class="docutils literal notranslate"><span class="pre">Run</span></code> so the kernel can be recognised in <code class="docutils literal notranslate"><span class="pre">rt.GetKernelUsage()</span></code>; add its
 <code class="docutils literal notranslate"><span class="pre">{op_type,</span> <span class="pre">kName}</span></code> pair to <code class="docutils literal notranslate"><span class="pre">RegisteredKernelNames()</span></code> in
 <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/kernels/kernel_usage.cc</span></code>.</p></li>
 <li><p>Wrap the class in a <code class="docutils literal notranslate"><span class="pre">NodeKernelFn</span></code> factory that constructs the kernel and
@@ -778,7 +814,7 @@ onnx-light Python package to share state with).</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 14, 2026.
+  Last updated on Sep 15, 2026.
   <br/>
 </p></div>
       

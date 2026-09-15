@@ -114,7 +114,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
  .. code-block:: none
 
-    CPU kernels available, SIMD level: 3 (AVX2)
+    CPU kernels available, SIMD level: 4 (AVX-512)
 
 
 
@@ -250,7 +250,7 @@ Build the onnx-light evaluator
 onnx-light-cpu kernels overrides the built-in ``Abs`` so every ``Abs`` node in
 the model dispatches to the SIMD-accelerated kernel.
 
-.. GENERATED FROM PYTHON SOURCE LINES 169-230
+.. GENERATED FROM PYTHON SOURCE LINES 169-229
 
 .. code-block:: Python
 
@@ -274,9 +274,13 @@ the model dispatches to the SIMD-accelerated kernel.
     # Confirm the model dispatches to the onnx-light-cpu ``Abs`` kernel (identified
     # by the library-qualified name it records when it runs) rather than
     # onnx-light's built-in kernel.
-    clear_used_kernel_names()
+    set_kernel_usage_recording(light_session, True)
+    clear_used_kernel_names(light_session)
     light_session.run(None, {"X": np.zeros(1, dtype=np.float32)})
-    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
+    assert used_kernel_names(light_session) == ["onnx_light_cpu::Abs"], used_kernel_names(
+        light_session
+    )
+    set_kernel_usage_recording(light_session, False)
 
     # Verify the two lifetime domains directly. The NumPy input must remain a
     # zero-copy borrowed tensor and consume no ExecutionArena slot, while the
@@ -305,11 +309,6 @@ the model dispatches to the SIMD-accelerated kernel.
         f"IO buffer reused at 0x{probe_address:x}; NumPy input is zero-copy"
     )
 
-    # Usage recording is diagnostic instrumentation, not part of inference. It
-    # takes a mutex and appends to a process-wide log on every invocation, so leave
-    # it out of the timed region after confirming the expected kernel was selected.
-    set_kernel_usage_recording(False)
-
 
     def run_light(inp):
         return light_session.run(None, {"X": inp})[0]
@@ -324,12 +323,12 @@ the model dispatches to the SIMD-accelerated kernel.
  .. code-block:: none
 
     onnx-light session thread count: 2
-    verified onnx-light arenas: distinct ExecutionArena/IOArena, IO buffer reused at 0x5568971ab8c0; NumPy input is zero-copy
+    verified onnx-light arenas: distinct ExecutionArena/IOArena, IO buffer reused at 0x55afd70a0a00; NumPy input is zero-copy
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 231-246
+.. GENERATED FROM PYTHON SOURCE LINES 230-245
 
 Setup cost: ReferenceEvaluator stays lightweight
 -------------------------------------------------
@@ -347,7 +346,7 @@ Kernel registration is process-wide and independent of evaluator construction,
 so it is timed separately rather than incorrectly attributing its first-import
 cost to ``ReferenceEvaluator``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 246-250
+.. GENERATED FROM PYTHON SOURCE LINES 245-249
 
 .. code-block:: Python
 
@@ -363,13 +362,13 @@ cost to ``ReferenceEvaluator``.
 
  .. code-block:: none
 
-    setup: onnx-light ReferenceEvaluator = 0.25 ms
-    setup: onnx-light-cpu kernel registration = 0.13 ms
+    setup: onnx-light ReferenceEvaluator = 0.30 ms
+    setup: onnx-light-cpu kernel registration = 0.11 ms
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 251-258
+.. GENERATED FROM PYTHON SOURCE LINES 250-257
 
 Run the benchmark
 -----------------
@@ -379,7 +378,7 @@ onnx-light phases prevents its persistent worker pool from perturbing them.
 Likewise, the accelerated phase finishes before the built-in onnx-light pool
 is first used. Batched samples report steady-state time per inference.
 
-.. GENERATED FROM PYTHON SOURCE LINES 258-322
+.. GENERATED FROM PYTHON SOURCE LINES 257-322
 
 .. code-block:: Python
 
@@ -406,11 +405,13 @@ is first used. Batched samples report steady-state time per inference.
     benchmark_phase(np.abs, 1, validate=False)
     benchmark_phase(run_light, 3)
 
-    set_kernel_usage_recording(True)
-    clear_used_kernel_names()
+    set_kernel_usage_recording(light_session, True)
+    clear_used_kernel_names(light_session)
     run_light(np.zeros(1, dtype=np.float32))
-    assert used_kernel_names() == ["onnx_light_cpu::Abs"], used_kernel_names()
-    set_kernel_usage_recording(False)
+    assert used_kernel_names(light_session) == ["onnx_light_cpu::Abs"], used_kernel_names(
+        light_session
+    )
+    set_kernel_usage_recording(light_session, False)
 
     benchmark_phase(lambda inp: alone_session.run(None, {"X": inp})[0], 2)
 
@@ -438,7 +439,6 @@ is first used. Batched samples report steady-state time per inference.
             f"cpu vs onnxruntime={ort_speedup:5.2f}x"
         )
 
-    set_kernel_usage_recording(True)
     print("verified onnx-light-cpu Abs dispatch")
 
     sizes = np.array([r[0] for r in rows])
@@ -455,14 +455,14 @@ is first used. Batched samples report steady-state time per inference.
 
  .. code-block:: none
 
-    setup: onnxruntime InferenceSession = 1.01 ms
-    size=      100 | numpy=      0.48 us | onnx-light=      2.32 us | onnx-light-cpu=      2.30 us | cpu vs built-in= 1.01x | onnxruntime=      8.22 us | cpu vs onnxruntime= 3.58x
-    size=     1000 | numpy=      0.72 us | onnx-light=      2.42 us | onnx-light-cpu=      2.40 us | cpu vs built-in= 1.01x | onnxruntime=      8.39 us | cpu vs onnxruntime= 3.49x
-    size=    10000 | numpy=      1.58 us | onnx-light=      3.33 us | onnx-light-cpu=      3.33 us | cpu vs built-in= 1.00x | onnxruntime=      9.80 us | cpu vs onnxruntime= 2.94x
-    size=   100000 | numpy=     10.33 us | onnx-light=      8.38 us | onnx-light-cpu=      8.48 us | cpu vs built-in= 0.99x | onnxruntime=     14.44 us | cpu vs onnxruntime= 1.70x
-    size=  1000000 | numpy=    116.73 us | onnx-light=     66.77 us | onnx-light-cpu=     72.03 us | cpu vs built-in= 0.93x | onnxruntime=     77.24 us | cpu vs onnxruntime= 1.07x
-    size= 10000000 | numpy=   3892.90 us | onnx-light=   1452.42 us | onnx-light-cpu=   1451.64 us | cpu vs built-in= 1.00x | onnxruntime=   1627.09 us | cpu vs onnxruntime= 1.12x
-    size=100000000 | numpy=  40861.21 us | onnx-light=  15955.15 us | onnx-light-cpu=  15787.53 us | cpu vs built-in= 1.01x | onnxruntime=  22188.26 us | cpu vs onnxruntime= 1.41x
+    setup: onnxruntime InferenceSession = 0.79 ms
+    size=      100 | numpy=      0.36 us | onnx-light=      1.68 us | onnx-light-cpu=      1.61 us | cpu vs built-in= 1.04x | onnxruntime=      6.35 us | cpu vs onnxruntime= 3.93x
+    size=     1000 | numpy=      0.52 us | onnx-light=      1.71 us | onnx-light-cpu=      1.63 us | cpu vs built-in= 1.05x | onnxruntime=      6.53 us | cpu vs onnxruntime= 4.01x
+    size=    10000 | numpy=      1.24 us | onnx-light=      2.96 us | onnx-light-cpu=      2.53 us | cpu vs built-in= 1.17x | onnxruntime=      7.35 us | cpu vs onnxruntime= 2.91x
+    size=   100000 | numpy=      8.37 us | onnx-light=      8.23 us | onnx-light-cpu=     10.80 us | cpu vs built-in= 0.76x | onnxruntime=     14.06 us | cpu vs onnxruntime= 1.30x
+    size=  1000000 | numpy=    256.22 us | onnx-light=    135.02 us | onnx-light-cpu=    133.11 us | cpu vs built-in= 1.01x | onnxruntime=    141.03 us | cpu vs onnxruntime= 1.06x
+    size= 10000000 | numpy=   4036.16 us | onnx-light=   1316.06 us | onnx-light-cpu=   1273.64 us | cpu vs built-in= 1.03x | onnxruntime=   1456.51 us | cpu vs onnxruntime= 1.14x
+    size=100000000 | numpy=  72987.41 us | onnx-light=  27136.06 us | onnx-light-cpu=  27506.77 us | cpu vs built-in= 0.99x | onnxruntime=  26912.00 us | cpu vs onnxruntime= 0.98x
     verified onnx-light-cpu Abs dispatch
 
 
@@ -560,7 +560,7 @@ y-axis so that a given ratio and its reciprocal are equidistant from the
 
 
 .. image-sg:: /auto_examples/benchmarks/images/sphx_glr_plot_abs_benchmark_001.png
-   :alt: Abs execution time (SIMD: AVX2), Abs speed-up (onnxruntime = 1)
+   :alt: Abs execution time (SIMD: AVX-512), Abs speed-up (onnxruntime = 1)
    :srcset: /auto_examples/benchmarks/images/sphx_glr_plot_abs_benchmark_001.png
    :class: sphx-glr-single-img
 
@@ -571,7 +571,7 @@ y-axis so that a given ratio and its reciprocal are equidistant from the
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 8.066 seconds)
+   **Total running time of the script:** (0 minutes 9.441 seconds)
 
 
 .. _sphx_glr_download_auto_examples_benchmarks_plot_abs_benchmark.py:

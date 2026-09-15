@@ -130,7 +130,7 @@ Report which SIMD level the current CPU provides. The mapping is ``0=None``,
 
  .. code-block:: none
 
-    CPU kernels available, SIMD level: 3 (AVX2)
+    CPU kernels available, SIMD level: 4 (AVX-512)
 
 
 
@@ -217,7 +217,7 @@ A dedicated model/session is run once while onnx-light-cpu's accelerated
 onnx-light's own built-in reference kernel. It is timed below alongside the
 other runtimes on the three smallest sizes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 168-208
+.. GENERATED FROM PYTHON SOURCE LINES 168-201
 
 .. code-block:: Python
 
@@ -254,11 +254,6 @@ other runtimes on the three smallest sizes.
 
     accelerated_kernel_name = registered_kernel_names()["Gemm"]
 
-    # onnx-light-cpu kernels record their name on every run (a mutex per call);
-    # only the accelerated curve would pay that cost, so disable recording to keep
-    # the timings fair. Recording is briefly re-enabled below to verify the exact
-    # implementation used for every benchmark size.
-    set_kernel_usage_recording(False)
 
 
 
@@ -266,9 +261,7 @@ other runtimes on the three smallest sizes.
 
 
 
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 209-215
+.. GENERATED FROM PYTHON SOURCE LINES 202-208
 
 Run the rest of the benchmark
 -------------------------------
@@ -277,7 +270,7 @@ Each backend runs in its own phase. In particular, the accelerated kernel is
 measured before NumPy initializes a BLAS pool and before the ONNX Runtime
 session exists. Inputs are regenerated from the same seed in every phase.
 
-.. GENERATED FROM PYTHON SOURCE LINES 215-312
+.. GENERATED FROM PYTHON SOURCE LINES 208-304
 
 .. code-block:: Python
 
@@ -296,12 +289,12 @@ session exists. Inputs are regenerated from the same seed in every phase.
 
 
     for size, a, b in inputs():
-        set_kernel_usage_recording(True)
-        clear_used_kernel_names()
+        set_kernel_usage_recording(light_session, True)
+        clear_used_kernel_names(light_session)
         run_light(a, b)
-        accelerated_kernel_names = used_kernel_names()
+        accelerated_kernel_names = used_kernel_names(light_session)
         assert accelerated_kernel_name in accelerated_kernel_names, accelerated_kernel_names
-        set_kernel_usage_recording(False)
+        set_kernel_usage_recording(light_session, False)
         rows_by_size[size][2] = measure(
             lambda a=a, b=b: run_light(a, b),
             args.repeat,
@@ -369,7 +362,6 @@ session exists. Inputs are regenerated from the same seed in every phase.
         "verified onnx-light-cpu Gemm for every benchmark size: "
         f"accelerated={accelerated_kernel_name}"
     )
-    set_kernel_usage_recording(True)
 
     sizes = np.array([r[0] for r in rows])
     numpy_times = np.array([r[1] for r in rows])
@@ -386,21 +378,21 @@ session exists. Inputs are regenerated from the same seed in every phase.
 
  .. code-block:: none
 
-    size=  16x16   | numpy=      1.76 us | onnx-light=      5.88 us | onnx-light-cpu=      5.02 us | onnxruntime=     13.25 us
-    size=  32x32   | numpy=      2.77 us | onnx-light=      6.12 us | onnx-light-cpu=      5.86 us | onnxruntime=     13.28 us
-    size=  64x64   | numpy=      8.70 us | onnx-light=     10.04 us | onnx-light-cpu=      9.62 us | onnxruntime=     15.92 us
-    size= 128x128  | numpy=     37.69 us | onnx-light=not measured | onnx-light-cpu=     36.32 us | onnxruntime=     43.11 us
-    size= 256x256  | numpy=    228.83 us | onnx-light=not measured | onnx-light-cpu=    238.63 us | onnxruntime=    236.73 us
-    size= 512x512  | numpy=   1580.00 us | onnx-light=not measured | onnx-light-cpu=   1798.06 us | onnxruntime=   1636.37 us
-    size=1024x1024 | numpy=  12375.58 us | onnx-light=not measured | onnx-light-cpu=  13509.33 us | onnxruntime=  15471.71 us
-    size=2048x2048 | numpy=  99826.98 us | onnx-light=not measured | onnx-light-cpu= 117568.25 us | onnxruntime= 120067.57 us
-    size=4096x4096 | numpy= 807318.62 us | onnx-light=not measured | onnx-light-cpu= 999221.39 us | onnxruntime= 937058.65 us
+    size=  16x16   | numpy=      1.07 us | onnx-light=      2.20 us | onnx-light-cpu=      2.46 us | onnxruntime=      9.20 us
+    size=  32x32   | numpy=      1.34 us | onnx-light=      2.53 us | onnx-light-cpu=      2.80 us | onnxruntime=      8.05 us
+    size=  64x64   | numpy=      3.53 us | onnx-light=      5.03 us | onnx-light-cpu=      5.04 us | onnxruntime=     11.88 us
+    size= 128x128  | numpy=     24.04 us | onnx-light=not measured | onnx-light-cpu=     17.03 us | onnxruntime=     23.16 us
+    size= 256x256  | numpy=    106.81 us | onnx-light=not measured | onnx-light-cpu=    111.05 us | onnxruntime=    110.09 us
+    size= 512x512  | numpy=    755.78 us | onnx-light=not measured | onnx-light-cpu=    854.92 us | onnxruntime=    886.75 us
+    size=1024x1024 | numpy=   5406.41 us | onnx-light=not measured | onnx-light-cpu=   5934.93 us | onnxruntime=   5999.93 us
+    size=2048x2048 | numpy=  41355.12 us | onnx-light=not measured | onnx-light-cpu=  48080.66 us | onnxruntime=  48949.93 us
+    size=4096x4096 | numpy= 329125.46 us | onnx-light=not measured | onnx-light-cpu= 411046.10 us | onnxruntime= 399201.85 us
     verified onnx-light-cpu Gemm for every benchmark size: accelerated=onnx_light_cpu::Gemm
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 313-325
+.. GENERATED FROM PYTHON SOURCE LINES 305-317
 
 Plot the timings
 ----------------
@@ -415,7 +407,7 @@ from the ``1`` baseline. The built-in onnx-light curve
 only has points for the sizes it was measured on (see "Why the built-in
 curve stops early" above).
 
-.. GENERATED FROM PYTHON SOURCE LINES 325-414
+.. GENERATED FROM PYTHON SOURCE LINES 317-406
 
 .. code-block:: Python
 
@@ -512,7 +504,7 @@ curve stops early" above).
 
 
 .. image-sg:: /auto_examples/benchmarks/images/sphx_glr_plot_gemm_benchmark_001.png
-   :alt: Gemm execution time (SIMD: AVX2), Gemm speed-up (onnxruntime = 1)
+   :alt: Gemm execution time (SIMD: AVX-512), Gemm speed-up (onnxruntime = 1)
    :srcset: /auto_examples/benchmarks/images/sphx_glr_plot_gemm_benchmark_001.png
    :class: sphx-glr-single-img
 
@@ -523,7 +515,7 @@ curve stops early" above).
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 28.372 seconds)
+   **Total running time of the script:** (0 minutes 19.336 seconds)
 
 
 .. _sphx_glr_download_auto_examples_benchmarks_plot_gemm_benchmark.py:
