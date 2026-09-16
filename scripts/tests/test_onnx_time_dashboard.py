@@ -45,6 +45,24 @@ class TestOnnxTimeDashboard(unittest.TestCase):
         self.assertEqual(text.count('time:{unit:"day"}'), 2)
         self.assertEqual(text.count('"Machine: " + item.raw.machine'), 2)
 
+    def test_timing_and_speedup_charts_zoom_in_both_axes(self):
+        with open(PAGE, encoding="utf-8") as stream:
+            text = stream.read()
+        self.assertEqual(
+            text.count(
+                'zoom: { pan:{enabled:true,mode:"xy"}, '
+                'zoom:{wheel:{enabled:true},pinch:{enabled:true},mode:"xy"} }'
+            ),
+            2,
+        )
+        self.assertIn(
+            'addEventListener("dblclick", () => charts[key].resetZoom())', text
+        )
+        self.assertIn(
+            'addEventListener("dblclick", () => charts[key + "Speedup"].resetZoom())',
+            text,
+        )
+
     def test_dedicated_workflow_records_history(self):
         with open(WORKFLOW, encoding="utf-8") as stream:
             text = stream.read()
