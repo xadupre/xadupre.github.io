@@ -2,8 +2,9 @@
 
 The snapshot contains the current number of open pull requests; the numbers
 opened, closed, and merged during the preceding day and seven days; and the
-average age in days of the pull requests that are still open. Rows are stored
-in ``cache_data/onnxruntime/pr_activity.csv``.
+average age in days of open PRs and PRs merged during the preceding seven days.
+Merged PR age is measured from creation to merge; its average is blank when
+no valid ages are available. Rows are stored in ``cache_data/<repo>/pr_activity.csv``.
 
 Usage::
 
@@ -34,6 +35,7 @@ CSV_FIELDS = (
     "closed_prs_1d",
     "merged_prs_1d",
     "avg_open_age_days",
+    "avg_merged_age_days_7d",
 )
 
 
@@ -104,6 +106,7 @@ def collect_snapshot(
     opened_day = 0
     closed_day = 0
     merged_day = 0
+    merged_ages = []
     for pr in open_pulls:
         if _is_at_or_after(pr.get("created_at"), since):
             opened += 1
@@ -127,6 +130,16 @@ def collect_snapshot(
             closed_day += 1
         if _is_at_or_after(pr.get("merged_at"), since):
             merged += 1
+            if pr.get("created_at"):
+                try:
+                    age = (
+                        _parse_iso(pr["merged_at"]) - _parse_iso(pr["created_at"])
+                    ).total_seconds() / 86400
+                except ValueError:
+                    pass
+                else:
+                    if age >= 0:
+                        merged_ages.append(age)
         if _is_at_or_after(pr.get("merged_at"), since_day):
             merged_day += 1
 
@@ -141,6 +154,9 @@ def collect_snapshot(
         "closed_prs_1d": str(closed_day),
         "merged_prs_1d": str(merged_day),
         "avg_open_age_days": f"{average_age:.2f}",
+        "avg_merged_age_days_7d": (
+            f"{sum(merged_ages) / len(merged_ages):.2f}" if merged_ages else ""
+        ),
     }
 
 
