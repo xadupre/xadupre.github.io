@@ -32,6 +32,12 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn("closed_prs_1d", text)
             self.assertIn("merged_prs_1d", text)
             self.assertIn("avg_open_age_days", text)
+            self.assertIn("avg_merged_age_days_7d", text)
+            self.assertIn('id="latestMergedAge"', text)
+            self.assertIn('data: points("mergedAge")', text)
+            self.assertIn('latest.mergedAge === null ? "N/A"', text)
+            self.assertIn('row.mergedAge === null ? "N/A"', text)
+            self.assertIn("average merged age (7d, days)", text)
             self.assertIn("loadChartJs()", text)
             self.assertIn('unit: "day"', text)
             self.assertIn('id="chartOpen"', text)
@@ -151,6 +157,51 @@ class TestRecordPrActivity(unittest.TestCase):
         self.assertEqual(snapshot["closed_prs_1d"], "1")
         self.assertEqual(snapshot["merged_prs_1d"], "1")
         self.assertEqual(snapshot["avg_open_age_days"], "11.50")
+        self.assertEqual(snapshot["avg_merged_age_days_7d"], "2.00")
+
+    def test_merged_age_uses_merge_time_and_seven_day_window(self):
+        now = dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc)
+        pulls = [
+            {
+                "created_at": created,
+                "merged_at": merged,
+                "closed_at": "2026-08-28T08:00:00Z",
+                "updated_at": "2026-08-28T08:00:00Z",
+            }
+            for created, merged in [
+                ("2026-08-01T08:00:00Z", "2026-08-21T08:00:00Z"),
+                ("2026-08-27T08:00:00Z", "2026-08-27T20:00:00Z"),
+                ("2026-07-01T08:00:00Z", "2026-08-21T07:59:59Z"),
+                ("2026-08-01T08:00:00Z", None),
+                (None, "2026-08-28T08:00:00Z"),
+                ("invalid", "2026-08-28T08:00:00Z"),
+                ("2026-08-28T08:00:00Z", "2026-08-27T08:00:00Z"),
+                ("2026-08-01T08:00:00Z", "invalid"),
+            ]
+        ]
+        original = rpa.iter_pulls
+        rpa.iter_pulls = lambda repo, state, token: iter(pulls)
+        try:
+            snapshot = rpa.collect_snapshot("owner/repo", None, now, open_pulls=[])
+        finally:
+            rpa.iter_pulls = original
+        self.assertEqual(snapshot["merged_prs_7d"], "5")
+        self.assertEqual(snapshot["avg_merged_age_days_7d"], "10.25")
+
+    def test_merged_age_without_valid_ages_is_blank(self):
+        original = rpa.iter_pulls
+        try:
+            for pulls in ([], [{"merged_at": "2026-08-28T08:00:00Z"}]):
+                with self.subTest(pulls=pulls):
+                    rpa.iter_pulls = lambda repo, state, token: iter(pulls)
+                    snapshot = rpa.collect_snapshot(
+                        "owner/repo", None,
+                        dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc),
+                        open_pulls=[],
+                    )
+                    self.assertEqual(snapshot["avg_merged_age_days_7d"], "")
+        finally:
+            rpa.iter_pulls = original
 
     def test_iter_pulls_handles_pagination(self):
         calls = []
@@ -182,6 +233,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 "closed_prs_1d": "2",
                 "merged_prs_1d": "3",
                 "avg_open_age_days": "30.00",
+                "avg_merged_age_days_7d": "2.50",
             }
             second = dict(first, date="2026-08-28T09:00:00Z", open_prs="101")
             rpa.write_snapshot(path, first)
@@ -203,6 +255,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 "closed_prs_1d": "2",
                 "merged_prs_1d": "3",
                 "avg_open_age_days": "30.00",
+                "avg_merged_age_days_7d": "2.50",
             }
             second = dict(first, date="2026-08-28T08:00:00Z", open_prs="101")
             rpa.write_snapshot(path, first)
@@ -210,6 +263,26 @@ class TestRecordPrActivity(unittest.TestCase):
             with open(path, newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
             self.assertEqual(rows, [first, second])
+
+    def test_write_snapshot_preserves_legacy_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "pr_activity.csv")
+            legacy_fields = [
+                field for field in rpa.CSV_FIELDS if field != "avg_merged_age_days_7d"
+            ]
+            first = dict.fromkeys(legacy_fields, "0")
+            first["date"] = "2026-08-27T08:00:00Z"
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=legacy_fields)
+                writer.writeheader()
+                writer.writerow(first)
+            second = dict(
+                first, date="2026-08-28T08:00:00Z", avg_merged_age_days_7d="2.50"
+            )
+            rpa.write_snapshot(path, second)
+            with open(path, newline="", encoding="utf-8") as stream:
+                rows = list(csv.DictReader(stream))
+            self.assertEqual(rows, [dict(first, avg_merged_age_days_7d=""), second])
 
     def test_write_open_pull_tables_sorts_by_creation_date_and_records_ages(self):
         pulls = [
