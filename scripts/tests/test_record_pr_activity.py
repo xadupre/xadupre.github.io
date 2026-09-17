@@ -18,6 +18,37 @@ import record_pr_activity as rpa
 
 
 class TestRecordPrActivity(unittest.TestCase):
+    def test_dashboard_age_series_use_separate_axes(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        for project, options in (("onnx", "options"), ("onnxruntime", "commonOptions")):
+            with self.subTest(project=project):
+                page = os.path.join(root, "dashboard", project, "pr-activity.html")
+                with open(page, encoding="utf-8") as stream:
+                    text = stream.read()
+                age_chart = text.split('getElementById("chartAge"), {', 1)[1].split(
+                    'const body = document.getElementById("observationsBody")', 1
+                )[0]
+                self.assertIn('data: points("age"), yAxisID: "y"', age_chart)
+                self.assertIn(
+                    'data: points("mergedAge"), yAxisID: "yMerged"', age_chart
+                )
+                self.assertIn(f"...{options},", age_chart)
+                self.assertIn(f"...{options}.scales,", age_chart)
+                for axis, position, label in (
+                    ("y", "left", "average open age (days)"),
+                    ("yMerged", "right", "average merged age (7d, days)"),
+                ):
+                    self.assertRegex(
+                        age_chart,
+                        rf'{axis}: \{{\s*\.\.\.{options}\.scales\.y,\s*'
+                        rf'position: "{position}",\s*'
+                        rf'title: \{{ display: true, text: "{re.escape(label)}"',
+                    )
+                self.assertIn("grid: { drawOnChartArea: false }", age_chart)
+                self.assertNotIn("yMerged", text.split(
+                    'getElementById("chartAge"), {', 1
+                )[0])
+
     def test_dashboard_and_home_page_are_wired(self):
         root = os.path.dirname(os.path.dirname(HERE))
         for project in ("onnx", "onnxruntime"):
