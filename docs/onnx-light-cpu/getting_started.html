@@ -32,7 +32,7 @@
 
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="_static/sg_gallery.css?v=fd6457a4" />
+    <link rel="stylesheet" type="text/css" href="_static/sg_gallery.css?v=c83e6b79" />
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 16, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 17, 2026"/>
   
     
     <script src="_static/searchtools.js"></script>
@@ -468,6 +468,60 @@ cmake<span class="w"> </span>--build<span class="w"> </span>build
 <p>The C++ quick start requires the onnx-light C++ package to be installed so
 <code class="docutils literal notranslate"><span class="pre">find_package(onnx_light)</span></code> can locate it.</p>
 </section>
+<section id="diagnosing-native-extension-import-failures">
+<h2>Diagnosing native-extension import failures<a class="headerlink" href="#diagnosing-native-extension-import-failures" title="Link to this heading">#</a></h2>
+<p>Before attributing an undefined symbol to import order, rebuild both projects
+from clean source trees with no existing native artifacts. Reusing an in-place
+build can mix extensions and shared libraries from different configurations.
+Use absolute source paths and fresh build directories; do not install either
+project into site-packages or use editable installs for this check.</p>
+<p>For example, on Linux, with the Python build dependencies already available:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">ONNX_SOURCE</span><span class="o">=</span>/absolute/path/to/onnx-light
+<span class="nb">export</span><span class="w"> </span><span class="nv">CPU_SOURCE</span><span class="o">=</span>/absolute/path/to/onnx-light-cpu
+<span class="nb">export</span><span class="w"> </span><span class="nv">BUILD_ROOT</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="k">)</span><span class="s2">"</span>
+
+cmake<span class="w"> </span>-S<span class="w"> </span><span class="s2">"</span><span class="nv">$ONNX_SOURCE</span><span class="s2">"</span><span class="w"> </span>-B<span class="w"> </span><span class="s2">"</span><span class="nv">$BUILD_ROOT</span><span class="s2">/onnx-light"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release<span class="w"> </span>-DONNX_LIGHT_INSTALL<span class="o">=</span>OFF<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DPython_EXECUTABLE<span class="o">=</span><span class="s2">"</span><span class="k">$(</span><span class="nb">command</span><span class="w"> </span>-v<span class="w"> </span>python<span class="k">)</span><span class="s2">"</span>
+cmake<span class="w"> </span>--build<span class="w"> </span><span class="s2">"</span><span class="nv">$BUILD_ROOT</span><span class="s2">/onnx-light"</span><span class="w"> </span>--parallel<span class="w"> </span><span class="m">4</span>
+cmake<span class="w"> </span>--install<span class="w"> </span><span class="s2">"</span><span class="nv">$BUILD_ROOT</span><span class="s2">/onnx-light"</span><span class="w"> </span>--prefix<span class="w"> </span><span class="s2">"</span><span class="nv">$ONNX_SOURCE</span><span class="s2">"</span>
+
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$CPU_SOURCE</span><span class="s2">:</span><span class="nv">$ONNX_SOURCE</span><span class="s2">"</span>
+python<span class="w"> </span><span class="s2">"</span><span class="nv">$CPU_SOURCE</span><span class="s2">/setup.py"</span><span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--onnx-light-source<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--build-temp<span class="w"> </span><span class="s2">"</span><span class="nv">$BUILD_ROOT</span><span class="s2">/onnx-light-cpu"</span><span class="w"> </span>--parallel<span class="w"> </span><span class="m">4</span>
+
+<span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$CPU_SOURCE</span><span class="s2">"</span>
+python<span class="w"> </span>-m<span class="w"> </span>unittest<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>unittests.python.test_kernels_e2e.TestExtensionImportOrder<span class="w"> </span>-v
+</pre></div>
+</div>
+<p>Here <code class="docutils literal notranslate"><span class="pre">cmake</span> <span class="pre">--install</span></code> places the dependency’s freshly built libraries in its
+source tree, not in site-packages. <code class="docutils literal notranslate"><span class="pre">--onnx-light-source</span></code> links against those
+same runtime libraries rather than rebuilding a second copy.</p>
+<p>The regression test imports <code class="docutils literal notranslate"><span class="pre">_cpukernels</span></code> then <code class="docutils literal notranslate"><span class="pre">_cpuregister</span></code>, and the
+reverse order, in separate Python subprocesses. It runs from both the checkout
+and a temporary working directory, verifies that the CPU extensions came from
+the checkout, and exercises kernel registration. A failure includes the child
+process’s output and traceback. If a clean build passes but reused artifacts
+fail, record both source revisions and build commands with the report rather
+than changing symbol visibility or preloading libraries to mask the failure.</p>
+<p>For <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/698">issue #698</a>, this
+procedure did not reproduce the reported undefined symbol on Linux x86-64.
+The clean Release builds used CPU sources at <code class="docutils literal notranslate"><span class="pre">1ebe06e8b3e4</span></code> and onnx-light at
+<code class="docutils literal notranslate"><span class="pre">e03a1ba56145</span></code>, with Python 3.13.15, GCC 13.3, CMake 3.31.6, and nanobind 3.0.1.
+Both import orders passed from both working directories, as did the existing
+kernel-usage and SIMD-detection tests (nine tests total). Neither project was
+installed into site-packages, and no runtime-library preload was needed.
+The reported mixed-artifact failure therefore did not warrant a source linkage
+or export change.</p>
+<p>The same regression subsequently exposed a separate Windows DLL-search failure:
+<code class="docutils literal notranslate"><span class="pre">_cpuregister</span></code> could not locate onnx-light’s dependent DLLs in a fresh process.
+On Windows, the bindings package registers the selected onnx-light package’s
+<code class="docutils literal notranslate"><span class="pre">onnx_py</span></code> directory with <code class="docutils literal notranslate"><span class="pre">os.add_dll_directory</span></code> and retains its handle.
+This makes the DLLs discoverable without preloading either project’s extensions;
+adding the directory to <code class="docutils literal notranslate"><span class="pre">PATH</span></code> alone is insufficient for Python’s extension
+loader.</p>
+</section>
 <section id="quick-start">
 <h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
 <p>Register the optimized kernels, then execute the graph through onnx-light’s
@@ -573,6 +627,7 @@ C++</label><div class="sd-tab-content docutils">
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#diagnosing-native-extension-import-failures">Diagnosing native-extension import failures</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
 </ul>
   </nav></div>
@@ -608,7 +663,7 @@ C++</label><div class="sd-tab-content docutils">
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 16, 2026.
+  Last updated on Sep 17, 2026.
   <br/>
 </p></div>
       

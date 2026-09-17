@@ -32,7 +32,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=c83e6b79" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 16, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -515,6 +515,114 @@ tests and vector-tail cases, and leave the automatic AVX-512 build unchanged.
 The final corpus target is at least <code class="docutils literal notranslate"><span class="pre">1.0x</span></code> ONNX Runtime median performance
 for each priority family, with no priority case below <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>.</p>
 </section>
+<section id="simplifiedlayernormalization-follow-up">
+<h2>SimplifiedLayerNormalization follow-up<a class="headerlink" href="#simplifiedlayernormalization-follow-up" title="Link to this heading">#</a></h2>
+<p>Issue <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/724">#724</a> fixes
+<code class="docutils literal notranslate"><span class="pre">stash_type</span></code> selection and removes the FP32-only, exact-suffix restriction
+from the common optimized paths. FP16 reuses the F16C RMS reduction and affine
+implementation, but rounds only after scaling. FP64 uses AVX with either FP32
+or FP64 accumulation. Broadcast-contiguous suffixes need one scale index per
+row or block rather than per element. Mixed types, BF16, unaligned buffers,
+and other layouts retain portable fallbacks.</p>
+<p>Measurements on 2026-09-17 used an AMD EPYC 9V74 runner (two visible physical
+cores), GCC Release, the AVX2 ceiling, onnx-light 0.1.27, and ONNX Runtime
+1.30.0 CPUExecutionProvider. The existing backend CLI measured all 72 FP16,
+FP32, and FP64 cases (12 shapes, with and without inverse RMS) using
+<code class="docutils literal notranslate"><span class="pre">stash_type=1</span></code>, 100 warm-ups, up to 2,000 repetitions, and a one-second
+limit per phase. Shapes include decode, prefill, narrow/tail rows, suffix
+axes, and outer broadcasting. Every case exceeded <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>; the minimum
+single-thread speedup was <code class="docutils literal notranslate"><span class="pre">1.45x</span></code>.</p>
+<p>An additional cross-check used the existing
+<code class="docutils literal notranslate"><span class="pre">tools._avx2_parity_worker.measure_isolated</span></code> API on the medium, prefill4096,
+and outer-broadcast fixtures, with identical serialized inputs and thread
+counts. Runtimes ran in separate subprocesses, exited between phases, and
+alternated first-runtime order by case. Affinity was <code class="docutils literal notranslate"><span class="pre">taskset</span> <span class="pre">-c</span> <span class="pre">0,2</span></code>
+(one hardware thread per physical core). The 18 cases at one and two threads
+all exceeded <code class="docutils literal notranslate"><span class="pre">0.9x</span></code>; the minimum across these 36 combinations was <code class="docutils literal notranslate"><span class="pre">1.32x</span></code>.
+Representative isolated <strong>median latencies in seconds</strong>, with Y only:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 29.0%" />
+<col style="width: 8.0%" />
+<col style="width: 16.0%" />
+<col style="width: 16.0%" />
+<col style="width: 12.0%" />
+<col style="width: 19.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>X / Scale shape, dtype</p></th>
+<th class="head"><p>Threads</p></th>
+<th class="head"><p>onnx-light-cpu</p></th>
+<th class="head"><p>ONNX Runtime</p></th>
+<th class="head"><p>ORT / CPU</p></th>
+<th class="head"><p>Recorded path</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>[64,512] / [512], FP16</p></td>
+<td><p>1</p></td>
+<td><p>0.000008122</p></td>
+<td><p>0.000115275</p></td>
+<td><p>14.19x</p></td>
+<td><p>f16c/row-scale</p></td>
+</tr>
+<tr class="row-odd"><td><p>[64,512] / [512], FP16</p></td>
+<td><p>2</p></td>
+<td><p>0.000008102</p></td>
+<td><p>0.000062875</p></td>
+<td><p>7.76x</p></td>
+<td><p>f16c/row-scale</p></td>
+</tr>
+<tr class="row-even"><td><p>[4,64,128] / [4,1,128], FP32</p></td>
+<td><p>1</p></td>
+<td><p>0.000009113</p></td>
+<td><p>0.000079320</p></td>
+<td><p>8.70x</p></td>
+<td><p>float32/normalization/row-scale</p></td>
+</tr>
+<tr class="row-odd"><td><p>[4,64,128] / [4,1,128], FP32</p></td>
+<td><p>2</p></td>
+<td><p>0.000009194</p></td>
+<td><p>0.000042494</p></td>
+<td><p>4.62x</p></td>
+<td><p>float32/normalization/row-scale</p></td>
+</tr>
+<tr class="row-even"><td><p>[1,128,4096] / [4096], FP64</p></td>
+<td><p>1</p></td>
+<td><p>0.000193082</p></td>
+<td><p>0.000801040</p></td>
+<td><p>4.15x</p></td>
+<td><p>avx/row-scale</p></td>
+</tr>
+<tr class="row-odd"><td><p>[1,128,4096] / [4096], FP64</p></td>
+<td><p>2</p></td>
+<td><p>0.000101874</p></td>
+<td><p>0.000403906</p></td>
+<td><p>3.96x</p></td>
+<td><p>avx/row-scale</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The workbook’s <code class="docutils literal notranslate"><span class="pre">cpu_kernel_paths</span></code> column records the registered operator
+and its selected implementation, not merely registration eligibility.
+The small cases intentionally stay serial inside the CPU executor even when
+two threads are available. The runner is virtualized; these measurements are
+not universal hardware guarantees. Hardware sampling was unavailable
+(<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>); no hardware-profile claim is made. No measured
+case remained below the acceptance threshold. Performance parity is not
+claimed for unmeasured mixed-type, BF16, or FP64-stash workloads.</p>
+<p>Reproduce the full single-thread corpus from the repository checkout:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CMAKE_ARGS</span><span class="o">=</span><span class="s2">"-DCMAKE_BUILD_TYPE=Release -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>setup.py<span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--onnx-light-source
+taskset<span class="w"> </span>-c<span class="w"> </span><span class="m">0</span>,2<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--test<span class="w"> </span><span class="s1">'^test_cpu_simplified_layer_normalization_'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--dtype<span class="w"> </span>float16<span class="w"> </span>float32<span class="w"> </span>float64<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--repeat<span class="w"> </span><span class="m">2000</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">100</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">1</span><span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/tmp/simplified-layer-normalization.xlsx
+</pre></div>
+</div>
+</section>
 <section id="reproducible-baseline">
 <h2>Reproducible baseline<a class="headerlink" href="#reproducible-baseline" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/issues/631">Issue #631</a> establishes
@@ -878,6 +986,105 @@ makes that sweep reproducible and prevents an AVX-512-capable development
 machine from hiding an AVX2 fallback.</p>
 </section>
 </section>
+<section id="skinny-m-matmulinteger-profiling-725">
+<h2>Skinny-M MatMulInteger profiling (#725)<a class="headerlink" href="#skinny-m-matmulinteger-profiling-725" title="Link to this heading">#</a></h2>
+<p>The September 17 checkout already bypassed packing for <code class="docutils literal notranslate"><span class="pre">M=1</span></code>. Its AVX2
+kernel widened eight B bytes to INT32, then traversed all of K before
+advancing to the next eight columns. Thus the reported M=1 slowdown was
+not caused by a full B pack in this revision: narrow, strided B reads and
+the widening/multiply loop were the target. <code class="docutils literal notranslate"><span class="pre">M=2</span></code> still transposed B.</p>
+<p>Before changing dispatch, <code class="docutils literal notranslate"><span class="pre">integer_gemm_throughput</span></code> measured the production
+B packer, the existing dot kernel on an already packed B, the forced packed
+driver (including allocations/corrections), and public dispatch separately.
+On a Xeon Platinum 8573C, GCC 13.3 Release, CPU affinity 0, one participant,
+AVX2 ceiling, UINT8 x INT8 with scalar zero points 128 and 0:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>M / N / K</p></th>
+<th class="head"><p>B packing (s)</p></th>
+<th class="head"><p>Packed dots only (s)</p></th>
+<th class="head"><p>Packed driver (s)</p></th>
+<th class="head"><p>Original dispatch (s)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1 / 4096 / 4096</p></td>
+<td><p>0.067409</p></td>
+<td><p>0.000743</p></td>
+<td><p>0.070419</p></td>
+<td><p>0.008151</p></td>
+</tr>
+<tr class="row-odd"><td><p>2 / 4096 / 4096</p></td>
+<td><p>0.067964</p></td>
+<td><p>0.001528</p></td>
+<td><p>0.068869</p></td>
+<td><p>0.068952</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>These are medians of 31 samples after five warmups. Isolated phase timings
+are not additive (allocation and cache state differ). They nevertheless
+show packing dominating M=2 and confirm that M=1 needs a better streaming
+kernel. Hardware-counter profiling was unavailable on this runner
+(<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>); these are wall-clock phase profiles, not PMU
+attributions.</p>
+<p>The new plan interleaves four K values <strong>in registers</strong>, reuses the exact
+AVX2 split-byte dot arithmetic or AVX-512 VNNI, and sweeps columns within
+bounded K bands. No B panel or retained packed weights are allocated.
+All four signedness combinations and scalar/per-axis zero points are
+supported. AVX2 specializes the normalized A zero points 0 and 128 to avoid
+unnecessary column sums. M=1 retains its streaming selection; M=2 uses it
+for N &gt;= 32 and K &gt;= 4 (the existing packed AVX2 microkernel has MR=2).
+Larger M and unsupported ISAs retain the packed path. Runtime-owned,
+cache-line-aligned column ranges provide parallelism without nesting.</p>
+<p>The end-to-end parity tool now prints and saves <code class="docutils literal notranslate"><span class="pre">packed</span></code>, <code class="docutils literal notranslate"><span class="pre">no-pack-avx2</span></code>,
+or <code class="docutils literal notranslate"><span class="pre">no-pack-vnni</span></code> from the production planner. Its <code class="docutils literal notranslate"><span class="pre">skinny_m_4096</span></code> case
+omits both zero points, as does the public backend benchmark; the
+<code class="docutils literal notranslate"><span class="pre">skinny_m_4096_shifted</span></code> case separately checks A zero point 128.
+With onnx-light 0.1.27 and ONNX Runtime 1.30.0, one thread, affinity 0,
+31 alternating samples and five warmups, the omitted-zero-point AVX2 case
+measured <strong>0.001803 s versus ORT 0.005461 s (3.03x)</strong>. The shifted case was
+0.001928 s versus 0.005775 s (3.00x); M=2 was 1.50x and the
+<code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">x</span> <span class="pre">1025</span></code> by <code class="docutils literal notranslate"><span class="pre">1025</span> <span class="pre">x</span> <span class="pre">257</span></code> tail case was 1.34x. Results are checked
+for exact equality before timing; ORT worker spinning is disabled.</p>
+<p>This clears the selected same-host comparison, <strong>not</strong> the full integer
+parity gate or the issue’s published absolute latency. The unchanged
+<code class="docutils literal notranslate"><span class="pre">direct</span></code> packed case remained below parity. Background extraction work
+on this shared runner affected timings, so dedicated-machine reproduction
+is still needed. The original ORT 0.354 ms number was not reproduced.
+For the omitted-zero-point case, a final isolated profile measured
+0.075958 s packing, 0.000935 s prepacked dots, and 0.001815 s streaming.
+Even prepacked exact AVX2 arithmetic exceeds the published ORT latency;
+register interleaving, output-band updates, and memory traffic remain in
+the streaming path. The phase comparison is a diagnostic floor, not a
+precise attribution of that remaining absolute gap.</p>
+<p>After background extraction finished, an isolated AUTO build on the same
+host verified <code class="docutils literal notranslate"><span class="pre">no-pack-vnni</span></code> and measured the public-compatible case at
+<strong>0.000715 s versus ORT 0.004785 s (6.69x)</strong>. The shifted case measured
+0.000719 s versus 0.004808 s (6.69x), M=2 measured 3.29x, and the tail
+case measured 1.78x. These used the same one-thread, CPU-0,
+31-alternating-sample/five-warmup protocol. All 13 native differential tests
+passed, as did all 13 AVX2 tests under AddressSanitizer/UndefinedBehaviorSanitizer;
+a build without compiled AVX kernels passed its 10 applicable tests.</p>
+<p>Reproduce without timing model construction or moving packing outside the
+end-to-end measurement:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">cmake -S . -B build-integer -DCMAKE_BUILD_TYPE=Release \</span>
+<span class="go">  -DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON -DONNX_LIGHT_CPU_BUILD_PYTHON=OFF \</span>
+<span class="go">  -DONNX_LIGHT_CPU_WITH_ONNX_LIGHT=OFF -DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2</span>
+<span class="go">cmake --build build-integer --target integer_gemm_throughput -j4</span>
+<span class="go">taskset -c 0 build-integer/integer_gemm_throughput 1 4096 4096 0 0</span>
+<span class="go">taskset -c 0 build-integer/integer_gemm_throughput 2 4096 4096 128 0</span>
+<span class="go">python -m tools.benchmark_integer_gemm_parity --threads 1 --cpus 0 \</span>
+<span class="go">  --case skinny_m_4096 --case skinny_m_4096_shifted --case skinny_m_mr \</span>
+<span class="go">  --case skinny_m_tail --repeat 31 --warmup 5 --output /tmp/integer-parity.json</span>
+</pre></div>
+</div>
+<p>The Python command requires an in-place extension built with the same ISA
+ceiling. Use <code class="docutils literal notranslate"><span class="pre">AUTO</span></code> instead of <code class="docutils literal notranslate"><span class="pre">AVX2</span></code> for native VNNI measurements.
+The C++ phase benchmark deliberately has no executor and reports one
+participant; use the Python tool’s <code class="docutils literal notranslate"><span class="pre">--threads</span></code> for runtime parallelism.</p>
+</section>
 <section id="work-sequence">
 <h2>Work sequence<a class="headerlink" href="#work-sequence" title="Link to this heading">#</a></h2>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -1024,12 +1231,14 @@ to hide a missing AVX2 implementation.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#measurement-contract">Measurement contract</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#simplifiedlayernormalization-follow-up">SimplifiedLayerNormalization follow-up</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproducible-baseline">Reproducible baseline</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-foundation">Current foundation</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#september-8-full-activation-corpus-audit">September 8 full activation-corpus audit</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#september-7-dashboard-follow-up">September 7 dashboard follow-up</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#skinny-m-matmulinteger-profiling-725">Skinny-M MatMulInteger profiling (#725)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#work-sequence">Work sequence</a></li>
 </ul>
   </nav></div>
@@ -1065,7 +1274,7 @@ to hide a missing AVX2 implementation.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 16, 2026.
+  Last updated on Sep 17, 2026.
   <br/>
 </p></div>
       

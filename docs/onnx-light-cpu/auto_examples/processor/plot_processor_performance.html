@@ -32,7 +32,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=c83e6b79" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 16, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -503,64 +503,63 @@ core.</p>
 duration, a smaller memory budget) so the example still runs quickly as a
 unit test while exercising every public result path: both thread policies,
 latency, an explicit affinity, and every element type this host can supply.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">platform</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplicitAffinity</span><span class="p">,</span> <span class="n">benchmark_processor_performance</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">_processor_name</span><span class="p">():</span>
-    <span class="n">cpuinfo</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">"/proc/cpuinfo"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">cpuinfo</span><span class="o">.</span><span class="n">exists</span><span class="p">():</span>
-        <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">cpuinfo</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">"utf-8"</span><span class="p">)</span><span class="o">.</span><span class="n">splitlines</span><span class="p">():</span>
-            <span class="n">key</span><span class="p">,</span> <span class="n">separator</span><span class="p">,</span> <span class="n">value</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="s2">":"</span><span class="p">)</span>
-            <span class="k">if</span> <span class="n">separator</span> <span class="ow">and</span> <span class="n">key</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span> <span class="o">==</span> <span class="s2">"model name"</span><span class="p">:</span>
-                <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span>
-    <span class="k">return</span> <span class="n">platform</span><span class="o">.</span><span class="n">processor</span><span class="p">()</span> <span class="ow">or</span> <span class="s2">"unknown"</span>
-
-
-<span class="n">unit_test_going</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"UNITTEST_GOING"</span><span class="p">,</span> <span class="s2">"0"</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"1"</span><span class="p">,</span> <span class="s2">"true"</span><span class="p">,</span> <span class="s2">"True"</span><span class="p">)</span>
-
-<span class="c1"># ``--repeats``/``--minimum-duration-ms`` let the measurement be lengthened</span>
-<span class="c1"># (e.g. to steady the noisy ``physical`` policy on a busy or high-core-count</span>
-<span class="c1"># host) without touching the source. ``parse_known_args`` ignores unrelated</span>
-<span class="c1"># arguments injected by pytest/sphinx-gallery when this file runs as a test</span>
-<span class="c1"># or a documentation example.</span>
-<span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="vm">__doc__</span><span class="p">)</span>
-<span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-    <span class="s2">"--repeats"</span><span class="p">,</span>
-    <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span>
-    <span class="n">default</span><span class="o">=</span><span class="mi">2</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="mi">12</span><span class="p">,</span>
-    <span class="n">help</span><span class="o">=</span><span class="s2">"number of measurement repeats per (dtype, policy) combination"</span><span class="p">,</span>
-<span class="p">)</span>
-<span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span>
-    <span class="s2">"--minimum-duration-ms"</span><span class="p">,</span>
-    <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span>
-    <span class="n">default</span><span class="o">=</span><span class="mf">1.0</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="mf">40.0</span><span class="p">,</span>
-    <span class="n">help</span><span class="o">=</span><span class="s2">"minimum wall-clock duration, in milliseconds, of a single measurement sample"</span><span class="p">,</span>
-<span class="p">)</span>
-<span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
-
-<span class="nb">print</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">"benchmark parameters: repeats=</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">repeats</span><span class="si">}</span><span class="s2"> minimum_duration_ms=</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">minimum_duration_ms</span><span class="si">}</span><span class="s2">"</span>
-<span class="p">)</span>
-
-<span class="n">profile</span> <span class="o">=</span> <span class="n">benchmark_processor_performance</span><span class="p">(</span>
-    <span class="n">thread_policies</span><span class="o">=</span><span class="p">(</span><span class="s2">"single"</span><span class="p">,</span> <span class="s2">"physical"</span><span class="p">),</span>
-    <span class="n">repeats</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">repeats</span><span class="p">,</span>
-    <span class="n">minimum_duration_ms</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">minimum_duration_ms</span><span class="p">,</span>
-    <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="p">(</span><span class="mi">128</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">),</span>
-    <span class="n">include_latency</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-    <span class="n">explicit_single_affinity</span><span class="o">=</span><span class="n">ExplicitAffinity</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span>
-<span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">platform</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span><span class="w">
+</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib</span><span class="nn">.</span><span class="nn">pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span><span class="w">
+</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">ExplicitAffinity</span><span class="p">,</span> <span class="n">benchmark_processor_performance</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">_processor_name</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">cpuinfo</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">/proc/cpuinfo</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">cpuinfo</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">cpuinfo</span><span class="o">.</span><span class="n">read_text</span><span class="p">(</span><span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">utf-8</span><span class="s2">&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">splitlines</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>            <span class="n">key</span><span class="p">,</span> <span class="n">separator</span><span class="p">,</span> <span class="n">value</span> <span class="o">=</span> <span class="n">line</span><span class="o">.</span><span class="n">partition</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">:</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>            <span class="k">if</span> <span class="n">separator</span> <span class="ow">and</span> <span class="n">key</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">model name</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
+</span>                <span class="k">return</span> <span class="n">value</span><span class="o">.</span><span class="n">strip</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">platform</span><span class="o">.</span><span class="n">processor</span><span class="p">(</span><span class="p">)</span> <span class="ow">or</span> <span class="s2">&quot;</span><span class="s2">unknown</span><span class="s2">&quot;</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="n">unit_test_going</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">UNITTEST_GOING</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">0</span><span class="s2">&quot;</span><span class="p">)</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">1</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">true</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">True</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="c1"># ``--repeats``/``--minimum-duration-ms`` let the measurement be lengthened</span><span class="w">
+</span><span class="c1"># (e.g. to steady the noisy ``physical`` policy on a busy or high-core-count</span><span class="w">
+</span><span class="c1"># host) without touching the source. ``parse_known_args`` ignores unrelated</span><span class="w">
+</span><span class="c1"># arguments injected by pytest/sphinx-gallery when this file runs as a test</span><span class="w">
+</span><span class="c1"># or a documentation example.</span><span class="w">
+</span><span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="vm">__doc__</span><span class="p">)</span><span class="w">
+</span><span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="w">
+</span>    <span class="s2">&quot;</span><span class="s2">--repeats</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>    <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span><span class="w">
+</span>    <span class="n">default</span><span class="o">=</span><span class="mi">2</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="mi">12</span><span class="p">,</span><span class="w">
+</span>    <span class="n">help</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">number of measurement repeats per (dtype, policy) combination</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span><span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="w">
+</span>    <span class="s2">&quot;</span><span class="s2">--minimum-duration-ms</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>    <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span><span class="w">
+</span>    <span class="n">default</span><span class="o">=</span><span class="mf">1.0</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="mf">40.0</span><span class="p">,</span><span class="w">
+</span>    <span class="n">help</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">minimum wall-clock duration, in milliseconds, of a single measurement sample</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span><span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">benchmark parameters: repeats=</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">repeats</span><span class="si">}</span><span class="s2"> minimum_duration_ms=</span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">minimum_duration_ms</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="n">profile</span> <span class="o">=</span> <span class="n">benchmark_processor_performance</span><span class="p">(</span><span class="w">
+</span>    <span class="n">thread_policies</span><span class="o">=</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">single</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">physical</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="n">repeats</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">repeats</span><span class="p">,</span><span class="w">
+</span>    <span class="n">minimum_duration_ms</span><span class="o">=</span><span class="n">args</span><span class="o">.</span><span class="n">minimum_duration_ms</span><span class="p">,</span><span class="w">
+</span>    <span class="n">memory_budget_bytes</span><span class="o">=</span><span class="p">(</span><span class="mi">8</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span> <span class="k">if</span> <span class="n">unit_test_going</span> <span class="k">else</span> <span class="p">(</span><span class="mi">128</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="n">include_latency</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span><span class="w">
+</span>    <span class="n">explicit_single_affinity</span><span class="o">=</span><span class="n">ExplicitAffinity</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>benchmark parameters: repeats=12 minimum_duration_ms=40.0
 </pre></div>
 </div>
@@ -573,75 +572,60 @@ latency, an explicit affinity, and every element type this host can supply.</p>
 processors that share that cache instance: one means private to one logical
 processor, while a larger value means shared by that many logical processors.
 It does not mean that every cache at a given level has one global instance.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">topology</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">topology</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"processor=</span><span class="si">{</span><span class="n">_processor_name</span><span class="p">()</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"platform=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">platform</span><span class="si">}</span><span class="s2"> compiler=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">compiler</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"timer=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">timer_name</span><span class="si">}</span><span class="s2"> schema_version=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">schema_version</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span>
-    <span class="sa">f</span><span class="s2">"logical_threads=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">logical_thread_count</span><span class="si">}</span><span class="s2"> "</span>
-    <span class="sa">f</span><span class="s2">"physical_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">physical_core_count</span><span class="si">}</span><span class="s2"> "</span>
-    <span class="sa">f</span><span class="s2">"performance_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">performance_core_count</span><span class="si">}</span><span class="s2"> "</span>
-    <span class="sa">f</span><span class="s2">"efficiency_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">efficiency_core_count</span><span class="si">}</span><span class="s2"> "</span>
-    <span class="sa">f</span><span class="s2">"cache_topology_detected=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">cache_topology_detected</span><span class="si">}</span><span class="s2">"</span>
-<span class="p">)</span>
-<span class="k">for</span> <span class="n">cache</span> <span class="ow">in</span> <span class="n">topology</span><span class="o">.</span><span class="n">caches</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">"  L</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">level</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">kind</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> size=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> bytes "</span>
-        <span class="sa">f</span><span class="s2">"line=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">line_size_bytes</span><span class="si">:</span><span class="s2">&gt;3</span><span class="si">}</span><span class="s2"> sharing_threads=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span><span class="si">:</span><span class="s2">&gt;3</span><span class="si">}</span><span class="s2"> "</span>
-        <span class="sa">f</span><span class="s2">"confidence=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">confidence</span><span class="si">}</span><span class="s2">"</span>
-    <span class="p">)</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">selected affinities and working-set sizes (memory levels):"</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">policies</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">reference</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_modify_write</span>
-        <span class="k">if</span> <span class="n">reference</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">continue</span>
-        <span class="nb">print</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">level</span><span class="si">:</span><span class="s2">&lt;3</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">policy</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> participants=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">participant_count</span><span class="si">:</span><span class="s2">&lt;2</span><span class="si">}</span><span class="s2"> "</span>
-            <span class="sa">f</span><span class="s2">"affinity_pinned=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">affinity_pinned</span><span class="si">!s:</span><span class="s2">&lt;5</span><span class="si">}</span><span class="s2"> "</span>
-            <span class="sa">f</span><span class="s2">"working_set=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">working_set_bytes</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> bytes"</span>
-        <span class="p">)</span>
-
-<span class="k">if</span> <span class="n">profile</span><span class="o">.</span><span class="n">warnings</span><span class="p">:</span>
-    <span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">warnings:"</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">warning</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">warnings</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  - </span><span class="si">{</span><span class="n">warning</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-</pre></div>
-</div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>processor=INTEL(R) XEON(R) PLATINUM 8573C
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">topology</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">topology</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">processor=</span><span class="si">{</span><span class="n">_processor_name</span><span class="p">(</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">platform=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">platform</span><span class="si">}</span><span class="s2"> compiler=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">compiler</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">timer=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">timer_name</span><span class="si">}</span><span class="s2"> schema_version=</span><span class="si">{</span><span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">schema_version</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">logical_threads=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">logical_thread_count</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">physical_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">physical_core_count</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">performance_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">performance_core_count</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">efficiency_cores=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">efficiency_core_count</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">cache_topology_detected=</span><span class="si">{</span><span class="n">topology</span><span class="o">.</span><span class="n">cache_topology_detected</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">cache</span> <span class="ow">in</span> <span class="n">topology</span><span class="o">.</span><span class="n">caches</span><span class="p">:</span><span class="w">
+</span>    <span class="nb">print</span><span class="p">(</span><span class="w">
+</span>        <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  L</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">level</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">kind</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> size=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> bytes </span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">line=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">line_size_bytes</span><span class="si">:</span><span class="s2">&gt;3</span><span class="si">}</span><span class="s2"> sharing_threads=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span><span class="si">:</span><span class="s2">&gt;3</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">confidence=</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">confidence</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">selected affinities and working-set sizes (memory levels):</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">policies</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">reference</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_modify_write</span><span class="w">
+</span>        <span class="k">if</span> <span class="n">reference</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span><span class="w">
+</span>            <span class="k">continue</span><span class="w">
+</span>        <span class="nb">print</span><span class="p">(</span><span class="w">
+</span>            <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  </span><span class="si">{</span><span class="n">level</span><span class="si">:</span><span class="s2">&lt;3</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">policy</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> participants=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">participant_count</span><span class="si">:</span><span class="s2">&lt;2</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>            <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">affinity_pinned=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">affinity_pinned</span><span class="si">!s:</span><span class="s2">&lt;5</span><span class="si">}</span><span class="s2"> </span><span class="s2">&quot;</span><span class="w">
+</span>            <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">working_set=</span><span class="si">{</span><span class="n">reference</span><span class="o">.</span><span class="n">working_set_bytes</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> bytes</span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="k">if</span> <span class="n">profile</span><span class="o">.</span><span class="n">warnings</span><span class="p">:</span><span class="w">
+</span>    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">warnings:</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">warning</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">warnings</span><span class="p">:</span><span class="w">
+</span>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  - </span><span class="si">{</span><span class="n">warning</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>processor=AMD EPYC 7763 64-Core Processor
 platform=linux compiler=gcc
 timer=std::chrono::steady_clock schema_version=2
 logical_threads=4 physical_cores=2 performance_cores=2 efficiency_cores=0 cache_topology_detected=True
-  L1 data      size=     49152 bytes line= 64 sharing_threads=  2 confidence=detected
+  L1 data      size=     32768 bytes line= 64 sharing_threads=  2 confidence=detected
   L1 instruction size=     32768 bytes line= 64 sharing_threads=  2 confidence=detected
-  L2 unified   size=   2097152 bytes line= 64 sharing_threads=  2 confidence=detected
-  L3 unified   size= 272629760 bytes line= 64 sharing_threads=  4 confidence=detected
+  L2 unified   size=    524288 bytes line= 64 sharing_threads=  2 confidence=detected
+  L3 unified   size=  33554432 bytes line= 64 sharing_threads=  4 confidence=detected
 
 selected affinities and working-set sizes (memory levels):
-  L1  single   participants=1  affinity_pinned=True  working_set=     24576 bytes
-  L1  physical participants=2  affinity_pinned=True  working_set=     24576 bytes
-  L2  single   participants=1  affinity_pinned=True  working_set=   1048576 bytes
-  L2  physical participants=2  affinity_pinned=True  working_set=   1048576 bytes
+  L1  single   participants=1  affinity_pinned=True  working_set=     16384 bytes
+  L1  physical participants=2  affinity_pinned=True  working_set=     16384 bytes
+  L2  single   participants=1  affinity_pinned=True  working_set=    262144 bytes
+  L2  physical participants=2  affinity_pinned=True  working_set=    262144 bytes
+  L3  single   participants=1  affinity_pinned=True  working_set=  16777216 bytes
+  L3  physical participants=2  affinity_pinned=True  working_set=  16777216 bytes
+  RAM single   participants=1  affinity_pinned=True  working_set=  75497472 bytes
 
 warnings:
-  - memory L3 read (single): working set unavailable for the requested memory level
-  - memory L3 write (single): working set unavailable for the requested memory level
-  - memory L3 copy (single): working set unavailable for the requested memory level
-  - memory L3 read_modify_write (single): working set unavailable for the requested memory level
-  - memory L3 latency (single): working set unavailable for the requested memory level
-  - memory RAM read (single): working set unavailable for the requested memory level
-  - memory RAM write (single): working set unavailable for the requested memory level
-  - memory RAM copy (single): working set unavailable for the requested memory level
-  - memory RAM read_modify_write (single): working set unavailable for the requested memory level
-  - memory RAM latency (single): working set unavailable for the requested memory level
-  - memory L3 read scaling (1 participants): working set unavailable for the requested memory level
-  - memory L3 read scaling (2 participants): working set unavailable for the requested memory level
-  - memory L3 read (physical): working set unavailable for the requested memory level
-  - memory L3 write (physical): working set unavailable for the requested memory level
-  - memory L3 copy (physical): working set unavailable for the requested memory level
-  - memory L3 read_modify_write (physical): working set unavailable for the requested memory level
-  - memory L3 latency (physical): working set unavailable for the requested memory level
   - memory RAM read (physical): working set unavailable for the requested memory level
   - memory RAM write (physical): working set unavailable for the requested memory level
   - memory RAM copy (physical): working set unavailable for the requested memory level
@@ -649,8 +633,10 @@ warnings:
   - memory RAM latency (physical): working set unavailable for the requested memory level
   - compute float16 (single): no compiled and runtime-detected native arithmetic path for this element type
   - compute bfloat16 (single): no compiled and runtime-detected native arithmetic path for this element type
+  - compute int8 (single): no compiled and runtime-detected native arithmetic path for this element type
   - compute float16 (physical): no compiled and runtime-detected native arithmetic path for this element type
   - compute bfloat16 (physical): no compiled and runtime-detected native arithmetic path for this element type
+  - compute int8 (physical): no compiled and runtime-detected native arithmetic path for this element type
 </pre></div>
 </div>
 </section>
@@ -662,82 +648,81 @@ sets inside the named cache level; RAM chooses one larger than the last-level
 cache. Cache annotations state whether each selected cache descriptor is
 private or how many logical processors share it. RAM has no detected capacity:
 its bar is only the working set used by the benchmark.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">_format_bytes</span><span class="p">(</span><span class="n">value</span><span class="p">):</span>
-    <span class="k">if</span> <span class="n">value</span> <span class="o">&gt;=</span> <span class="mi">1024</span><span class="o">**</span><span class="mi">2</span><span class="p">:</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="o">**</span><span class="mi">2</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MiB"</span>
-    <span class="k">return</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> KiB"</span>
-
-
-<span class="n">levels</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
-<span class="n">cache_by_level</span> <span class="o">=</span> <span class="p">{}</span>
-<span class="k">for</span> <span class="n">cache</span> <span class="ow">in</span> <span class="n">topology</span><span class="o">.</span><span class="n">caches</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">cache</span><span class="o">.</span><span class="n">kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"data"</span><span class="p">,</span> <span class="s2">"unified"</span><span class="p">):</span>
-        <span class="k">continue</span>
-    <span class="n">level</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"L</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">level</span><span class="si">}</span><span class="s2">"</span>
-    <span class="k">if</span> <span class="n">level</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">cache_by_level</span> <span class="ow">or</span> <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span> <span class="o">&gt;</span> <span class="n">cache_by_level</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">:</span>
-        <span class="n">cache_by_level</span><span class="p">[</span><span class="n">level</span><span class="p">]</span> <span class="o">=</span> <span class="n">cache</span>
-
-<span class="n">working_sets</span> <span class="o">=</span> <span class="p">{}</span>
-<span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="n">entry</span> <span class="o">=</span> <span class="n">policies</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"single"</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
-    <span class="n">reference</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_modify_write</span>
-    <span class="k">if</span> <span class="n">reference</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">working_sets</span><span class="p">[</span><span class="n">level</span><span class="p">]</span> <span class="o">=</span> <span class="n">reference</span><span class="o">.</span><span class="n">working_set_bytes</span>
-
-<span class="n">fig_hierarchy</span><span class="p">,</span> <span class="n">ax_hierarchy</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">7.5</span><span class="p">,</span> <span class="mf">4.5</span><span class="p">))</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">))</span>
-<span class="n">width</span> <span class="o">=</span> <span class="mf">0.36</span>
-<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">level</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">levels</span><span class="p">):</span>
-    <span class="n">cache</span> <span class="o">=</span> <span class="n">cache_by_level</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">level</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">cache</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span>
-            <span class="n">i</span> <span class="o">-</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span>
-            <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">label</span><span class="o">=</span><span class="s2">"detected cache"</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">""</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="n">sharing</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="s2">"private to 1 logical processor"</span>
-            <span class="k">if</span> <span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span> <span class="o">==</span> <span class="mi">1</span>
-            <span class="k">else</span> <span class="sa">f</span><span class="s2">"shared by </span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span><span class="si">}</span><span class="s2"> logical processors"</span>
-        <span class="p">)</span>
-        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">_format_bytes</span><span class="p">(</span><span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">)</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">sharing</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-            <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">),</span>
-            <span class="n">xytext</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
-            <span class="n">textcoords</span><span class="o">=</span><span class="s2">"offset points"</span><span class="p">,</span>
-            <span class="n">ha</span><span class="o">=</span><span class="s2">"center"</span><span class="p">,</span>
-            <span class="n">va</span><span class="o">=</span><span class="s2">"bottom"</span><span class="p">,</span>
-            <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>
-        <span class="p">)</span>
-    <span class="k">if</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">working_sets</span><span class="p">:</span>
-        <span class="n">value</span> <span class="o">=</span> <span class="n">working_sets</span><span class="p">[</span><span class="n">level</span><span class="p">]</span>
-        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span>
-            <span class="n">i</span> <span class="o">+</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span>
-            <span class="n">value</span><span class="p">,</span>
-            <span class="n">width</span><span class="p">,</span>
-            <span class="n">label</span><span class="o">=</span><span class="s2">"measured working set"</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">""</span><span class="p">,</span>
-            <span class="n">color</span><span class="o">=</span><span class="s2">"#f4a259"</span><span class="p">,</span>
-        <span class="p">)</span>
-        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span>
-            <span class="n">_format_bytes</span><span class="p">(</span><span class="n">value</span><span class="p">),</span>
-            <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">value</span><span class="p">),</span>
-            <span class="n">xytext</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">),</span>
-            <span class="n">textcoords</span><span class="o">=</span><span class="s2">"offset points"</span><span class="p">,</span>
-            <span class="n">ha</span><span class="o">=</span><span class="s2">"center"</span><span class="p">,</span>
-            <span class="n">va</span><span class="o">=</span><span class="s2">"bottom"</span><span class="p">,</span>
-            <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span>
-        <span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"bytes (log scale)"</span><span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"cache capacity and benchmark working set per participant"</span><span class="p">)</span>
-<span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
-<span class="n">fig_hierarchy</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig_hierarchy</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_hierarchy.png"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">def</span><span class="w"> </span><span class="nf">_format_bytes</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">value</span> <span class="o">&gt;</span><span class="o">=</span> <span class="mi">1024</span><span class="o">*</span><span class="o">*</span><span class="mi">2</span><span class="p">:</span><span class="w">
+</span>        <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="o">*</span><span class="o">*</span><span class="mi">2</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> MiB</span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">value</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="mi">1024</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2"> KiB</span><span class="s2">&quot;</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="n">levels</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">keys</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">cache_by_level</span> <span class="o">=</span> <span class="p">{</span><span class="p">}</span><span class="w">
+</span><span class="k">for</span> <span class="n">cache</span> <span class="ow">in</span> <span class="n">topology</span><span class="o">.</span><span class="n">caches</span><span class="p">:</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">cache</span><span class="o">.</span><span class="n">kind</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">data</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">unified</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="k">continue</span><span class="w">
+</span>    <span class="n">level</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">L</span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">level</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">level</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">cache_by_level</span> <span class="ow">or</span> <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span> <span class="o">&gt;</span> <span class="n">cache_by_level</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">:</span><span class="w">
+</span>        <span class="n">cache_by_level</span><span class="p">[</span><span class="n">level</span><span class="p">]</span> <span class="o">=</span> <span class="n">cache</span><span class="w">
+</span><span class="w">
+</span><span class="n">working_sets</span> <span class="o">=</span> <span class="p">{</span><span class="p">}</span><span class="w">
+</span><span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">entry</span> <span class="o">=</span> <span class="n">policies</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">single</span><span class="s2">&quot;</span><span class="p">)</span> <span class="ow">or</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span>    <span class="n">reference</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="ow">or</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_modify_write</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">reference</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span><span class="w">
+</span>        <span class="n">working_sets</span><span class="p">[</span><span class="n">level</span><span class="p">]</span> <span class="o">=</span> <span class="n">reference</span><span class="o">.</span><span class="n">working_set_bytes</span><span class="w">
+</span><span class="w">
+</span><span class="n">fig_hierarchy</span><span class="p">,</span> <span class="n">ax_hierarchy</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">7.5</span><span class="p">,</span> <span class="mf">4.5</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">width</span> <span class="o">=</span> <span class="mf">0.36</span><span class="w">
+</span><span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">level</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">cache</span> <span class="o">=</span> <span class="n">cache_by_level</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">level</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">cache</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span><span class="w">
+</span>        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="w">
+</span>            <span class="n">i</span> <span class="o">-</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span><span class="w">
+</span>            <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">,</span><span class="w">
+</span>            <span class="n">width</span><span class="p">,</span><span class="w">
+</span>            <span class="n">label</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">detected cache</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">&quot;</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="n">sharing</span> <span class="o">=</span> <span class="p">(</span><span class="w">
+</span>            <span class="s2">&quot;</span><span class="s2">private to 1 logical processor</span><span class="s2">&quot;</span><span class="w">
+</span>            <span class="k">if</span> <span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span> <span class="o">==</span> <span class="mi">1</span><span class="w">
+</span>            <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">shared by </span><span class="si">{</span><span class="n">cache</span><span class="o">.</span><span class="n">sharing_thread_count</span><span class="si">}</span><span class="s2"> logical processors</span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span><span class="w">
+</span>            <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">_format_bytes</span><span class="p">(</span><span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">)</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">sharing</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">cache</span><span class="o">.</span><span class="n">size_bytes</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">xytext</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">textcoords</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">offset points</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">center</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">va</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">bottom</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">working_sets</span><span class="p">:</span><span class="w">
+</span>        <span class="n">value</span> <span class="o">=</span> <span class="n">working_sets</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="w">
+</span>        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="w">
+</span>            <span class="n">i</span> <span class="o">+</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span><span class="w">
+</span>            <span class="n">value</span><span class="p">,</span><span class="w">
+</span>            <span class="n">width</span><span class="p">,</span><span class="w">
+</span>            <span class="n">label</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">measured working set</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="mi">0</span> <span class="k">else</span> <span class="s2">&quot;</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">color</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">#f4a259</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">annotate</span><span class="p">(</span><span class="w">
+</span>            <span class="n">_format_bytes</span><span class="p">(</span><span class="n">value</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="p">(</span><span class="n">i</span> <span class="o">+</span> <span class="n">width</span> <span class="o">/</span> <span class="mi">2</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">xytext</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">textcoords</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">offset points</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">ha</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">center</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">va</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">bottom</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>            <span class="n">fontsize</span><span class="o">=</span><span class="mi">7</span><span class="p">,</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">bytes (log scale)</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">cache capacity and benchmark working set per participant</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_hierarchy</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_hierarchy</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_hierarchy</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_hierarchy.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_001.png" srcset="../../_images/sphx_glr_plot_processor_performance_001.png" alt="cache capacity and benchmark working set per participant" class = "sphx-glr-single-img"/><section id="how-to-read-this-figure">
 <h3>How to read this figure<a class="headerlink" href="#how-to-read-this-figure" title="Link to this heading">#</a></h3>
 <p>One group of bars per memory level (<code class="docutils literal notranslate"><span class="pre">L1</span></code>, <code class="docutils literal notranslate"><span class="pre">L2</span></code>, <code class="docutils literal notranslate"><span class="pre">L3</span></code>, <code class="docutils literal notranslate"><span class="pre">RAM</span></code>), on a
@@ -772,42 +757,43 @@ therefore means “no cache descriptor at this level”, never “capacity zero�
 (element type/policy) compute measurement. Values are the <em>median</em> of the
 raw samples retained in the profile; all figures are effective measurements
 on this host, not a hardware specification.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">memory bandwidth (effective, median of raw samples):"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="s1">'level'</span><span class="si">:</span><span class="s2">&lt;4</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'policy'</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'read GB/s'</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'write GB/s'</span><span class="si">:</span><span class="s2">&gt;11</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'copy GB/s'</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">policies</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">read</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
-        <span class="n">write</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
-        <span class="n">copy</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">"nan"</span><span class="p">)</span>
-        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">level</span><span class="si">:</span><span class="s2">&lt;4</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">policy</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">read</span><span class="si">:</span><span class="s2">&gt;10.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">write</span><span class="si">:</span><span class="s2">&gt;11.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">copy</span><span class="si">:</span><span class="s2">&gt;10.2f</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-
-<span class="nb">print</span><span class="p">(</span><span class="s2">"</span><span class="se">\n</span><span class="s2">compute throughput (effective, median of raw samples, GOP/s):"</span><span class="p">)</span>
-<span class="n">compute_policies</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="n">p</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"single"</span><span class="p">,</span> <span class="s2">"physical"</span><span class="p">)</span> <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">p</span> <span class="ow">in</span> <span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">values</span><span class="p">())</span>
-<span class="p">]</span>
-<span class="n">header</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="s1">'dtype'</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'impl'</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2">"</span> <span class="o">+</span> <span class="s2">""</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">p</span><span class="si">:</span><span class="s2">&gt;12</span><span class="si">}</span><span class="s2">"</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">compute_policies</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="n">header</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">element_type</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="n">implementation_name</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span><span class="o">.</span><span class="n">implementation_name</span>
-    <span class="n">row</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"  </span><span class="si">{</span><span class="n">element_type</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">implementation_name</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2">"</span>
-    <span class="k">for</span> <span class="n">policy</span> <span class="ow">in</span> <span class="n">compute_policies</span><span class="p">:</span>
-        <span class="n">entry</span> <span class="o">=</span> <span class="n">policies</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span>
-        <span class="n">row</span> <span class="o">+=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">median_gops</span><span class="si">:</span><span class="s2">&gt;12.2f</span><span class="si">}</span><span class="s2">"</span> <span class="k">if</span> <span class="n">entry</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="s1">'--'</span><span class="si">:</span><span class="s2">&gt;12</span><span class="si">}</span><span class="s2">"</span>
-    <span class="nb">print</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">memory bandwidth (effective, median of raw samples):</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  </span><span class="si">{</span><span class="s1">'</span><span class="s1">level</span><span class="s1">'</span><span class="si">:</span><span class="s2">&lt;4</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'</span><span class="s1">policy</span><span class="s1">'</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'</span><span class="s1">read GB/s</span><span class="s1">'</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'</span><span class="s1">write GB/s</span><span class="s1">'</span><span class="si">:</span><span class="s2">&gt;11</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'</span><span class="s1">copy GB/s</span><span class="s1">'</span><span class="si">:</span><span class="s2">&gt;10</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">entry</span> <span class="ow">in</span> <span class="n">policies</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">read</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">read</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">nan</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>        <span class="n">write</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">write</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">nan</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>        <span class="n">copy</span> <span class="o">=</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">entry</span><span class="o">.</span><span class="n">copy</span> <span class="k">else</span> <span class="nb">float</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">nan</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  </span><span class="si">{</span><span class="n">level</span><span class="si">:</span><span class="s2">&lt;4</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">policy</span><span class="si">:</span><span class="s2">&lt;8</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">read</span><span class="si">:</span><span class="s2">&gt;10.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">write</span><span class="si">:</span><span class="s2">&gt;11.2f</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">copy</span><span class="si">:</span><span class="s2">&gt;10.2f</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">compute throughput (effective, median of raw samples, GOP/s):</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">compute_policies</span> <span class="o">=</span> <span class="p">[</span><span class="w">
+</span>    <span class="n">p</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">single</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">physical</span><span class="s2">&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">p</span> <span class="ow">in</span> <span class="n">v</span> <span class="k">for</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="p">]</span><span class="w">
+</span><span class="n">header</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  </span><span class="si">{</span><span class="s1">'</span><span class="s1">dtype</span><span class="s1">'</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="s1">'</span><span class="s1">impl</span><span class="s1">'</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2">&quot;</span> <span class="o">+</span> <span class="s2">&quot;</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">p</span><span class="si">:</span><span class="s2">&gt;12</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">compute_policies</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="n">header</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">element_type</span><span class="p">,</span> <span class="n">policies</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">implementation_name</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">policies</span><span class="o">.</span><span class="n">values</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="p">)</span><span class="o">.</span><span class="n">implementation_name</span><span class="w">
+</span>    <span class="n">row</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="s2">  </span><span class="si">{</span><span class="n">element_type</span><span class="si">:</span><span class="s2">&lt;9</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">implementation_name</span><span class="si">:</span><span class="s2">&lt;10</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">policy</span> <span class="ow">in</span> <span class="n">compute_policies</span><span class="p">:</span><span class="w">
+</span>        <span class="n">entry</span> <span class="o">=</span> <span class="n">policies</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span><span class="w">
+</span>        <span class="n">row</span> <span class="o">+</span><span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">entry</span><span class="o">.</span><span class="n">median_gops</span><span class="si">:</span><span class="s2">&gt;12.2f</span><span class="si">}</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">entry</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="s1">'</span><span class="s1">--</span><span class="s1">'</span><span class="si">:</span><span class="s2">&gt;12</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">
+</span>    <span class="nb">print</span><span class="p">(</span><span class="n">row</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>memory bandwidth (effective, median of raw samples):
   level policy    read GB/s  write GB/s  copy GB/s
-  L1   single        81.14       48.03      86.61
-  L1   physical     161.24       95.63     134.02
-  L2   single        72.35       39.20      84.21
-  L2   physical     144.72       80.88     141.86
+  L1   single        84.58       51.38      98.54
+  L1   physical     168.92      100.78     194.84
+  L2   single        77.82       49.68     100.24
+  L2   physical     157.79       97.11     200.89
+  L3   single        54.79       44.60      59.53
+  L3   physical     114.50       83.06      77.44
+  RAM  single        24.63       12.51      34.00
 
 compute throughput (effective, median of raw samples, GOP/s):
   dtype     impl            single    physical
-  float32   AVX-512          98.06      194.42
-  float64   AVX-512          49.11       97.21
-  int8      AVX-512         267.07      527.80
+  float32   AVX2             51.33      101.50
+  float64   AVX2             25.69       50.85
 </pre></div>
 </div>
 </section>
@@ -818,34 +804,33 @@ loads for read, cached stores for write, and one source plus one destination
 for copy. Useful bytes are divided by elapsed monotonic wall-clock time, then
 the plot uses the median across recorded samples. Each participant owns
 disjoint storage; <code class="docutils literal notranslate"><span class="pre">physical</span></code> values are aggregate bandwidth.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">policies_order</span> <span class="o">=</span> <span class="p">[</span>
-    <span class="n">p</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"single"</span><span class="p">,</span> <span class="s2">"physical"</span><span class="p">)</span> <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">p</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">lv</span><span class="p">]</span> <span class="k">for</span> <span class="n">lv</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">)</span>
-<span class="p">]</span>
-<span class="n">modes</span> <span class="o">=</span> <span class="p">(</span><span class="s2">"read"</span><span class="p">,</span> <span class="s2">"write"</span><span class="p">,</span> <span class="s2">"copy"</span><span class="p">)</span>
-<span class="n">mode_colors</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"read"</span><span class="p">:</span> <span class="s2">"#4a9eff"</span><span class="p">,</span> <span class="s2">"write"</span><span class="p">:</span> <span class="s2">"#f4a259"</span><span class="p">,</span> <span class="s2">"copy"</span><span class="p">:</span> <span class="s2">"#5cb85c"</span><span class="p">}</span>
-
-<span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span>
-    <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)),</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">5</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)),</span> <span class="mf">4.2</span><span class="p">),</span> <span class="n">squeeze</span><span class="o">=</span><span class="kc">False</span>
-<span class="p">)</span>
-<span class="k">for</span> <span class="n">ax</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">policies_order</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
-    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">))</span>
-    <span class="n">width</span> <span class="o">=</span> <span class="mf">0.25</span>
-    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">mode</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">modes</span><span class="p">):</span>
-        <span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span>
-            <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span>
-            <span class="n">measurement</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">entry</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
-            <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">measurement</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mf">0.0</span><span class="p">)</span>
-        <span class="n">ax</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">mode_colors</span><span class="p">[</span><span class="n">mode</span><span class="p">])</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"effective GB/s"</span><span class="p">)</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="sa">f</span><span class="s2">"memory bandwidth (</span><span class="si">{</span><span class="n">policy</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
-    <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
-<span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_bandwidth.png"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">policies_order</span> <span class="o">=</span> <span class="p">[</span><span class="w">
+</span>    <span class="n">p</span> <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">single</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">physical</span><span class="s2">&quot;</span><span class="p">)</span> <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">p</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">lv</span><span class="p">]</span> <span class="k">for</span> <span class="n">lv</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">)</span><span class="w">
+</span><span class="p">]</span><span class="w">
+</span><span class="n">modes</span> <span class="o">=</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">read</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">write</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">copy</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">mode_colors</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;</span><span class="s2">read</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">#4a9eff</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">write</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">#f4a259</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">copy</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">#5cb85c</span><span class="s2">&quot;</span><span class="p">}</span><span class="w">
+</span><span class="w">
+</span><span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="w">
+</span>    <span class="mi">1</span><span class="p">,</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)</span><span class="p">)</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">5</span> <span class="o">*</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)</span><span class="p">)</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">)</span><span class="p">,</span> <span class="n">squeeze</span><span class="o">=</span><span class="kc">False</span><span class="w">
+</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">ax</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="p">,</span> <span class="n">policies_order</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span>    <span class="n">width</span> <span class="o">=</span> <span class="mf">0.25</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">mode</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">modes</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">values</span> <span class="o">=</span> <span class="p">[</span><span class="p">]</span><span class="w">
+</span>        <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span><span class="w">
+</span>            <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span><span class="w">
+</span>            <span class="n">measurement</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">entry</span><span class="p">,</span> <span class="n">mode</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span> <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="w">
+</span>            <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">measurement</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">if</span> <span class="n">measurement</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="mf">0.0</span><span class="p">)</span><span class="w">
+</span>        <span class="n">ax</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">mode</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="n">mode_colors</span><span class="p">[</span><span class="n">mode</span><span class="p">]</span><span class="p">)</span><span class="w">
+</span>    <span class="n">ax</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span>    <span class="n">ax</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="w">
+</span>    <span class="n">ax</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">effective GB/s</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="n">ax</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">memory bandwidth (</span><span class="si">{</span><span class="n">policy</span><span class="si">}</span><span class="s2">)</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="n">ax</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="w">
+</span><span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_bandwidth.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_002.png" srcset="../../_images/sphx_glr_plot_processor_performance_002.png" alt="memory bandwidth (single), memory bandwidth (physical)" class = "sphx-glr-single-img"/><section id="id1">
 <h3>How to read this figure<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <p>One panel per thread policy, one group of bars per memory level, three series
@@ -877,26 +862,25 @@ printed above says why.</p>
 <p>The physical-core measurement also records intermediate powers of two, making
 cache and memory-bandwidth saturation visible instead of reporting only the
 one-core and all-core endpoints.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">fig_scaling</span><span class="p">,</span> <span class="n">ax_scaling</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">))</span>
-<span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"L1"</span><span class="p">,</span> <span class="s2">"L2"</span><span class="p">,</span> <span class="s2">"L3"</span><span class="p">):</span>
-    <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">level</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"physical"</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">:</span>
-        <span class="k">continue</span>
-    <span class="n">ax_scaling</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span>
-        <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">participant_count</span> <span class="k">for</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">],</span>
-        <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">for</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">],</span>
-        <span class="n">marker</span><span class="o">=</span><span class="s2">"o"</span><span class="p">,</span>
-        <span class="n">label</span><span class="o">=</span><span class="n">level</span><span class="p">,</span>
-    <span class="p">)</span>
-<span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">,</span> <span class="n">base</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-<span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"physical cores"</span><span class="p">)</span>
-<span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"aggregate effective GB/s"</span><span class="p">)</span>
-<span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"read bandwidth scaling by physical-core count"</span><span class="p">)</span>
-<span class="n">ax_scaling</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
-<span class="n">fig_scaling</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig_scaling</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_bandwidth_scaling.png"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">fig_scaling</span><span class="p">,</span> <span class="n">ax_scaling</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">L1</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">L2</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">L3</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">level</span><span class="p">,</span> <span class="p">{</span><span class="p">}</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">physical</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">:</span><span class="w">
+</span>        <span class="k">continue</span><span class="w">
+</span>    <span class="n">ax_scaling</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="w">
+</span>        <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">participant_count</span> <span class="k">for</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">median_gbps</span> <span class="k">for</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">entry</span><span class="o">.</span><span class="n">read_scaling</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="n">marker</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">o</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="n">label</span><span class="o">=</span><span class="n">level</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span><span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">base</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">physical cores</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">aggregate effective GB/s</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_scaling</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">read bandwidth scaling by physical-core count</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_scaling</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_scaling</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_scaling</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_bandwidth_scaling.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_003.png" srcset="../../_images/sphx_glr_plot_processor_performance_003.png" alt="read bandwidth scaling by physical-core count" class = "sphx-glr-single-img"/><section id="id2">
 <h3>How to read this figure<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
 <p>One curve per cache level, taken from <code class="docutils literal notranslate"><span class="pre">entry.read_scaling</span></code> of the
@@ -922,26 +906,25 @@ recorded for that level.</p>
 <p>Latency uses a randomized single-cycle pointer permutation built before
 timing. Every load determines the address of the next, preventing overlap;
 the plotted value is the median nanoseconds per dependent load.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">fig_lat</span><span class="p">,</span> <span class="n">ax_lat</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">))</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">))</span>
-<span class="n">width</span> <span class="o">=</span> <span class="mf">0.35</span>
-<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">policies_order</span><span class="p">):</span>
-    <span class="n">values</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span>
-        <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span>
-        <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="n">entry</span><span class="o">.</span><span class="n">latency</span><span class="o">.</span><span class="n">median_ns_per_load</span> <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">entry</span><span class="o">.</span><span class="n">latency</span> <span class="k">else</span> <span class="mf">0.0</span>
-        <span class="p">)</span>
-    <span class="n">ax_lat</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">policy</span><span class="p">)</span>
-<span class="n">ax_lat</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">ax_lat</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span>
-<span class="n">ax_lat</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"effective ns / dependent load"</span><span class="p">)</span>
-<span class="n">ax_lat</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"dependent-load latency by memory level"</span><span class="p">)</span>
-<span class="n">ax_lat</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
-<span class="n">fig_lat</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig_lat</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_latency.png"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">fig_lat</span><span class="p">,</span> <span class="n">ax_lat</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">6</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">width</span> <span class="o">=</span> <span class="mf">0.35</span><span class="w">
+</span><span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">values</span> <span class="o">=</span> <span class="p">[</span><span class="p">]</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="n">levels</span><span class="p">:</span><span class="w">
+</span>        <span class="n">entry</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">memory</span><span class="p">[</span><span class="n">level</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">policy</span><span class="p">)</span><span class="w">
+</span>        <span class="n">values</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="w">
+</span>            <span class="n">entry</span><span class="o">.</span><span class="n">latency</span><span class="o">.</span><span class="n">median_ns_per_load</span> <span class="k">if</span> <span class="n">entry</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">entry</span><span class="o">.</span><span class="n">latency</span> <span class="k">else</span> <span class="mf">0.0</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>    <span class="n">ax_lat</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">policy</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_lat</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_lat</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">levels</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_lat</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">effective ns / dependent load</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_lat</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">dependent-load latency by memory level</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_lat</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_lat</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_lat</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_latency.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_004.png" srcset="../../_images/sphx_glr_plot_processor_performance_004.png" alt="dependent-load latency by memory level" class = "sphx-glr-single-img"/><section id="id3">
 <h3>How to read this figure<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
 <p>One group of bars per memory level, one bar per thread policy. The value is
@@ -970,29 +953,28 @@ level/policy.</p>
 so this measures arithmetic rather than memory traffic. Operations are
 divided by elapsed monotonic wall-clock time and medians are plotted; a fused
 multiply-add counts as two floating-point operations.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">element_types</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
-<span class="n">fig_compute</span><span class="p">,</span> <span class="n">ax_compute</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">6.5</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">))</span>
-<span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">element_types</span><span class="p">))</span>
-<span class="n">width</span> <span class="o">=</span> <span class="mf">0.35</span>
-<span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">policies_order</span><span class="p">):</span>
-    <span class="n">values</span> <span class="o">=</span> <span class="p">[</span>
-        <span class="p">(</span>
-            <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="p">[</span><span class="n">element_type</span><span class="p">][</span><span class="n">policy</span><span class="p">]</span><span class="o">.</span><span class="n">median_gops</span>
-            <span class="k">if</span> <span class="n">policy</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="p">[</span><span class="n">element_type</span><span class="p">]</span>
-            <span class="k">else</span> <span class="mf">0.0</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">element_type</span> <span class="ow">in</span> <span class="n">element_types</span>
-    <span class="p">]</span>
-    <span class="n">ax_compute</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">policy</span><span class="p">)</span>
-<span class="n">ax_compute</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
-<span class="n">ax_compute</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">element_types</span><span class="p">)</span>
-<span class="n">ax_compute</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"effective GOP/s"</span><span class="p">)</span>
-<span class="n">ax_compute</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"register-resident arithmetic throughput"</span><span class="p">)</span>
-<span class="n">ax_compute</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span>
-<span class="n">fig_compute</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig_compute</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_compute.png"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">element_types</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="o">.</span><span class="n">keys</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_compute</span><span class="p">,</span> <span class="n">ax_compute</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">6.5</span><span class="p">,</span> <span class="mf">4.2</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">element_types</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">width</span> <span class="o">=</span> <span class="mf">0.35</span><span class="w">
+</span><span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">policy</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">policies_order</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">values</span> <span class="o">=</span> <span class="p">[</span><span class="w">
+</span>        <span class="p">(</span><span class="w">
+</span>            <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="p">[</span><span class="n">element_type</span><span class="p">]</span><span class="p">[</span><span class="n">policy</span><span class="p">]</span><span class="o">.</span><span class="n">median_gops</span><span class="w">
+</span>            <span class="k">if</span> <span class="n">policy</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">compute</span><span class="p">[</span><span class="n">element_type</span><span class="p">]</span><span class="w">
+</span>            <span class="k">else</span> <span class="mf">0.0</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="k">for</span> <span class="n">element_type</span> <span class="ow">in</span> <span class="n">element_types</span><span class="w">
+</span>    <span class="p">]</span><span class="w">
+</span>    <span class="n">ax_compute</span><span class="o">.</span><span class="n">bar</span><span class="p">(</span><span class="n">x</span> <span class="o">+</span> <span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="mf">0.5</span><span class="p">)</span> <span class="o">*</span> <span class="n">width</span><span class="p">,</span> <span class="n">values</span><span class="p">,</span> <span class="n">width</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">policy</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_compute</span><span class="o">.</span><span class="n">set_xticks</span><span class="p">(</span><span class="n">x</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_compute</span><span class="o">.</span><span class="n">set_xticklabels</span><span class="p">(</span><span class="n">element_types</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_compute</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">effective GOP/s</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_compute</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">register-resident arithmetic throughput</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_compute</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">8</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_compute</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_compute</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_compute.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_005.png" srcset="../../_images/sphx_glr_plot_processor_performance_005.png" alt="register-resident arithmetic throughput" class = "sphx-glr-single-img"/><section id="id4">
 <h3>How to read this figure<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>One group of bars per element type actually available on this host (the keys
@@ -1025,38 +1007,37 @@ ceiling derived from the measured read bandwidth of one memory level, and
 their crossover arithmetic intensity. These are <em>derived</em> quantities that
 still link back to the exact compute and memory measurements they were
 computed from – not an idealized hardware Roofline.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">fig_roof</span><span class="p">,</span> <span class="n">ax_roof</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">6.5</span><span class="p">,</span> <span class="mi">5</span><span class="p">))</span>
-<span class="n">intensity</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logspace</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">200</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">element_type</span><span class="p">,</span> <span class="n">per_policy</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">roofline</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">per_level</span> <span class="ow">in</span> <span class="n">per_policy</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">per_level</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">memory_bound</span> <span class="o">=</span> <span class="n">point</span><span class="o">.</span><span class="n">memory_read_gbps</span> <span class="o">*</span> <span class="n">intensity</span>
-            <span class="n">roofline_curve</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">memory_bound</span><span class="p">,</span> <span class="n">point</span><span class="o">.</span><span class="n">compute_gops</span><span class="p">)</span>
-            <span class="n">ax_roof</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span>
-                <span class="n">intensity</span><span class="p">,</span>
-                <span class="n">roofline_curve</span><span class="p">,</span>
-                <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">element_type</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">policy</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">level</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-                <span class="n">linewidth</span><span class="o">=</span><span class="mf">1.2</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="n">ax_roof</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span>
-                <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">arithmetic_intensity_crossover</span><span class="p">],</span>
-                <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">compute_gops</span><span class="p">],</span>
-                <span class="n">marker</span><span class="o">=</span><span class="s2">"o"</span><span class="p">,</span>
-                <span class="n">s</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span>
-            <span class="p">)</span>
-
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">)</span>
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">)</span>
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"arithmetic intensity (operations / byte)"</span><span class="p">)</span>
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"effective GOP/s"</span><span class="p">)</span>
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">"Roofline (effective measurements, not a hardware specification)"</span><span class="p">)</span>
-<span class="n">ax_roof</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span> <span class="n">ncol</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-<span class="n">fig_roof</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig_roof</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_processor_performance_roofline.png"</span><span class="p">)</span>
-
-<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">fig_roof</span><span class="p">,</span> <span class="n">ax_roof</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mf">6.5</span><span class="p">,</span> <span class="mi">5</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="n">intensity</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">logspace</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">200</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">element_type</span><span class="p">,</span> <span class="n">per_policy</span> <span class="ow">in</span> <span class="n">profile</span><span class="o">.</span><span class="n">roofline</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">policy</span><span class="p">,</span> <span class="n">per_level</span> <span class="ow">in</span> <span class="n">per_policy</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="k">for</span> <span class="n">level</span><span class="p">,</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">per_level</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>            <span class="n">memory_bound</span> <span class="o">=</span> <span class="n">point</span><span class="o">.</span><span class="n">memory_read_gbps</span> <span class="o">*</span> <span class="n">intensity</span><span class="w">
+</span>            <span class="n">roofline_curve</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">minimum</span><span class="p">(</span><span class="n">memory_bound</span><span class="p">,</span> <span class="n">point</span><span class="o">.</span><span class="n">compute_gops</span><span class="p">)</span><span class="w">
+</span>            <span class="n">ax_roof</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="w">
+</span>                <span class="n">intensity</span><span class="p">,</span><span class="w">
+</span>                <span class="n">roofline_curve</span><span class="p">,</span><span class="w">
+</span>                <span class="n">label</span><span class="o">=</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">element_type</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">policy</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">level</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>                <span class="n">linewidth</span><span class="o">=</span><span class="mf">1.2</span><span class="p">,</span><span class="w">
+</span>            <span class="p">)</span><span class="w">
+</span>            <span class="n">ax_roof</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="w">
+</span>                <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">arithmetic_intensity_crossover</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>                <span class="p">[</span><span class="n">point</span><span class="o">.</span><span class="n">compute_gops</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>                <span class="n">marker</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">o</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>                <span class="n">s</span><span class="o">=</span><span class="mi">14</span><span class="p">,</span><span class="w">
+</span>            <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">arithmetic intensity (operations / byte)</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">effective GOP/s</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">Roofline (effective measurements, not a hardware specification)</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">ax_roof</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="n">fontsize</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span> <span class="n">ncol</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_roof</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig_roof</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_processor_performance_roofline.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <img src="../../_images/sphx_glr_plot_processor_performance_006.png" srcset="../../_images/sphx_glr_plot_processor_performance_006.png" alt="Roofline (effective measurements, not a hardware specification)" class = "sphx-glr-single-img"/><section id="id5">
 <h3>How to read this figure<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
 <p>Both axes are logarithmic. The horizontal axis is <strong>arithmetic intensity</strong>:
@@ -1092,17 +1073,16 @@ patterns.</p>
 the whole profile (metadata, topology, memory, compute, roofline, and
 warnings), suitable for archiving alongside a run or feeding a future
 optimal-transport GEMM tile-placement cost model.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="n">serialized</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">to_dict</span><span class="p">()</span>
-<span class="k">assert</span> <span class="n">serialized</span><span class="p">[</span><span class="s2">"metadata"</span><span class="p">][</span><span class="s2">"schema_version"</span><span class="p">]</span> <span class="o">==</span> <span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">schema_version</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="se">\n</span><span class="s2">serialized profile keys: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">serialized</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
-<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"serialized JSON size: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">serialized</span><span class="p">))</span><span class="si">}</span><span class="s2"> bytes"</span><span class="p">)</span>
-</pre></div>
-</div>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="n">serialized</span> <span class="o">=</span> <span class="n">profile</span><span class="o">.</span><span class="n">to_dict</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="k">assert</span> <span class="n">serialized</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">metadata</span><span class="s2">&quot;</span><span class="p">]</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">schema_version</span><span class="s2">&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="n">profile</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">schema_version</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="se">\n</span><span class="s2">serialized profile keys: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">serialized</span><span class="o">.</span><span class="n">keys</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">serialized JSON size: </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">serialized</span><span class="p">)</span><span class="p">)</span><span class="si">}</span><span class="s2"> bytes</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
 <div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>serialized profile keys: ['compute', 'memory', 'metadata', 'roofline', 'topology', 'warnings']
-serialized JSON size: 21912 bytes
+serialized JSON size: 28724 bytes
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.078 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 39.513 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-processor-plot-processor-performance-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/a695ff9ea1c054cbd91aeb0fed7d48fc/plot_processor_performance.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_processor_performance.ipynb</span></code></a></p>
@@ -1227,7 +1207,7 @@ serialized JSON size: 21912 bytes
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 16, 2026.
+  Last updated on Sep 17, 2026.
   <br/>
 </p></div>
       

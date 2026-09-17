@@ -32,7 +32,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=fd6457a4" />
+    <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery.css?v=c83e6b79" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="../../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 16, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -482,144 +482,143 @@ to download the full example code.</p>
 <span id="sphx-glr-auto-examples-benchmarks-plot-custom-operators-benchmark-py"></span><h1>Benchmark custom operators against ONNX Runtime<a class="headerlink" href="#benchmark-custom-operators-against-onnx-runtime" title="Link to this heading">#</a></h1>
 <p>This benchmark compares the portable onnx-light-cpu implementations of
 <code class="docutils literal notranslate"><span class="pre">com.microsoft.CDist</span></code> and <code class="docutils literal notranslate"><span class="pre">com.microsoft.BiasGelu</span></code> with ONNX Runtime CPU.</p>
-<img src="../../_images/sphx_glr_plot_custom_operators_benchmark_001.png" srcset="../../_images/sphx_glr_plot_custom_operators_benchmark_001.png" alt="CDist, BiasGelu" class = "sphx-glr-single-img"/><div class="highlight-Python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">statistics</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">time</span>
-
-<span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib.pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
-
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorProto</span><span class="p">,</span> <span class="n">helper</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_kernels</span>
-
-<span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="vm">__doc__</span><span class="p">)</span>
-<span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-r"</span><span class="p">,</span> <span class="s2">"--repeat"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
-<span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-w"</span><span class="p">,</span> <span class="s2">"--warmup"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span>
-<span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">"-t"</span><span class="p">,</span> <span class="s2">"--max-repeat-time"</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-<span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">()</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">make_model</span><span class="p">(</span><span class="n">op_type</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="o">**</span><span class="n">attributes</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""Builds one dynamic custom-operator model."""</span>
-    <span class="n">node</span> <span class="o">=</span> <span class="n">helper</span><span class="o">.</span><span class="n">make_node</span><span class="p">(</span>
-        <span class="n">op_type</span><span class="p">,</span>
-        <span class="p">[</span><span class="n">value</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">inputs</span><span class="p">],</span>
-        <span class="p">[</span><span class="n">output</span><span class="o">.</span><span class="n">name</span><span class="p">],</span>
-        <span class="n">domain</span><span class="o">=</span><span class="s2">"com.microsoft"</span><span class="p">,</span>
-        <span class="o">**</span><span class="n">attributes</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="k">return</span> <span class="n">helper</span><span class="o">.</span><span class="n">make_model</span><span class="p">(</span>
-        <span class="n">helper</span><span class="o">.</span><span class="n">make_graph</span><span class="p">([</span><span class="n">node</span><span class="p">],</span> <span class="n">op_type</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="p">[</span><span class="n">output</span><span class="p">]),</span>
-        <span class="n">opset_imports</span><span class="o">=</span><span class="p">[</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_opsetid</span><span class="p">(</span><span class="s2">""</span><span class="p">,</span> <span class="mi">20</span><span class="p">),</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_opsetid</span><span class="p">(</span><span class="s2">"com.microsoft"</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
-        <span class="p">],</span>
-        <span class="n">ir_version</span><span class="o">=</span><span class="mi">13</span><span class="p">,</span>
-    <span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">feeds</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""Returns the median bounded inference time."""</span>
-    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">warmup</span><span class="p">):</span>
-        <span class="n">run</span><span class="p">(</span><span class="n">feeds</span><span class="p">)</span>
-    <span class="n">samples</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="n">elapsed</span> <span class="o">=</span> <span class="mf">0.0</span>
-    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">repeat</span><span class="p">):</span>
-        <span class="n">begin</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span>
-        <span class="n">run</span><span class="p">(</span><span class="n">feeds</span><span class="p">)</span>
-        <span class="n">duration</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">()</span> <span class="o">-</span> <span class="n">begin</span>
-        <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">duration</span><span class="p">)</span>
-        <span class="n">elapsed</span> <span class="o">+=</span> <span class="n">duration</span>
-        <span class="k">if</span> <span class="n">elapsed</span> <span class="o">&gt;=</span> <span class="n">args</span><span class="o">.</span><span class="n">max_repeat_time</span><span class="p">:</span>
-            <span class="k">break</span>
-    <span class="k">return</span> <span class="n">statistics</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">make_ort</span><span class="p">(</span><span class="n">model</span><span class="p">):</span>
-    <span class="n">options</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">SessionOptions</span><span class="p">()</span>
-    <span class="n">options</span><span class="o">.</span><span class="n">intra_op_num_threads</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">()</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="n">options</span><span class="o">.</span><span class="n">inter_op_num_threads</span> <span class="o">=</span> <span class="mi">1</span>
-    <span class="k">return</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span>
-        <span class="n">model</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">(),</span> <span class="n">sess_options</span><span class="o">=</span><span class="n">options</span><span class="p">,</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">"CPUExecutionProvider"</span><span class="p">]</span>
-    <span class="p">)</span>
-
-
-<span class="n">sizes</span> <span class="o">=</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">]</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"UNITTEST_GOING"</span><span class="p">)</span> <span class="k">else</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">1024</span><span class="p">]</span>
-<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span>
-<span class="n">models</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">"CDist"</span><span class="p">:</span> <span class="n">make_model</span><span class="p">(</span>
-        <span class="s2">"CDist"</span><span class="p">,</span>
-        <span class="p">[</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"A"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">32</span><span class="p">]),</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"B"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">32</span><span class="p">]),</span>
-        <span class="p">],</span>
-        <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"Y"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]),</span>
-        <span class="n">metric</span><span class="o">=</span><span class="s2">"sqeuclidean"</span><span class="p">,</span>
-    <span class="p">),</span>
-    <span class="s2">"BiasGelu"</span><span class="p">:</span> <span class="n">make_model</span><span class="p">(</span>
-        <span class="s2">"BiasGelu"</span><span class="p">,</span>
-        <span class="p">[</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"X"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">128</span><span class="p">]),</span>
-            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"bias"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="mi">128</span><span class="p">]),</span>
-        <span class="p">],</span>
-        <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">"Y"</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">128</span><span class="p">]),</span>
-    <span class="p">),</span>
-<span class="p">}</span>
-<span class="n">ort_sessions</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">make_ort</span><span class="p">(</span><span class="n">model</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">models</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
-<span class="n">register_kernels</span><span class="p">()</span>
-<span class="n">light_sessions</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="n">name</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span>
-        <span class="n">model</span><span class="p">,</span>
-        <span class="n">cpu_execution</span><span class="o">=</span><span class="p">{</span><span class="s2">"num_threads"</span><span class="p">:</span> <span class="nb">min</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">()</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">),</span> <span class="s2">"affinity_policy"</span><span class="p">:</span> <span class="s2">"none"</span><span class="p">},</span>
-    <span class="p">)</span>
-    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">models</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-<span class="p">}</span>
-
-<span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="p">{</span><span class="s2">"onnx-light-cpu"</span><span class="p">:</span> <span class="p">[],</span> <span class="s2">"ONNX Runtime"</span><span class="p">:</span> <span class="p">[]}</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">models</span><span class="p">}</span>
-<span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">sizes</span><span class="p">:</span>
-    <span class="n">feeds_by_op</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="s2">"CDist"</span><span class="p">:</span> <span class="p">{</span>
-            <span class="s2">"A"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-            <span class="s2">"B"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-        <span class="p">},</span>
-        <span class="s2">"BiasGelu"</span><span class="p">:</span> <span class="p">{</span>
-            <span class="s2">"X"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">((</span><span class="n">size</span><span class="p">,</span> <span class="mi">128</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-            <span class="s2">"bias"</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-        <span class="p">},</span>
-    <span class="p">}</span>
-    <span class="k">for</span> <span class="n">op_type</span><span class="p">,</span> <span class="n">feeds</span> <span class="ow">in</span> <span class="n">feeds_by_op</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">light</span> <span class="o">=</span> <span class="n">light_sessions</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span>
-        <span class="n">ort</span> <span class="o">=</span> <span class="n">ort_sessions</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span>
-        <span class="n">expected</span> <span class="o">=</span> <span class="n">ort</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="n">actual</span> <span class="o">=</span> <span class="n">light</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
-        <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span><span class="n">actual</span><span class="p">,</span> <span class="n">expected</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">2e-5</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">2e-5</span><span class="p">)</span>
-        <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">][</span><span class="s2">"onnx-light-cpu"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">current_feeds</span><span class="p">,</span> <span class="n">sess</span><span class="o">=</span><span class="n">light</span><span class="p">:</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">current_feeds</span><span class="p">),</span> <span class="n">feeds</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">][</span><span class="s2">"ONNX Runtime"</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
-            <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">current_feeds</span><span class="p">,</span> <span class="n">sess</span><span class="o">=</span><span class="n">ort</span><span class="p">:</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">current_feeds</span><span class="p">),</span> <span class="n">feeds</span><span class="p">)</span>
-        <span class="p">)</span>
-
-<span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">))</span>
-<span class="k">for</span> <span class="n">axis</span><span class="p">,</span> <span class="n">op_type</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="p">(</span><span class="s2">"CDist"</span><span class="p">,</span> <span class="s2">"BiasGelu"</span><span class="p">),</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
-    <span class="k">for</span> <span class="n">runtime</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">axis</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">sizes</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">,</span> <span class="n">marker</span><span class="o">=</span><span class="s2">"o"</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">runtime</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">,</span> <span class="n">base</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">"log"</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">op_type</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">"rows"</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">"median time (us)"</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span>
-    <span class="n">axis</span><span class="o">.</span><span class="n">legend</span><span class="p">()</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">()</span>
-<span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">"plot_custom_operators_benchmark.png"</span><span class="p">)</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
-</pre></div>
-</div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.089 seconds)</p>
+<img src="../../_images/sphx_glr_plot_custom_operators_benchmark_001.png" srcset="../../_images/sphx_glr_plot_custom_operators_benchmark_001.png" alt="CDist, BiasGelu" class = "sphx-glr-single-img"/><div class="highlight-Python notranslate"><div class="highlight"><pre><span class="kn">import</span><span class="w"> </span><span class="nn">argparse</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">statistics</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">time</span><span class="w">
+</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">matplotlib</span><span class="nn">.</span><span class="nn">pyplot</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">plt</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span><span class="w">
+</span><span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span><span class="w">
+</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light</span><span class="nn">.</span><span class="nn">onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorProto</span><span class="p">,</span> <span class="n">helper</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light</span><span class="nn">.</span><span class="nn">onnx</span><span class="nn">.</span><span class="nn">reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span><span class="w">
+</span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_kernels</span><span class="w">
+</span><span class="w">
+</span><span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="vm">__doc__</span><span class="p">)</span><span class="w">
+</span><span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">-r</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">--repeat</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span><span class="w">
+</span><span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">-w</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">--warmup</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span><span class="w">
+</span><span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">-t</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">--max-repeat-time</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">float</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span><span class="w">
+</span><span class="n">args</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_known_args</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">make_model</span><span class="p">(</span><span class="n">op_type</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="n">output</span><span class="p">,</span> <span class="o">*</span><span class="o">*</span><span class="n">attributes</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="sd">&quot;&quot;&quot;Builds one dynamic custom-operator model.&quot;&quot;&quot;</span><span class="w">
+</span>    <span class="n">node</span> <span class="o">=</span> <span class="n">helper</span><span class="o">.</span><span class="n">make_node</span><span class="p">(</span><span class="w">
+</span>        <span class="n">op_type</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="n">value</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">inputs</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="n">output</span><span class="o">.</span><span class="n">name</span><span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="n">domain</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">com.microsoft</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="o">*</span><span class="o">*</span><span class="n">attributes</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">helper</span><span class="o">.</span><span class="n">make_model</span><span class="p">(</span><span class="w">
+</span>        <span class="n">helper</span><span class="o">.</span><span class="n">make_graph</span><span class="p">(</span><span class="p">[</span><span class="n">node</span><span class="p">]</span><span class="p">,</span> <span class="n">op_type</span><span class="p">,</span> <span class="n">inputs</span><span class="p">,</span> <span class="p">[</span><span class="n">output</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="n">opset_imports</span><span class="o">=</span><span class="p">[</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_opsetid</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">&quot;</span><span class="p">,</span> <span class="mi">20</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_opsetid</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">com.microsoft</span><span class="s2">&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="n">ir_version</span><span class="o">=</span><span class="mi">13</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">measure</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="sd">&quot;&quot;&quot;Returns the median bounded inference time.&quot;&quot;&quot;</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">warmup</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">run</span><span class="p">(</span><span class="n">feeds</span><span class="p">)</span><span class="w">
+</span>    <span class="n">samples</span> <span class="o">=</span> <span class="p">[</span><span class="p">]</span><span class="w">
+</span>    <span class="n">elapsed</span> <span class="o">=</span> <span class="mf">0.0</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">repeat</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">begin</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>        <span class="n">run</span><span class="p">(</span><span class="n">feeds</span><span class="p">)</span><span class="w">
+</span>        <span class="n">duration</span> <span class="o">=</span> <span class="n">time</span><span class="o">.</span><span class="n">perf_counter</span><span class="p">(</span><span class="p">)</span> <span class="o">-</span> <span class="n">begin</span><span class="w">
+</span>        <span class="n">samples</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">duration</span><span class="p">)</span><span class="w">
+</span>        <span class="n">elapsed</span> <span class="o">+</span><span class="o">=</span> <span class="n">duration</span><span class="w">
+</span>        <span class="k">if</span> <span class="n">elapsed</span> <span class="o">&gt;</span><span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">max_repeat_time</span><span class="p">:</span><span class="w">
+</span>            <span class="k">break</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">statistics</span><span class="o">.</span><span class="n">median</span><span class="p">(</span><span class="n">samples</span><span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="k">def</span><span class="w"> </span><span class="nf">make_ort</span><span class="p">(</span><span class="n">model</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="n">options</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">SessionOptions</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="n">options</span><span class="o">.</span><span class="n">intra_op_num_threads</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">(</span><span class="p">)</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">)</span><span class="w">
+</span>    <span class="n">options</span><span class="o">.</span><span class="n">inter_op_num_threads</span> <span class="o">=</span> <span class="mi">1</span><span class="w">
+</span>    <span class="k">return</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">InferenceSession</span><span class="p">(</span><span class="w">
+</span>        <span class="n">model</span><span class="o">.</span><span class="n">SerializeToString</span><span class="p">(</span><span class="p">)</span><span class="p">,</span> <span class="n">sess_options</span><span class="o">=</span><span class="n">options</span><span class="p">,</span> <span class="n">providers</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">CPUExecutionProvider</span><span class="s2">&quot;</span><span class="p">]</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="w">
+</span><span class="n">sizes</span> <span class="o">=</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">]</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">UNITTEST_GOING</span><span class="s2">&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="p">[</span><span class="mi">16</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">1024</span><span class="p">]</span><span class="w">
+</span><span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">42</span><span class="p">)</span><span class="w">
+</span><span class="n">models</span> <span class="o">=</span> <span class="p">{</span><span class="w">
+</span>    <span class="s2">&quot;</span><span class="s2">CDist</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">make_model</span><span class="p">(</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">CDist</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">A</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">B</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">32</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">Y</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="n">metric</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">sqeuclidean</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="s2">&quot;</span><span class="s2">BiasGelu</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">make_model</span><span class="p">(</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">BiasGelu</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="p">[</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">X</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">bias</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="mi">128</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">]</span><span class="p">,</span><span class="w">
+</span>        <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_value_info</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">Y</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="mi">128</span><span class="p">]</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="p">,</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span><span class="n">ort_sessions</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="n">make_ort</span><span class="p">(</span><span class="n">model</span><span class="p">)</span> <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">models</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">}</span><span class="w">
+</span><span class="n">register_kernels</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">light_sessions</span> <span class="o">=</span> <span class="p">{</span><span class="w">
+</span>    <span class="n">name</span><span class="p">:</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="w">
+</span>        <span class="n">model</span><span class="p">,</span><span class="w">
+</span>        <span class="n">cpu_execution</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;</span><span class="s2">num_threads</span><span class="s2">&quot;</span><span class="p">:</span> <span class="nb">min</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span> <span class="n">os</span><span class="o">.</span><span class="n">cpu_count</span><span class="p">(</span><span class="p">)</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">)</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">affinity_policy</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">none</span><span class="s2">&quot;</span><span class="p">}</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">model</span> <span class="ow">in</span> <span class="n">models</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="p">}</span><span class="w">
+</span><span class="w">
+</span><span class="n">results</span> <span class="o">=</span> <span class="p">{</span><span class="n">name</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;</span><span class="s2">onnx-light-cpu</span><span class="s2">&quot;</span><span class="p">:</span> <span class="p">[</span><span class="p">]</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">ONNX Runtime</span><span class="s2">&quot;</span><span class="p">:</span> <span class="p">[</span><span class="p">]</span><span class="p">}</span> <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">models</span><span class="p">}</span><span class="w">
+</span><span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">sizes</span><span class="p">:</span><span class="w">
+</span>    <span class="n">feeds_by_op</span> <span class="o">=</span> <span class="p">{</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">CDist</span><span class="s2">&quot;</span><span class="p">:</span> <span class="p">{</span><span class="w">
+</span>            <span class="s2">&quot;</span><span class="s2">A</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">(</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="s2">&quot;</span><span class="s2">B</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">(</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">}</span><span class="p">,</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">BiasGelu</span><span class="s2">&quot;</span><span class="p">:</span> <span class="p">{</span><span class="w">
+</span>            <span class="s2">&quot;</span><span class="s2">X</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">(</span><span class="p">(</span><span class="n">size</span><span class="p">,</span> <span class="mi">128</span><span class="p">)</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>            <span class="s2">&quot;</span><span class="s2">bias</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">standard_normal</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="p">,</span><span class="w">
+</span>        <span class="p">}</span><span class="p">,</span><span class="w">
+</span>    <span class="p">}</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">op_type</span><span class="p">,</span> <span class="n">feeds</span> <span class="ow">in</span> <span class="n">feeds_by_op</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">light</span> <span class="o">=</span> <span class="n">light_sessions</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="w">
+</span>        <span class="n">ort</span> <span class="o">=</span> <span class="n">ort_sessions</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="w">
+</span>        <span class="n">expected</span> <span class="o">=</span> <span class="n">ort</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w">
+</span>        <span class="n">actual</span> <span class="o">=</span> <span class="n">light</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w">
+</span>        <span class="n">np</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_allclose</span><span class="p">(</span><span class="n">actual</span><span class="p">,</span> <span class="n">expected</span><span class="p">,</span> <span class="n">rtol</span><span class="o">=</span><span class="mf">2e-5</span><span class="p">,</span> <span class="n">atol</span><span class="o">=</span><span class="mf">2e-5</span><span class="p">)</span><span class="w">
+</span>        <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">onnx-light-cpu</span><span class="s2">&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="w">
+</span>            <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">current_feeds</span><span class="p">,</span> <span class="n">sess</span><span class="o">=</span><span class="n">light</span><span class="p">:</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">current_feeds</span><span class="p">)</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">ONNX Runtime</span><span class="s2">&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="w">
+</span>            <span class="n">measure</span><span class="p">(</span><span class="k">lambda</span> <span class="n">current_feeds</span><span class="p">,</span> <span class="n">sess</span><span class="o">=</span><span class="n">ort</span><span class="p">:</span> <span class="n">sess</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="kc">None</span><span class="p">,</span> <span class="n">current_feeds</span><span class="p">)</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span><span class="w">
+</span><span class="n">fig</span><span class="p">,</span> <span class="n">axes</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">11</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span><span class="p">)</span><span class="w">
+</span><span class="k">for</span> <span class="n">axis</span><span class="p">,</span> <span class="n">op_type</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">axes</span><span class="p">,</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">CDist</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">BiasGelu</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>    <span class="k">for</span> <span class="n">runtime</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">results</span><span class="p">[</span><span class="n">op_type</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+</span>        <span class="n">axis</span><span class="o">.</span><span class="n">plot</span><span class="p">(</span><span class="n">sizes</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">values</span><span class="p">)</span> <span class="o">*</span> <span class="mf">1e6</span><span class="p">,</span> <span class="n">marker</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">o</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">label</span><span class="o">=</span><span class="n">runtime</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">set_xscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">base</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">set_yscale</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">log</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="n">op_type</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">set_xlabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">rows</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">set_ylabel</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">median time (us)</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">grid</span><span class="p">(</span><span class="kc">True</span><span class="p">)</span><span class="w">
+</span>    <span class="n">axis</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">plt</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span><span class="n">fig</span><span class="o">.</span><span class="n">savefig</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">plot_custom_operators_benchmark.png</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span><span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 1.405 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-benchmarks-plot-custom-operators-benchmark-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../../_downloads/6ab80ec988ba4719f7bf9ce46a9d146d/plot_custom_operators_benchmark.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_custom_operators_benchmark.ipynb</span></code></a></p>
@@ -704,7 +703,7 @@ to download the full example code.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 16, 2026.
+  Last updated on Sep 17, 2026.
   <br/>
 </p></div>
       
