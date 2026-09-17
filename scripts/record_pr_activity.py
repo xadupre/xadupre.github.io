@@ -2,7 +2,8 @@
 
 The snapshot contains the current number of open pull requests; the numbers
 opened, closed, and merged during the preceding day and seven days; and the
-average age in days of open PRs and PRs merged during the preceding seven days.
+average age in days of open PRs and PRs merged during the preceding 365 days.
+The merged-age window advances daily, excluding expired merges and including new ones.
 Merged PR age is measured from creation to merge; its average is blank when
 no valid ages are available. Rows are stored in ``cache_data/<repo>/pr_activity.csv``.
 
@@ -35,7 +36,7 @@ CSV_FIELDS = (
     "closed_prs_1d",
     "merged_prs_1d",
     "avg_open_age_days",
-    "avg_merged_age_days_7d",
+    "avg_merged_age_days_365d",
 )
 
 
@@ -100,6 +101,7 @@ def collect_snapshot(
 
     since = now - dt.timedelta(days=7)
     since_day = now - dt.timedelta(days=1)
+    since_year = now - dt.timedelta(days=365)
     opened = 0
     closed = 0
     merged = 0
@@ -116,7 +118,7 @@ def collect_snapshot(
         updated_at = pr.get("updated_at")
         if updated_at:
             try:
-                if _parse_iso(updated_at) < since:
+                if _parse_iso(updated_at) < since_year:
                     break
             except ValueError:
                 pass
@@ -130,15 +132,17 @@ def collect_snapshot(
             closed_day += 1
         if _is_at_or_after(pr.get("merged_at"), since):
             merged += 1
+        if _is_at_or_after(pr.get("merged_at"), since_year):
             if pr.get("created_at"):
                 try:
+                    merged_at = _parse_iso(pr["merged_at"])
                     age = (
-                        _parse_iso(pr["merged_at"]) - _parse_iso(pr["created_at"])
+                        merged_at - _parse_iso(pr["created_at"])
                     ).total_seconds() / 86400
                 except ValueError:
                     pass
                 else:
-                    if age >= 0:
+                    if age >= 0 and merged_at <= now:
                         merged_ages.append(age)
         if _is_at_or_after(pr.get("merged_at"), since_day):
             merged_day += 1
@@ -154,7 +158,7 @@ def collect_snapshot(
         "closed_prs_1d": str(closed_day),
         "merged_prs_1d": str(merged_day),
         "avg_open_age_days": f"{average_age:.2f}",
-        "avg_merged_age_days_7d": (
+        "avg_merged_age_days_365d": (
             f"{sum(merged_ages) / len(merged_ages):.2f}" if merged_ages else ""
         ),
     }
@@ -172,6 +176,9 @@ def write_snapshot(csv_path: str, snapshot: dict[str, str]) -> None:
                 if (row.get("date") or "")[:10] != snapshot_day
             ]
     rows.append(snapshot)
+    for row in rows:
+        # Historical seven-day averages cannot stand in for yearly averages.
+        row.pop("avg_merged_age_days_7d", None)
     rows.sort(key=lambda row: row["date"])
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     with open(csv_path, "w", newline="", encoding="utf-8") as stream:
