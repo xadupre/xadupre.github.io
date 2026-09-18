@@ -67,7 +67,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Sep 17, 2026"/>
+    <meta name="docbuild:last-update" content="Sep 18, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -481,7 +481,7 @@
 <dd class="field-odd"><p>2026-09</p>
 </dd>
 </dl>
-<p><strong>planned</strong></p>
+<p><strong>in progress</strong></p>
 <section id="objective-and-boundary">
 <h2>Objective and boundary<a class="headerlink" href="#objective-and-boundary" title="Link to this heading">#</a></h2>
 <p>Make the audited dense Qwen3 INT4 graph executable by implementing its missing
@@ -495,8 +495,11 @@ The steps below split those deliverables into independently reviewable PRs;
 they do not introduce a second implementation of their shared engines.</p>
 <p>Already available: <code class="docutils literal notranslate"><span class="pre">GroupQueryAttention</span></code> with fused RoPE and tensor cache
 inputs/outputs, <code class="docutils literal notranslate"><span class="pre">RMSNormalization</span></code>, <code class="docutils literal notranslate"><span class="pre">Sigmoid</span></code>, <code class="docutils literal notranslate"><span class="pre">Mul</span></code>, <code class="docutils literal notranslate"><span class="pre">Sub</span></code>, and the
-shared matrix engine. Reuse them rather than introducing new attention,
-normalization, or activation kernels.</p>
+shared matrix engine. Since this plan was written, <code class="docutils literal notranslate"><span class="pre">Gather</span></code>, <code class="docutils literal notranslate"><span class="pre">Cast</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Split</span></code>, <code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code> have also been delivered. Reuse them
+rather than introducing new attention, normalization, layout, or activation
+kernels.</p>
 </section>
 <section id="runtime-prerequisites-not-new-cpu-kernels">
 <h2>Runtime prerequisites, not new CPU kernels<a class="headerlink" href="#runtime-prerequisites-not-new-cpu-kernels" title="Link to this heading">#</a></h2>
@@ -515,20 +518,51 @@ Attention belong to Qwen PR06b after that contract exists. Neither is a
 prerequisite for the initial kernel milestone, which uses the existing tensor
 <code class="docutils literal notranslate"><span class="pre">past</span></code>/<code class="docutils literal notranslate"><span class="pre">present</span></code> GQA interface and reports its copy cost.</p>
 </section>
+<section id="progress-snapshot">
+<h2>Progress snapshot<a class="headerlink" href="#progress-snapshot" title="Link to this heading">#</a></h2>
+<p>As of 2026-09-18, K04 and K07 are complete. K01–K03, K05, K06, and K08 have
+delivered foundations or their principal kernels but retain the optimization
+and integration work listed below. K00 is partially covered by their direct
+and backend fixtures. K09 has not started.</p>
+<p>The delivered operator work is:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code>: <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/666">#666</a>;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Split</span></code>: <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/673">#673</a>;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Cast</span></code>: <a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/674">#674</a>;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code>:
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/675">#675</a>, with subsequent
+precision and SIMD work in
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/732">#732</a>;</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code>:
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/678">#678</a>.</p></li>
+<li><p>portable packed <code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> foundation:
+<a class="reference external" href="https://github.com/xadupre/onnx-light-cpu/pull/737">#737</a>.</p></li>
+</ul>
+<p>The remaining critical path is prepared-weight persistence, optimized decode
+GEMV and prefill GEMM, INT64 <code class="docutils literal notranslate"><span class="pre">ReduceSum</span></code>, and complete-block integration.
+Zero-copy <code class="docutils literal notranslate"><span class="pre">Reshape</span></code> and persistent KV-cache work remain owned by
+<code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>; they affect efficiency but do not block the initial
+past/present-tensor correctness milestone.</p>
+</section>
 <section id="pr-sequence">
 <h2>PR sequence<a class="headerlink" href="#pr-sequence" title="Link to this heading">#</a></h2>
-<p>All steps are pending. K00 establishes executable contracts before work starts
-in parallel. Model downloads and a complete generation benchmark are not
+<p>K01 now has a portable packed-INT4/block-32 foundation with schema, symbolic
+shape inference, zero scratch-memory accounting, gradients, bias fusion, and
+Qwen2/Qwen3-shaped backend benchmarks. Prepared-weight persistence and the
+optimized K02/K03 paths remain pending. K00 continues to establish the
+complete model contract; model downloads and a generation benchmark are not
 prerequisites for isolated kernel development.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
 <col style="width: 8.0%" />
-<col style="width: 27.0%" />
-<col style="width: 49.0%" />
-<col style="width: 16.0%" />
+<col style="width: 13.0%" />
+<col style="width: 24.0%" />
+<col style="width: 43.0%" />
+<col style="width: 12.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Step</p></th>
+<th class="head"><p>Status</p></th>
 <th class="head"><p>Deliverable</p></th>
 <th class="head"><p>Acceptance</p></th>
 <th class="head"><p>Depends on</p></th>
@@ -536,39 +570,52 @@ prerequisites for isolated kernel development.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><p>K00</p></td>
+<td><p>Partial</p></td>
 <td><p>Audited contracts and C++ backend fixtures.</p></td>
 <td><p>Deterministic small inputs reproduce the exact domains, opsets,
 attributes, types, optional outputs, and dynamic dimensions. Expected
 outputs come from ONNX Runtime or supported built-in onnx-light
 kernels, not reimplemented Python math. Record upstream execution
-ownership and missing contracts.</p></td>
+ownership and missing contracts. Operator fixtures exist for K01–K08;
+the executable block and complete ownership inventory remain.</p></td>
 <td><p>Existing graph inventory</p></td>
 </tr>
 <tr class="row-odd"><td><p>K01</p></td>
+<td><p>Partial</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">MatMulNBits</span></code> schema, adapter, and prepared storage.</p></td>
-<td><p>Validate the audited three-input FP32/UINT8/FP32 contract with
-<code class="docutils literal notranslate"><span class="pre">bits=4</span></code>, <code class="docutils literal notranslate"><span class="pre">block_size=32</span></code>, and <code class="docutils literal notranslate"><span class="pre">accuracy_level=4</span></code>. Match packed
-layout, implicit zero points, scale indexing, and padding against ONNX
-Runtime. Reuse constant packed weights; reject unsupported variants
-explicitly without expanding the complete weight matrix.</p></td>
+<td><p>Validate matching FP32/FP16/BF16 activation, scale, bias, and output
+types with packed UINT8 INT2/INT4/INT8 weights, <code class="docutils literal notranslate"><span class="pre">block_size=32</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">accuracy_level=4</span></code>. Match packed layout, implicit zero points, scale
+indexing, and padding against ONNX Runtime. Reuse constant packed
+weights; reject unsupported variants explicitly without expanding the
+complete weight matrix. The portable direct-packed contract, schema,
+shape inference, gradients, fusion, tests, and benchmarks are delivered;
+prepared-weight persistence remains.</p></td>
 <td><p>K00</p></td>
 </tr>
 <tr class="row-even"><td><p>K02</p></td>
+<td><p>Partial</p></td>
 <td><p>Packed INT4 decode GEMV.</p></td>
 <td><p>The K01 plan executes <code class="docutils literal notranslate"><span class="pre">M=1</span></code> for every audited projection, including
 the vocabulary head. Scales and zero points are applied while
 consuming bounded panels. Exact packing/tail tests and numerical
-comparisons pass; repeated calls do not repack constant weights.</p></td>
+comparisons pass; repeated calls do not repack constant weights. The
+portable kernel and Qwen-shaped <code class="docutils literal notranslate"><span class="pre">M=1</span></code> benchmarks are delivered; the
+dedicated optimized GEMV and prepared-weight reuse remain.</p></td>
 <td><p>K01</p></td>
 </tr>
 <tr class="row-odd"><td><p>K03</p></td>
+<td><p>Partial</p></td>
 <td><p>INT4 small-M and prefill GEMM.</p></td>
 <td><p>Reuse the same compressed weights for short prompts and prefill.
 Bound workspace, cover partial blocks and output tails, and publish
-latency and memory comparisons without regressing decode.</p></td>
+latency and memory comparisons without regressing decode. The portable
+direct-packed path and a Qwen3 <code class="docutils literal notranslate"><span class="pre">M=8</span></code> benchmark are delivered; tiled
+SIMD prefill performance remains.</p></td>
 <td><p>K02</p></td>
 </tr>
 <tr class="row-even"><td><p>K04</p></td>
+<td><p>Complete</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Gather</span></code>.</p></td>
 <td><p>FP32 embedding lookup on axis 0 with INT64 indices and the INT64
 scalar shape-gather case pass negative-index, bounds, empty-index,
@@ -577,22 +624,28 @@ the entire embedding table.</p></td>
 <td><p>K00</p></td>
 </tr>
 <tr class="row-odd"><td><p>K05</p></td>
+<td><p>Partial</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Cast</span></code> and <code class="docutils literal notranslate"><span class="pre">ReduceSum</span></code> mask prelude.</p></td>
 <td><p>INT64 mask reduction with tensor axes and <code class="docutils literal notranslate"><span class="pre">keepdims=0</span></code> followed by
 INT64-to-INT32 conversion matches the source schemas. Test empty
 reductions, axes, dtype boundaries, and malformed inputs. GQA length
-validation must not redefine generic ONNX Cast semantics.</p></td>
+validation must not redefine generic ONNX Cast semantics. <code class="docutils literal notranslate"><span class="pre">Cast</span></code> and
+its audited Qwen conversions are delivered; INT64 <code class="docutils literal notranslate"><span class="pre">ReduceSum</span></code> remains.</p></td>
 <td><p>K00</p></td>
 </tr>
 <tr class="row-even"><td><p>K06</p></td>
+<td><p>Partial</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Split</span></code> and layout integration.</p></td>
 <td><p>Last-axis FP32 QKV splitting with <code class="docutils literal notranslate"><span class="pre">[2048,1024,1024]</span></code> works for
 multi-token as well as single-token inputs. Verify split totals,
 ownership, release order, output strides, and a materialized fallback.
-Compose with the upstream Reshape contract.</p></td>
+The registered materialized implementation covers decode, small-M,
+prefill, and batched shapes. Complete the composed release-order and
+upstream <code class="docutils literal notranslate"><span class="pre">Reshape</span></code>-view validation.</p></td>
 <td><p>K00; upstream layout contract</p></td>
 </tr>
 <tr class="row-odd"><td><p>K07</p></td>
+<td><p>Complete</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">SimplifiedLayerNormalization</span></code> adapter.</p></td>
 <td><p>Resolve the experimental <code class="docutils literal notranslate"><span class="pre">ai.onnx</span></code> schema/loading contract and
 reuse RMSNormalization for <code class="docutils literal notranslate"><span class="pre">axis=-1</span></code>, <code class="docutils literal notranslate"><span class="pre">epsilon=1e-6</span></code>, and
@@ -601,15 +654,19 @@ optional outputs if supported; do not advertise unsupported forms.</p></td>
 <td><p>K00; existing RMS engine</p></td>
 </tr>
 <tr class="row-even"><td><p>K08</p></td>
+<td><p>Partial</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">SkipSimplifiedLayerNormalization</span></code> adapter.</p></td>
 <td><p>Reuse residual addition and the shared RMS engine. Preserve sparse
 optional outputs for all audited output layouts, especially the
 residual result. Cover omitted outputs, aliasing, epsilon, shape
-errors, and accumulation precision. Fusion is a measured follow-up,
-not a prerequisite for correct execution.</p></td>
+errors, and accumulation precision. The registered kernel and sparse
+optional-output tests are delivered; complete the ORT differential and
+caller-output aliasing evidence. Fusion is a measured follow-up, not a
+prerequisite for correct execution.</p></td>
 <td><p>K07</p></td>
 </tr>
 <tr class="row-odd"><td><p>K09</p></td>
+<td><p>Not started</p></td>
 <td><p>Complete block and native INT4 graph integration.</p></td>
 <td><p>First execute a deterministic block with FP32 MatMul using K04-K08,
 then replace projections with K01-K03. Compare intermediates, logits,
@@ -706,6 +763,7 @@ end-to-end Qwen performance parity.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective-and-boundary">Objective and boundary</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#runtime-prerequisites-not-new-cpu-kernels">Runtime prerequisites, not new CPU kernels</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#progress-snapshot">Progress snapshot</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pr-sequence">PR sequence</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#common-implementation-and-performance-gates">Common implementation and performance gates</a></li>
 </ul>
@@ -742,7 +800,7 @@ end-to-end Qwen performance parity.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Sep 17, 2026.
+  Last updated on Sep 18, 2026.
   <br/>
 </p></div>
       
