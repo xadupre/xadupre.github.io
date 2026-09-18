@@ -63,6 +63,19 @@ class TestOnnxTimeDashboard(unittest.TestCase):
             text,
         )
 
+    def test_timing_and_speedup_charts_use_library_line_styles(self):
+        with open(PAGE, encoding="utf-8") as stream:
+            text = stream.read()
+        for function_name in ("renderChart", "renderSpeedupChart"):
+            with self.subTest(function=function_name):
+                body = text.split(f"function {function_name}(", 1)[1].split(
+                    "\nfunction ", 1
+                )[0]
+                self.assertIn(
+                    r"borderDash: /\/(?:onnx|ort)(?:-|$)/.test(name) ? [2, 3] : []",
+                    body,
+                )
+
     def test_dedicated_workflow_records_history(self):
         with open(WORKFLOW, encoding="utf-8") as stream:
             text = stream.read()
