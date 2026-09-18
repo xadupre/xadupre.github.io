@@ -1,6 +1,7 @@
 """Tests for the plot_onnx_time history dashboard."""
 
 import os
+import re
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -72,9 +73,31 @@ class TestOnnxTimeDashboard(unittest.TestCase):
                     "\nfunction ", 1
                 )[0]
                 self.assertIn(
-                    r"borderDash: /\/(?:onnx|ort)(?:-|$)/.test(name) ? [2, 3] : []",
+                    r"borderDash: /\/(?:onnx|ort|ir-py)(?:-|$)/.test(name) ? [2, 3] : []",
                     body,
                 )
+                pattern = body.split("borderDash: /", 1)[1].split("/.test(name)", 1)[0]
+                for operation in ("load", "save"):
+                    for files in (1, 2):
+                        for threads in (1, 4):
+                            for library, dotted in (
+                                ("onnx", True),
+                                ("onnx-cpp", True),
+                                ("ort", True),
+                                ("ir-py", True),
+                                ("onnxlight", False),
+                                ("onnxlight-cpp", False),
+                                ("onnxlight-cpp-nocopy", False),
+                                ("onnxlight-nocopy", False),
+                                ("onnxlight-ifstream", False),
+                                ("onnxlight-mmap", False),
+                                ("reference", False),
+                            ):
+                                name = f"{operation}/{files}filex{threads}/{library}"
+                                with self.subTest(name=name):
+                                    self.assertEqual(
+                                        re.search(pattern, name) is not None, dotted
+                                    )
 
     def test_dedicated_workflow_records_history(self):
         with open(WORKFLOW, encoding="utf-8") as stream:
