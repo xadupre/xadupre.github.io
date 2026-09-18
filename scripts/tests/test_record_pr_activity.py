@@ -36,7 +36,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 self.assertIn(f"...{options}.scales,", age_chart)
                 for axis, position, label in (
                     ("y", "left", "average open age (days)"),
-                    ("yMerged", "right", "average merged age (7d, days)"),
+                    ("yMerged", "right", "average merged age (365d, days)"),
                 ):
                     self.assertRegex(
                         age_chart,
@@ -63,12 +63,14 @@ class TestRecordPrActivity(unittest.TestCase):
             self.assertIn("closed_prs_1d", text)
             self.assertIn("merged_prs_1d", text)
             self.assertIn("avg_open_age_days", text)
-            self.assertIn("avg_merged_age_days_7d", text)
+            self.assertIn("avg_merged_age_days_365d", text)
+            self.assertNotIn("avg_merged_age_days_7d", text)
             self.assertIn('id="latestMergedAge"', text)
             self.assertIn('data: points("mergedAge")', text)
             self.assertIn('latest.mergedAge === null ? "N/A"', text)
             self.assertIn('row.mergedAge === null ? "N/A"', text)
-            self.assertIn("average merged age (7d, days)", text)
+            self.assertIn("average merged age (365d, days)", text)
+            self.assertIn("rolling year (365 days)", text)
             self.assertIn("loadChartJs()", text)
             self.assertIn('unit: "day"', text)
             self.assertIn('id="chartOpen"', text)
@@ -188,9 +190,9 @@ class TestRecordPrActivity(unittest.TestCase):
         self.assertEqual(snapshot["closed_prs_1d"], "1")
         self.assertEqual(snapshot["merged_prs_1d"], "1")
         self.assertEqual(snapshot["avg_open_age_days"], "11.50")
-        self.assertEqual(snapshot["avg_merged_age_days_7d"], "2.00")
+        self.assertEqual(snapshot["avg_merged_age_days_365d"], "3.50")
 
-    def test_merged_age_uses_merge_time_and_seven_day_window(self):
+    def test_merged_age_uses_merge_time_and_year_window(self):
         now = dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc)
         pulls = [
             {
@@ -200,14 +202,15 @@ class TestRecordPrActivity(unittest.TestCase):
                 "updated_at": "2026-08-28T08:00:00Z",
             }
             for created, merged in [
-                ("2026-08-01T08:00:00Z", "2026-08-21T08:00:00Z"),
+                ("2025-08-08T08:00:00Z", "2025-08-28T08:00:00Z"),
                 ("2026-08-27T08:00:00Z", "2026-08-27T20:00:00Z"),
-                ("2026-07-01T08:00:00Z", "2026-08-21T07:59:59Z"),
+                ("2025-07-01T08:00:00Z", "2025-08-28T07:59:59Z"),
                 ("2026-08-01T08:00:00Z", None),
                 (None, "2026-08-28T08:00:00Z"),
                 ("invalid", "2026-08-28T08:00:00Z"),
                 ("2026-08-28T08:00:00Z", "2026-08-27T08:00:00Z"),
                 ("2026-08-01T08:00:00Z", "invalid"),
+                ("2026-08-01T08:00:00Z", "2026-08-28T08:00:01Z"),
             ]
         ]
         original = rpa.iter_pulls
@@ -217,7 +220,7 @@ class TestRecordPrActivity(unittest.TestCase):
         finally:
             rpa.iter_pulls = original
         self.assertEqual(snapshot["merged_prs_7d"], "5")
-        self.assertEqual(snapshot["avg_merged_age_days_7d"], "10.25")
+        self.assertEqual(snapshot["avg_merged_age_days_365d"], "10.25")
 
     def test_merged_age_without_valid_ages_is_blank(self):
         original = rpa.iter_pulls
@@ -230,7 +233,53 @@ class TestRecordPrActivity(unittest.TestCase):
                         dt.datetime(2026, 8, 28, 8, tzinfo=dt.timezone.utc),
                         open_pulls=[],
                     )
-                    self.assertEqual(snapshot["avg_merged_age_days_7d"], "")
+                    self.assertEqual(snapshot["avg_merged_age_days_365d"], "")
+        finally:
+            rpa.iter_pulls = original
+
+    def test_merged_age_window_drops_expired_merges_and_adds_new_merges(self):
+        original = rpa.iter_pulls
+        try:
+            for year in (2024, 2026):
+                with self.subTest(year=year):
+                    now = dt.datetime(year, 8, 28, 8, tzinfo=dt.timezone.utc)
+
+                    def pull(merged, age):
+                        return {
+                            "created_at": rpa._format_iso(merged - dt.timedelta(days=age)),
+                            "merged_at": rpa._format_iso(merged),
+                            "closed_at": rpa._format_iso(merged),
+                            "updated_at": rpa._format_iso(merged),
+                        }
+
+                    pulls = [
+                        pull(now - dt.timedelta(days=30), 10),
+                        pull(now - dt.timedelta(days=365), 20),
+                        pull(now - dt.timedelta(days=365, seconds=1), 100),
+                    ]
+
+                    def iter_pulls(repo, state, token):
+                        yield from pulls
+                        self.fail("Collection must stop once updates predate the year")
+
+                    rpa.iter_pulls = iter_pulls
+                    first = rpa.collect_snapshot("owner/repo", None, now, open_pulls=[])
+                    self.assertEqual(first["avg_merged_age_days_365d"], "15.00")
+                    self.assertEqual(first["merged_prs_7d"], "0")
+                    self.assertEqual(first["merged_prs_1d"], "0")
+
+                    pulls.insert(0, pull(now + dt.timedelta(hours=12), 6))
+                    second = rpa.collect_snapshot(
+                        "owner/repo", None, now + dt.timedelta(days=1), open_pulls=[]
+                    )
+                    self.assertEqual(second["avg_merged_age_days_365d"], "8.00")
+                    self.assertEqual(second["merged_prs_7d"], "1")
+                    self.assertEqual(second["merged_prs_1d"], "1")
+
+                    expired = rpa.collect_snapshot(
+                        "owner/repo", None, now + dt.timedelta(days=366), open_pulls=[]
+                    )
+                    self.assertEqual(expired["avg_merged_age_days_365d"], "")
         finally:
             rpa.iter_pulls = original
 
@@ -264,7 +313,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 "closed_prs_1d": "2",
                 "merged_prs_1d": "3",
                 "avg_open_age_days": "30.00",
-                "avg_merged_age_days_7d": "2.50",
+                "avg_merged_age_days_365d": "2.50",
             }
             second = dict(first, date="2026-08-28T09:00:00Z", open_prs="101")
             rpa.write_snapshot(path, first)
@@ -286,7 +335,7 @@ class TestRecordPrActivity(unittest.TestCase):
                 "closed_prs_1d": "2",
                 "merged_prs_1d": "3",
                 "avg_open_age_days": "30.00",
-                "avg_merged_age_days_7d": "2.50",
+                "avg_merged_age_days_365d": "2.50",
             }
             second = dict(first, date="2026-08-28T08:00:00Z", open_prs="101")
             rpa.write_snapshot(path, first)
@@ -299,7 +348,7 @@ class TestRecordPrActivity(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "pr_activity.csv")
             legacy_fields = [
-                field for field in rpa.CSV_FIELDS if field != "avg_merged_age_days_7d"
+                field for field in rpa.CSV_FIELDS if field != "avg_merged_age_days_365d"
             ]
             first = dict.fromkeys(legacy_fields, "0")
             first["date"] = "2026-08-27T08:00:00Z"
@@ -308,12 +357,36 @@ class TestRecordPrActivity(unittest.TestCase):
                 writer.writeheader()
                 writer.writerow(first)
             second = dict(
-                first, date="2026-08-28T08:00:00Z", avg_merged_age_days_7d="2.50"
+                first, date="2026-08-28T08:00:00Z", avg_merged_age_days_365d="2.50"
             )
             rpa.write_snapshot(path, second)
             with open(path, newline="", encoding="utf-8") as stream:
                 rows = list(csv.DictReader(stream))
-            self.assertEqual(rows, [dict(first, avg_merged_age_days_7d=""), second])
+            self.assertEqual(rows, [dict(first, avg_merged_age_days_365d=""), second])
+
+    def test_write_snapshot_does_not_relabel_seven_day_averages_as_yearly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "pr_activity.csv")
+            legacy_fields = [
+                "avg_merged_age_days_7d" if field == "avg_merged_age_days_365d" else field
+                for field in rpa.CSV_FIELDS
+            ]
+            first = dict.fromkeys(legacy_fields, "0")
+            first.update(date="2026-08-27T08:00:00Z", avg_merged_age_days_7d="2.50")
+            with open(path, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=legacy_fields)
+                writer.writeheader()
+                writer.writerow(first)
+            second = dict.fromkeys(rpa.CSV_FIELDS, "0")
+            second.update(date="2026-08-28T08:00:00Z", avg_merged_age_days_365d="15.00")
+            rpa.write_snapshot(path, second)
+            rpa.write_snapshot(path, second)
+            with open(path, newline="", encoding="utf-8") as stream:
+                reader = csv.DictReader(stream)
+                rows = list(reader)
+                self.assertEqual(reader.fieldnames, list(rpa.CSV_FIELDS))
+            first.pop("avg_merged_age_days_7d")
+            self.assertEqual(rows, [dict(first, avg_merged_age_days_365d=""), second])
 
     def test_write_open_pull_tables_sorts_by_creation_date_and_records_ages(self):
         pulls = [
