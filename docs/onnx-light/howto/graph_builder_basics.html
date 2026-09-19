@@ -432,7 +432,7 @@
 <li class="toctree-l2"><a class="reference internal" href="load_save_onnx_files.html">How to load and save ONNX files</a></li>
 <li class="toctree-l2"><a class="reference internal" href="align_external_data_streaming.html">How to re-align external weights without loading them in memory</a></li>
 <li class="toctree-l2"><a class="reference internal" href="save_model_with_shared_external_data.html">How to save a model that shares weights with another on-disk model</a></li>
-<li class="toctree-l2"><a class="reference internal" href="save_ort_flatbuffers.html">How to save a model in the ORT flatbuffer format</a></li>
+<li class="toctree-l2"><a class="reference internal" href="save_ort_flatbuffers.html">How to save and load a model in the ORT flatbuffer format</a></li>
 <li class="toctree-l2"><a class="reference internal" href="collect_backend_test_cases.html">How to collect backend test cases (by op type or by name)</a></li>
 <li class="toctree-l2"><a class="reference internal" href="run_backend_test_case.html">Run a backend test case with the reference evaluator</a></li>
 <li class="toctree-l2"><a class="reference internal" href="benchmark_methodology.html">Benchmark methodology</a></li>
@@ -613,6 +613,92 @@ a positive output count.</p>
 <code class="xref py py-meth docutils literal notranslate"><span class="pre">make_output()</span></code> methods.
 Those <code class="docutils literal notranslate"><span class="pre">make_*</span></code> methods are the complete low-level contract for generated code
 and advanced authoring.</p>
+</section>
+<section id="structured-values-and-encoded-initializers">
+<h2>Structured values and encoded initializers<a class="headerlink" href="#structured-values-and-encoded-initializers" title="Link to this heading">#</a></h2>
+<p>Native models can declare reusable <code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> types and store
+<code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> initializers. These are onnx-light protobuf extensions,
+not ordinary ONNX tensors. A declaration describes one record; each payload’s
+byte extent determines its record count. Different payload lengths can
+therefore share one type.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">EncodedValueProto</span><span class="p">,</span>
+    <span class="n">StructTypeProto</span><span class="p">,</span>
+    <span class="n">TensorProto</span><span class="p">,</span>
+    <span class="n">TypeProto</span><span class="p">,</span>
+    <span class="n">ValueInfoProto</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">helper</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_core.graph_builder</span><span class="w"> </span><span class="kn">import</span> <span class="n">GraphBuilder</span>
+
+<span class="c1"># Each record contains two UINT8 elements.</span>
+<span class="n">pair</span> <span class="o">=</span> <span class="n">StructTypeProto</span><span class="p">()</span>
+<span class="n">pair</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"BytePair"</span>
+<span class="n">pair</span><span class="o">.</span><span class="n">type_id</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">pair</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">dimension</span> <span class="o">=</span> <span class="mi">2</span>
+<span class="n">pair</span><span class="o">.</span><span class="n">array</span><span class="o">.</span><span class="n">element_type</span><span class="o">.</span><span class="n">CopyFrom</span><span class="p">(</span>
+    <span class="n">helper</span><span class="o">.</span><span class="n">make_tensor_type_proto</span><span class="p">(</span><span class="n">TensorProto</span><span class="o">.</span><span class="n">UINT8</span><span class="p">,</span> <span class="p">[])</span>
+<span class="p">)</span>
+
+<span class="n">builder</span> <span class="o">=</span> <span class="n">GraphBuilder</span><span class="p">(</span><span class="s2">"encoded_records"</span><span class="p">)</span>
+<span class="n">builder</span><span class="o">.</span><span class="n">set_opset_version</span><span class="p">(</span><span class="s2">""</span><span class="p">,</span> <span class="mi">18</span><span class="p">)</span>
+<span class="n">builder</span><span class="o">.</span><span class="n">make_struct_type</span><span class="p">(</span><span class="n">pair</span><span class="p">)</span>
+
+<span class="n">value</span> <span class="o">=</span> <span class="n">EncodedValueProto</span><span class="p">()</span>
+<span class="n">value</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"records"</span>
+<span class="n">value</span><span class="o">.</span><span class="n">struct_type</span><span class="o">.</span><span class="n">type_ref</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">value</span><span class="o">.</span><span class="n">raw_data</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">"</span><span class="se">\x01\x02\x03\x04</span><span class="s2">"</span>
+<span class="n">builder</span><span class="o">.</span><span class="n">make_encoded_initializer</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+
+<span class="n">output_type</span> <span class="o">=</span> <span class="n">TypeProto</span><span class="p">()</span>
+<span class="n">output_type</span><span class="o">.</span><span class="n">struct_type</span><span class="o">.</span><span class="n">type_ref</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">ValueInfoProto</span><span class="p">()</span>
+<span class="n">output</span><span class="o">.</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"records"</span>
+<span class="n">output</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">CopyFrom</span><span class="p">(</span><span class="n">output_type</span><span class="p">)</span>
+<span class="n">builder</span><span class="o">.</span><span class="n">make_output</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+
+<span class="n">native_model</span> <span class="o">=</span> <span class="n">builder</span><span class="o">.</span><span class="n">to_onnx</span><span class="p">(</span><span class="s2">"model"</span><span class="p">)</span>
+<span class="n">restored</span> <span class="o">=</span> <span class="n">GraphBuilder</span><span class="p">(</span><span class="n">native_model</span><span class="p">)</span>
+<span class="n">layout</span> <span class="o">=</span> <span class="n">restored</span><span class="o">.</span><span class="n">shapes</span><span class="o">.</span><span class="n">get_encoded_layout</span><span class="p">(</span><span class="s2">"records"</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">layout</span><span class="o">.</span><span class="n">payload_bytes</span> <span class="o">==</span> <span class="mi">4</span>
+<span class="k">assert</span> <span class="n">layout</span><span class="o">.</span><span class="n">record_count</span> <span class="o">==</span> <span class="mi">2</span>
+</pre></div>
+</div>
+<p>Declarations also support named typed fields, tensor-valued constant fields,
+nested arrays and bit packing. Constant fields occupy no payload bits.
+<code class="docutils literal notranslate"><span class="pre">make_struct_type</span></code> registers a model-scoped nonzero <code class="docutils literal notranslate"><span class="pre">type_id</span></code>; references
+must resolve in that model, including its nested subgraphs. Declare referenced
+types before their users when constructing a model incrementally. Importing a
+model loads its complete catalogue before its graph.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ShapesContext</span></code> keeps the structured type, optional decoded
+<code class="docutils literal notranslate"><span class="pre">logical_type</span></code>, and physical layout together. Its <code class="docutils literal notranslate"><span class="pre">get_type</span></code>,
+<code class="docutils literal notranslate"><span class="pre">resolve_struct_type</span></code> and <code class="docutils literal notranslate"><span class="pre">get_encoded_layout</span></code> queries distinguish field
+types from payload geometry. A logical tensor descriptor does not decode the
+stored bytes or make an encoded initializer an ordinary tensor constant.
+The affine branch retains its storage type, scales, zero point, axis and
+block size; its logical tensor type must have concrete dimensions.
+An encoded initializer sharing a graph input’s name is an overridable
+default: inference validates its layout but retains the public input type
+and symbolic shape rather than treating the default bytes as a constant.
+<code class="docutils literal notranslate"><span class="pre">Identity</span></code> preserves the structured descriptor, including structured types
+nested in sequence, optional and map containers. <code class="docutils literal notranslate"><span class="pre">If</span></code> branches and
+<code class="docutils literal notranslate"><span class="pre">Loop</span></code>-carried values preserve matching structured types; encoded values
+must also have identical layouts and payloads. Standard tensor operators
+do not implicitly decode encoded inputs. Custom consumers need registered
+shape inference; unsupported structured operations and control-flow merges
+fail explicitly rather than guessing a layout.</p>
+<p>For external payloads, set <code class="docutils literal notranslate"><span class="pre">data_location</span></code> to <code class="docutils literal notranslate"><span class="pre">TensorProto.EXTERNAL</span></code>
+and provide <code class="docutils literal notranslate"><span class="pre">external_data</span></code> entries for <code class="docutils literal notranslate"><span class="pre">location</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code>
+(and optionally <code class="docutils literal notranslate"><span class="pre">offset</span></code>). Validation checks the declared extent, not
+the file’s contents. Native C++ callers can also use
+<code class="docutils literal notranslate"><span class="pre">EncodedValueProto::set_raw_data_with_deleter</span></code> to retain shared buffer
+ownership across builder and context copies.</p>
+<p><code class="docutils literal notranslate"><span class="pre">build_graph</span></code> and <code class="docutils literal notranslate"><span class="pre">to_onnx(&quot;model&quot;)</span></code> preserve the native extensions.
+Use a model, rather than a standalone graph, to retain shared declarations.
+<code class="docutils literal notranslate"><span class="pre">to_standard_model</span></code> explicitly rejects structured constructs: lowering
+to standard tensors and operators is not implemented. ORT serialization
+also rejects them. Do not pass native structured models to an upstream
+consumer expecting standard ONNX support.</p>
 </section>
 <section id="optimize-and-replay-a-rewrite">
 <h2>Optimize and replay a rewrite<a class="headerlink" href="#optimize-and-replay-a-rewrite" title="Link to this heading">#</a></h2>

@@ -420,6 +420,7 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Kernel parallelization and tuning sequence</a></li>
+
 <li class="toctree-l1"><a class="reference internal" href="2026-08_onnxruntime_fast_model_loading.html">Using <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> fast loading in <code class="docutils literal notranslate"><span class="pre">onnxruntime</span></code></a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_proto_inheritance.html">Proto schema inheritance</a></li>
 <li class="toctree-l1"><a class="reference internal" href="2026-08_quantization.html">Quantization</a></li>
@@ -516,7 +517,58 @@
 <dd class="field-odd"><p>2026-08</p>
 </dd>
 </dl>
-<p><strong>Step G in progress (x86-64 calibrated; ARM64 pending hardware access)</strong></p>
+<p><strong>Step G in progress (x86-64 calibrated; ARM64 measurements pending)</strong></p>
+</section>
+<section id="native-measurement-workflow">
+<h1>Native measurement workflow<a class="headerlink" href="#native-measurement-workflow" title="Link to this heading">#</a></h1>
+<p>The opt-in <code class="docutils literal notranslate"><span class="pre">Native</span> <span class="pre">kernel</span> <span class="pre">reports</span></code> workflow
+(<code class="docutils literal notranslate"><span class="pre">.github/workflows/kernel_reports.yml</span></code>) runs on native
+<code class="docutils literal notranslate"><span class="pre">ubuntu-24.04-arm</span></code> and <code class="docutils literal notranslate"><span class="pre">ubuntu-24.04</span></code> runners. Dispatch it from an
+up-to-date branch; both jobs check out the same event commit SHA, not a
+moving branch tip. For example, after the workflow is on the default branch:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">gh</span> <span class="n">workflow</span> <span class="n">run</span> <span class="n">kernel_reports</span><span class="o">.</span><span class="n">yml</span> <span class="o">--</span><span class="n">ref</span> <span class="n">main</span>
+<span class="n">gh</span> <span class="n">run</span> <span class="nb">list</span> <span class="o">--</span><span class="n">workflow</span> <span class="n">kernel_reports</span><span class="o">.</span><span class="n">yml</span>
+<span class="n">gh</span> <span class="n">run</span> <span class="n">download</span> <span class="o">&lt;</span><span class="n">run</span><span class="o">-</span><span class="nb">id</span><span class="o">&gt;</span> <span class="o">--</span><span class="nb">dir</span> <span class="n">kernel</span><span class="o">-</span><span class="n">reports</span>
+</pre></div>
+</div>
+<p>Each architecture artifact contains three independent runs, the workflow
+recipe, source revision, compiler/dependency versions, CMake configuration,
+processor and memory information, affinity/cgroup limits, and native test logs.
+Each run records its registry (including tuning ABIs), baseline, per-key raw
+calibration diagnostics, persisted cache, fresh-process reload checks, tuned
+baseline, and same-machine comparisons. Failed jobs also upload partial
+evidence for diagnosis; these artifacts are <strong>not</strong> validated reports.
+Artifacts expire after 30 days: archive successful evidence before expiry.</p>
+<p>To reproduce the measurement phases from the recorded source revision, build
+the native extension with the workflow’s dependencies and Release configuration,
+set <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> to the checkout, and use a new output/cache directory per run:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">XDG_CACHE_HOME</span><span class="o">=</span><span class="s2">"$(mktemp -d)"</span>
+<span class="n">export</span> <span class="n">OMP_NUM_THREADS</span><span class="o">=</span><span class="mi">2</span> <span class="n">OPENBLAS_NUM_THREADS</span><span class="o">=</span><span class="mi">1</span> <span class="n">MKL_NUM_THREADS</span><span class="o">=</span><span class="mi">1</span>
+<span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">onnx_light</span><span class="o">.</span><span class="n">tools</span><span class="o">.</span><span class="n">kernel_reports</span> <span class="n">collect</span> <span class="o">--</span><span class="n">output</span> <span class="o">/</span><span class="n">tmp</span><span class="o">/</span><span class="n">kernel</span><span class="o">-</span><span class="n">run</span><span class="o">-</span><span class="mi">1</span> \
+    <span class="o">--</span><span class="n">threads</span> <span class="mi">2</span> <span class="o">--</span><span class="n">repeat</span> <span class="mi">10</span> <span class="o">--</span><span class="n">maximum</span><span class="o">-</span><span class="n">duration</span><span class="o">-</span><span class="n">ms</span> <span class="mi">10000</span> \
+    <span class="o">--</span><span class="n">maximum</span><span class="o">-</span><span class="n">memory</span><span class="o">-</span><span class="nb">bytes</span> <span class="mi">268435456</span>
+<span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">onnx_light</span><span class="o">.</span><span class="n">tools</span><span class="o">.</span><span class="n">kernel_reports</span> <span class="n">verify</span> <span class="o">--</span><span class="n">output</span> <span class="o">/</span><span class="n">tmp</span><span class="o">/</span><span class="n">kernel</span><span class="o">-</span><span class="n">run</span><span class="o">-</span><span class="mi">1</span>
+<span class="n">python</span> <span class="o">-</span><span class="n">m</span> <span class="n">onnx_light</span><span class="o">.</span><span class="n">tools</span><span class="o">.</span><span class="n">kernel_reports</span> <span class="n">verify</span><span class="o">-</span><span class="n">incompatible</span> <span class="o">--</span><span class="n">output</span> <span class="o">/</span><span class="n">tmp</span><span class="o">/</span><span class="n">kernel</span><span class="o">-</span><span class="n">run</span><span class="o">-</span><span class="mi">1</span>
+</pre></div>
+</div>
+<p>Calibration discovers the currently registered CPU keys; it neither assumes a
+fixed key count nor supplies historical Gemm parameters. Duration and memory
+budgets apply to the native calibrators, not to the whole process or baseline.
+The workflow runs native correctness, processor-compatibility and execution-policy
+tests, checks sampled thread diagnostics, validates schema/ABI on reload, and
+rejects profiles under a different thread descriptor. Diagnostic buffers are
+bounded; their <code class="docutils literal notranslate"><span class="pre">dropped_events</span></code> counts must not be interpreted as full traces.</p>
+<p>Compare matching corpus rows, thread policies and source revisions across the
+two artifacts. <code class="docutils literal notranslate"><span class="pre">comparison.json</span></code> reports <strong>same-machine</strong> baseline/tuned
+speedups (below one means regression); ARM64/x86-64 absolute latencies compare
+different machines, not the effect of tuning. Inspect all three runs and report
+their spread and unstable profile choices, including regressions. Hosted-VM
+noise and unavailable performance counters limit conclusions; the serial rows
+can also vary from measurement noise even when no serial profile was calibrated.
+The fixed baseline corpus does not cover every calibrated dtype or workload.
+Successful artifacts still require review and publication under
+<code class="docutils literal notranslate"><span class="pre">kernel_parallelization_reports/</span></code> before the ARM64 evidence gap is closed.
+Profiles remain machine-specific; this workflow does not promote portable defaults.</p>
 <section id="objective">
 <h2>Objective<a class="headerlink" href="#objective" title="Link to this heading">#</a></h2>
 <p>Parallelize kernels from measured evidence without adding hidden worker pools,
@@ -952,6 +1004,8 @@ tuning-registry access on the hot path.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Kernel parallelization and tuning sequence</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#native-measurement-workflow">Native measurement workflow</a><ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#objective">Objective</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-chain">Dependency chain</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#assignable-issue-sequence">Assignable issue sequence</a></li>
@@ -965,6 +1019,9 @@ tuning-registry access on the hot path.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#migration-priority">Migration priority</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#definition-of-done">Definition of done</a></li>
 </ul>
+</li>
+</ul>
+
   </nav></div>
 
   <div class="sidebar-secondary-item">
