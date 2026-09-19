@@ -434,6 +434,93 @@ Face <code class="docutils literal notranslate"><span class="pre">config.json</s
 </tbody>
 </table>
 </div>
+<section id="qwen2-5-omni-video-inputs">
+<h2>Qwen2.5-Omni video inputs<a class="headerlink" href="#qwen2-5-omni-video-inputs" title="Link to this heading">¶</a></h2>
+<p>Export with <code class="docutils literal notranslate"><span class="pre">multimodal=True</span></code> to produce the shared image/video vision
+encoder, audio encoder, embedding model, and thinker decoder. For direct
+ONNX Runtime inference with multimodal temporal/spatial positions, also set
+<code class="docutils literal notranslate"><span class="pre">use_3d_position_ids=True</span></code> (CLI:
+<code class="docutils literal notranslate"><span class="pre">--extra_options</span> <span class="pre">multimodal=true</span> <span class="pre">use_3d_position_ids=true</span></code>).
+The default decoder still accepts 2-D position IDs for existing callers.
+With the 3-D option, vision <code class="docutils literal notranslate"><span class="pre">frame_ids</span></code> and <code class="docutils literal notranslate"><span class="pre">window_ids</span></code> are required
+inputs; without it, they retain their single-frame/window defaults.</p>
+<p>The Hugging Face processor supplies <code class="docutils literal notranslate"><span class="pre">pixel_values_videos</span></code> and
+<code class="docutils literal notranslate"><span class="pre">video_grid_thw</span></code>. Prepare the vision feeds as follows:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">modelbuilder.helpers.vision_helper</span><span class="w"> </span><span class="kn">import</span> <span class="n">prepare_qwen25_omni_vision_inputs</span>
+
+<span class="n">feeds</span> <span class="o">=</span> <span class="n">prepare_qwen25_omni_vision_inputs</span><span class="p">(</span>
+    <span class="n">pixel_values_videos</span><span class="p">,</span> <span class="n">video_grid_thw</span><span class="p">,</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">vision_config</span>
+<span class="p">)</span>
+<span class="n">video_features</span> <span class="o">=</span> <span class="n">vision_session</span><span class="o">.</span><span class="n">run</span><span class="p">([</span><span class="s2">"image_features"</span><span class="p">],</span> <span class="n">feeds</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+</pre></div>
+</div>
+<p>The helper accepts NumPy arrays in processor patch order. It computes vision
+RoPE frequencies and frame/window IDs, preventing attention across separate
+frames or spatial windows. A temporal grid entry counts groups of
+<code class="docutils literal notranslate"><span class="pre">temporal_patch_size</span></code> raw frames. The same helper supports images and
+multiple videos with different spatial dimensions.</p>
+<p>Pass the resulting features to <code class="docutils literal notranslate"><span class="pre">embedding.onnx</span></code> through <code class="docutils literal notranslate"><span class="pre">image_features</span></code>;
+this existing input is shared by images and videos. For a mixed prompt, arrange
+the feature rows in the order that image/video placeholders occur in
+<code class="docutils literal notranslate"><span class="pre">input_ids</span></code>. <code class="docutils literal notranslate"><span class="pre">audio_features</span></code> is unchanged; use an empty
+<code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">hidden_size]</span></code> array when audio is absent. Modality token IDs come from
+the checkpoint config, including <code class="docutils literal notranslate"><span class="pre">video_token_id</span></code> / <code class="docutils literal notranslate"><span class="pre">video_token_index</span></code>.</p>
+<p>Feed the embedding output to <code class="docutils literal notranslate"><span class="pre">model.onnx</span></code>. With <code class="docutils literal notranslate"><span class="pre">use_3d_position_ids=True</span></code>,
+provide <code class="docutils literal notranslate"><span class="pre">position_ids</span></code> of shape <code class="docutils literal notranslate"><span class="pre">[3,</span> <span class="pre">batch,</span> <span class="pre">sequence]</span></code>, computed using
+the thinker’s <code class="docutils literal notranslate"><span class="pre">get_rope_index</span></code> with the original grids, video timing
+(<code class="docutils literal notranslate"><span class="pre">second_per_grids</span></code>), and any audio metadata. Subsequent decoding positions
+must account for the returned RoPE deltas.</p>
+<section id="onnx-runtime-genai-video-generation">
+<h3>ONNX Runtime GenAI video generation<a class="headerlink" href="#onnx-runtime-genai-video-generation" title="Link to this heading">¶</a></h3>
+<p>Video-only prompts can also run through ONNX Runtime GenAI 0.15.2 or later
+with explicit preprocessing. Export with <code class="docutils literal notranslate"><span class="pre">use_3d_position_ids=True</span></code> and
+overlay the default <code class="docutils literal notranslate"><span class="pre">phi3v</span></code> configuration with Qwen-VL position handling:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime_genai</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">og</span>
+
+<span class="n">config</span> <span class="o">=</span> <span class="n">og</span><span class="o">.</span><span class="n">Config</span><span class="p">(</span><span class="n">output_dir</span><span class="p">)</span>
+<span class="n">config</span><span class="o">.</span><span class="n">overlay</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">({</span>
+    <span class="s2">"model"</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">"type"</span><span class="p">:</span> <span class="s2">"qwen2_5_vl"</span><span class="p">,</span>
+        <span class="s2">"image_token_id"</span><span class="p">:</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">image_token_id</span><span class="p">,</span>
+        <span class="s2">"video_token_id"</span><span class="p">:</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">video_token_id</span><span class="p">,</span>
+        <span class="s2">"vision_start_token_id"</span><span class="p">:</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">vision_start_token_id</span><span class="p">,</span>
+        <span class="s2">"vision"</span><span class="p">:</span> <span class="p">{</span><span class="s2">"tokens_per_second"</span><span class="p">:</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">position_id_per_seconds</span><span class="p">},</span>
+    <span class="p">}</span>
+<span class="p">}))</span>
+<span class="n">model</span> <span class="o">=</span> <span class="n">og</span><span class="o">.</span><span class="n">Model</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+<span class="n">params</span> <span class="o">=</span> <span class="n">og</span><span class="o">.</span><span class="n">GeneratorParams</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+<span class="n">params</span><span class="o">.</span><span class="n">set_search_options</span><span class="p">(</span><span class="n">do_sample</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">max_length</span><span class="o">=</span><span class="n">input_ids</span><span class="o">.</span><span class="n">size</span> <span class="o">+</span> <span class="mi">3</span><span class="p">)</span>
+<span class="n">generator</span> <span class="o">=</span> <span class="n">og</span><span class="o">.</span><span class="n">Generator</span><span class="p">(</span><span class="n">model</span><span class="p">,</span> <span class="n">params</span><span class="p">)</span>
+<span class="n">tensors</span> <span class="o">=</span> <span class="n">og</span><span class="o">.</span><span class="n">NamedTensors</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">feeds</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="n">tensors</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">value</span>
+<span class="n">merge</span> <span class="o">=</span> <span class="n">thinker_config</span><span class="o">.</span><span class="n">vision_config</span><span class="o">.</span><span class="n">spatial_merge_size</span>
+<span class="n">tensors</span><span class="p">[</span><span class="s2">"num_image_tokens"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">np</span><span class="o">.</span><span class="n">prod</span><span class="p">(</span><span class="n">video_grid_thw</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">()</span> <span class="o">//</span> <span class="n">merge</span><span class="o">**</span><span class="mi">2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span>
+<span class="p">)</span>
+<span class="n">tensors</span><span class="p">[</span><span class="s2">"video_grid_thw"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">video_grid_thw</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+<span class="n">tensors</span><span class="p">[</span><span class="s2">"second_per_grid_ts"</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">second_per_grids</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">generator</span><span class="o">.</span><span class="n">set_inputs</span><span class="p">(</span><span class="n">tensors</span><span class="p">)</span>
+<span class="n">generator</span><span class="o">.</span><span class="n">append_tokens</span><span class="p">(</span><span class="n">input_ids</span><span class="p">)</span>
+<span class="k">while</span> <span class="ow">not</span> <span class="n">generator</span><span class="o">.</span><span class="n">is_done</span><span class="p">():</span>
+    <span class="n">generator</span><span class="o">.</span><span class="n">generate_next_token</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>GenAI runs the vision encoder, embedding model, and cached decoder; it does
+not merely consume externally computed logits. The native 3-D export makes
+frame/window inputs required because GenAI does not forward overridable
+initializer inputs. The fp32/fp16 <code class="docutils literal notranslate"><span class="pre">test_video_*_cpu_genai</span></code> tests compare
+positions, embeddings, logits, and generated tokens against PyTorch.</p>
+<p>This explicit-input setup does not provide automatic raw-video processing
+or Omni audio/video interleaving. GenAI’s Qwen-VL positions round temporal
+coordinates whereas Omni truncates them; use timings for which
+<code class="docutils literal notranslate"><span class="pre">second_per_grids</span> <span class="pre">*</span> <span class="pre">position_id_per_seconds</span></code> is integral for parity.
+Use direct ONNX Runtime and Omni’s <code class="docutils literal notranslate"><span class="pre">get_rope_index</span></code> for other timings or
+audio/video interleaving. The default <code class="docutils literal notranslate"><span class="pre">phi3v</span></code> configuration is unchanged.</p>
+</section>
+</section>
 <section id="adding-a-new-architecture">
 <h2>Adding a new architecture<a class="headerlink" href="#adding-a-new-architecture" title="Link to this heading">¶</a></h2>
 <p>Support for a new family is added by:</p>
@@ -506,6 +593,10 @@ automatically.</p>
           <div class="toc-tree">
             <ul>
 <li><a class="reference internal" href="#">Supported architectures</a><ul>
+<li><a class="reference internal" href="#qwen2-5-omni-video-inputs">Qwen2.5-Omni video inputs</a><ul>
+<li><a class="reference internal" href="#onnx-runtime-genai-video-generation">ONNX Runtime GenAI video generation</a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#adding-a-new-architecture">Adding a new architecture</a></li>
 </ul>
 </li>
