@@ -28,8 +28,6 @@ import sys
 import urllib.request
 from typing import Iterable
 
-from backend_test_metadata import kind_name
-
 PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 
 CSV_FIELDS = (
@@ -145,41 +143,15 @@ def count_supported_types() -> int:
 
 
 def count_node_test_cases() -> int:
-    """Return the number of node test cases available for ``onnx``.
+    """Count the installed ONNX node tests, including function-expanded cases.
 
-    ``onnx-weekly`` no longer bundles the ``onnx/backend/test/data/node``
-    directory, so the count is taken from the ``onnx-light`` backend test
-    catalog (collected via
-    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`), keeping
-    only the cases whose ``kind`` is ``node``. When the on-disk directory is
-    still present (older ``onnx`` wheels) it is used as a fallback.
+    ONNX 1.23 no longer bundles ``backend/test/data/node``, but its Python
+    generators remain available. Pass ``None`` explicitly to collect all
+    operators with older ONNX versions too.
     """
-    try:
-        from onnx_light.onnx_lib.backend.test.case import collect_test_case
+    from onnx.backend.test.case.node import collect_testcases
 
-        cases = collect_test_case(include_big=True)
-        count = sum(
-            1
-            for name, tc in cases.items()
-            if name and kind_name(getattr(tc, "kind", None)) == "node"
-        )
-        if count:
-            return count
-    except Exception:  # noqa: BLE001 - onnx-light not importable
-        pass
-
-    import onnx
-
-    root = os.path.join(
-        os.path.dirname(onnx.__file__), "backend", "test", "data", "node"
-    )
-    if not os.path.isdir(root):
-        return 0
-    return sum(
-        1
-        for entry in os.listdir(root)
-        if entry.startswith("test_") and os.path.isdir(os.path.join(root, entry))
-    )
+    return len(collect_testcases(None))
 
 
 def collect_local_stats() -> dict[str, str]:

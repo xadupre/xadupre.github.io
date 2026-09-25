@@ -128,41 +128,47 @@ class TestRecordOnnxStats(unittest.TestCase):
 
     @unittest.skipUnless(HAS_ONNX, "requires the onnx package")
     def test_count_node_test_cases_positive(self):
-        # The installed onnx package ships hundreds of node test cases.
+        # Node test generators remain available even without data/node.
         self.assertGreater(ros.count_node_test_cases(), 0)
 
-    def test_count_node_test_cases_uses_onnx_light_catalog(self):
-        # ``onnx-weekly`` no longer bundles ``onnx/backend/test/data/node``, so
-        # the count is taken from the onnx-light backend test catalog, keeping
-        # only ``kind == "node"`` cases.
+    def test_count_node_test_cases_uses_onnx_generators(self):
         import types
 
-        cases = {
-            "test_abs": types.SimpleNamespace(kind="node"),
-            "test_add": types.SimpleNamespace(kind="node"),
-            "test_cc_shape": types.SimpleNamespace(kind="model"),
-            "test_simple": types.SimpleNamespace(kind="simple"),
-        }
-        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda include_big=False: cases
+        cases = [
+            types.SimpleNamespace(name="test_abs", kind="node"),
+            types.SimpleNamespace(name="test_add", kind="node"),
+            types.SimpleNamespace(name="test_add_expanded", kind="node"),
+        ]
+        calls = []
+
+        def collect_testcases(op_type):
+            calls.append(op_type)
+            return cases
+
+        def failing_collector(op_type):
+            raise RuntimeError("Cannot collect node tests")
+
+        fake_module = types.ModuleType("onnx.backend.test.case.node")
+        fake_module.collect_testcases = collect_testcases
         parents = [
-            ("onnx_light", types.ModuleType("onnx_light")),
-            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
+            ("onnx", types.ModuleType("onnx")),
+            ("onnx.backend", types.ModuleType("onnx.backend")),
+            ("onnx.backend.test", types.ModuleType("onnx.backend.test")),
             (
-                "onnx_light.onnx_lib.backend",
-                types.ModuleType("onnx_light.onnx_lib.backend"),
+                "onnx.backend.test.case",
+                types.ModuleType("onnx.backend.test.case"),
             ),
-            (
-                "onnx_light.onnx_lib.backend.test",
-                types.ModuleType("onnx_light.onnx_lib.backend.test"),
-            ),
-            ("onnx_light.onnx_lib.backend.test.case", fake_module),
+            ("onnx.backend.test.case.node", fake_module),
         ]
         saved = {name: sys.modules.get(name) for name, _ in parents}
         try:
             for name, mod in parents:
                 sys.modules[name] = mod
-            self.assertEqual(ros.count_node_test_cases(), 2)
+            self.assertEqual(ros.count_node_test_cases(), 3)
+            self.assertEqual(calls, [None])
+            fake_module.collect_testcases = failing_collector
+            with self.assertRaisesRegex(RuntimeError, "Cannot collect node tests"):
+                ros.count_node_test_cases()
         finally:
             for name, mod in saved.items():
                 if mod is None:
