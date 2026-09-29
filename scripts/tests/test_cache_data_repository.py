@@ -77,7 +77,7 @@ class TestCacheDataWorkflowWiring(unittest.TestCase):
                 )
                 self.assertIsNone(helper_steps[0].get("working-directory"))
 
-        self.assertEqual(len(workflows), 26)
+        self.assertEqual(len(workflows), 27)
 
     def test_site_documentation_commits_do_not_stage_cache_data(self):
         for name in ("build_onnx_light_docs.yml", "record_size_onnx_light.yml"):
