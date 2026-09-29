@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>ONNX Runtime binary sizes</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" type="image/svg+xml" href="../../logo.svg" />
+<style>
+body { margin: 0; padding: 1.5em; background: #0d1117; color: #c9d1d9; font-family: sans-serif; }
+header, .description, .message { text-align: center; }
+h1 { font-size: 1.4em; }
+a { color: #58a6ff; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.description { color: #8b949e; font-size: 0.9em; }
+.panel { max-width: 1100px; margin: 1em auto; padding: 1em; background: #161b22; border-radius: 12px; }
+.chart-container { position: relative; height: 50vh; min-height: 300px; }
+select { max-width: 100%; margin: 0.5em 0; padding: 0.5em; background: #0d1117; color: #c9d1d9; }
+.observations { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+th, td { padding: 0.5em; text-align: left; border-bottom: 1px solid #30363d; }
+td { font-family: monospace; }
+.message { color: #f85149; }
+</style>
+<script src="../../assets/chart-loader.js"></script>
+</head>
+<body>
+<header>
+  <a href="../../index.html">&larr; back to home</a>
+  <h1>ONNX Runtime &mdash; release binary sizes</h1>
+</header>
+<p class="description">
+  Binary packages attached to stable
+  <a href="https://github.com/microsoft/onnxruntime/releases">microsoft/onnxruntime GitHub releases</a>.
+  Sizes are compressed download sizes reported by GitHub, not installed library sizes.
+  History uses release publication dates and is refreshed weekly; prereleases,
+  checksums, and GitHub-generated source archives are excluded.
+</p>
+<div id="message" class="message" role="status">Loading release sizes…</div>
+<main id="results" hidden>
+  <div class="panel">
+    <label for="package">Binary package (platform / architecture / provider)</label><br />
+    <select id="package"></select>
+    <div class="chart-container"><canvas id="sizes"></canvas></div>
+    <p class="description">MiB = 1,048,576 bytes. Drag to pan, scroll to zoom, double-click to reset.</p>
+  </div>
+  <div class="panel observations">
+    <h2>Release history</h2>
+    <table>
+      <thead><tr><th>Published</th><th>Release</th><th>Asset</th><th>Bytes</th><th>MiB</th></tr></thead>
+      <tbody id="history"></tbody>
+    </table>
+  </div>
+</main>
+<footer class="data-updated" data-source="../../cache_data/onnxruntime/release_sizes.json" style="text-align:center;color:#8b949e;font-size:0.8em;display:none;"></footer>
+<script src="../../assets/last-updated.js"></script>
+<script>
+const DATA_URL = "../../cache_data/onnxruntime/release_sizes.json";
+const RELEASE_URL = "https://github.com/microsoft/onnxruntime/releases/tag/";
+let chart;
+
+function render(rows) {
+  const select = document.getElementById("package");
+  const packages = [...new Set(rows.map(row => row.package))].sort();
+  for (const name of packages) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  }
+  select.value = packages.find(name => name === "onnxruntime-linux-x64-{version}.tgz") || packages[0];
+  function update() {
+    const selected = rows.filter(row => row.package === select.value)
+      .sort((a, b) => new Date(a.date) - new Date(b.date));
+    const body = document.getElementById("history");
+    body.replaceChildren();
+    for (const row of [...selected].reverse()) {
+      const tr = document.createElement("tr");
+      for (const value of [row.date.slice(0, 10), row.version, row.name, row.size.toLocaleString(), (row.size / 1048576).toFixed(2)]) {
+        const td = document.createElement("td");
+        td.textContent = value;
+        tr.appendChild(td);
+      }
+      const link = document.createElement("a");
+      link.href = RELEASE_URL + encodeURIComponent(row.version);
+      link.textContent = row.version;
+      tr.children[1].replaceChildren(link);
+      body.appendChild(tr);
+    }
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById("sizes"), {
+      type: "line",
+      data: { datasets: [{
+        label: select.value,
+        data: selected.map(row => ({ x: row.date, y: row.size / 1048576, version: row.version })),
+        borderColor: "#58a6ff", backgroundColor: "#58a6ff",
+      }] },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: "#c9d1d9" } },
+          tooltip: { callbacks: { title: items => items[0].raw.version } },
+          zoom: {
+            pan: { enabled: true, mode: "xy" },
+            zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: "xy" },
+          },
+        },
+        scales: {
+          x: { type: "time", time: { tooltipFormat: "yyyy-MM-dd" }, ticks: { color: "#c9d1d9" } },
+          y: { beginAtZero: true, title: { display: true, text: "download size (MiB)", color: "#c9d1d9" }, ticks: { color: "#c9d1d9" } },
+        },
+      },
+    });
+  }
+  document.getElementById("results").hidden = false;
+  select.addEventListener("change", update);
+  document.getElementById("sizes").addEventListener("dblclick", () => chart.resetZoom());
+  update();
+}
+
+loadChartJs()
+  .then(() => fetch(DATA_URL, { cache: "no-store" }))
+  .then(response => {
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.json();
+  })
+  .then(rows => {
+    if (!rows.length) throw new Error("No release binary sizes are available yet.");
+    render(rows);
+    document.getElementById("message").textContent = "";
+  })
+  .catch(error => {
+    document.getElementById("message").textContent = "Unable to load release sizes: " + error.message;
+  });
+</script>
+</body>
+</html>

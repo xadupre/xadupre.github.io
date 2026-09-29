@@ -10,6 +10,15 @@ the former `cache_data/` contents at that repository's root. Its GitHub Pages
 project serves those files under `https://xadupre.github.io/cache_data/`, so
 the existing dashboard URLs remain unchanged.
 
+The [ONNX Runtime binary size dashboard](dashboard/onnxruntime/package-size.html)
+tracks compressed binary assets from stable `microsoft/onnxruntime` GitHub
+releases, grouped by package/platform. The weekly `DATA onnxruntime binary sizes`
+workflow backfills release history using GitHub's asset metadata (without
+downloading binaries) into `onnxruntime/release_sizes.json` in the data repository.
+To refresh locally, run `python scripts/record_onnxruntime_release_sizes.py
+--cache-dir /tmp/cache_data`; set `GITHUB_TOKEN` for the authenticated API rate
+limit. Reruns replace the snapshot rather than duplicating releases.
+
 ## Branch protection and the auto-updating workflows
 
 Most of the workflows under [`.github/workflows`](.github/workflows) commit and
