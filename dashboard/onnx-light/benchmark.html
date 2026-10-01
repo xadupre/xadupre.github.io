@@ -287,6 +287,9 @@ table.benchmark tr.graph-row > td {
     <a href="../../docs/onnx-light-cpu/index.html"><code>onnx&#8209;light&#8209;cpu</code></a>
     SIMD kernels layered on top, and its speedup uses the same
     <code>onnxruntime&nbsp;avg</code> baseline.
+    <code>onnx&#8209;light&nbsp;mixed</code> uses
+    <code>MixedReferenceEvaluator</code>, with NumPy kernels for
+    Gemm, MatMul, Conv and Attention; its speedup also uses onnxruntime as baseline.
     Three averages are reported. <em>Avg speedup</em> is the unweighted mean of every
     per-test speedup, so an O(1) kernel (e.g.
     <code>Shape</code>/<code>Reshape</code>) counts as much as an O(n)
@@ -368,15 +371,17 @@ table.benchmark tr.graph-row > td {
     <table class="benchmark">
       <colgroup>
         <col style="width:17%" />
+        <col style="width:6%" />
         <col style="width:7%" />
-        <col style="width:7%" />
-        <col style="width:12%" />
-        <col style="width:9%" />
-        <col style="width:9%" />
-        <col style="width:9%" />
-        <col style="width:7%" />
-        <col style="width:7%" />
-        <col style="width:16%" />
+        <col style="width:10%" />
+        <col style="width:8%" />
+        <col style="width:8%" />
+        <col style="width:8%" />
+        <col style="width:8%" />
+        <col style="width:6%" />
+        <col style="width:6%" />
+        <col style="width:6%" />
+        <col style="width:10%" />
       </colgroup>
       <thead>
         <tr>
@@ -386,8 +391,10 @@ table.benchmark tr.graph-row > td {
           <th class="center">date</th>
           <th data-key="onnxruntime_avg_ms" class="center"><code>onnxruntime</code> avg <span class="arrow"></span></th>
           <th data-key="onnx_light_avg_ms" class="center"><code>onnx-light</code> avg <span class="arrow"></span></th>
+          <th data-key="onnx_light_mixed_avg_ms" class="center"><code>onnx-light mixed</code> avg <span class="arrow"></span></th>
           <th data-key="onnx_light_cpu_avg_ms" class="center"><code>onnx-light + cpu</code> avg <span class="arrow"></span></th>
           <th data-key="speedup" class="center">speedup <span class="arrow"></span></th>
+          <th data-key="speedup_mixed" class="center">speedup (mixed) <span class="arrow"></span></th>
           <th data-key="speedup_cpu" class="center">speedup (cpu) <span class="arrow"></span></th>
           <th data-key="status" class="center">status <span class="arrow"></span></th>
         </tr>
@@ -618,6 +625,23 @@ function renderSummaryCards(summary, rows, nWarmup, nMeasure) {
   }
   addCard("faster", "onnx-light faster", String(nFaster), "of " + bothOk + " jointly successful");
   addCard("slower", "onnx-light slower", String(nSlower), "of " + bothOk + " jointly successful");
+  const avgSpeedupMixed = summary.avg_speedup_mixed;
+  if (avgSpeedupMixed !== undefined) {
+    const clsMixed = avgSpeedupMixed >= 1 ? "faster" : (avgSpeedupMixed >= 0.9 ? "close" : "slower");
+    addCard(clsMixed, "avg speedup (ort / light mixed)", avgSpeedupMixed.toFixed(2) + "×", "unweighted mean of per-test speedups");
+  }
+  const weightedMixed = weightedAverage("speedup_mixed");
+  if (weightedMixed !== undefined) {
+    const clsMixed = weightedMixed >= 1 ? "faster" : (weightedMixed >= 0.9 ? "close" : "slower");
+    addCard(clsMixed, "weighted avg speedup (ort / light mixed)", weightedMixed.toFixed(2) + "×", "linear cost for ordinary kernels; quadratic for matrix multiplication and attention");
+  }
+  const sumLatencyMixed = summary.speedup_sum_latency_mixed !== undefined
+    ? summary.speedup_sum_latency_mixed
+    : sumLatencySpeedup("onnx_light_mixed_avg_ms");
+  if (sumLatencyMixed !== undefined) {
+    const clsMixed = sumLatencyMixed >= 1 ? "faster" : (sumLatencyMixed >= 0.9 ? "close" : "slower");
+    addCard(clsMixed, "sum latency speedup (ort / light mixed)", sumLatencyMixed.toFixed(2) + "×", "sum(onnxruntime latency) / sum(onnx-light mixed latency)");
+  }
   const avgSpeedupCpu = summary.avg_speedup_cpu;
   if (avgSpeedupCpu !== undefined) {
     const clsCpu = avgSpeedupCpu >= 1 ? "faster" : (avgSpeedupCpu >= 0.9 ? "close" : "slower");
@@ -866,7 +890,7 @@ function renderRows() {
     const tr = document.createElement("tr");
     tr.className = "empty-row";
     const td = document.createElement("td");
-    td.colSpan = 10;
+    td.colSpan = 12;
     td.textContent = state.regexError
       ? "Fix the filter regex to see results."
       : state.search ? "No test matches the current filter." : "No test recorded.";
@@ -944,6 +968,19 @@ function renderRows() {
         lightTd.className = "center status-fail";
       }
 
+      /* onnx-light mixed avg */
+      const mixedTd = document.createElement("td");
+      mixedTd.className = "center time-light";
+      if (r.onnx_light_mixed_success && r.onnx_light_mixed_avg_ms !== undefined) {
+        mixedTd.textContent = formatMs(r.onnx_light_mixed_avg_ms);
+        setMinMaxTooltip(mixedTd, r, "onnx_light_mixed");
+      } else {
+        mixedTd.textContent = r.onnx_light_mixed_error
+          ? "\u2717 " + shortenError(r.onnx_light_mixed_error)
+          : "—";
+        mixedTd.className = "center status-fail";
+      }
+
       /* onnx-light + cpu avg */
       const cpuTd = document.createElement("td");
       cpuTd.className = "center time-light";
@@ -966,6 +1003,17 @@ function renderRows() {
       } else {
         speedupTd.textContent = "—";
         speedupTd.classList.add("speedup-neutral");
+      }
+
+      /* Speedup (onnx-light mixed) */
+      const speedupMixedTd = document.createElement("td");
+      speedupMixedTd.className = "center";
+      if (r.speedup_mixed !== undefined) {
+        speedupMixedTd.textContent = formatSpeedup(r.speedup_mixed);
+        speedupMixedTd.classList.add(speedupCellClass(r.speedup_mixed));
+      } else {
+        speedupMixedTd.textContent = "—";
+        speedupMixedTd.classList.add("speedup-neutral");
       }
 
       /* Speedup (onnx-light + cpu) */
@@ -993,12 +1041,14 @@ function renderRows() {
       tr.appendChild(dateTd);
       tr.appendChild(ortTd);
       tr.appendChild(lightTd);
+      tr.appendChild(mixedTd);
       tr.appendChild(cpuTd);
       tr.appendChild(speedupTd);
+      tr.appendChild(speedupMixedTd);
       tr.appendChild(speedupCpuTd);
       tr.appendChild(statusTd);
 
-      const graphRow = appendGraphRow(tr, nameTd, r, 10);
+      const graphRow = appendGraphRow(tr, nameTd, r, 12);
       body.appendChild(tr);
       if (graphRow) body.appendChild(graphRow);
     }

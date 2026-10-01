@@ -62,6 +62,16 @@ class TestBenchmarkDashboard(unittest.TestCase):
         # Rows render the recorded input type inside the new cell.
         self.assertIn("r.input_type", text)
 
+    def test_mixed_evaluator_columns_and_summary(self):
+        text = _read(PAGE)
+        self.assertIn('data-key="onnx_light_mixed_avg_ms"', text)
+        self.assertIn('data-key="speedup_mixed"', text)
+        self.assertIn("r.onnx_light_mixed_error", text)
+        self.assertIn('setMinMaxTooltip(mixedTd, r, "onnx_light_mixed")', text)
+        self.assertIn("weightedAverage(\"speedup_mixed\")", text)
+        self.assertIn('appendGraphRow(tr, nameTd, r, 12)', text)
+        self.assertIn("td.colSpan = 12;", text)
+
     def test_input_type_selector_present(self):
         text = _read(PAGE)
         # A dropdown selector lets the user filter rows by their input type.
