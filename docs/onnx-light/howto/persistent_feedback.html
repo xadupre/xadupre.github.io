@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Persistent input/output feedback &#8212; onnx-light 0.1.28 documentation</title>
+    <title>Persistent input/output feedback &#8212; onnx-light 0.1.29 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0" />
 
-    <script src="../_static/documentation_options.js?v=34399df3"></script>
+    <script src="../_static/documentation_options.js?v=904119ea"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -139,8 +139,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.28 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.28 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.29 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.29 documentation - Home"/>
   
   
 </a></div>
@@ -481,6 +481,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_quantization_kernels.html">Calibrates quantization with graph kernels</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_custom_kernel.html">Extend ReferenceEvaluator with a custom kernel</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_runtime_memory.html">Profile the runtime memory of a model with the event log</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_quantize_paged_cache.html">Quantizes and dequantizes selected pages of a KV cache</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_register_custom_kernel.html">Replace a built-in kernel with a Python one and prove it ran</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_backend_test_case.html">Retrieve a backend test case and display its model and data</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../auto_examples_runtime/plot_runtime_events.html">Run a model with the runtime and inspect intermediate results</a></li>
@@ -608,6 +609,88 @@ computed results; the state layer does not duplicate those results merely
 to retain or return them. The CPU Attention append optimization described
 below reduces kernel allocations and prefix copies independently of this
 zero-copy state forwarding.</p>
+<p>To reproduce a tensor-cache decode comparison, refresh the target revision
+and run the native benchmark from the repository root:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">git fetch origin main</span>
+<span class="go">PYTHONPATH=. python benchmarks/bench_persistent_feedback.py --tokens 16</span>
+</pre></div>
+</div>
+<p>The JSON records both source revisions, model identity, execution policy,
+separate setup times and raw per-token latency for a persistent state and an
+explicit stateless session. The latter feeds selected outputs back using
+<code class="docutils literal notranslate"><span class="pre">model.graph.persistent_bindings</span></code>, without guessing names or providing a
+second mapping. Numerical output and retained pointer identity are checked
+at each step. <code class="docutils literal notranslate"><span class="pre">retained_logical_bytes</span></code> measures visible tensor lengths,
+not reserved cache capacity; <code class="docutils literal notranslate"><span class="pre">event_workspace_peak_bytes</span></code> is the peak
+reported by runtime events, not whole-process RSS. The storage allocation,
+prefix-copy and append-copy counters describe the <strong>Attention kernel</strong>,
+not state forwarding. The zero-copy state layer has no payload-copy counter:
+its forwarding is checked by pointer identity, while wall times include
+kernel work, Python conversion and state management. The stateless session
+does not use contiguous persistent capacity, so this is not a matched-kernel
+isolation of state-management time. Results vary by CPU and build flags.
+This small synthetic fixture avoids external model assets; it does not measure
+Qwen weights, multi-layer decode or whole-process peak memory. Use a
+materialized Qwen model with its required operators and assets for those
+workloads rather than extrapolating these timings.</p>
+<p>One raw four-token run on an AMD EPYC 9V74 (Linux, Python 3.13.15,
+Release build), with source revision
+<code class="docutils literal notranslate"><span class="pre">f6efe8829202eb654024d9809f62143cd4110bf1</span></code> and freshly fetched target
+<code class="docutils literal notranslate"><span class="pre">72c65c505fcd6f08c84a1b8a05295733bb0bec9b</span></code>, produced stateful setup
+145690 ns and stateless session setup 10245 ns. Times are single observations,
+not comparative performance claims:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Token</p></th>
+<th class="head"><p>Stateful ns</p></th>
+<th class="head"><p>Stateless ns</p></th>
+<th class="head"><p>Retained logical bytes</p></th>
+<th class="head"><p>Event workspace peak bytes</p></th>
+<th class="head"><p>Kernel allocations / allocated bytes</p></th>
+<th class="head"><p>Kernel prefix / append copied bytes</p></th>
+<th class="head"><p>Kernel reuse count</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1</p></td>
+<td><p>236216</p></td>
+<td><p>358640</p></td>
+<td><p>16</p></td>
+<td><p>0</p></td>
+<td><p>2 / 64</p></td>
+<td><p>0 / 16</p></td>
+<td><p>0</p></td>
+</tr>
+<tr class="row-odd"><td><p>2</p></td>
+<td><p>34542</p></td>
+<td><p>18268</p></td>
+<td><p>32</p></td>
+<td><p>0</p></td>
+<td><p>0 / 0</p></td>
+<td><p>0 / 16</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-even"><td><p>3</p></td>
+<td><p>22253</p></td>
+<td><p>6079</p></td>
+<td><p>48</p></td>
+<td><p>0</p></td>
+<td><p>0 / 0</p></td>
+<td><p>0 / 16</p></td>
+<td><p>2</p></td>
+</tr>
+<tr class="row-odd"><td><p>4</p></td>
+<td><p>20891</p></td>
+<td><p>5308</p></td>
+<td><p>64</p></td>
+<td><p>0</p></td>
+<td><p>0 / 0</p></td>
+<td><p>0 / 16</p></td>
+<td><p>2</p></td>
+</tr>
+</tbody>
+</table>
+</div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
 <p>Inputs, retained state and returned views can share the same payload.
@@ -618,6 +701,48 @@ Metadata such as a returned tensor’s name and shape is independent.</p>
 <p>The model is immutable for the entire bound session lifetime. State creation
 and execution do not serialize, clone or hash the model to check for changes.
 To rewrite the graph, create a new state/session after rewriting instead.</p>
+<section id="autoregressive-generation">
+<h2>Autoregressive generation<a class="headerlink" href="#autoregressive-generation" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator.generate</span></code> runs the token loop in the native runtime:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx.reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span>
+
+<span class="n">evaluator</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="n">model</span><span class="p">)</span>
+<span class="n">tokens</span> <span class="o">=</span> <span class="n">evaluator</span><span class="o">.</span><span class="n">generate</span><span class="p">(</span>
+    <span class="p">{</span><span class="s2">"input_ids"</span><span class="p">:</span> <span class="n">input_ids</span><span class="p">,</span> <span class="o">**</span><span class="n">initial_empty_caches</span><span class="p">},</span>
+    <span class="n">max_new_tokens</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span>
+    <span class="n">temperature</span><span class="o">=</span><span class="mf">0.7</span><span class="p">,</span>
+    <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span>
+    <span class="n">eos_token_id</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>The result is an INT64 <code class="docutils literal notranslate"><span class="pre">[batch,</span> <span class="pre">prompt_length</span> <span class="pre">+</span> <span class="pre">generated_length]</span></code> array,
+including the prompt. <code class="docutils literal notranslate"><span class="pre">temperature=0</span></code> (the default) uses greedy decoding;
+positive temperatures sample <code class="docutils literal notranslate"><span class="pre">softmax(logits</span> <span class="pre">/</span> <span class="pre">temperature)</span></code>. A seed makes
+sampling repeatable within the same runtime implementation. Generation stops
+at the token limit or when every row emits EOS; finished rows are padded with
+<code class="docutils literal notranslate"><span class="pre">pad_token_id</span></code> (EOS by default).</p>
+<p>Models without <code class="docutils literal notranslate"><span class="pre">persistent_bindings</span></code> use an ordinary <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> and
+evaluate the full growing prefix. No persistent state is created, and no cache
+bindings are guessed from operator or tensor names. Models with bindings use
+<code class="docutils literal notranslate"><span class="pre">PersistentValueState</span></code>: supply initial empty caches in the feeds, or declare
+paged-cache initializers. The prompt is evaluated once; each subsequent decoding
+iteration within the same generation call consumes one new token. Eligible kernels
+reuse persistent buffers; other kernels retain their ordinary allocation behavior.
+Each generation call owns fresh state and leaves the model and caller feeds unchanged.</p>
+<p>The model accepts INT64 <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> and returns floating-point <code class="docutils literal notranslate"><span class="pre">logits</span></code>
+of shape <code class="docutils literal notranslate"><span class="pre">[batch,</span> <span class="pre">sequence,</span> <span class="pre">vocabulary]</span></code> or <code class="docutils literal notranslate"><span class="pre">[batch,</span> <span class="pre">vocabulary]</span></code>.
+FLOAT, DOUBLE, FLOAT16 and BFLOAT16 logits are supported. Declared INT64
+<code class="docutils literal notranslate"><span class="pre">attention_mask</span></code> and <code class="docutils literal notranslate"><span class="pre">position_ids</span></code> inputs are created if absent and updated
+at each step. Prompts must be unpadded or left-padded; the final logit position
+predicts the next token. Other supplied inputs remain fixed across iterations.
+Initial caches must represent an empty prefix.</p>
+<p>The lower-level <code class="docutils literal notranslate"><span class="pre">runtime.generate(model,</span> <span class="pre">context,</span> <span class="pre">feeds,</span> <span class="pre">options,</span>
+<span class="pre">session_options)</span></code> returns a runtime tensor. <code class="docutils literal notranslate"><span class="pre">runtime.GenerationOptions</span></code>
+also allows configuring the token, logits, mask and position input/output names.
+C++ callers use <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::core::runtime::Generate()</span></code> with the same
+options and an existing <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>.</p>
+</section>
 <section id="a-basic-feedback-loop">
 <h2>A basic feedback loop<a class="headerlink" href="#a-basic-feedback-loop" title="Link to this heading">#</a></h2>
 <p>The Python binding is available from the native runtime module:</p>
@@ -777,8 +902,48 @@ tensor kernels continue to use the existing tensor API. In C++, structured
 and encoded edges live in <code class="docutils literal notranslate"><span class="pre">RuntimeContext::values()</span></code> as <code class="docutils literal notranslate"><span class="pre">RuntimeValue</span></code>
 objects containing existing tensors or <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> payloads.
 Inline structured encoded payloads can be retained as whole values; external
-payloads must first be loaded. This API currently supports tensors, named
-structs and inline structured encodings, not sequence/map/optional state.
+payloads must first be loaded. The native API supports tensors, named
+structs, typed sequences and inline structured or affine encodings. Affine
+values are checked against their declared logical tensor type without decoding.
+Persistent values always have concrete dimensions. For an encoded tensor,
+<code class="docutils literal notranslate"><span class="pre">logical_type</span></code> describes its decoded shape, not an unresolved symbolic shape:
+missing ranks or non-concrete dimensions are rejected. Symbolic dimensions remain
+valid in the model’s input/output declarations.
+Map, optional, sparse and opaque state remain unsupported and are rejected
+explicitly, including when nested in a sequence or structure.
+For the supported types, the native correspondence is:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tensor_type</span></code>: a runtime tensor, or an encoded value with a matching logical
+tensor type.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">struct_type</span></code>: named runtime fields, or an encoded value with a compatible
+storage type.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">sequence_type</span></code>: runtime elements recursively checked against <code class="docutils literal notranslate"><span class="pre">elem_type</span></code>.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">RuntimeValue.elements</span></code> is a <code class="docutils literal notranslate"><span class="pre">RuntimeSequence</span></code> with immutable element
+metadata and structural sharing. Copying a sequence shares its tree; appending
+or replacing an element copies only a logarithmic path. Read access uses
+<code class="docutils literal notranslate"><span class="pre">elements[i]</span></code> or <code class="docutils literal notranslate"><span class="pre">elements.at(i)</span></code>. To edit an element, obtain its
+<code class="docutils literal notranslate"><span class="pre">BorrowView()</span></code>, change that independent descriptor and call
+<code class="docutils literal notranslate"><span class="pre">elements.Set(i,</span> <span class="pre">std::move(value))</span></code>. Existing snapshots remain unchanged.
+Payload owners are shared and payloads remain read-only. Deep copies still
+produce independent payloads.</p>
+<p>Validation reuses results for unchanged sequence subtrees and merges their
+concrete symbolic bindings, rather than walking historical elements on every
+invocation. Memo tables hold weak references, so they do not prolong page or
+allocator lifetimes. Catalogue-dependent encoded retention still rechecks the
+supplied catalogue.
+Structurally recognized paged-cache snapshots additionally validate their complete
+page structure and ranges before state publication, without decoding payloads.</p>
+<p>These are <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code> contracts, not a claim that every <code class="docutils literal notranslate"><span class="pre">SequenceProto</span></code>,
+<code class="docutils literal notranslate"><span class="pre">MapProto</span></code> or <code class="docutils literal notranslate"><span class="pre">OptionalProto</span></code> has a native persistent representation.
+Python feedback supports tensors, named structs as dictionaries, typed sequences
+as lists, inline encoded values and dedicated <code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code> values.
+Lists are converted recursively without converting their tensor payloads;
+their elements must match the declared <code class="docutils literal notranslate"><span class="pre">sequence_type.elem_type</span></code>. Empty
+lists are supported. Tuples and arbitrary iterables are not sequence inputs.
+Ordinary dictionaries require named field declarations. Layout-less
+<code class="docutils literal notranslate"><span class="pre">struct_type</span></code> declarations are reserved for structurally recognized paged caches,
+whose page ranges, fields and payloads are validated independently.
 <code class="docutils literal notranslate"><span class="pre">If</span></code> and model-local functions forward selected whole output names and move
 those results without persistence-related copies. Function attributes,
 <code class="docutils literal notranslate"><span class="pre">Loop</span></code> and <code class="docutils literal notranslate"><span class="pre">Scan</span></code> use their ordinary runtime implementations: their normal
@@ -931,8 +1096,8 @@ half-precision conversion.</p>
 <p>Sum fields from the event list when totals are needed. Call
 <code class="docutils literal notranslate"><span class="pre">context.ClearEvents()</span></code> before a run to obtain per-token reports; otherwise
 events accumulate in that context, including runs of different feedback states.
-Resetting or closing a state does not clear the caller’s log.
-<code class="docutils literal notranslate"><span class="pre">event.storage_allocated_bytes</span></code> counts requested storage capacity,
+Resetting or closing a state does not clear the caller’s log.</p>
+<p><code class="docutils literal notranslate"><span class="pre">event.storage_allocated_bytes</span></code> counts requested storage capacity,
 not physical heap allocations: an I/O arena may satisfy a request from its free
 lists. The existing <code class="docutils literal notranslate"><span class="pre">event.allocated_bytes</span></code> and <code class="docutils literal notranslate"><span class="pre">event.peak_bytes</span></code> fields
 still describe allocator live and peak memory and have not changed meaning.
@@ -949,6 +1114,345 @@ copies is a state-management copy.</p>
 <p>A runnable native example, including per-token allocation/copy measurements
 and a multi-head fallback, is provided in
 <a class="reference internal" href="../examples_cc/contiguous_kv_decode_example.html"><span class="doc">Contiguous KV decode on CPU</span></a>.</p>
+</section>
+</section>
+<section id="optional-heterogeneous-paged-kv">
+<h2>Optional heterogeneous paged KV<a class="headerlink" href="#optional-heterogeneous-paged-kv" title="Link to this heading">#</a></h2>
+<section id="cache-value-declaration">
+<h3>Cache value declaration<a class="headerlink" href="#cache-value-declaration" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">PagedAttention</span></code> declares <code class="docutils literal notranslate"><span class="pre">past</span></code> and <code class="docutils literal notranslate"><span class="pre">present</span></code> as structured values.
+Their concrete serialized representation is <code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code>, whose
+<code class="docutils literal notranslate"><span class="pre">blocks</span></code> sequence contains pages with scalar INT64 <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code>
+fields and floating-point <code class="docutils literal notranslate"><span class="pre">key</span></code> and <code class="docutils literal notranslate"><span class="pre">value</span></code> tensors. The proto and runtime
+validation define the cache layout directly; there is no separate cache-type
+factory or physical encoding in the graph declaration.
+The declaration may leave <code class="docutils literal notranslate"><span class="pre">struct_type</span></code> unset internally or specify the named
+cache fields, directly or through a model-catalogue reference. Array and bit-packing
+layouts are not cache declarations. Declared <code class="docutils literal notranslate"><span class="pre">key</span></code> and <code class="docutils literal notranslate"><span class="pre">value</span></code> tensors have
+logical dtype FLOAT; FLOAT16 and BFLOAT16 are physical dense page formats, not
+alternative logical declarations.
+Dense pages accept ONNX <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> or the matching typed field: <code class="docutils literal notranslate"><span class="pre">float_data</span></code>
+for FLOAT and <code class="docutils literal notranslate"><span class="pre">int32_data</span></code> carrying 16-bit element representations for FLOAT16
+and BFLOAT16. Importing typed 16-bit data packs it into owned runtime storage;
+raw payloads retain the existing borrowing behavior.</p>
+</section>
+<section id="versioned-operator-schema">
+<h3>Versioned operator schema<a class="headerlink" href="#versioned-operator-schema" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ai.rt::PagedAttention</span></code> has an independent <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code> at domain
+<code class="docutils literal notranslate"><span class="pre">ai.rt</span></code>, opset 1. It takes <code class="docutils literal notranslate"><span class="pre">Q,</span> <span class="pre">K,</span> <span class="pre">V,</span> <span class="pre">past</span></code> and produces <code class="docutils literal notranslate"><span class="pre">Y,</span> <span class="pre">present</span></code>.
+Q/K/V and Y are FLOAT, FLOAT16, or BFLOAT16 <code class="docutils literal notranslate"><span class="pre">[batch,heads,L,D]</span></code> tensors;
+Q/K/V use the same batch and new-token dimensions, K/V use the same head count,
+and the query head count is a multiple of the K/V head count. <code class="docutils literal notranslate"><span class="pre">past</span></code> and
+<code class="docutils literal notranslate"><span class="pre">present</span></code> use the paged-cache structure. Shape inference returns Y with Q’s
+batch, heads, sequence length and element type, V’s head size, and preserves
+the structured declaration of <code class="docutils literal notranslate"><span class="pre">past</span></code> for <code class="docutils literal notranslate"><span class="pre">present</span></code>.</p>
+<p>All attributes are optional: <code class="docutils literal notranslate"><span class="pre">block_size=16</span></code> and <code class="docutils literal notranslate"><span class="pre">max_tokens=4096</span></code> must be
+positive; <code class="docutils literal notranslate"><span class="pre">is_causal=1</span></code> accepts only 0 or 1; <code class="docutils literal notranslate"><span class="pre">left_window_size=-1</span></code> means
+unbounded and non-negative values bound preceding tokens. Physical cache
+storage is deliberately absent from the operator attributes: every page is
+self-describing, and the registered kernel may choose a different K/V format
+on every execution. Data-dependent cache checks happen at execution. The
+schema and shape-function registration do not register a kernel.</p>
+</section>
+<section id="kernel-implementation">
+<h3>Kernel implementation<a class="headerlink" href="#kernel-implementation" title="Link to this heading">#</a></h3>
+<p>The native <code class="docutils literal notranslate"><span class="pre">onnx_kernels::kernel::PagedAttention</span></code> is an opt-in consumer. It
+does not change standard ONNX <code class="docutils literal notranslate"><span class="pre">Attention</span></code> or add another state subsystem.
+Declare <code class="docutils literal notranslate"><span class="pre">past</span></code> and <code class="docutils literal notranslate"><span class="pre">present</span></code> as structured values and bind <code class="docutils literal notranslate"><span class="pre">past</span> <span class="pre">&lt;-</span>
+<span class="pre">present</span></code> in <code class="docutils literal notranslate"><span class="pre">GraphProto.persistent_bindings</span></code>. Initialize each request with
+<code class="docutils literal notranslate"><span class="pre">PagedAttention::EmptyCache()</span></code>.</p>
+<p>Import domain <code class="docutils literal notranslate"><span class="pre">ai.rt</span></code> at version 1 in the model. Unknown ranks and
+symbolic Q/K/V dimensions remain supported. Cache page capacities should remain
+unspecified because appended pages can have different lengths.</p>
+<p>Register the native kernel on the context used by the state:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_light</span><span class="p">;</span>
+<span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">onnx_light</span><span class="o">::</span><span class="nn">core</span><span class="o">::</span><span class="nn">runtime</span><span class="p">;</span>
+
+<span class="n">context</span><span class="p">.</span><span class="n">RegisterKernelFn</span><span class="p">(</span>
+<span class="w">    </span><span class="s">"ai.rt"</span><span class="p">,</span><span class="w"> </span><span class="s">"PagedAttention"</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="o">::</span><span class="n">symbolic</span><span class="o">::</span><span class="n">Device</span><span class="o">::</span><span class="n">kCPU</span><span class="p">,</span>
+<span class="w">    </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">node</span><span class="p">,</span><span class="w"> </span><span class="n">RuntimeContext</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rt</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">KernelBase</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">auto</span><span class="w"> </span><span class="n">kernel</span><span class="w"> </span><span class="o">=</span>
+<span class="w">          </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">onnx_kernels</span><span class="o">::</span><span class="n">kernel</span><span class="o">::</span><span class="n">PagedAttention</span><span class="o">&gt;</span><span class="p">(</span><span class="n">rt</span><span class="p">.</span><span class="n">kernel_ctx</span><span class="p">());</span>
+<span class="w">      </span><span class="n">kernel</span><span class="o">-&gt;</span><span class="n">set_node</span><span class="p">(</span><span class="n">node</span><span class="p">);</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">kernel</span><span class="p">;</span>
+<span class="w">    </span><span class="p">});</span>
+</pre></div>
+</div>
+<p>To select storage dynamically, construct the kernel with a <code class="docutils literal notranslate"><span class="pre">FormatSelector</span></code>.
+The selector receives the current K/V tensors and retained token count. It
+returns the formats for the pages appended by that execution. Without a
+selector the native kernel stores new pages as dense FLOAT. For example, a
+policy can switch formats as the cache grows:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">auto</span><span class="w"> </span><span class="n">select_formats</span><span class="w"> </span><span class="o">=</span>
+<span class="w">    </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="w"> </span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="w"> </span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="kt">int64_t</span><span class="w"> </span><span class="n">past_length</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">past_length</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">1024</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">onnx_kernels</span><span class="o">::</span><span class="n">kernel</span><span class="o">::</span><span class="n">PagedAttention</span><span class="o">::</span><span class="n">Formats</span><span class="p">{};</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">onnx_kernels</span><span class="o">::</span><span class="n">kernel</span><span class="o">::</span><span class="n">PagedAttention</span><span class="o">::</span><span class="n">Formats</span><span class="p">{</span>
+<span class="w">          </span><span class="p">{</span><span class="n">TensorProto</span><span class="o">::</span><span class="n">INT8</span><span class="p">,</span><span class="w"> </span><span class="mf">0.01f</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">},</span>
+<span class="w">          </span><span class="p">{</span><span class="n">TensorProto</span><span class="o">::</span><span class="n">UINT4</span><span class="p">,</span><span class="w"> </span><span class="mf">0.25f</span><span class="p">,</span><span class="w"> </span><span class="mi">8</span><span class="p">}};</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="k">auto</span><span class="w"> </span><span class="n">kernel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">onnx_kernels</span><span class="o">::</span><span class="n">kernel</span><span class="o">::</span><span class="n">PagedAttention</span><span class="o">&gt;</span><span class="p">(</span>
+<span class="w">    </span><span class="n">context</span><span class="p">.</span><span class="n">kernel_ctx</span><span class="p">(),</span><span class="w"> </span><span class="n">select_formats</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>The node takes <code class="docutils literal notranslate"><span class="pre">Q,</span> <span class="pre">K,</span> <span class="pre">V,</span> <span class="pre">past</span></code> and returns <code class="docutils literal notranslate"><span class="pre">Y,</span> <span class="pre">present</span></code>. It accepts finite
+FLOAT, FLOAT16, or BFLOAT16 tensors, supports multiple batches and grouped-query
+attention, and requires equal new Q/K/V sequence lengths and positive head
+sizes. Masks and other unsupported attributes fail explicitly. Kernel
+instances, execution and allocator routing use the normal runtime contracts.
+Python feedback represents this cache with <code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code> rather than
+converting its internal sequence into a Python list.
+This conversion recognizes the runtime structure: a single <code class="docutils literal notranslate"><span class="pre">blocks</span></code> sequence,
+whose elements have exactly <code class="docutils literal notranslate"><span class="pre">start</span></code>, <code class="docutils literal notranslate"><span class="pre">length</span></code>, <code class="docutils literal notranslate"><span class="pre">key</span></code> and <code class="docutils literal notranslate"><span class="pre">value</span></code> fields.
+The first two fields are INT64 scalar tensors; the payloads are tensors or encoded
+values. Payload types, shapes and page ranges are validated before export.
+No separate runtime marker records the value’s origin. A Python dictionary with
+this structure is therefore also treated as a cache and returned as
+<code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code>. A structure containing only <code class="docutils literal notranslate"><span class="pre">{&quot;blocks&quot;:</span> <span class="pre">[]}</span></code> represents an
+empty cache. Other structures remain dictionaries, and their ordinary sequence
+fields round-trip as Python lists.</p>
+</section>
+<section id="selected-block-quantization">
+<h3>Selected-block quantization<a class="headerlink" href="#selected-block-quantization" title="Link to this heading">#</a></h3>
+<p>The <a class="reference internal" href="../auto_examples_runtime/plot_quantize_paged_cache.html#l-example-quantize-paged-cache"><span class="std std-ref">Python example</span></a> builds and executes
+a graph that quantizes one cache page, dequantizes it, and serializes the
+mixed-format cache.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ai.rt::QuantizePagedCache</span></code> converts selected cache blocks without
+rebuilding the remaining cache. Its opset-1 signature is:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">QuantizePagedCache</span><span class="p">(</span>
+    <span class="n">cache</span><span class="p">,</span> <span class="n">block_indices</span><span class="p">,</span>
+    <span class="n">key_scale</span><span class="p">,</span> <span class="n">key_zero_point</span><span class="p">,</span>
+    <span class="n">value_scale</span><span class="p">,</span> <span class="n">value_zero_point</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">quantized_cache</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">block_indices</span></code> is a rank-one INT64 tensor of unique, zero-based block
+indices. The K and V scales are positive finite scalar FLOAT tensors. Each
+scalar zero point selects the corresponding payload storage type, so K and V
+may use different formats. INT8, UINT8, INT4, UINT4, INT2 and UINT2 request
+affine quantization. FLOAT, FLOAT16 and BFLOAT16 request dense dequantization;
+the floating-point marker’s value and the corresponding scale are ignored.
+For a paged cache declared with logical FLOAT K/V fields, dense FLOAT16 and
+BFLOAT16 pages are physical storage alternatives and remain valid across
+persistent bindings. Ordinary non-cache tensor fields still require exact
+dtype agreement.</p>
+<p>For every selected block, the kernel decodes either its dense floating-point
+payload or its existing affine payload, then converts the valid <code class="docutils literal notranslate"><span class="pre">length</span></code>
+prefix to the selected format. The original capacity and <code class="docutils literal notranslate"><span class="pre">length</span></code> are preserved.
+Unused rows are initialized from logical zeros in the destination format without
+reading the source’s unused rows. This also preserves fixed-capacity cache
+declarations through quantization, requantization and dequantization.
+The whole input cache is validated before applying the block selection, including
+page fields, contiguous ranges, K/V capacities and payload extents. This also
+applies to unselected pages and an empty selection, without decoding payloads.
+Unselected blocks retain their payload storage
+and owners. Indices and quantization parameters are all checked before the
+output is published, so an invalid request does not partially modify the
+cache. Shape inference preserves the input cache’s structured declaration on
+<code class="docutils literal notranslate"><span class="pre">quantized_cache</span></code>.</p>
+<p>For example, this graph first quantizes block 3 to INT2 keys and UINT4 values,
+then uses the same operator to materialize FLOAT16 keys and BFLOAT16 values.
+The floating zero-point inputs are type markers:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>key_scale       = FLOAT scalar 0.25
+key_zero_int2   = INT2 scalar 0
+value_scale     = FLOAT scalar 0.125
+value_zero_u4   = UINT4 scalar 8
+ignored_scale   = FLOAT scalar 1
+key_float16     = FLOAT16 scalar 0
+value_bfloat16  = BFLOAT16 scalar 0
+selected_blocks = INT64[1] {3}
+
+quantized_cache = ai.rt::QuantizePagedCache(
+    cache, selected_blocks,
+    key_scale, key_zero_int2,
+    value_scale, value_zero_u4)
+
+dequantized_cache = ai.rt::QuantizePagedCache(
+    quantized_cache, selected_blocks,
+    ignored_scale, key_float16,
+    ignored_scale, value_bfloat16)
+</pre></div>
+</div>
+</section>
+<section id="serialized-cache-values">
+<h3>Serialized cache values<a class="headerlink" href="#serialized-cache-values" title="Link to this heading">#</a></h3>
+<p>The graph’s structured declaration does not serialize a cache value. At
+runtime, a cache is a <code class="docutils literal notranslate"><span class="pre">RuntimeValue</span></code> structure containing a dynamic
+<code class="docutils literal notranslate"><span class="pre">RuntimeSequence</span></code> of pages. The sequence cannot be represented as one
+fixed-layout <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code>; an encoded value represents one tensor (or
+one fixed-layout structured value), not the complete cache and its dynamic
+page sequence.</p>
+<p><code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code> is the dedicated onnx-light serialized value representation,
+separate from the logical <code class="docutils literal notranslate"><span class="pre">TypeProto</span></code>. Its <code class="docutils literal notranslate"><span class="pre">blocks</span></code> field contains
+<code class="docutils literal notranslate"><span class="pre">PagedCacheBlockProto</span></code> messages with explicit <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code>.
+Each block selects exactly one dense <code class="docutils literal notranslate"><span class="pre">key</span></code> or <code class="docutils literal notranslate"><span class="pre">encoded_key</span></code>, and one dense
+<code class="docutils literal notranslate"><span class="pre">value</span></code> or <code class="docutils literal notranslate"><span class="pre">encoded_value</span></code>. Dense payloads use <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>; encoded
+payloads retain <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> layouts and parameter references.
+The current kernel accepts inline dense FLOAT, FLOAT16 or BFLOAT16 pages, or
+affine INT8, UINT8, INT4, UINT4, INT2 or UINT2 pages with FLOAT scales; K and V
+may use independent per-axis or blocked formats. Page ranges start at zero, are
+contiguous and have positive lengths no greater than their physical capacities.
+K/V capacities match within each block, and each tensor’s head width is
+consistent across blocks.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RuntimeValue::FromPagedCache</span></code> restores the recursive runtime value with
+retained storage owners; <code class="docutils literal notranslate"><span class="pre">ToPagedCache</span></code> exports it without decoding pages.
+Already retained dense buffers and managed encoded payloads remain shared.
+Binary protobuf serialization writes their contents; parsing reconstructs
+owned data. Referenced types and shared quantization parameters still belong to
+the containing model, not to the standalone cache. Pass its catalogues to the
+native conversion functions when needed.</p>
+<p><code class="docutils literal notranslate"><span class="pre">GraphProto.paged_cache_initializer</span></code> (extension field 1002) stores named
+cache defaults. Names are unique across all initializer categories. A default
+that also names a graph input may be overridden by a caller; otherwise it is a
+constant graph value. Runtime sessions seed these initializers, and persistent
+state initialization/reset uses them when a bound input is omitted from the
+initial-value map. Shape inference, model validation and <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>
+import/export preserve the declaration and its structured type references.
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder::MakePagedCacheInitializer</span></code> adds one directly.
+Non-bound graph inputs with initializer defaults may also be omitted from
+current feeds; an explicit feed overrides the default for that invocation.</p>
+<p>Python exposes both messages through <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx</span></code>. A
+<code class="docutils literal notranslate"><span class="pre">PersistentValueState</span></code> accepts and returns <code class="docutils literal notranslate"><span class="pre">PagedCacheProto</span></code> for these
+values, including through <code class="docutils literal notranslate"><span class="pre">values</span></code> and <code class="docutils literal notranslate"><span class="pre">reset</span></code>. Serializing a returned
+cache and placing it in a new model’s <code class="docutils literal notranslate"><span class="pre">paged_cache_initializer</span></code> resumes the
+cache independently of the original state.</p>
+<p>Validation rejects missing payload alternatives, negative or non-contiguous
+starts, non-positive lengths, lengths larger than page capacity, inconsistent
+K/V capacities or widths, non-concrete encoded payload dimensions, and external
+page data. The runtime kernel additionally validates these ranges and
+capacities on actual page values before attention. Load external data before
+constructing the serialized cache.
+This extension is supported by onnx-light binary protobuf, not standard ONNX,
+ORT, or ONNX text export. Legacy graph extraction, prefixing and merging reject
+cache initializers explicitly rather than silently losing them; use
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> for supported graph edits.</p>
+<p>The cache is a named structure containing <code class="docutils literal notranslate"><span class="pre">blocks</span></code>, a typed runtime sequence.
+Historical descriptors are shared, and immutable page validation is memoized
+per kernel instance. A finite attention window uses a binary search to skip
+unattended historical pages; views are prepared once per invocation, not once
+per query row. <code class="docutils literal notranslate"><span class="pre">Statistics.validated_pages</span></code> counts newly checked page metadata.
+The memo is synchronized only during metadata analysis, not numerical attention.
+Cache pages use independently retained storage (the I/O arena when supplied),
+even when <code class="docutils literal notranslate"><span class="pre">present</span></code> is an intermediate value forwarded to a persistent output.
+Each block is a structure with scalar INT64 <code class="docutils literal notranslate"><span class="pre">start</span></code> and <code class="docutils literal notranslate"><span class="pre">length</span></code> fields and
+<code class="docutils literal notranslate"><span class="pre">key</span></code>/<code class="docutils literal notranslate"><span class="pre">value</span></code> fields. Starts are contiguous logical token offsets; length is
+the valid prefix of the block’s physical token capacity. Key/value payloads are
+independently owned dense tensors or affine <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> values whose
+logical shapes are <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">1,</span> <span class="pre">capacity,</span> <span class="pre">head_size]</span></code>. Their affine descriptors carry
+format identity, scales and zero points, independently for K, V and each block.
+There are no persistent flags or new quantization layouts.</p>
+<p>A root persistent sequence containing only dense tensors is bridged to the
+standard <code class="docutils literal notranslate"><span class="pre">RuntimeContext::sequences()</span></code> representation while the graph runs,
+then converted back to <code class="docutils literal notranslate"><span class="pre">RuntimeValue</span></code> at the persistent output boundary.
+Standard sequence operators such as <code class="docutils literal notranslate"><span class="pre">SequenceInsert</span></code> can therefore consume
+and produce persistent tensor sequences. A root sequence containing encoded
+tensor values remains in <code class="docutils literal notranslate"><span class="pre">RuntimeContext::values()</span></code> for consumers that support
+those encodings, and outputs are accepted symmetrically from either store.
+Nested sequences, including the <code class="docutils literal notranslate"><span class="pre">blocks</span></code> field above, remain part of their
+enclosing structured <code class="docutils literal notranslate"><span class="pre">RuntimeValue</span></code>.</p>
+<p>Persistent values also retain the shared parameter catalogue introduced by
+<a class="reference internal" href="quantized_values.html"><span class="doc">Quantizes tensors into encoded values</span></a>, recursively through structures and sequences. A tensor
+declaration is checked against an encoded value’s logical tensor type; a
+structured declaration is checked against its storage type. Retaining or
+validating a compact shared value checks its reference, types and byte extent
+without materializing it. Borrowed views survive reset and close with both
+their payload and their shared parameters.
+Native C++ current feeds undergo this reference validation before execution,
+including when an encoded value is only forwarded to a nonpersistent output.
+They must carry their shared parameter catalogue in <code class="docutils literal notranslate"><span class="pre">RuntimeValue</span></code>.</p>
+<p>Python construction, <code class="docutils literal notranslate"><span class="pre">reset</span></code> and <code class="docutils literal notranslate"><span class="pre">run</span></code> resolve <code class="docutils literal notranslate"><span class="pre">EncodedValueProto.parameter_ref</span></code>
+against the state’s model, including encoded values nested in dictionaries.
+Conversions reject missing references and reuse one shared parameter catalogue
+per input dictionary. After <code class="docutils literal notranslate"><span class="pre">close</span></code>, state operations and the native model
+and type-catalogue accessors reject access; already exported values remain valid.</p>
+<p>This general runtime support does not broaden the native <code class="docutils literal notranslate"><span class="pre">PagedAttention</span></code>
+decoder: its supported page formats remain the dense and affine formats below.
+Portable structured and shared encodings can be retained and forwarded by other
+consumers, but this kernel rejects them explicitly rather than materializing a
+whole cache or silently converting its representation.</p>
+<p><code class="docutils literal notranslate"><span class="pre">block_size</span></code> bounds each block’s token capacity and <code class="docutils literal notranslate"><span class="pre">max_tokens</span></code> bounds the
+retained logical length. A registered kernel may provide a <code class="docutils literal notranslate"><span class="pre">FormatSelector</span></code>
+that chooses independent K/V formats from the current inputs and retained
+length on every execution. FLOAT, INT8, UINT8, INT4, UINT4, INT2 and UINT2 are
+supported for new blocks; affine append uses scalar parameters. The selected descriptor is
+stored in every new page, so successive executions may append different
+formats without converting prior pages. An affine descriptor may omit its
+concrete <code class="docutils literal notranslate"><span class="pre">storage_type</span></code> and provide <code class="docutils literal notranslate"><span class="pre">signed_storage</span></code> instead. Validation
+then infers the unique supported code width from the logical element count and
+payload byte size; ambiguous sizes are rejected. Existing blocks may also use
+per-axis and blocked affine parameters with FLOAT scales. Other scale types,
+external payloads and custom structured encodings require another consumer and
+are rejected.
+Partial blocks are sealed: an append adds new blocks
+rather than rewriting the previous partial block. This can use more metadata
+than filling partial blocks, but guarantees that even live aliases never force
+a prefix payload copy or conversion.</p>
+<p>Attention applies causal masking by default. <code class="docutils literal notranslate"><span class="pre">is_causal</span></code> and
+<code class="docutils literal notranslate"><span class="pre">left_window_size</span></code> control the visible token range. It reads only valid,
+visible tokens and uses online softmax instead of concatenating K/V or allocating
+a cache-length score matrix. Current K/V participate in this calculation as
+uncompressed FLOAT values and are encoded only afterward for publication in
+<code class="docutils literal notranslate"><span class="pre">present</span></code>. Retention, invocation, publication and state views share payload
+owners. Kernel conversion of new blocks is separate from those zero-copy state
+operations.</p>
+<p>The direct C++ call returns <code class="docutils literal notranslate"><span class="pre">Result::statistics</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">copied_bytes</span></code> counts new stored payload bytes written by copying or
+conversion, excluding metadata and Y.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dequantized_bytes</span></code> counts decoded FLOAT bytes for visible quantized
+tokens, including repeated reads for different queries.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">peak_workspace_bytes</span></code> counts peak numerical scratch, excluding output,
+retained payloads and collection metadata.</p></li>
+</ul>
+<p>These are kernel costs, not state-forwarding copies. Native tests also check
+payload/owner identity across publication and append. For example, the native
+windowed fixture starts with six retained tokens, appends two tokens with
+INT8 keys (width 2) and UINT4 values (width 3), and uses a left window of one:
+it writes 7 new payload bytes, decodes 80 FLOAT bytes across the two queries,
+and uses 24 bytes of numerical scratch. No prior block payload is copied.
+The dense fixture appends three tokens with widths 3 and 2 on each call:
+its 60 append bytes and 16 scratch bytes stay constant as the cache grows.</p>
+<p>Quantization rounds ties
+to even and saturates to the selected code range. For non-saturated inputs,
+each affine reconstruction differs from its source by at most half its scale
+(plus floating-point rounding). Attention error also depends on Q/K magnitudes
+and softmax conditioning; no format alone guarantees a universal output error
+bound. The numerical fixtures compare the paged consumer to dense Attention
+using the reconstructed values with absolute tolerance <code class="docutils literal notranslate"><span class="pre">1e-5</span></code> for the four
+tested affine storage types (INT4, UINT4, INT8 and UINT8), separately from
+quantization error. The end-to-end
+four-step fixture uses Q/K/V components <code class="docutils literal notranslate"><span class="pre">+/-(0.173</span> <span class="pre">*</span> <span class="pre">step)</span></code> and compares to
+unquantized dense Attention with these absolute output tolerances:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Storage</p></th>
+<th class="head"><p>Scale</p></th>
+<th class="head"><p>Zero point</p></th>
+<th class="head"><p>Fixture tolerance</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>INT8 / UINT8</p></td>
+<td><p>0.01</p></td>
+<td><p>0 / 128</p></td>
+<td><p>0.01</p></td>
+</tr>
+<tr class="row-odd"><td><p>INT4 / UINT4</p></td>
+<td><p>0.25</p></td>
+<td><p>0 / 8</p></td>
+<td><p>0.15</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>These fixture-specific bounds do not apply to arbitrary models or saturated
+inputs. INT2 and UINT2 are supported, but are not covered by these four-format
+accuracy fixtures or the table above.</p>
+<p>Validation rejects malformed ranges, invalid layouts, unsupported consumers
+and capacity violations. A failing or cancelled invocation cannot publish part
+of a block collection. Cancellation remains a publication gate, not preemption.
+Reset/close drop the state’s owners; exported views and other requests retain
+their blocks until their last owner is released. The bound model is never
+serialized or cloned by this path.</p>
 </section>
 </section>
 </section>
@@ -1000,11 +1504,20 @@ and a multi-head fallback, is provided in
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#autoregressive-generation">Autoregressive generation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#a-basic-feedback-loop">A basic feedback loop</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#lifecycle-and-validation">Lifecycle and validation</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#structured-feedback">Structured feedback</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#contiguous-cpu-attention-feedback">Contiguous CPU Attention feedback</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#opt-in-storage-auditing-through-runtime-events">Opt-in storage auditing through runtime events</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-heterogeneous-paged-kv">Optional heterogeneous paged KV</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#cache-value-declaration">Cache value declaration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#versioned-operator-schema">Versioned operator schema</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kernel-implementation">Kernel implementation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#selected-block-quantization">Selected-block quantization</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#serialized-cache-values">Serialized cache values</a></li>
 </ul>
 </li>
 </ul>
