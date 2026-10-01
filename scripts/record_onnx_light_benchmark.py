@@ -3,7 +3,8 @@
 The script discovers every benchmark-sized backend node test bundled with
 the installed ``onnx-light`` package and measures the processing time of
 ``onnxruntime``, the ``onnx-light`` reference implementation backed by its
-C++ ``KernelDispatchTable``, and ``onnx-light`` running with the
+C++ ``KernelDispatchTable``, its ``MixedReferenceEvaluator`` (NumPy kernels
+for selected operators), and ``onnx-light`` running with the
 ``onnx-light-cpu`` SIMD kernels registered on top. The ``onnx-light-cpu``
 backend runs the model through the exact same ``onnx-light``
 ``ReferenceEvaluator`` API as the plain ``onnx-light`` backend, but
@@ -21,7 +22,8 @@ resolves each kernel once and replays the cached execution plan on subsequent
 runs.
 
 The benchmark runs every test through ``onnx-light``, then every test through
-``onnx-light-cpu``, and finally every test through ONNX Runtime. Sessions from
+``MixedReferenceEvaluator``, ``onnx-light-cpu``, and finally every test through
+ONNX Runtime. Sessions from
 one phase are released before the next phase starts, so each runtime keeps its
 default worker-spin policy without perturbing another runtime's measurements.
 
@@ -89,10 +91,9 @@ from backend_test_metadata import kind_name, tag_name
 # Configuration constants
 # ---------------------------------------------------------------------------
 
-#: Backends exercised by the benchmark. ``onnxruntime``, ``onnx_light`` and
-#: ``onnx_light_cpu`` are timed; the reference implementation is intentionally
-#: omitted because it is Python-only and not representative of production
-#: performance. ``onnx_light_cpu`` runs the model through the *same*
+#: Backends exercised by the benchmark. ``onnx_light_mixed`` uses the mixed
+#: evaluator's NumPy kernels for selected operators. ``onnx_light_cpu`` runs
+#: the model through the *same*
 #: ``onnx-light`` ``ReferenceEvaluator`` API as ``onnx_light``, but with
 #: the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` installed into
 #: onnx-light's shared C++ dispatch table via ``register_kernels``, so it
@@ -100,12 +101,14 @@ from backend_test_metadata import kind_name, tag_name
 BENCHMARK_BACKENDS: Tuple[str, ...] = (
     "onnxruntime",
     "onnx_light",
+    "onnx_light_mixed",
     "onnx_light_cpu",
 )
 
 BACKEND_PACKAGE: Dict[str, str] = {
     "onnxruntime": "onnxruntime",
     "onnx_light": "onnx_light",
+    "onnx_light_mixed": "onnx_light",
     "onnx_light_cpu": "onnx_light_cpu",
 }
 
@@ -140,6 +143,7 @@ DEFAULT_KIND: str = "node"
 
 BENCHMARK_EXECUTION_ORDER: Tuple[str, ...] = (
     "onnx_light",
+    "onnx_light_mixed",
     "onnx_light_cpu",
     "onnxruntime",
 )
@@ -628,6 +632,19 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
     return _make_onnx_light_reference_runner(model)
 
 
+def _make_onnx_light_mixed_runner(model) -> Callable[[List[Any]], List[Any]]:
+    """Build a reusable onnx-light mixed evaluator for ``model``."""
+    from onnx_light.onnx.reference import MixedReferenceEvaluator
+
+    evaluator = MixedReferenceEvaluator(model.SerializeToString())
+    input_names = evaluator.input_names
+
+    def _run(inputs: List[Any]) -> List[Any]:
+        return list(evaluator.run(None, dict(zip(input_names, inputs))))
+
+    return _run
+
+
 def _make_onnx_light_cpu_runner(
     model,
     *,
@@ -770,6 +787,7 @@ def _make_onnx_light_cpu_runner(
 _RUNNER_FACTORIES: Dict[str, Callable[[Any], Callable[[List[Any]], List[Any]]]] = {
     "onnxruntime": _make_onnxruntime_runner,
     "onnx_light": _make_onnx_light_runner,
+    "onnx_light_mixed": _make_onnx_light_mixed_runner,
     "onnx_light_cpu": _make_onnx_light_cpu_runner,
 }
 
@@ -1159,9 +1177,11 @@ def _row_from_results(
     # A value > 1 means onnx-light is faster than onnxruntime.
     ort_avg = results.get("onnxruntime", {}).get("avg_ms")
     light_avg = results.get("onnx_light", {}).get("avg_ms")
+    mixed_avg = results.get("onnx_light_mixed", {}).get("avg_ms")
     cpu_avg = results.get("onnx_light_cpu", {}).get("avg_ms")
     ort_ok = results.get("onnxruntime", {}).get("success", False)
     light_ok = results.get("onnx_light", {}).get("success", False)
+    mixed_ok = results.get("onnx_light_mixed", {}).get("success", False)
     cpu_ok = results.get("onnx_light_cpu", {}).get("success", False)
     if (
         ort_ok
@@ -1171,6 +1191,9 @@ def _row_from_results(
         and light_avg > 0
     ):
         row["speedup"] = round(ort_avg / light_avg, 4)
+
+    if ort_ok and mixed_ok and ort_avg is not None and mixed_avg is not None and mixed_avg > 0:
+        row["speedup_mixed"] = round(ort_avg / mixed_avg, 4)
 
     # Compute speedup_cpu = onnxruntime_avg_ms / onnx_light_cpu_avg_ms, mirroring
     # ``speedup`` for the onnx-light runtime running onnx-light-cpu kernels.
@@ -1267,7 +1290,7 @@ def build_payload(
             }
         )
 
-    # The plain onnx-light phase must precede onnx-light-cpu because registering
+    # The plain and mixed onnx-light phases must precede onnx-light-cpu because registering
     # the accelerated kernels is process-wide and irreversible. ONNX Runtime is
     # measured last, after all onnx-light sessions have been released.
     for backend in BENCHMARK_EXECUTION_ORDER:
@@ -1312,6 +1335,22 @@ def build_payload(
     operator_weights = _operator_weights(both_ok)
     if operator_weights:
         summary["operator_weights"] = operator_weights
+
+    mixed_ok = [
+        r for r in rows if r.get("onnxruntime_success") and r.get("onnx_light_mixed_success")
+    ]
+    speedups_mixed = [r["speedup_mixed"] for r in mixed_ok if "speedup_mixed" in r]
+    summary["mixed_succeeded"] = len(mixed_ok)
+    if speedups_mixed:
+        summary["avg_speedup_mixed"] = round(sum(speedups_mixed) / len(speedups_mixed), 4)
+        summary["min_speedup_mixed"] = round(min(speedups_mixed), 4)
+        summary["max_speedup_mixed"] = round(max(speedups_mixed), 4)
+    weighted_mixed = _weighted_avg_speedup(mixed_ok, "speedup_mixed")
+    if weighted_mixed is not None:
+        summary["avg_speedup_weighted_mixed"] = weighted_mixed
+    sum_latency_mixed = _sum_latency_speedup(mixed_ok, "onnx_light_mixed_avg_ms")
+    if sum_latency_mixed is not None:
+        summary["speedup_sum_latency_mixed"] = sum_latency_mixed
 
     # Summary stats for the onnx-light + onnx-light-cpu kernels backend.
     cpu_ok = [

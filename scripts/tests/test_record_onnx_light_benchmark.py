@@ -297,6 +297,28 @@ class TestRowFromResults(unittest.TestCase):
         row = rlb._row_from_results("test_abs", results)
         self.assertNotIn("speedup_cpu", row)
 
+    def test_mixed_speedup_and_failed_or_missing_results(self):
+        results = self._make_results(ort_ok=True, light_ok=True, ort_avg=2.0)
+        results["onnx_light_mixed"] = {
+            "success": True, "avg_ms": 0.5, "min_ms": 0.4, "max_ms": 0.6
+        }
+        row = rlb._row_from_results("test_abs", results)
+        self.assertEqual(row["speedup_mixed"], 4.0)
+        self.assertEqual(row["onnx_light_mixed_min_ms"], 0.4)
+        self.assertEqual(row["onnx_light_mixed_max_ms"], 0.6)
+
+        results["onnx_light_mixed"] = {"success": False, "error": "mixed load failed"}
+        row = rlb._row_from_results("test_abs", results)
+        self.assertNotIn("speedup_mixed", row)
+        self.assertEqual(row["onnx_light_mixed_error"], "mixed load failed")
+        del results["onnx_light_mixed"]
+        self.assertFalse(rlb._row_from_results("test_abs", results)["onnx_light_mixed_success"])
+        results["onnx_light_mixed"] = {"success": True, "avg_ms": 0}
+        self.assertNotIn("speedup_mixed", rlb._row_from_results("test_abs", results))
+        results["onnx_light_mixed"]["avg_ms"] = 0.5
+        results["onnxruntime"]["success"] = False
+        self.assertNotIn("speedup_mixed", rlb._row_from_results("test_abs", results))
+
 
 class TestRunBenchmark(unittest.TestCase):
     def test_unknown_backend_returns_failure(self):
@@ -852,6 +874,12 @@ class TestBuildPayload(unittest.TestCase):
         # unweighted mean of per-test ratios.
         self.assertIn("avg_speedup_weighted", summary)
         self.assertIn("speedup_sum_latency", summary)
+        self.assertEqual(summary["mixed_succeeded"], 2)
+        self.assertIn("avg_speedup_mixed", summary)
+        self.assertIn("avg_speedup_weighted_mixed", summary)
+        self.assertIn("speedup_sum_latency_mixed", summary)
+        for row in payload["tests"]:
+            self.assertIn("speedup_mixed", row, msg=row["name"])
         # The onnx-light-cpu backend is timed as well, so its summary and
         # per-row speedup are present too.
         self.assertEqual(summary["cpu_succeeded"], 2)
@@ -992,6 +1020,52 @@ class TestParseArgs(unittest.TestCase):
         self.assertEqual(args.n_measure, 20)
         self.assertEqual(args.max_repeat_time, 0.25)
         self.assertEqual(args.limit, 10)
+
+
+class TestMixedReferenceRunner(unittest.TestCase):
+    def test_mixed_evaluator_reuses_session_and_maps_inputs(self):
+        import types
+
+        calls = []
+        created = []
+        reference = types.ModuleType("onnx_light.onnx.reference")
+
+        class MixedReferenceEvaluator:
+            def __init__(self, model_bytes):
+                created.append(model_bytes)
+                self.input_names = ["x", "y"]
+
+            def run(self, output_names, feeds):
+                calls.append((output_names, feeds))
+                return [feeds["x"] + feeds["y"]]
+
+        class Model:
+            def SerializeToString(self):
+                return b"model"
+
+        reference.MixedReferenceEvaluator = MixedReferenceEvaluator
+        names = ("onnx_light", "onnx_light.onnx", "onnx_light.onnx.reference")
+        saved = {name: sys.modules.get(name) for name in names}
+        try:
+            sys.modules["onnx_light"] = types.ModuleType("onnx_light")
+            sys.modules["onnx_light.onnx"] = types.ModuleType("onnx_light.onnx")
+            sys.modules["onnx_light.onnx.reference"] = reference
+            runner = rlb._make_onnx_light_mixed_runner(Model())
+            x = np.array([1.0], dtype=np.float32)
+            y = np.array([2.0], dtype=np.float32)
+            np.testing.assert_array_equal(runner([x, y])[0], [3.0])
+            np.testing.assert_array_equal(runner([y, x])[0], [3.0])
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+        self.assertEqual(created, [b"model"])
+        self.assertEqual(len(calls), 2)
+        self.assertIsNone(calls[0][0])
+        self.assertIs(calls[0][1]["x"], x)
+        self.assertIs(calls[0][1]["y"], y)
 
 
 class TestOnnxLightReferenceRunner(unittest.TestCase):
