@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Complete native kernel parallelization &#8212; onnx-light 0.1.29 documentation</title>
+    <title>Complete native kernel parallelization &#8212; onnx-light 0.1.30 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0" />
 
-    <script src="../../_static/documentation_options.js?v=904119ea"></script>
+    <script src="../../_static/documentation_options.js?v=73657eb8"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -139,8 +139,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.29 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.29 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.30 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.30 documentation - Home"/>
   
   
 </a></div>
@@ -606,18 +606,29 @@ scratch where the kernel already exposes those costs.</p></li>
 <p>The batches are ordered by expected model impact. A batch starts only after the
 previous batch has a published baseline and a reviewed list of serial
 exemptions.</p>
+<p>The first implementation wave is now in the source tree: <code class="docutils literal notranslate"><span class="pre">Conv</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ConvTranspose</span></code>, <code class="docutils literal notranslate"><span class="pre">ConvInteger</span></code>, <code class="docutils literal notranslate"><span class="pre">QLinearConv</span></code>, <code class="docutils literal notranslate"><span class="pre">Attention</span></code>,
+<code class="docutils literal notranslate"><span class="pre">LinearAttention</span></code> and <code class="docutils literal notranslate"><span class="pre">FlexAttention</span></code> use typed
+<code class="docutils literal notranslate"><span class="pre">parallel.minimum_elements</span></code> tuning and partition independent output planes
+or batch/head recurrences. Attention scratch is allocated before worker
+launches and sliced by task, so workers never concurrently access the
+non-thread-safe runtime allocator. The migration is implemented; the batch
+remains open until the required x86-64 and ARM64 crossover reports are
+published and portable defaults are accepted.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
-<col style="width: 12.0%" />
-<col style="width: 25.0%" />
-<col style="width: 38.0%" />
-<col style="width: 25.0%" />
+<col style="width: 10.0%" />
+<col style="width: 22.0%" />
+<col style="width: 33.0%" />
+<col style="width: 22.0%" />
+<col style="width: 13.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Batch</p></th>
 <th class="head"><p>Kernel families</p></th>
 <th class="head"><p>Required parallel decomposition</p></th>
 <th class="head"><p>Exit evidence</p></th>
+<th class="head"><p>Status</p></th>
 </tr>
 </thead>
 <tbody>
@@ -628,6 +639,7 @@ exemptions.</p>
 per-worker accumulation and no duplicate cache decoding.</p></td>
 <td><p>CNN and transformer shapes beat or match serial execution on x86-64 and
 ARM64 without memory or determinism regressions.</p></td>
+<td><p>Migration implemented; cross-platform calibration pending.</p></td>
 </tr>
 <tr class="row-odd"><td><p>2</p></td>
 <td><p>Reductions, <code class="docutils literal notranslate"><span class="pre">Softmax</span></code>, <code class="docutils literal notranslate"><span class="pre">LogSoftmax</span></code>, normalization, global/local
@@ -636,6 +648,7 @@ pooling, <code class="docutils literal notranslate"><span class="pre">TopK</span
 deterministic partials only when measurements justify the merge cost.</p></td>
 <td><p>Scalar, empty, strided, dynamic-axis, low-precision, and large-axis
 correctness plus crossover measurements.</p></td>
+<td><p>Not started.</p></td>
 </tr>
 <tr class="row-even"><td><p>3</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Cast</span></code>, quantize/dequantize, <code class="docutils literal notranslate"><span class="pre">Gather*</span></code>, <code class="docutils literal notranslate"><span class="pre">Scatter*</span></code>, <code class="docutils literal notranslate"><span class="pre">Where</span></code>,
@@ -645,6 +658,7 @@ correctness plus crossover measurements.</p></td>
 Scatter paths must prove writes cannot conflict before parallelizing.</p></td>
 <td><p>Memory-bandwidth scaling, overlap/alias safety, and bounded participant
 counts across contiguous and non-contiguous cases.</p></td>
+<td><p>Not started.</p></td>
 </tr>
 <tr class="row-odd"><td><p>4</p></td>
 <td><p>Recurrent operators, <code class="docutils literal notranslate"><span class="pre">DFT</span></code>, <code class="docutils literal notranslate"><span class="pre">STFT</span></code>, <code class="docutils literal notranslate"><span class="pre">Einsum</span></code>, image/object
@@ -653,6 +667,7 @@ detection, traditional-ML and training kernels</p></td>
 dependencies permit.</p></td>
 <td><p>Representative backend models identify which paths merit migration;
 every retained serial path has measured justification.</p></td>
+<td><p>Not started.</p></td>
 </tr>
 <tr class="row-even"><td><p>5</p></td>
 <td><p>Sequences, optionals, text, metadata and remaining utility paths</p></td>
@@ -660,6 +675,7 @@ every retained serial path has measured justification.</p></td>
 ordering.</p></td>
 <td><p>The inventory contains no unexplained serial path and no fixed-policy
 parallel path.</p></td>
+<td><p>Not started.</p></td>
 </tr>
 </tbody>
 </table>
