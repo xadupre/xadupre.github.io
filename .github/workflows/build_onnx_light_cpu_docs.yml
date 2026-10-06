@@ -82,75 +82,44 @@ jobs:
       - name: Build and install onnx-light from source
         env:
           SCCACHE_GHA_ENABLED: "true"
+          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         run: |
-          # The onnx-light-cpu package and its gallery example depend on the
-          # onnx-light Python package (``onnx_light``) *and*, now that the
-          # gallery example registers the accelerated kernels through
-          # ``onnx_light_cpu.register_kernels()``, on onnx-light's C++
-          # development tree: building onnx-light-cpu with
-          # ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON`` compiles the ``_cpuregister``
-          # extension, which links onnx-light's ``lib_onnx_core`` located via
-          # ``find_package(onnx_light)``. A prebuilt wheel does not ship the
-          # CMake package config needed for that, so build onnx-light from
-          # source (with sccache to keep repeat runs fast), install its CMake
-          # package and expose it on ``CMAKE_PREFIX_PATH``, then ``pip install``
-          # it for the Python runtime. This mirrors onnx-light-cpu's own
-          # ``docs.yml`` workflow.
+          # Build and install one onnx-light wheel. onnx-light-cpu discovers
+          # the native libraries loaded by this package through
+          # get_cpp_build_info(), so both projects share one nanobind type
+          # registry and one runtime dispatch table.
           python -m pip install --upgrade pip
-          # onnx-light's CMake calls find_package(nanobind) via "python -m
-          # nanobind --cmake_dir", so nanobind (and scikit-build-core) must be
-          # importable before configuring it. Recent onnx-light sources also
-          # query numpy.get_include() at configure time, so numpy is required
-          # too (matches onnx-light-cpu's own ``docs.yml``).
           pip install nanobind scikit-build-core numpy
           git clone --depth 1 --branch "${ONNX_LIGHT_REF}" \
             https://github.com/xadupre/onnx-light.git /tmp/onnx-light
-          cmake -S /tmp/onnx-light -B /tmp/onnx-light/build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/tmp/onnx-light/install \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build /tmp/onnx-light/build --config Release --parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"
-          cmake --install /tmp/onnx-light/build --config Release
-          CMAKE_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache" \
-            pip install /tmp/onnx-light
-          echo "CMAKE_PREFIX_PATH=/tmp/onnx-light/install${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
-          # The onnx-light-cpu ``_cpuregister`` extension links onnx-light's
-          # shared libraries and is imported by the gallery example at
-          # documentation build time, so the install lib dir must be on
-          # LD_LIBRARY_PATH or the import fails with "cannot open shared object
-          # file: liblib_onnx_core.so".
-          onnx_light_libdir="$(dirname "$(find /tmp/onnx-light/install -name 'liblib_onnx_core.so' | head -1)")"
+          # Match the CPU extensions' STABLE_ABI: nanobind keeps ABI3 and
+          # regular CPython type registries separate.
+          pip install -C build.verbose=true -C wheel.py-api=cp312 /tmp/onnx-light -v
+          onnx_light_libdir="$(python -c "from onnx_light import get_cpp_build_info as info; print(info()['library_dir'])")"
           echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and install onnx-light-cpu with doc dependencies
         working-directory: onnx-light-cpu
         env:
           SCCACHE_GHA_ENABLED: "true"
+          CMAKE_ARGS: "-DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache"
         run: |
-          # Build the compiled CPU kernel extension: the gallery example
-          # imports ``onnx_light_cpu.onnx_py._cpukernels`` (a nanobind
-          # extension) and calls ``onnx_light_cpu.register_kernels()`` at
-          # documentation build time, so the package itself must be built and
-          # installed with the onnx-light integration enabled
-          # (``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``), not just its documentation
-          # dependencies. The ``docs`` extra pulls in the Sphinx
-          # theme/extensions plus matplotlib needed to render the gallery.
           pip install --upgrade pip
-          pip install scikit-build-core nanobind
-          pip install \
-            -C build-dir=build \
-            -C cmake.build-type=Release \
-            -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
-            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
-            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            -e ".[docs]" -v
+          pip install breathe matplotlib ml_dtypes myst-parser openpyxl onnxruntime pandas \
+            pydata-sphinx-theme "sphinx>=7" sphinx-copybutton sphinx-datatables \
+            sphinx-design sphinx-gallery sphinx-reredirects tqdm
+          # Link directly to the libraries loaded by the onnx-light wheel
+          # above instead of configuring a second CMake-installed runtime.
+          python setup.py build_ext --inplace --onnx-light-source
 
       - name: pip freeze
         run: pip freeze
 
       - name: Build documentation
         working-directory: onnx-light-cpu
+        env:
+          PYTHONPATH: ${{ github.workspace }}/onnx-light-cpu
+          UNITTEST_GOING: 1
         # Build serially (no ``-j auto``): the gallery examples import the
         # native ``onnx_light_cpu`` / onnx-light C++ extensions, which crash
         # Sphinx's forked parallel workers ("EOFError" from
