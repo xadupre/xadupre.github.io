@@ -21,6 +21,11 @@ class TestRecordSizeOnnxLightCpuWorkflow(unittest.TestCase):
             "cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", self.content
         )
 
+    def test_builds_continue_when_sccache_backend_is_unavailable(self):
+        self.assertIn("mozilla-actions/sccache-action@", self.content)
+        self.assertIn("-DCMAKE_CXX_COMPILER_LAUNCHER=sccache", self.content)
+        self.assertNotIn("SCCACHE_GHA_ENABLED", self.content)
+
     def test_records_shared_library_sizes(self):
         self.assertIn('out="${out_dir}/so_sizes.csv"', self.content)
         self.assertIn('"${GITHUB_WORKSPACE}/wheel-out"/*.whl', self.content)
