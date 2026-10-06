@@ -19,10 +19,6 @@ concurrency:
 
 permissions:
   contents: write
-  # ``actions: read`` is required so that the wheel-install step below can
-  # list and download artifacts of the onnx-light ``build_release.yml``
-  # workflow.
-  actions: read
 
 jobs:
   build-and-publish:
@@ -63,39 +59,18 @@ jobs:
           # The gallery example ``examples/plot_image_formats.py`` imports the
           # onnx-light Python package (``onnx_light``). Building onnx-light from
           # source is expensive, so install a prebuilt CPython 3.12 manylinux
-          # wheel instead. The onnx-light GitHub *releases* page only publishes
-          # the size-reduced wheels (built with ``ONNX_LIGHT_BUILD_KERNELS=OFF``):
-          # their file names carry a ``0reduced`` build tag and they omit the
-          # operator kernels the gallery relies on. The full, kernels-enabled
-          # wheels are published as artifacts of the ``build_release.yml``
-          # workflow, so download the wheel from the most recent successful run
-          # of that workflow rather than from the releases page.
+          # wheel from the latest release. Select the full, kernels-enabled
+          # wheel rather than the ``0reduced`` variant.
           python -m pip install --upgrade pip
-          run_id="$(gh run list \
-            --repo xadupre/onnx-light \
-            --workflow build_release.yml \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId')"
-          if [ -z "${run_id}" ]; then
-            echo "No successful build_release.yml run found for xadupre/onnx-light." >&2
-            exit 1
-          fi
-          echo "Using build_release.yml run ${run_id}"
           wheel_dir="$(mktemp -d)"
-          # The ``wheels-linux-x86_64`` artifact bundles the full manylinux
-          # wheels for every packaged CPython version.
-          gh run download "${run_id}" \
+          gh release download \
             --repo xadupre/onnx-light \
-            --name wheels-linux-x86_64 \
+            --pattern 'onnx_light-*cp312-cp312*manylinux*x86_64*.whl' \
             --dir "${wheel_dir}"
-          # Keep the glibc (manylinux) CPython 3.12 wheel and, defensively,
-          # skip any size-reduced wheel that carries the ``0reduced`` build tag.
           wheel="$(find "${wheel_dir}" -name 'onnx_light-*cp312-cp312*manylinux*x86_64*.whl' \
             ! -name '*reduced*' | sort -V | tail -n1)"
           if [ -z "${wheel}" ]; then
-            echo "No full onnx_light cp312 manylinux wheel found in the latest build_release.yml artifacts." >&2
+            echo "No full onnx_light cp312 manylinux wheel found in the latest release." >&2
             exit 1
           fi
           echo "Installing ${wheel}"
