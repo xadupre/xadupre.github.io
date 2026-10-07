@@ -54,7 +54,7 @@ class TestCacheDataWorkflowWiring(unittest.TestCase):
                     for step in steps
                 )
                 data_path = "site/cache_data" if site_checkout else "cache_data"
-                self.assertEqual(checkout.get("uses"), "actions/checkout@v6")
+                self.assertEqual(checkout.get("uses"), "actions/checkout@v7")
                 self.assertEqual((checkout.get("with") or {}).get("path"), data_path)
                 self.assertEqual((checkout.get("with") or {}).get("ref"), "main")
                 self.assertEqual((checkout.get("with") or {}).get("fetch-depth"), 0)
