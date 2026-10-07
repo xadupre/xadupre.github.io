@@ -10,7 +10,7 @@ WORKFLOWS = os.path.join(ROOT, ".github", "workflows")
 
 
 class TestCheckoutCredentialsWorkflows(unittest.TestCase):
-    def test_pushing_jobs_use_checkout_v5_credentials(self):
+    def test_pushing_jobs_use_checkout_v7_credentials(self):
         pushing_jobs = 0
         for name in os.listdir(WORKFLOWS):
             if not name.endswith(".yml"):
@@ -30,7 +30,7 @@ class TestCheckoutCredentialsWorkflows(unittest.TestCase):
                     if step.get("name") == "Checkout xadupre.github.io"
                 ]
                 self.assertEqual(len(checkout), 1, name)
-                self.assertEqual(checkout[0].get("uses"), "actions/checkout@v5", name)
+                self.assertEqual(checkout[0].get("uses"), "actions/checkout@v7", name)
         self.assertGreater(pushing_jobs, 0)
 
 
