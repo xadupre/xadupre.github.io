@@ -20,17 +20,25 @@ class TestCMakeBuildParallelismWorkflows(unittest.TestCase):
                     content = fh.read()
                 limit = 'echo "CMAKE_BUILD_PARALLEL_LEVEL=2" >> "$GITHUB_ENV"'
                 self.assertIn(limit, content)
-                self.assertLess(content.index(limit), content.index("cmake --build"))
                 builds = [
                     line.strip()
                     for line in content.splitlines()
                     if line.strip().startswith("cmake --build ")
                 ]
-                self.assertTrue(builds)
-                for command in builds:
-                    # Bare --parallel overrides the environment limit and
-                    # lets Unix Makefiles launch an unlimited number of jobs.
-                    self.assertIn('--parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"', command)
+                if builds:
+                    self.assertLess(content.index(limit), content.index("cmake --build"))
+                    for command in builds:
+                        # Bare --parallel overrides the environment limit and
+                        # lets Unix Makefiles launch an unlimited number of jobs.
+                        self.assertIn(
+                            '--parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"', command
+                        )
+                else:
+                    # Source installs invoke the CMake build through pip and
+                    # inherit CMAKE_BUILD_PARALLEL_LEVEL from GITHUB_ENV.
+                    source_install = "pip install ./onnx-light"
+                    self.assertIn(source_install, content)
+                    self.assertLess(content.index(limit), content.index(source_install))
 
 
 if __name__ == "__main__":
