@@ -57,6 +57,47 @@ class TestProcessorName(unittest.TestCase):
 
 
 class TestDiscovery(unittest.TestCase):
+    def test_collects_only_cpu_benchmarks_without_expected_outputs(self):
+        calls = []
+        backend = types.ModuleType("onnx_light.onnx.backend")
+        backend.TestMode = types.SimpleNamespace(BENCHMARK="benchmark")
+
+        def collect(pattern, **kwargs):
+            calls.append((pattern, kwargs))
+            return [types.SimpleNamespace(name="test_cpu_abs_float32_benchmark")]
+
+        backend.collect_test_cases_by_name = collect
+        modules = {
+            "onnx_light": types.ModuleType("onnx_light"),
+            "onnx_light.onnx": types.ModuleType("onnx_light.onnx"),
+            "onnx_light.onnx.backend": backend,
+        }
+        saved = {name: sys.modules.get(name) for name in modules}
+        try:
+            sys.modules.update(modules)
+            cases = rcb._collect_benchmark_cases()
+        finally:
+            for name, module in saved.items():
+                if module is None:
+                    sys.modules.pop(name, None)
+                else:
+                    sys.modules[name] = module
+
+        self.assertEqual([case.name for case in cases], ["test_cpu_abs_float32_benchmark"])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    r"^test_cpu_.*_benchmark$",
+                    {
+                        "include_big": True,
+                        "mode": "benchmark",
+                        "generate_benchmark_expected_outputs": False,
+                    },
+                )
+            ],
+        )
+
     def test_uses_only_cpu_benchmark_cases(self):
         calls = []
         module = types.ModuleType("onnx_light_cpu")
@@ -137,7 +178,11 @@ class TestLoading(unittest.TestCase):
             [
                 (
                     r"^test_cpu_abs\[1\]_benchmark$",
-                    {"include_big": True, "mode": benchmark_mode},
+                    {
+                        "include_big": True,
+                        "mode": benchmark_mode,
+                        "generate_benchmark_expected_outputs": False,
+                    },
                 )
             ],
         )

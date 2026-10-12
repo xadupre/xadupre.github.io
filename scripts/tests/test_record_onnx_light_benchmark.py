@@ -2030,6 +2030,7 @@ class TestDiscoverNodeTests(unittest.TestCase):
 
         self.assertEqual(call_kwargs["include_big"], True)
         self.assertEqual(call_kwargs["mode"], _FakeTestMode.BENCHMARK)
+        self.assertIs(call_kwargs["generate_benchmark_expected_outputs"], False)
         self.assertEqual([d["name"] for d in discovered], ["test_cc_benchmark"])
         self.assertEqual(discovered[0]["tag"], "bench")
         data_sets = discovered[0]["data_sets"]
