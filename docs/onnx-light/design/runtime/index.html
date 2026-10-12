@@ -26,8 +26,8 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../../_static/styles/theme.css?digest=64cc4de3f052d77215f0" rel="stylesheet" />
-<link href="../../_static/styles/pydata-sphinx-theme.css?digest=64cc4de3f052d77215f0" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
@@ -41,10 +41,10 @@
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=45a1d1c6" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../../_static/scripts/fontawesome.js?digest=64cc4de3f052d77215f0"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0" />
-<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
     <script src="../../_static/documentation_options.js?v=d71dfaa1"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
@@ -66,6 +66,7 @@
     <link rel="next" title="Buffer-reuse arenas" href="arenas.html" />
     <link rel="prev" title="Gradient" href="../gradient/index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
   
@@ -539,6 +540,22 @@ the built-in <code class="xref cpp cpp-func docutils literal notranslate"><span 
 initializers, intermediates, and outputs in a <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">RuntimeContext</span></code>.
 That context also owns the execution and output allocator routes, records
 events when requested, and releases last-use intermediates when enabled.</p>
+<p>Before kernel resolution, the execution plan registers every value name from
+the root graph, nested graph attributes, and model-local functions in one
+invocation-wide directory. Each unique name keeps one stable <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> slot.
+Tensor payloads live in a vector indexed by those slots. <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code>
+resolves each kernel’s input and output slots once for a context, so built-in
+kernels do not hash ONNX names while replaying the plan. The name-keyed tensor
+map remains a synchronized compatibility view for external callers and custom
+kernels.
+The same <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> is reused by control-flow bodies and local
+functions, so nested execution neither copies the context nor deep-copies
+loop-carried values merely to cross a context boundary.</p>
+<p>When the caller supplies no execution allocator, the context creates a
+fixed-capacity <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ExecutionArena</span></code> from
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::arena_capacity()</span></code>. Stable value slots do not pin physical
+storage: deleting a last-use value releases its allocation handle and the arena
+may reuse that <code class="docutils literal notranslate"><span class="pre">RawBuffer</span></code> for any later value.</p>
 <p>Before dispatch, the session leases its resolved <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">CpuExecutor</span></code> and
 installs it on the runtime context.  Kernels then use the same session CPU
 executor for serial or parallel work.  The backend-test catalog sits above
@@ -549,6 +566,17 @@ native callers.</p>
 </section>
 <section id="preparation-and-execution">
 <h2>Preparation and execution<a class="headerlink" href="#preparation-and-execution" title="Link to this heading">#</a></h2>
+<p>Direct <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> replay prepares immutable kernel inputs synchronously
+during the first <code class="docutils literal notranslate"><span class="pre">RuntimeSession::Run</span></code>. The root session and all nested
+graph/function sessions share one <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code>. Each kernel
+retains a stable integer slot, so later executions read the prepared value by
+direct vector indexing without a mutex, map lookup, readiness wait, or
+scheduler dispatch. The store owns its prepared allocations for the complete
+session-hierarchy lifetime.</p>
+<p>The preparation <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> is separate from the invocation value
+directory. The former owns immutable prepared kernel objects; the latter maps
+ONNX value names to stable runtime slots whose physical tensor buffers remain
+recyclable by the execution arena.</p>
 <p><code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code> may prepare synchronously or submit work through a
 shared execution pool. Its tasks cover payload reads, kernel creation, weight
 prepacking, device copies, and publication; dependencies and memory admission
@@ -560,10 +588,12 @@ kernel ABI, and format version. Compatible entries bypass portable-weight
 loading and prepacking. Residency is bounded, active consumers pin their
 objects, and evicted entries retain enough information for a later reload.</p>
 <p><code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions</span></code> selects the CPU execution policy.
-<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> owns preparation arenas, residency, and resource
-limits. Sessions and prepared plans lease executors rather than creating one
-thread pool per kernel, so independent sessions can share workers without
-nested oversubscription. See <a class="reference internal" href="../../next_steps/2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>,
+<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> owns the asynchronous plan’s preparation arenas,
+residency, generations, and resource limits; it is separate from the
+<code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> used by direct replay. Sessions and prepared plans
+lease executors rather than creating one thread pool per kernel, so independent
+sessions can share workers without nested oversubscription. See
+<a class="reference internal" href="../../next_steps/2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>,
 <a class="reference internal" href="../../next_steps/2026/2026-08_native_fast_loading_completion.html#l-next-steps-native-fast-loading-completion"><span class="std std-ref">Completing native fast model loading</span></a>, and
 <a class="reference internal" href="../../next_steps/2026/2026-08_session_execution_pools.html#l-next-steps-session-execution-pools"><span class="std std-ref">Session execution policies and shared CPU pools</span></a> for the implemented contracts.</p>
 <div class="toctree-wrapper compound">
@@ -650,8 +680,8 @@ nested oversubscription. See <a class="reference internal" href="../../next_step
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0"></script>
-<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -674,7 +704,7 @@ nested oversubscription. See <a class="reference internal" href="../../next_step
         <div class="footer-item">
 <p class="theme-version">
   <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
-  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.22.0.
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.23.0.
 </p></div>
       
     </div>

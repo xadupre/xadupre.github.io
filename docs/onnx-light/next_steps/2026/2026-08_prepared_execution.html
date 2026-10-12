@@ -26,8 +26,8 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="../../_static/styles/theme.css?digest=64cc4de3f052d77215f0" rel="stylesheet" />
-<link href="../../_static/styles/pydata-sphinx-theme.css?digest=64cc4de3f052d77215f0" rel="stylesheet" />
+  <link href="../../_static/styles/theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=8f2a1f02" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
@@ -41,10 +41,10 @@
     <link rel="stylesheet" type="text/css" href="../../_static/custom.css?v=45a1d1c6" />
   
   <!-- So that users can add custom icons -->
-  <script defer src="../../_static/scripts/fontawesome.js?digest=64cc4de3f052d77215f0"></script>
+  <script defer src="../../_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0" />
-<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0" />
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
     <script src="../../_static/documentation_options.js?v=d71dfaa1"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
@@ -66,6 +66,7 @@
     <link rel="next" title="Completing native fast model loading" href="2026-08_native_fast_loading_completion.html" />
     <link rel="prev" title="Model-loading bug fixes" href="2026-08_model_loading_bug_fixes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
   
@@ -598,6 +599,28 @@ session-task closure required by that invocation.</p>
 invocation-scoped task descriptors; it is not retained as a second plan.
 Its allocation, execution, and release actions remain reusable templates, but
 each inference receives its own task state and invocation-owned values.</p>
+<p>Until that migration is complete, direct <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> replay remains the
+synchronous production path. Its kernel instances prepare immutable inputs
+once into a hierarchy-owned <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> and retain stable
+integer slots. Root, control-flow subgraph, and model-local function sessions
+share the store. Invocation values use a separate global name-to-<code class="docutils literal notranslate"><span class="pre">uint32_t</span></code>
+directory held by one <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> across root and nested execution.
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::arena_capacity()</span></code> sizes its fixed <code class="docutils literal notranslate"><span class="pre">ExecutionArena</span></code> from all
+unique graph/function value names, a workspace/recurrent-state allowance
+derived from the widest node in the complete session hierarchy, and planned
+temporary storage. A stable value slot does not reserve a physical buffer:
+last-use removal returns that buffer to the arena. Reusing one context with a
+larger unrelated plan installs a new fixed arena while retaining any older
+arena still referenced by live tensors.</p>
+<p>A hot replay performs direct slot operations without creating a child context
+for control flow or copying values across context boundaries. It does not use
+a string lookup for built-in tensor inputs/outputs, a mutex, a readiness wait,
+or the general <code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> scheduler. <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> resolves
+the kernel slot vectors once per context-directory identity; the name-keyed map
+is retained only as a synchronized compatibility surface. This is an
+intentional bridge, not a second asynchronous plan: generations, external-data
+loading, persistence, eviction, and dependency scheduling remain solely in
+<code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code>.</p>
 <p>Publishing a session object is atomic: the producing task completes only after
 the immutable object and its allocation handle are visible. An inference task
 depends on that completion event directly, rather than looking up a value after
@@ -1906,7 +1929,11 @@ explicit prepared-object requirement/atomic-publish contract.</p></li>
 publish, and dormant-fallback task descriptors.</p></li>
 <li><p><strong>Implemented:</strong> add session-scoped preparation for one CPU <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> with a
 constant <code class="docutils literal notranslate"><span class="pre">B</span></code>, including both <code class="docutils literal notranslate"><span class="pre">transB</span></code> values while preserving the
-ordinary reference fallback.</p></li>
+ordinary reference fallback. Direct <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> replay now stores the
+result in one hierarchy-owned <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> shared by root,
+subgraph, and model-local function sessions. Each <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> retains a stable
+integer slot and reads it without a mutex, map lookup, readiness wait, or
+per-run scheduler dispatch.</p></li>
 <li><p><strong>Implemented:</strong> merge kernel preparation and node execution into one
 <code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code> and first execute its session-scoped tasks
 sequentially through completion events.</p></li>
@@ -2047,8 +2074,8 @@ this core is stable.</p>
   </div>
   
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="../../_static/scripts/bootstrap.js?digest=64cc4de3f052d77215f0"></script>
-<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=64cc4de3f052d77215f0"></script>
+  <script defer src="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be"></script>
+<script defer src="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be"></script>
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -2071,7 +2098,7 @@ this core is stable.</p>
         <div class="footer-item">
 <p class="theme-version">
   <!-- # L10n: Setting the PST URL as an argument as this does not need to be localized -->
-  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.22.0.
+  Built with the <a href="https://pydata-sphinx-theme.readthedocs.io/en/stable/index.html">PyData Sphinx Theme</a> 0.23.0.
 </p></div>
       
     </div>
