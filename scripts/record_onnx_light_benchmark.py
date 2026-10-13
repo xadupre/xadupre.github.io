@@ -320,7 +320,11 @@ def _discover_benchmark_mode_tests(kind: str) -> Optional[List[Dict[str, Any]]]:
         return None
 
     try:
-        cases = collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
+        cases = collect_test_cases(
+            include_big=True,
+            mode=TestMode.BENCHMARK,
+            generate_benchmark_expected_outputs=False,
+        )
     except TypeError:
         return None
 

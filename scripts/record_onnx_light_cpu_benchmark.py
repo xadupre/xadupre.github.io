@@ -62,9 +62,14 @@ def collect_versions() -> dict[str, str]:
 
 
 def _collect_benchmark_cases() -> list[Any]:
-    from onnx_light.onnx.backend import TestMode, collect_test_cases
+    from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
 
-    return collect_test_cases(include_big=True, mode=TestMode.BENCHMARK)
+    return collect_test_cases_by_name(
+        r"^test_cpu_.*_benchmark$",
+        include_big=True,
+        mode=TestMode.BENCHMARK,
+        generate_benchmark_expected_outputs=False,
+    )
 
 
 def benchmark_type_from_name(name: str) -> str | None:
@@ -102,7 +107,10 @@ def _load_benchmark_test(name: str) -> dict[str, Any]:
     from onnx_light.onnx.backend import TestMode, collect_test_cases_by_name
 
     cases = collect_test_cases_by_name(
-        f"^{re.escape(name)}$", include_big=True, mode=TestMode.BENCHMARK
+        f"^{re.escape(name)}$",
+        include_big=True,
+        mode=TestMode.BENCHMARK,
+        generate_benchmark_expected_outputs=False,
     )
     if len(cases) != 1:
         raise RuntimeError(f"Unable to load benchmark test {name!r}.")
