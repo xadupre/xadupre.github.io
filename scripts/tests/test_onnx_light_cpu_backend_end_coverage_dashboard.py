@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import unittest
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGE = os.path.join(
@@ -86,6 +88,40 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
     def test_recording_workflow_does_not_require_github_cache_service(self):
         text = _read(WORKFLOW)
         self.assertNotIn("sccache", text)
+
+    def test_recording_workflow_uses_one_onnx_light_runtime(self):
+        steps = yaml.safe_load(_read(WORKFLOW))["jobs"]["record"]["steps"]
+        build = next(
+            step["run"]
+            for step in steps
+            if step["name"] == "Build and install onnx-light from source"
+        )
+        self.assertIn(
+            "pip install ./onnx-light -C cmake.define.ONNX_LIGHT_INSTALL=ON", build
+        )
+        self.assertIn("CMAKE_PREFIX_PATH=${onnx_light_prefix}", build)
+        self.assertIn(
+            "${onnx_light_prefix}/onnx_light/onnx_py:${onnx_light_prefix}/lib",
+            build,
+        )
+        self.assertNotIn("cmake --install", build)
+        cpu_build = next(
+            step["run"]
+            for step in steps
+            if step["name"] == "Build and install onnx-light-cpu"
+        )
+        self.assertIn("--no-deps", cpu_build)
+
+    def test_recording_workflow_checks_cpu_before_writing_snapshot(self):
+        steps = yaml.safe_load(_read(WORKFLOW))["jobs"]["record"]["steps"]
+        names = [step["name"] for step in steps]
+        self.assertLess(
+            names.index("Verify onnx-light-cpu backend"),
+            names.index("Record backend test coverage snapshot"),
+        )
+        check = steps[names.index("Verify onnx-light-cpu backend")]["run"]
+        self.assertIn("_run_with_onnx_light_cpu(model)", check)
+        self.assertIn("np.testing.assert_array_equal(result, [1.0, 2.0])", check)
 
 
 if __name__ == "__main__":
