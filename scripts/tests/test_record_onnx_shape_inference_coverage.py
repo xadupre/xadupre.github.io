@@ -534,13 +534,10 @@ class TestRunTestWithBackend(unittest.TestCase):
         self.assertIn("ort-transformers", rsi._BACKEND_RUNNERS)
         self.assertEqual(rsi.BACKEND_PACKAGE["ort-transformers"], "onnxruntime")
 
-    def test_yobx_backend_registered(self):
-        # The shape inference shipped in ``yet-another-onnx-builder``
-        # (``yobx.xshape.BasicShapeBuilder``) is exposed as a dedicated
-        # backend in the coverage script.
-        self.assertIn("yobx", rsi.BACKENDS)
-        self.assertIn("yobx", rsi._BACKEND_RUNNERS)
-        self.assertEqual(rsi.BACKEND_PACKAGE["yobx"], "yobx")
+    def test_yobx_backend_not_recorded(self):
+        self.assertNotIn("yobx", rsi.BACKENDS)
+        self.assertNotIn("yobx", rsi._BACKEND_RUNNERS)
+        self.assertNotIn("yobx", rsi.BACKEND_PACKAGE)
 
     def test_empty_expected(self):
         info = rsi.run_test_with_backend(None, [], "onnx")
@@ -1323,7 +1320,7 @@ class TestTagFiltering(unittest.TestCase):
         self.assertEqual(rsi.backend_versions_from_map({}), {})
         self.assertEqual(
             rsi.backend_versions_from_map({"yobx": "3.1", "onnx": "1.18.0"}),
-            {"onnx": "1.18.0", "yobx": "3.1"},
+            {"onnx": "1.18.0"},
         )
 
 
