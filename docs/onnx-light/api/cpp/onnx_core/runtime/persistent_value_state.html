@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>persistent_value_state &#8212; onnx-light 0.1.31 documentation</title>
+    <title>persistent_value_state &#8212; onnx-light 0.1.32 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../../_static/documentation_options.js?v=d71dfaa1"></script>
+    <script src="../../../../_static/documentation_options.js?v=e0e570cb"></script>
     <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -59,7 +59,7 @@
     <script src="../../../../_static/activate_datatables.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'api/cpp/onnx_core/runtime/persistent_value_state';</script>
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
-    <script src="../../../../_static/svg_zoom.js?v=880fa9ad"></script>
+    <script src="../../../../_static/svg_zoom.js?v=78ac63ff"></script>
     <link rel="icon" href="../../../../_static/logo.svg"/>
     <link rel="index" title="Index" href="../../../../genindex.html" />
     <link rel="search" title="Search" href="../../../../search.html" />
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.31 documentation - Home"/>
-    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.31 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.32 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.32 documentation - Home"/>
   
   
 </a></div>
@@ -910,9 +910,11 @@
                   
   <section id="persistent-value-state">
 <h1>persistent_value_state<a class="headerlink" href="#persistent-value-state" title="Link to this heading">#</a></h1>
-<p>Each call follows four steps:</p>
+<p><code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> owns its passive <code class="docutils literal notranslate"><span class="pre">PersistentValueState</span></code> and reuses it between
+calls. Construct a session with initial retained values, then call
+<code class="docutils literal notranslate"><span class="pre">RuntimeSession::Run(context,</span> <span class="pre">feeds)</span></code> without passing a separate state:</p>
 <ol class="arabic simple">
-<li><p>Binds retained values to the declared persistent inputs and adds current feeds.</p></li>
+<li><p>Uses retained values for persistent inputs alongside current feeds.</p></li>
 <li><p>Runs the session, reusing eligible append buffers or allocating new ones.</p></li>
 <li><p>Validates outputs and checks cancellation.</p></li>
 <li><p>Publishes the selected outputs as the next state only on success.</p></li>
@@ -937,31 +939,36 @@ Persistent strings are rejected, including nested strings.</p></li>
 <h2>Ownership<a class="headerlink" href="#ownership" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p>The model stays immutable; declarations are resolved once, without cloning it.
-A shared-model constructor or <code class="docutils literal notranslate"><span class="pre">model_owner</span></code> retains its lifetime.
-Otherwise, the caller keeps it alive through all exported model-backed views.</p></li>
+C++ constructors borrow <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">ModelProto&amp;</span></code>. The caller keeps it alive
+through the session and all exported model-backed views.
+Python bindings retain the model for sessions and exported initializer views.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">initial</span></code> and <code class="docutils literal notranslate"><span class="pre">Reset</span></code> take maps by value in C++. Use <code class="docutils literal notranslate"><span class="pre">std::move(initial)</span></code>
 to avoid copying owned payloads.</p></li>
-<li><p>Returned views share owners and remain valid after later calls, reset or close.
-Callers must not modify shared payloads; publication does not undo such writes.</p></li>
-<li><p>Retained borrows need owners, and arena allocations need self-owning I/O leases.
-Unsafe storage is rejected, not copied as a fallback.</p></li>
-<li><p>All calls use the same allocators, kept alive until the state closes.
-<code class="docutils literal notranslate"><span class="pre">RetainOwner</span></code> can retain model/context owners before execution, including
-failed attempts. Owners must not own the state itself.</p></li>
-<li><p>Model-backed initializer views retain the constructor’s model owner.
-Borrowed raw data additionally needs its own storage owner; ordinary kernel
-results cannot use the model owner to extend their lifetime.</p></li>
+<li><p>Returned views share owners and remain valid after later calls, reset or session
+destruction. Callers must not modify shared payloads; publication does not undo
+such writes.</p></li>
+<li><p>Retained borrows need owners, except views of immutable initializer-owned
+storage whose lifetime is guaranteed by the C++ caller. Arena allocations
+need self-owning I/O leases. Unsafe storage is rejected, not copied as a fallback.</p></li>
+<li><p>All calls use the same allocators, kept alive until the session is destroyed.</p></li>
+<li><p>Initializers borrowing external raw data still need their own storage owner.
+Model lifetime alone cannot extend the lifetime of external storage or
+ordinary kernel results.</p></li>
 </ul>
 </section>
 <section id="execution-and-lifecycle">
 <h2>Execution and lifecycle<a class="headerlink" href="#execution-and-lifecycle" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>Execution uses the ordinary <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> and cached kernels.
+<li><p>Execution uses the supplied <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> directly and the caller-owned
+<code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> and its cached kernels. No child context is created.
+The state exposes no context-binding or execution methods; the session handles
+inputs, validation and publication as part of <code class="docutils literal notranslate"><span class="pre">Run</span></code>.
 Only declared persistent outputs bypass normal output materialization.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">If</span></code> and local functions transport selected outputs without payload copies.
 Other operators retain their ordinary computation and transport costs.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Reset(initial)</span></code> replaces retained values but keeps the prepared session.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">Close()</span></code> releases retained values and kernels and permanently closes the state.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">RuntimeSession::Reset(initial)</span></code> replaces retained values without rebuilding
+the session or its cached kernels.</p></li>
+<li><p>Session destruction releases its retained values and cached kernels.</p></li>
 <li><p>Events use <code class="docutils literal notranslate"><span class="pre">context.events()</span></code> when <code class="docutils literal notranslate"><span class="pre">events_enabled</span></code> is true, including
 work before failure. <code class="docutils literal notranslate"><span class="pre">ClearEvents()</span></code> clears this log, not the persistent values.</p></li>
 </ul>

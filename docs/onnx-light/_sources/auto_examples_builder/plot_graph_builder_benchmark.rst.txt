@@ -24,12 +24,13 @@ Benchmark GraphBuilder against onnxscript GraphBuilder
 This example builds the same attention-style graph with 100, 200, and
 500 nodes using :class:`onnx_light.onnx_core.graph_builder.GraphBuilder` and
 :class:`onnxscript.GraphBuilder`. It checks that both models produce the same
-outputs before measuring model construction with and without in-memory
-serialization. The timings include model finalization (``to_onnx`` or
-``onnx_ir.to_proto``), but exclude imports, input generation, and execution.
-The serialization column additionally calls ``SerializeToString``: it creates
-the complete protobuf wire representation in memory rather than writing it to
-a file.
+outputs before measuring graph construction and large-model serialization.
+The construction timings include model finalization (``to_onnx`` or
+``onnx_ir.to_proto``), but exclude imports, input generation, execution, and
+the large initializer payload described below. The serialization timings build
+the same graph with that payload and additionally call ``SerializeToString``:
+they create the complete protobuf wire representation in memory rather than
+writing it to a file.
 
 Run this example with the ``docs`` optional dependencies installed.
 
@@ -42,18 +43,19 @@ The same exported models are checked on several shapes, including a singleton
 sequence. Both builders receive identical operators and initializers; their
 default shape-inference behavior is included in the construction timings.
 
-To make the serialization cost visible, the timed models also expose four
-large ``UINT8`` initializers as outputs. They share one source array while the
+To make the serialization cost visible without hiding builder scaling in the
+construction column, only the serialization measurements expose four large
+``UINT8`` initializers as outputs. They share one source array while the
 builders are running, but each initializer is present in the final model, whose
-serialized size is approximately 1.5 GB. The functional checks omit this large
-payload.
+serialized size is approximately 1.5 GB. The functional checks and construction
+measurements omit this large payload.
 
-.. GENERATED FROM PYTHON SOURCE LINES 32-286
+.. GENERATED FROM PYTHON SOURCE LINES 34-292
 
 
 
 .. image-sg:: /auto_examples_builder/images/sphx_glr_plot_graph_builder_benchmark_001.png
-   :alt: Model construction, Model construction and in-memory serialization
+   :alt: Graph construction without large initializers, 1.5 GB model construction and serialization
    :srcset: /auto_examples_builder/images/sphx_glr_plot_graph_builder_benchmark_001.png
    :class: sphx-glr-single-img
 
@@ -62,17 +64,17 @@ payload.
 
  .. code-block:: none
 
-    nodes  builder       model (ms)  model + in-memory serialization (ms)
-      100  onnx-light        658.75                                792.90
-      100  onnxscript        132.95                                298.56
-      200  onnx-light       2112.30                               2238.80
-      200  onnxscript        142.70                                323.08
-      500  onnx-light      10968.73                              11177.74
-      500  onnxscript        252.48                                585.12
-     1000  onnx-light      41097.00                              41342.13
-     1000  onnxscript        300.33                                631.63
-     2000  onnx-light     158288.57                             158684.65
-     2000  onnxscript        403.26                                737.17
+    nodes  builder       graph (ms)  1.5 GB model + serialization (ms)
+      100  onnx-light         16.37                                615.58
+      100  onnxscript         25.78                                693.33
+      200  onnx-light         24.42                                875.51
+      200  onnxscript         49.80                               1181.36
+      500  onnx-light         47.96                                601.79
+      500  onnxscript        122.84                               1174.84
+     1000  onnx-light         88.53                                647.71
+     1000  onnxscript        244.34                               1262.30
+     2000  onnx-light        166.93                                778.56
+     2000  onnxscript        487.09                               1479.29
 
     Node-type distribution (identical for both builders):
     operator         100     200     500    1000    2000
@@ -305,11 +307,11 @@ payload.
 
 
     def plot_benchmark(results: list[dict]):
-        """Plots construction times with and without in-memory serialization."""
+        """Plots graph construction and large-model serialization times."""
         figure, axes = matplotlib.pyplot.subplots(1, 2, figsize=(11, 4), sharex=True)
         for axis, key, title in (
-            (axes[0], "model", "Model construction"),
-            (axes[1], "serialized", "Model construction and in-memory serialization"),
+            (axes[0], "model", "Graph construction without large initializers"),
+            (axes[1], "serialized", "1.5 GB model construction and serialization"),
         ):
             for builder_name in ("onnx-light", "onnxscript"):
                 rows = [row for row in results if row["builder"] == builder_name]
@@ -329,7 +331,7 @@ payload.
 
 
     if __name__ == "__main__":
-        print("nodes  builder       model (ms)  model + in-memory serialization (ms)")
+        print("nodes  builder       graph (ms)  1.5 GB model + serialization (ms)")
         results = []
         distributions = {}
         for count in NODE_COUNTS:
@@ -337,12 +339,16 @@ payload.
             distribution_model = build_light(count)
             distributions[count] = node_type_distribution(distribution_model)
             del distribution_model
-            for name, build in (
-                ("onnx-light", lambda n: build_light(n, large_initializers=True)),
-                ("onnxscript", lambda n: build_onnxscript(n, large_initializers=True)),
+            for name, build, build_large in (
+                ("onnx-light", build_light, lambda n: build_light(n, large_initializers=True)),
+                (
+                    "onnxscript",
+                    build_onnxscript,
+                    lambda n: build_onnxscript(n, large_initializers=True),
+                ),
             ):
                 model_time = measure(build, count, False)
-                serialized_time = measure(build, count, True)
+                serialized_time = measure(build_large, count, True)
                 results.append(
                     {
                         "nodes": count,
@@ -360,7 +366,7 @@ payload.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (28 minutes 45.639 seconds)
+   **Total running time of the script:** (0 minutes 42.272 seconds)
 
 
 .. _sphx_glr_download_auto_examples_builder_plot_graph_builder_benchmark.py:
