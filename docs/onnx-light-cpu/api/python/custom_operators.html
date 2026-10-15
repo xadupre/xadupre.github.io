@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 12, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -517,6 +517,16 @@ formats with required <code class="docutils literal notranslate"><span class="pr
 <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">ceil(K</span> <span class="pre">/</span> <span class="pre">32)]</span></code> or the equivalent flat shape. Implicit zero points are
 2, 8, and 128. Activations, scales, optional bias, and output have one matching
 <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> type; <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> is not supported.</p>
+<p>Input <code class="docutils literal notranslate"><span class="pre">B</span></code> may instead be an <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> using onnx-light’s
+<code class="docutils literal notranslate"><span class="pre">ORT_MATMULNBITS_INT2</span></code>, <code class="docutils literal notranslate"><span class="pre">ORT_MATMULNBITS_INT4</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">ORT_MATMULNBITS_INT8</span></code> layout. In that form, omit the <code class="docutils literal notranslate"><span class="pre">scales</span></code> input: the
+kernel validates the encoded geometry, dtype, layout, padding, and implicit
+zero points, then borrows its packed <code class="docutils literal notranslate"><span class="pre">B</span></code> and scales without copying them per
+inference. It never converts the encoded weights to the VNNI preparation layout. Encoded layouts
+with explicit zero points, shared parameter references, incompatible
+attributes, or any other unsupported representation fail with an exception.
+This encoded form is inference-only; automatic differentiation continues to
+require separate tensor <code class="docutils literal notranslate"><span class="pre">B</span></code> and <code class="docutils literal notranslate"><span class="pre">scales</span></code> inputs.</p>
 <p>The activation may have any positive rank with final dimension <code class="docutils literal notranslate"><span class="pre">K</span></code>. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with <code class="docutils literal notranslate"><span class="pre">N</span></code>. INT4 uses bounded panels of 8 rows, 32 output
@@ -678,6 +688,24 @@ scalar, and generic paths, together with their scale layout.</p>
 metadata is proportional to rank). This is inference compatibility support:
 no gradient rules or fusion patterns are registered for this operator.</p>
 </section>
+<section id="microsoft-skiplayernormalization">
+<h2>Microsoft SkipLayerNormalization<a class="headerlink" href="#microsoft-skiplayernormalization" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::SkipLayerNormalization</span></code> version 1 adds <code class="docutils literal notranslate"><span class="pre">input</span></code>, <code class="docutils literal notranslate"><span class="pre">skip</span></code>,
+and optional <code class="docutils literal notranslate"><span class="pre">bias</span></code> before centering the residual sum over its last axis,
+scaling by the inverse standard deviation and <code class="docutils literal notranslate"><span class="pre">gamma</span></code>, and adding optional
+<code class="docutils literal notranslate"><span class="pre">beta</span></code>. All inputs have one matching <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>
+type. <code class="docutils literal notranslate"><span class="pre">input</span></code> has shape <code class="docutils literal notranslate"><span class="pre">[S,</span> <span class="pre">H]</span></code> or <code class="docutils literal notranslate"><span class="pre">[B,</span> <span class="pre">S,</span> <span class="pre">H]</span></code>; for rank-three input,
+<code class="docutils literal notranslate"><span class="pre">skip</span></code> may also have shape <code class="docutils literal notranslate"><span class="pre">[S,</span> <span class="pre">H]</span></code> or <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">S,</span> <span class="pre">H]</span></code>. <code class="docutils literal notranslate"><span class="pre">gamma</span></code>, optional
+<code class="docutils literal notranslate"><span class="pre">beta</span></code>, and optional <code class="docutils literal notranslate"><span class="pre">bias</span></code> are rank-one tensors of length <code class="docutils literal notranslate"><span class="pre">H</span></code>.</p>
+<p>Output slot 0 has the input shape and type. Optional slots 1 and 2 are FLOAT
+mean and inverse-standard-deviation tensors with final dimension one. Optional
+slot 3 is the typed residual sum. <code class="docutils literal notranslate"><span class="pre">epsilon</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1e-12</span></code> and must be
+finite and nonnegative. The allocation-free CPU kernel uses FP32 arithmetic
+for narrow inputs and runtime-owned row scheduling. This follows the
+<a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/9c87bdf2e6676eee0073c711a32e75183dc41199/onnxruntime/contrib_ops/cpu/skip_layer_norm.cc">ONNX Runtime CPU contract</a>.
+Shape inference preserves symbolic dimensions and scratch-memory accounting is
+zero, excluding inputs and outputs.</p>
+</section>
 <section id="microsoft-skipsimplifiedlayernormalization">
 <h2>Microsoft SkipSimplifiedLayerNormalization<a class="headerlink" href="#microsoft-skipsimplifiedlayernormalization" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">com.microsoft::SkipSimplifiedLayerNormalization</span></code> version 1 adds <code class="docutils literal notranslate"><span class="pre">input</span></code>,
@@ -810,6 +838,7 @@ returns it.</p>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#experimental-simplifiedlayernormalization">Experimental SimplifiedLayerNormalization</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-skiplayernormalization">Microsoft SkipLayerNormalization</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-skipsimplifiedlayernormalization">Microsoft SkipSimplifiedLayerNormalization</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#support-inventory">Support inventory</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#OperatorSupport"><code class="docutils literal notranslate"><span class="pre">OperatorSupport</span></code></a></li>
@@ -852,7 +881,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 12, 2026.
+  Last updated on Oct 15, 2026.
 </p></div>
       
     </div>
