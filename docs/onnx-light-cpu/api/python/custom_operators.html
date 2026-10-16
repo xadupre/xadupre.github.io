@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -505,6 +505,26 @@ values above <code class="docutils literal notranslate"><span class="pre">INT32_
 step. RoPE uses absolute positions as before. Full and sliding attention nodes
 can coexist in the same model; <code class="docutils literal notranslate"><span class="pre">sliding_window_cache</span></code> remains unsupported.</p>
 </section>
+<section id="microsoft-moe">
+<h2>Microsoft MoE<a class="headerlink" href="#microsoft-moe" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MoE</span></code> version 1 routes rank-2 packed tokens <code class="docutils literal notranslate"><span class="pre">[T,H]</span></code> or
+rank-3 decoder activations <code class="docutils literal notranslate"><span class="pre">[B,S,H]</span></code> using rank-2 <code class="docutils literal notranslate"><span class="pre">[T,E]</span></code> router <strong>logits</strong>.
+It applies a softmax over all experts, selects the top <code class="docutils literal notranslate"><span class="pre">k</span></code> (default 1), and
+optionally renormalizes the selected weights before summing expert outputs.
+Expert weights are <code class="docutils literal notranslate"><span class="pre">[E,I,H]</span></code> for FC1 and <code class="docutils literal notranslate"><span class="pre">[E,H,I]</span></code> for FC2. Optional
+expert-major biases occupy inputs 3 and 5. Interleaved SwiGLU
+(<code class="docutils literal notranslate"><span class="pre">activation_type=&quot;swiglu&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">swiglu_fusion=1</span></code>) uses FC1 <code class="docutils literal notranslate"><span class="pre">[E,2*I,H]</span></code>
+with alternating gate and linear rows, and supports <code class="docutils literal notranslate"><span class="pre">swiglu_limit</span></code>,
+<code class="docutils literal notranslate"><span class="pre">activation_alpha</span></code>, and <code class="docutils literal notranslate"><span class="pre">activation_beta</span></code>. The other supported activations
+are <code class="docutils literal notranslate"><span class="pre">relu</span></code> (default), <code class="docutils literal notranslate"><span class="pre">gelu</span></code>, <code class="docutils literal notranslate"><span class="pre">silu</span></code>, and <code class="docutils literal notranslate"><span class="pre">identity</span></code>.</p>
+<p>Input and output types must match and be <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or
+<code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>. Low-precision inputs and weights are converted in bounded row
+tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
+weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
+supported by the CPU kernel. The output retains the input shape.
+See <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc">ONNX Runtime’s MoE CPU implementation</a>
+for the upstream compatibility contract.</p>
+</section>
 <section id="microsoft-matmulnbits">
 <h2>Microsoft MatMulNBits<a class="headerlink" href="#microsoft-matmulnbits" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MatMulNBits</span></code> version 1 multiplies floating-point activations by a
@@ -527,6 +547,33 @@ with explicit zero points, shared parameter references, incompatible
 attributes, or any other unsupported representation fail with an exception.
 This encoded form is inference-only; automatic differentiation continues to
 require separate tensor <code class="docutils literal notranslate"><span class="pre">B</span></code> and <code class="docutils literal notranslate"><span class="pre">scales</span></code> inputs.</p>
+<p>Genuine three-bit weights use the separate onnx-light
+<code class="docutils literal notranslate"><span class="pre">MATMULNBITS_INT3</span></code> format (struct name
+<code class="docutils literal notranslate"><span class="pre">onnx_light.quantization.v1/matmulnbits_int3</span></code>), <strong>not</strong> an ORT layout
+or a <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> tensor <code class="docutils literal notranslate"><span class="pre">B</span></code>. Set <code class="docutils literal notranslate"><span class="pre">bits=3</span></code>, <code class="docutils literal notranslate"><span class="pre">block_size=32</span></code> and omit
+the <code class="docutils literal notranslate"><span class="pre">scales</span></code> node input. Its <code class="docutils literal notranslate"><span class="pre">EncodedValueProto.logical_type</span></code> is
+<code class="docutils literal notranslate"><span class="pre">[K,N]</span></code> with <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> element type.
+The inline struct has, in order, an <code class="docutils literal notranslate"><span class="pre">INT64[2]</span></code> constant named
+<code class="docutils literal notranslate"><span class="pre">parameters</span></code> containing <code class="docutils literal notranslate"><span class="pre">[3,32]</span></code>, a <code class="docutils literal notranslate"><span class="pre">UINT8[N,ceil(K/32),12]</span></code>
+field named <code class="docutils literal notranslate"><span class="pre">B</span></code>, a <code class="docutils literal notranslate"><span class="pre">[N,ceil(K/32)]</span></code> field named <code class="docutils literal notranslate"><span class="pre">scales</span></code> with
+the logical element type, and optionally a <code class="docutils literal notranslate"><span class="pre">UINT8[N,ceil(K/32)]</span></code>
+field named <code class="docutils literal notranslate"><span class="pre">zero_points</span></code>. Concatenate these fields (excluding the
+constant) in that order into <code class="docutils literal notranslate"><span class="pre">raw_data</span></code>; no external payload or shared
+parameters are permitted. Block order is output column first, then K
+block. In each 12-byte block, code <code class="docutils literal notranslate"><span class="pre">q[p]</span></code> occupies bits
+<code class="docutils literal notranslate"><span class="pre">[3*p,</span> <span class="pre">3*p+3)</span></code> in little-endian bit order (least-significant bit
+first within each byte). Unused codes and bits after the final K
+element in each column must be zero. For example, codes
+<code class="docutils literal notranslate"><span class="pre">[1,2,5]</span></code> begin with bytes <code class="docutils literal notranslate"><span class="pre">51</span> <span class="pre">01</span></code> (the low byte of
+<code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">|</span> <span class="pre">(2</span> <span class="pre">&lt;&lt;</span> <span class="pre">3)</span> <span class="pre">|</span> <span class="pre">(5</span> <span class="pre">&lt;&lt;</span> <span class="pre">6)</span></code> is <code class="docutils literal notranslate"><span class="pre">0x51</span></code>; the third code’s high
+bit is in the second byte). The remaining
+ten bytes of this block are zero. An omitted zero-point field means
+code 4 for every block; explicit zero points must each be in <code class="docutils literal notranslate"><span class="pre">[0,7]</span></code>.
+Weights are reconstructed as <code class="docutils literal notranslate"><span class="pre">(q</span> <span class="pre">-</span> <span class="pre">zero_point)</span> <span class="pre">*</span> <span class="pre">scale</span></code> without
+expanding a full INT8 matrix. INT3 is not ternary: it represents eight
+distinct codes.
+The low-level C++ INT3 entry point also rejects overflowing activation,
+packed-weight, scale, and output sizes before dispatch or buffer access.</p>
 <p>The activation may have any positive rank with final dimension <code class="docutils literal notranslate"><span class="pre">K</span></code>. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with <code class="docutils literal notranslate"><span class="pre">N</span></code>. INT4 uses bounded panels of 8 rows, 32 output
@@ -542,8 +589,8 @@ Each active eight-row tile uses <code class="docutils literal notranslate"><span
 Other combinations retain the bounded panel or allocation-free scalar path.
 Inputs and outputs are excluded from scratch accounting. The projection
 benchmark reports both worker-local and prepared storage.</p>
-<p>Explicit zero points, deprecated <code class="docutils literal notranslate"><span class="pre">g_idx</span></code>, provider-prepacked weights, other
-bit widths, block sizes, mixed floating-point types, and <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> are
+<p>Explicit zero points in the legacy layouts or node input, deprecated <code class="docutils literal notranslate"><span class="pre">g_idx</span></code>,
+provider-prepacked weights, other bit widths, block sizes, mixed floating-point types, and <code class="docutils literal notranslate"><span class="pre">DOUBLE</span></code> are
 rejected rather than silently using a different layout. The registered gradient differentiates the
 activation and optional bias while treating packed weights and scales as
 constants. The bias fusion applies only to an exclusively consumed
@@ -580,9 +627,100 @@ path. Large vocabulary cases are opt-in because model serialization and ONNX
 Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 <code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON</span></code> and run
-<code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">M</span> <span class="pre">K</span> <span class="pre">N</span> <span class="pre">repeats</span></code>. This reports input preparation,
-median steady-state seconds, packed bytes, zero kernel weight-copy bytes,
-scratch bytes, and the selected implementation.</p>
+<code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">M</span> <span class="pre">K</span> <span class="pre">N</span> <span class="pre">repeats</span> <span class="pre">[bits=4|8]</span></code>. This reports input
+preparation, first-use packing time, median steady-state seconds, source packed
+bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
+implementation.</p>
+<p>The prepared INT8 path processes four activation rows per eight-column tile,
+reusing packed weights across rows and keeping dot products and accumulation
+inside the ISA-specific implementation. Activation blocks use the full signed
+INT8 range <code class="docutils literal notranslate"><span class="pre">[-127,127]</span></code>; AVX2 splits the unsigned activation’s high bit before
+pairwise multiplication to avoid 16-bit saturation. AVX-512 VNNI uses all 512
+bits to process two weight quads at once.</p>
+<p>Disjoint scratch of <code class="docutils literal notranslate"><span class="pre">5*K</span></code> bytes per participant is allocated through the
+runtime execution allocator before dispatch; range callbacks do not allocate.
+The output-based parallel threshold, target block size, and participant cap
+apply to prepared execution as well as the generic path. Activation scales,
+scale products, and biased accumulation remain in double precision until each
+updated block accumulator is converted to FLOAT. Nonfinite activations or
+weight scales retain per-element floating-point dequantization semantics.
+Implementation labels remain available through <code class="docutils literal notranslate"><span class="pre">used_kernel_paths()</span></code>, but
+are excluded from <code class="docutils literal notranslate"><span class="pre">used_kernel_names()</span></code>.</p>
+<p>Run <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">tools.benchmark_matmul_nbits_parity</span> <span class="pre">--qwen-int8</span></code> for all six
+synthetic Qwen2 prefill projections at four threads. Both sessions use the
+same graph and input values; CPU timings feed native backend tensors without
+NumPy adaptation. Preparation and first-run times are separate from the
+alternating steady-state samples. These isolated nodes do not measure the
+exported end-to-end decoder.</p>
+<p>On an Intel Xeon Platinum 8480C with affinity restricted to four CPUs,
+GCC 13.2 Release and ONNX Runtime 1.32.0, the command above with
+<code class="docutils literal notranslate"><span class="pre">--repeat</span> <span class="pre">15</span> <span class="pre">--warmup</span> <span class="pre">5</span></code> measured these median steady-state milliseconds
+(<code class="docutils literal notranslate"><span class="pre">M=128</span></code>, FP32, INT8, block size 32, accuracy level 4). The selected CPU
+implementation was <code class="docutils literal notranslate"><span class="pre">int8_avx512_vnni</span></code>; maximum absolute error against ORT
+across these six cases was below <code class="docutils literal notranslate"><span class="pre">1.9e-5</span></code>.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Projection</p></th>
+<th class="head"><p>K</p></th>
+<th class="head"><p>N</p></th>
+<th class="head"><p>CPU before (<code class="docutils literal notranslate"><span class="pre">51e760e</span></code>)</p></th>
+<th class="head"><p>CPU tiled</p></th>
+<th class="head"><p>ORT</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>LM head</p></td>
+<td><p>512</p></td>
+<td><p>32000</p></td>
+<td><p>21.044</p></td>
+<td><p>6.812</p></td>
+<td><p>6.725</p></td>
+</tr>
+<tr class="row-odd"><td><p>MLP gate</p></td>
+<td><p>512</p></td>
+<td><p>1376</p></td>
+<td><p>0.900</p></td>
+<td><p>0.337</p></td>
+<td><p>0.401</p></td>
+</tr>
+<tr class="row-even"><td><p>MLP up</p></td>
+<td><p>512</p></td>
+<td><p>1376</p></td>
+<td><p>0.900</p></td>
+<td><p>0.325</p></td>
+<td><p>0.421</p></td>
+</tr>
+<tr class="row-odd"><td><p>MLP down</p></td>
+<td><p>1376</p></td>
+<td><p>512</p></td>
+<td><p>0.951</p></td>
+<td><p>0.328</p></td>
+<td><p>0.484</p></td>
+</tr>
+<tr class="row-even"><td><p>Attention QKV</p></td>
+<td><p>512</p></td>
+<td><p>1024</p></td>
+<td><p>0.704</p></td>
+<td><p>0.251</p></td>
+<td><p>0.337</p></td>
+</tr>
+<tr class="row-odd"><td><p>Attention output</p></td>
+<td><p>512</p></td>
+<td><p>512</p></td>
+<td><p>0.376</p></td>
+<td><p>0.137</p></td>
+<td><p>0.228</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Both CPU revisions used native backend feeds, the same deterministic inputs,
+four threads, five warmups, and fifteen alternating samples. Preparation is
+excluded. The old seven-bit activation quantization also failed ORT parity
+on these cases (maximum LM-head error about <code class="docutils literal notranslate"><span class="pre">0.285</span></code>); the timings above
+do not imply that its numerical behavior was equivalent. These measurements
+are not portable speedup thresholds, and the LM head remains slightly slower
+than ORT on this runner.</p>
 <p>ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
 BF16 oracle therefore runs ORT’s FP32 operator on BF16-rounded activations
 and scales and rounds its output back to BF16. This validates the CPU
@@ -832,6 +970,7 @@ returns it.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator_schema_lookup"><code class="docutils literal notranslate"><span class="pre">operator_schema_lookup()</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#experimental_op_schemas"><code class="docutils literal notranslate"><span class="pre">experimental_op_schemas()</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-groupqueryattention">Microsoft GroupQueryAttention</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-moe">Microsoft MoE</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-matmulnbits">Microsoft MatMulNBits</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#muse-glimmer-projections">Muse-Glimmer projections</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#representative-kernel-measurements">Representative kernel measurements</a></li>
@@ -881,7 +1020,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 15, 2026.
+  Last updated on Oct 16, 2026.
 </p></div>
       
     </div>

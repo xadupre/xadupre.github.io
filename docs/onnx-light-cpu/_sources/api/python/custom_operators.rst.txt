@@ -32,6 +32,29 @@ Windowing restricts only attention scores: ``present_key`` and
 step. RoPE uses absolute positions as before. Full and sliding attention nodes
 can coexist in the same model; ``sliding_window_cache`` remains unsupported.
 
+Microsoft MoE
+~~~~~~~~~~~~~
+
+``com.microsoft::MoE`` version 1 routes rank-2 packed tokens ``[T,H]`` or
+rank-3 decoder activations ``[B,S,H]`` using rank-2 ``[T,E]`` router **logits**.
+It applies a softmax over all experts, selects the top ``k`` (default 1), and
+optionally renormalizes the selected weights before summing expert outputs.
+Expert weights are ``[E,I,H]`` for FC1 and ``[E,H,I]`` for FC2. Optional
+expert-major biases occupy inputs 3 and 5. Interleaved SwiGLU
+(``activation_type="swiglu"``, ``swiglu_fusion=1``) uses FC1 ``[E,2*I,H]``
+with alternating gate and linear rows, and supports ``swiglu_limit``,
+``activation_alpha``, and ``activation_beta``. The other supported activations
+are ``relu`` (default), ``gelu``, ``silu``, and ``identity``.
+
+Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
+``BFLOAT16``. Low-precision inputs and weights are converted in bounded row
+tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
+weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
+supported by the CPU kernel. The output retains the input shape.
+See `ONNX Runtime's MoE CPU implementation
+<https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
+for the upstream compatibility contract.
+
 Microsoft MatMulNBits
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -57,6 +80,34 @@ attributes, or any other unsupported representation fail with an exception.
 This encoded form is inference-only; automatic differentiation continues to
 require separate tensor ``B`` and ``scales`` inputs.
 
+Genuine three-bit weights use the separate onnx-light
+``MATMULNBITS_INT3`` format (struct name
+``onnx_light.quantization.v1/matmulnbits_int3``), **not** an ORT layout
+or a ``UINT8`` tensor ``B``. Set ``bits=3``, ``block_size=32`` and omit
+the ``scales`` node input. Its ``EncodedValueProto.logical_type`` is
+``[K,N]`` with ``FLOAT``, ``FLOAT16``, or ``BFLOAT16`` element type.
+The inline struct has, in order, an ``INT64[2]`` constant named
+``parameters`` containing ``[3,32]``, a ``UINT8[N,ceil(K/32),12]``
+field named ``B``, a ``[N,ceil(K/32)]`` field named ``scales`` with
+the logical element type, and optionally a ``UINT8[N,ceil(K/32)]``
+field named ``zero_points``. Concatenate these fields (excluding the
+constant) in that order into ``raw_data``; no external payload or shared
+parameters are permitted. Block order is output column first, then K
+block. In each 12-byte block, code ``q[p]`` occupies bits
+``[3*p, 3*p+3)`` in little-endian bit order (least-significant bit
+first within each byte). Unused codes and bits after the final K
+element in each column must be zero. For example, codes
+``[1,2,5]`` begin with bytes ``51 01`` (the low byte of
+``1 | (2 << 3) | (5 << 6)`` is ``0x51``; the third code's high
+bit is in the second byte). The remaining
+ten bytes of this block are zero. An omitted zero-point field means
+code 4 for every block; explicit zero points must each be in ``[0,7]``.
+Weights are reconstructed as ``(q - zero_point) * scale`` without
+expanding a full INT8 matrix. INT3 is not ternary: it represents eight
+distinct codes.
+The low-level C++ INT3 entry point also rejects overflowing activation,
+packed-weight, scale, and output sizes before dispatch or buffer access.
+
 The activation may have any positive rank with final dimension ``K``. Shape
 inference preserves every leading concrete or symbolic dimension and replaces
 the final dimension with ``N``. INT4 uses bounded panels of 8 rows, 32 output
@@ -73,8 +124,8 @@ Other combinations retain the bounded panel or allocation-free scalar path.
 Inputs and outputs are excluded from scratch accounting. The projection
 benchmark reports both worker-local and prepared storage.
 
-Explicit zero points, deprecated ``g_idx``, provider-prepacked weights, other
-bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
+Explicit zero points in the legacy layouts or node input, deprecated ``g_idx``,
+provider-prepacked weights, other bit widths, block sizes, mixed floating-point types, and ``DOUBLE`` are
 rejected rather than silently using a different layout. The registered gradient differentiates the
 activation and optional bias while treating packed weights and scales as
 constants. The bias fusion applies only to an exclusively consumed
@@ -121,9 +172,95 @@ path. Large vocabulary cases are opt-in because model serialization and ONNX
 Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 ``-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON`` and run
-``matmul_nbits_throughput M K N repeats``. This reports input preparation,
-median steady-state seconds, packed bytes, zero kernel weight-copy bytes,
-scratch bytes, and the selected implementation.
+``matmul_nbits_throughput M K N repeats [bits=4|8]``. This reports input
+preparation, first-use packing time, median steady-state seconds, source packed
+bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
+implementation.
+
+The prepared INT8 path processes four activation rows per eight-column tile,
+reusing packed weights across rows and keeping dot products and accumulation
+inside the ISA-specific implementation. Activation blocks use the full signed
+INT8 range ``[-127,127]``; AVX2 splits the unsigned activation's high bit before
+pairwise multiplication to avoid 16-bit saturation. AVX-512 VNNI uses all 512
+bits to process two weight quads at once.
+
+Disjoint scratch of ``5*K`` bytes per participant is allocated through the
+runtime execution allocator before dispatch; range callbacks do not allocate.
+The output-based parallel threshold, target block size, and participant cap
+apply to prepared execution as well as the generic path. Activation scales,
+scale products, and biased accumulation remain in double precision until each
+updated block accumulator is converted to FLOAT. Nonfinite activations or
+weight scales retain per-element floating-point dequantization semantics.
+Implementation labels remain available through ``used_kernel_paths()``, but
+are excluded from ``used_kernel_names()``.
+
+Run ``python -m tools.benchmark_matmul_nbits_parity --qwen-int8`` for all six
+synthetic Qwen2 prefill projections at four threads. Both sessions use the
+same graph and input values; CPU timings feed native backend tensors without
+NumPy adaptation. Preparation and first-run times are separate from the
+alternating steady-state samples. These isolated nodes do not measure the
+exported end-to-end decoder.
+
+On an Intel Xeon Platinum 8480C with affinity restricted to four CPUs,
+GCC 13.2 Release and ONNX Runtime 1.32.0, the command above with
+``--repeat 15 --warmup 5`` measured these median steady-state milliseconds
+(``M=128``, FP32, INT8, block size 32, accuracy level 4). The selected CPU
+implementation was ``int8_avx512_vnni``; maximum absolute error against ORT
+across these six cases was below ``1.9e-5``.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Projection
+     - K
+     - N
+     - CPU before (``51e760e``)
+     - CPU tiled
+     - ORT
+   * - LM head
+     - 512
+     - 32000
+     - 21.044
+     - 6.812
+     - 6.725
+   * - MLP gate
+     - 512
+     - 1376
+     - 0.900
+     - 0.337
+     - 0.401
+   * - MLP up
+     - 512
+     - 1376
+     - 0.900
+     - 0.325
+     - 0.421
+   * - MLP down
+     - 1376
+     - 512
+     - 0.951
+     - 0.328
+     - 0.484
+   * - Attention QKV
+     - 512
+     - 1024
+     - 0.704
+     - 0.251
+     - 0.337
+   * - Attention output
+     - 512
+     - 512
+     - 0.376
+     - 0.137
+     - 0.228
+
+Both CPU revisions used native backend feeds, the same deterministic inputs,
+four threads, five warmups, and fifteen alternating samples. Preparation is
+excluded. The old seven-bit activation quantization also failed ORT parity
+on these cases (maximum LM-head error about ``0.285``); the timings above
+do not imply that its numerical behavior was equivalent. These measurements
+are not portable speedup thresholds, and the LM head remains slightly slower
+than ORT on this runner.
 
 ONNX Runtime 1.30.0 CPU does not implement native BF16 MatMulNBits. The
 BF16 oracle therefore runs ORT's FP32 operator on BF16-rounded activations
