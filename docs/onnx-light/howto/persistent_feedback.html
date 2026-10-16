@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Persistent input/output feedback &#8212; onnx-light 0.1.32 documentation</title>
+    <title>Persistent input/output feedback &#8212; onnx-light 0.1.33 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../_static/documentation_options.js?v=e0e570cb"></script>
+    <script src="../_static/documentation_options.js?v=449df4d2"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.32 documentation - Home"/>
-    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.32 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.33 documentation - Home"/>
+    <img src="../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.33 documentation - Home"/>
   
   
 </a></div>
@@ -598,14 +598,10 @@ The graph declares the relationship in <code class="docutils literal notranslate
 types come from its final input/output declarations. The caller supplies
 initial values, not a separate feedback mapping. Execution uses the existing
 session and allocator infrastructure, not a separate executor.</p>
-<p>Each bound input must have <strong>exactly one value-use</strong> in the graph. Every node
-input position counts, including read-only operations such as <code class="docutils literal notranslate"><span class="pre">Shape</span></code> and
-two positions of the same node. A graph output that directly returns that input
-also counts, as do captures in nested graph attributes. The check counts
-references statically, including references in mutually exclusive branches.
-Input declarations, bindings and <code class="docutils literal notranslate"><span class="pre">value_info</span></code> metadata do not count as uses.
-Both ONNX validation and runtime graph-plan construction enforce this rule;
-graphs without persistent bindings retain their ordinary sharing semantics.</p>
+<p>Each bound input must have <strong>at least one value-use</strong> in the graph and may be
+consumed by multiple nodes. After each run, the configured persistent output
+replaces its bound input for the next run. Both ONNX validation and runtime
+graph-plan construction reject unused bound inputs.</p>
 <p>The native <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">onnx_light::core::runtime::PersistentValueState</span></code> uses the
 existing runtime execution and value ownership contracts. Create one state
 per independent request. Python initialization/reset, C++ ownership transfer,
@@ -767,6 +763,12 @@ graph used only once.
 Graphs connect through their declared input and output names: for example,
 the embedding graph consumes <code class="docutils literal notranslate"><span class="pre">input_ids</span></code> and produces the language model’s
 <code class="docutils literal notranslate"><span class="pre">inputs_embeds</span></code> input. No additional name mappings are supplied.
+Top-level inputs and outputs may share names across stages, including these
+declared embedding-to-language-model connections and embedding outputs backed
+directly by initializers. Private initializer and intermediate names must be
+unique across the models; generation rejects a collision before either stage
+executes. This rule also covers encoded and paged-cache initializers and values
+defined in nested subgraphs, including reachable model-local function bodies.
 All graphs execute in one call-local <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> configured from the
 language-model evaluator, using its custom kernels and sharing its CPU executor
 and event log. Pipeline stages share call-local allocators, not the evaluator’s
@@ -775,16 +777,26 @@ The embedding evaluator supplies its model only; its local registrations and
 CPU execution policy are not used. Register pipeline-wide custom kernels on
 the language-model evaluator. Image/audio encoders can run before generation;
 their features are supplied as ordinary feeds.
+Each feed is supplied once and routed to every pipeline model that declares its
+name. Encoded values, including values nested in structures, sequences and
+paged-cache pages, resolve <code class="docutils literal notranslate"><span class="pre">parameter_ref</span></code> independently against each receiving
+model’s catalogue.
+An embedding-only feed never consults the language model. A shared input name
+may resolve to distinct compatible catalogue entries in both models; an entry
+that is missing or incompatible in either scope is rejected before execution.
 Each stage resolves its own model-local functions; definitions from another stage
-cannot override its custom operators. The caller’s function registry is restored
-when generation returns or fails. Embedding inputs backed by tensor, encoded or
-paged-cache initializers may be omitted from feeds. Structured sequence inputs
-retain their runtime representation rather than being converted to dense tensor
-sequences.</p>
-<p>C++ callers can alternatively pass <code class="docutils literal notranslate"><span class="pre">GenerationPipeline{.prefill</span> <span class="pre">=</span> <span class="pre">&amp;language_model,</span>
-<span class="pre">.embedding</span> <span class="pre">=</span> <span class="pre">&amp;embedding_model}</span></code> instead of a <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> to <code class="docutils literal notranslate"><span class="pre">Generate</span></code>.
-The pipeline contains only these model pointers. The single <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>
-is passed as a separate argument to either overload.</p>
+cannot override its custom operators. Model-local definitions take precedence
+over functions registered on the shared context. Reachable context functions
+follow the same private-name collision checks, and the caller’s function
+registry is unchanged when generation returns or fails. Embedding inputs backed
+by tensor, encoded or paged-cache initializers may be omitted from feeds.
+Structured sequence inputs retain their runtime representation rather than
+being converted to dense tensor sequences.</p>
+<p>C++ callers pass a <code class="docutils literal notranslate"><span class="pre">PipelineProto</span></code> containing the prefill model and optional
+embedding model to <code class="docutils literal notranslate"><span class="pre">Generate</span></code>. Generation settings may be stored directly in
+the pipeline or supplied explicitly with <code class="docutils literal notranslate"><span class="pre">GenerationOptions</span></code>. The single feed
+map and <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> are passed as separate arguments; callers never need
+to duplicate or manually separate feeds by model.</p>
 </section>
 <section id="a-basic-feedback-loop">
 <h2>A basic feedback loop<a class="headerlink" href="#a-basic-feedback-loop" title="Link to this heading">#</a></h2>
