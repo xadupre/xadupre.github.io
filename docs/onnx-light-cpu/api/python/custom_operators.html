@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 16, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -504,6 +504,11 @@ values above <code class="docutils literal notranslate"><span class="pre">INT32_
 <code class="docutils literal notranslate"><span class="pre">present_value</span></code> still contain the entire past cache followed by the current
 step. RoPE uses absolute positions as before. Full and sliding attention nodes
 can coexist in the same model; <code class="docutils literal notranslate"><span class="pre">sliding_window_cache</span></code> remains unsupported.</p>
+<p>The optional twelfth input, <code class="docutils literal notranslate"><span class="pre">head_sink</span></code>, has shape <code class="docutils literal notranslate"><span class="pre">(num_heads,)</span></code> and the
+same element type as the query. Each query head’s sink is a virtual softmax
+logit: it contributes to the normalization denominator, but contributes no
+value to the output. Causal and local-window masks still apply only to real
+keys. Omitting the input preserves ordinary attention normalization.</p>
 </section>
 <section id="microsoft-moe">
 <h2>Microsoft MoE<a class="headerlink" href="#microsoft-moe" title="Link to this heading">#</a></h2>
@@ -627,10 +632,15 @@ path. Large vocabulary cases are opt-in because model serialization and ONNX
 Runtime preparation can require several GB.
 For isolated single-thread FP32 kernel measurements, build with
 <code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_CPU_BUILD_BENCHMARKS=ON</span></code> and run
-<code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">M</span> <span class="pre">K</span> <span class="pre">N</span> <span class="pre">repeats</span> <span class="pre">[bits=4|8]</span></code>. This reports input
+<code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">M</span> <span class="pre">K</span> <span class="pre">N</span> <span class="pre">repeats</span> <span class="pre">[bits=4|8]</span> <span class="pre">[--generic]</span></code>. This reports input
 preparation, first-use packing time, median steady-state seconds, source packed
 bytes, persistent prepared bytes, per-callback scratch bytes, and the selected
-implementation.</p>
+implementation.
+For example, <code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">1</span> <span class="pre">512</span> <span class="pre">32000</span> <span class="pre">21</span> <span class="pre">8</span> <span class="pre">--generic</span></code> measures
+the generic INT8 panel path, not INT4. Both modes use one participant;
+the generic mode allocates no persistent prepared-weight buffers.
+The bit width remains optional with <code class="docutils literal notranslate"><span class="pre">--generic</span></code>:
+<code class="docutils literal notranslate"><span class="pre">matmul_nbits_throughput</span> <span class="pre">1</span> <span class="pre">512</span> <span class="pre">32000</span> <span class="pre">21</span> <span class="pre">--generic</span></code> uses the default INT4 path.</p>
 <p>The prepared INT8 path processes four activation rows per eight-column tile,
 reusing packed weights across rows and keeping dot products and accumulation
 inside the ISA-specific implementation. Activation blocks use the full signed
@@ -639,6 +649,12 @@ pairwise multiplication to avoid 16-bit saturation. AVX-512 VNNI uses all 512
 bits to process two weight quads at once.</p>
 <p>Disjoint scratch of <code class="docutils literal notranslate"><span class="pre">5*K</span></code> bytes per participant is allocated through the
 runtime execution allocator before dispatch; range callbacks do not allocate.
+For decode with <code class="docutils literal notranslate"><span class="pre">M=1,2,3,4</span></code>, activations are quantized once into shared,
+read-only scratch of <code class="docutils literal notranslate"><span class="pre">5*M*K/4</span></code> bytes and workers own disjoint groups of
+eight output columns. The parallel threshold uses the actual <code class="docutils literal notranslate"><span class="pre">M*N</span></code>
+output count, excluding padded lanes. For a zero reduction dimension, the
+low-level entry point returns the bias, or zero when no bias is supplied,
+without dispatch.
 The output-based parallel threshold, target block size, and participant cap
 apply to prepared execution as well as the generic path. Activation scales,
 scale products, and biased accumulation remain in double precision until each
@@ -651,9 +667,11 @@ synthetic Qwen2 prefill projections at four threads. Both sessions use the
 same graph and input values; CPU timings feed native backend tensors without
 NumPy adaptation. Preparation and first-run times are separate from the
 alternating steady-state samples. These isolated nodes do not measure the
-exported end-to-end decoder.</p>
+exported end-to-end decoder.
+Use <code class="docutils literal notranslate"><span class="pre">--qwen-int8-decode</span></code> instead for all six projections at <code class="docutils literal notranslate"><span class="pre">M=1,2,4</span></code>
+with one and four threads.</p>
 <p>On an Intel Xeon Platinum 8480C with affinity restricted to four CPUs,
-GCC 13.2 Release and ONNX Runtime 1.32.0, the command above with
+GCC 13.2 Release and ONNX Runtime 1.32.0, the <code class="docutils literal notranslate"><span class="pre">--qwen-int8</span></code> command with
 <code class="docutils literal notranslate"><span class="pre">--repeat</span> <span class="pre">15</span> <span class="pre">--warmup</span> <span class="pre">5</span></code> measured these median steady-state milliseconds
 (<code class="docutils literal notranslate"><span class="pre">M=128</span></code>, FP32, INT8, block size 32, accuracy level 4). The selected CPU
 implementation was <code class="docutils literal notranslate"><span class="pre">int8_avx512_vnni</span></code>; maximum absolute error against ORT
@@ -1020,7 +1038,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 16, 2026.
+  Last updated on Oct 17, 2026.
 </p></div>
       
     </div>
