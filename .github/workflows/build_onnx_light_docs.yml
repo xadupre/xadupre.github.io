@@ -86,7 +86,9 @@ jobs:
         working-directory: onnx-light
         run: |
           pip install scikit-build-core nanobind
-          pip install -e ".[docs]" -v
+          # Breathe 5.1 matches directory-qualified doxygenfile directives
+          # against basenames in the Doxygen index instead of file locations.
+          pip install -e ".[docs]" "breathe==4.36.0" -v
 
       - name: pip freeze
         run: pip freeze
@@ -141,6 +143,12 @@ jobs:
             "${PWD}/build/examples-lib" \
             "${PWD}/build/examples/load_onnx_time"
 
+      - name: Fix legacy simple_span documentation path
+        working-directory: onnx-light
+        run: |
+          sed -i 's@doxygenfile:: common/simple_span.h@doxygenfile:: onnx_proto/simple_span.h@' \
+            docs/api/cpp/common/simple_span.rst
+
       - name: Build documentation
         working-directory: onnx-light
         # Build serially because the gallery imports native C++ extensions,
@@ -159,6 +167,18 @@ jobs:
           # checkout, not at the onnx-light one, so override it here.
           GITHUB_WORKSPACE: ${{ github.workspace }}/onnx-light
         run: python -m sphinx docs dist/html
+
+      - name: Check simple_span C++ documentation
+        working-directory: onnx-light
+        run: |
+          for page in common/simple_span onnx_proto/simple_span; do
+            path="dist/html/api/cpp/${page}.html"
+            test -s "${path}"
+            if grep -Fq 'doxygenfile: Cannot find file' "${path}"; then
+              echo "Unresolved C++ documentation in ${path}" >&2
+              exit 1
+            fi
+          done
 
       - name: Copy documentation into site/docs/onnx-light
         run: |
