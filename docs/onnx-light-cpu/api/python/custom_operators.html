@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 17, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 18, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -492,6 +492,38 @@ These adapters are separate from standardized ONNX schemas and from the
 Microsoft-only <a class="reference internal" href="#custom_op_schemas" title="custom_op_schemas"><code class="xref py py-func docutils literal notranslate"><span class="pre">custom_op_schemas()</span></code></a> provider.</p>
 </dd></dl>
 
+<section id="microsoft-multiheadattention">
+<h2>Microsoft MultiHeadAttention<a class="headerlink" href="#microsoft-multiheadattention" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MultiHeadAttention</span></code> v1 accepts FLOAT, FLOAT16 and BFLOAT16
+query <code class="docutils literal notranslate"><span class="pre">(B,S,N*H)</span></code>, key <code class="docutils literal notranslate"><span class="pre">(B,L,N*H)</span></code> and value <code class="docutils literal notranslate"><span class="pre">(B,L,N*Hv)</span></code>, or
+Whisper-style cross-attention key <code class="docutils literal notranslate"><span class="pre">(B,N,L,H)</span></code> and value
+<code class="docutils literal notranslate"><span class="pre">(B,N,L,Hv)</span></code>. <code class="docutils literal notranslate"><span class="pre">num_heads</span></code> is required.
+The output shape is <code class="docutils literal notranslate"><span class="pre">(B,S,N*Hv)</span></code>. Shape inference preserves the value’s
+symbolic total width for rank-3 inputs and the symbolic product <code class="docutils literal notranslate"><span class="pre">N*Hv</span></code>
+for rank-4 inputs.
+Optional inputs are projection bias <code class="docutils literal notranslate"><span class="pre">(2*N*H+N*Hv)</span></code>, int32 key-padding
+lengths <code class="docutils literal notranslate"><span class="pre">(B)</span></code> or binary masks <code class="docutils literal notranslate"><span class="pre">(B,T)/(B,S,T)</span></code>, additive attention bias
+<code class="docutils literal notranslate"><span class="pre">(1</span> <span class="pre">or</span> <span class="pre">B,1</span> <span class="pre">or</span> <span class="pre">N,S,T)</span></code>, and paired past key <code class="docutils literal notranslate"><span class="pre">(B,N,P,H)</span></code> and
+value <code class="docutils literal notranslate"><span class="pre">(B,N,P,Hv)</span></code>.
+For rank-4 cross attention, only the query segment of projection bias is
+applied; the key and value bias segments are ignored, as in the upstream
+CPU implementation.
+The optional present outputs contain <code class="docutils literal notranslate"><span class="pre">P+L</span></code> positions. <code class="docutils literal notranslate"><span class="pre">scale</span></code> defaults
+to <code class="docutils literal notranslate"><span class="pre">1/sqrt(H)</span></code>, <code class="docutils literal notranslate"><span class="pre">mask_filter_value</span></code> to <code class="docutils literal notranslate"><span class="pre">-10000</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">unidirectional</span></code> to zero. Packed rank-5 inputs, shared-buffer inputs
+8/9 and <code class="docutils literal notranslate"><span class="pre">qk</span></code> output are explicitly unsupported. The implementation
+is independent of <code class="docutils literal notranslate"><span class="pre">ai.onnx::Attention</span></code> and does not reinterpret its
+different mask and projection semantics.
+The contract is based on <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/graph/contrib_ops/bert_defs.cc">ONNX Runtime’s upstream schema</a>
+and <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/bert/multihead_attention.cc">CPU implementation</a>;
+the CPU kernel here is an original implementation, not a copy of upstream code.</p>
+<p>The focused C++ tests cover scalar self/cross attention, projection bias,
+key padding, cached present outputs, all three floating types, symbolic
+shapes and the explicitly rejected slots. An end-to-end Whisper model run
+and direct numerical differential testing against ONNX Runtime remain
+untested; the backend fixtures use independently specified small expected
+outputs rather than importing ONNX Runtime.</p>
+</section>
 <section id="microsoft-groupqueryattention">
 <h2>Microsoft GroupQueryAttention<a class="headerlink" href="#microsoft-groupqueryattention" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> supports causal local attention for
@@ -529,6 +561,58 @@ weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
 supported by the CPU kernel. The output retains the input shape.
 See <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc">ONNX Runtime’s MoE CPU implementation</a>
 for the upstream compatibility contract.</p>
+</section>
+<section id="microsoft-qmoe">
+<h2>Microsoft QMoE<a class="headerlink" href="#microsoft-qmoe" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::QMoE</span></code> version 1 accepts the block-wise CPU expert tensors emitted by
+<a class="reference external" href="https://github.com/xadupre/mbext/blob/68a6860cc8fe2c3381f5248d215b7217a36822e3/modelbuilder/builders/base.py#L3870-L4010">mbext’s MoE builder</a>.
+Activations, router logits, optional biases, and output share one of
+<code class="docutils literal notranslate"><span class="pre">FLOAT</span></code>, <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, or <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>. Scales may independently use any of
+these three floating-point types. Input/output and routing shapes,
+top-k softmax normalization, and activation parameters follow <code class="docutils literal notranslate"><span class="pre">MoE</span></code> above.</p>
+<p>Inputs are, in order: input, router logits, FC1 weights, FC1 scales,
+optional FC1 bias, FC2 weights, FC2 scales, optional FC2 bias, optional FC3
+weights, optional FC3 scales, optional FC3 bias, and three optional zero-point
+slots. FC3 weights and scales must appear together. Nonempty zero points,
+sparse mixer routing, and CUDA-prepacked weights are rejected.</p>
+<p><code class="docutils literal notranslate"><span class="pre">expert_weight_bits</span></code> supports <strong>4 and 8</strong>. INT4 stores adjacent last-axis
+values in low-then-high nibbles with implicit zero point 8; INT8 stores signed
+two’s-complement values in <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> tensors for block quantization.
+<code class="docutils literal notranslate"><span class="pre">block_size=0</span></code> (default) accepts only raw CPU output-major matrices with
+per-output-row scales <code class="docutils literal notranslate"><span class="pre">[E,R]</span></code>; INT8 then uses an implicit zero point of 128.
+Supported positive block sizes
+are powers of two of at least 16, including <strong>16, 32, 64, and 128</strong>;
+scales then have shape
+<code class="docutils literal notranslate"><span class="pre">[E,R,ceil(C/block_size)]</span></code> for a stored logical matrix <code class="docutils literal notranslate"><span class="pre">[E,R,C]</span></code>.
+The final block and an odd INT4 column count need not be padded in the
+weight tensor: its shape is <code class="docutils literal notranslate"><span class="pre">[E,R,ceil(C/2)]</span></code> for INT4 or <code class="docutils literal notranslate"><span class="pre">[E,R,C]</span></code> for INT8.</p>
+<p>For block quantization, the fused builder emits output-major FC1
+<code class="docutils literal notranslate"><span class="pre">[E,2*I,H]</span></code> and FC2 <code class="docutils literal notranslate"><span class="pre">[E,H,I]</span></code>
+logical matrices with interleaved SwiGLU gate/up rows
+(<code class="docutils literal notranslate"><span class="pre">activation_type=&quot;swiglu&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">swiglu_fusion=1</span></code>).
+The split builder supplies FC3 and emits input-major FC1/FC3 <code class="docutils literal notranslate"><span class="pre">[E,H,I]</span></code>
+and FC2 <code class="docutils literal notranslate"><span class="pre">[E,I,H]</span></code> logical matrices. Its expert function is
+<code class="docutils literal notranslate"><span class="pre">FC2(activation(FC1(input))</span> <span class="pre">*</span> <span class="pre">FC3(input))</span></code>, including optional biases.
+Separate FC3 and fused SwiGLU cannot be combined. Without FC3, ordinary
+<code class="docutils literal notranslate"><span class="pre">relu</span></code>, <code class="docutils literal notranslate"><span class="pre">gelu</span></code>, <code class="docutils literal notranslate"><span class="pre">silu</span></code>, and <code class="docutils literal notranslate"><span class="pre">identity</span></code> projections are also supported
+in input-major layout.</p>
+<p>For block quantization, the kernel validates both orientations against all
+projection and scale shapes, preferring the builder’s orientation when
+dimensions are ambiguous. Tensor quantization always uses ONNX Runtime’s
+raw output-major, row-scaled format. See the <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_quantization_cpu.cc">ONNX Runtime CPU dequantizer</a>.</p>
+<p>This is a portable correctness implementation: expert matrices are
+dequantized into execution-allocator scratch and projections accumulate in
+FLOAT. It does not interpret CPU weights as CUDA’s MatMulNBits block packing
+or TensorRT’s shuffled prepacked format. Quantized weights are inference-only;
+no QMoE gradient or graph-fusion rule is registered.</p>
+<p>The cited builder’s legacy <code class="docutils literal notranslate"><span class="pre">qmoe_block_size=0</span></code> fallback selects
+<a class="reference external" href="https://github.com/NVIDIA/TensorRT-LLM/blob/main/cpp/tensorrt_llm/thop/weightOnlyQuantOp.cpp">TensorRT-LLM’s preprocessed quantizer output</a>,
+not its raw CPU tensor output. That
+architecture-dependent CUDA format is not the raw tensor layout described
+above, even though it has the same tensor shape. Re-export those models with
+a positive CPU <code class="docutils literal notranslate"><span class="pre">qmoe_block_size</span></code> (for example, 32). Untagged CUDA-prepacked
+contents cannot be identified from tensor shapes alone; do not pass them as
+raw CPU tensors.</p>
 </section>
 <section id="microsoft-matmulnbits">
 <h2>Microsoft MatMulNBits<a class="headerlink" href="#microsoft-matmulnbits" title="Link to this heading">#</a></h2>
@@ -987,8 +1071,10 @@ returns it.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#custom_op_schemas"><code class="docutils literal notranslate"><span class="pre">custom_op_schemas()</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator_schema_lookup"><code class="docutils literal notranslate"><span class="pre">operator_schema_lookup()</span></code></a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#experimental_op_schemas"><code class="docutils literal notranslate"><span class="pre">experimental_op_schemas()</span></code></a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-multiheadattention">Microsoft MultiHeadAttention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-groupqueryattention">Microsoft GroupQueryAttention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-moe">Microsoft MoE</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-qmoe">Microsoft QMoE</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-matmulnbits">Microsoft MatMulNBits</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#muse-glimmer-projections">Muse-Glimmer projections</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#representative-kernel-measurements">Representative kernel measurements</a></li>
@@ -1038,7 +1124,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 17, 2026.
+  Last updated on Oct 18, 2026.
 </p></div>
       
     </div>
