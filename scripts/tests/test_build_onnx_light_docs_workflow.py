@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -101,6 +102,17 @@ class TestBuildOnnxLightDocsWorkflow(unittest.TestCase):
         )[0]
         self.assertIn("run: python -m sphinx docs dist/html", step)
         self.assertNotIn(" -j ", step)
+
+    def test_sphinx_issue_links_and_tracebacks(self):
+        step = next(
+            step for step in self._steps() if step["name"] == "Build documentation"
+        )
+        command = shlex.split(step["run"])
+        self.assertEqual(
+            command[command.index("-D") + 1],
+            "issues_default_group_project=xadupre/onnx-light",
+        )
+        self.assertIn("-T", command)
 
 
 if __name__ == "__main__":
