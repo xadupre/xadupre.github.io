@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 18, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 19, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -969,13 +969,13 @@ with NEON – a ``vmovl_u16`` zero-extend plus 16-bit shift for BFLOAT16 and the
 ``vcvt_f32_f16`` (``FCVTL``) instruction for FLOAT16, both with an exact scalar
 tail matching the bit decode and a scalar fallback when the FP16 intrinsics are
 unavailable. Roadmap PR08.2 then adds the native NEON arithmetic kernels
-(``GemmMicroKernel_NEON_BF16`` always, ``GemmMicroKernel_NEON_FP16`` when the
+(``GemmMicroTile_NEON_BF16`` always, ``GemmMicroTile_NEON_FP16`` when the
 FP16 intrinsics compile): both keep the operands half-precision to the register
 file, widen each ``B`` vector on the fly (zero-extend/shift for BFLOAT16,
 ``FCVTL`` for FLOAT16) and accumulate in float32, and are dispatched from
 ``GemmHalfPlanned&lt;kGeneral&gt;`` for non-transposed ``B`` ahead of the converting
 float32 path, which stays the fallback. Roadmap PR08.3 then adds the native SVE
-arithmetic kernels (``GemmMicroKernel_SVE_BF16`` / ``GemmMicroKernel_SVE_FP16``):
+arithmetic kernels (``GemmMicroTile_SVE_BF16`` / ``GemmMicroTile_SVE_FP16``):
 they reuse the same drivers, keep the operands half-precision to the register
 file, widen each ``B`` vector on the fly (``svld1uh_u32`` zero-extend/shift for
 BFLOAT16, the SVE ``FCVT`` ``svcvt_f32_f16`` for FLOAT16), accumulate in
@@ -1206,7 +1206,7 @@ hardware.</p></td>
 <tr class="row-odd"><td><p>P1</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">GemmPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">MatMulPlan</span></code>, <code class="docutils literal notranslate"><span class="pre">StridedBatchedGemm</span></code>, and
 <code class="docutils literal notranslate"><span class="pre">GroupedGemm</span></code> interfaces in
-<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu/impl/math/gemm/gemm_plan.h</span></code>.</p></td>
+<code class="docutils literal notranslate"><span class="pre">ml_cpu_compute/include/ml_cpu_compute/math/gemm/gemm_plan.h</span></code>.</p></td>
 <td><p>Existing Gemm results remain correct with no material performance
 regression.</p></td>
 <td><p>P0.</p></td>
@@ -1529,14 +1529,14 @@ tests land without BF16 or AMX changes.</p></td>
 <td><p>Implemented. A new <code class="docutils literal notranslate"><span class="pre">CpuSupportsAvx512Fp16()</span></code> CPUID gate
 (leaf 7 <code class="docutils literal notranslate"><span class="pre">EDX[23]</span></code> plus OS AVX-512 state) selects the native path at
 runtime. The <code class="docutils literal notranslate"><span class="pre">gemm/avx512fp16</span></code> translation unit is compiled with
-<code class="docutils literal notranslate"><span class="pre">-mavx512fp16</span></code> and carries <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_AVX512FP16</span></code>, which keeps
+<code class="docutils literal notranslate"><span class="pre">-mavx512fp16</span></code> and carries <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_AVX512FP16</span></code>, which keeps
 both operands in FLOAT16 – a packed FLOAT16 <code class="docutils literal notranslate"><span class="pre">A</span></code> panel and the
 non-transposed FLOAT16 <code class="docutils literal notranslate"><span class="pre">B</span></code> matrix – widens each 16-lane <code class="docutils literal notranslate"><span class="pre">B</span></code> vector
 with <code class="docutils literal notranslate"><span class="pre">vcvtph2psx</span></code> (<code class="docutils literal notranslate"><span class="pre">_mm512_cvtxph_ps</span></code>), broadcasts each FLOAT16 <code class="docutils literal notranslate"><span class="pre">A</span></code>
 element, and accumulates in float32, so the result matches the
 widen-then-float32 reference. Column counts that are not a multiple of
 sixteen finish through the shared scalar member
-<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarFp16</span></code> (also the portable, always-built family
+<code class="docutils literal notranslate"><span class="pre">GemmMicroTile_ScalarFp16</span></code> (also the portable, always-built family
 member). <code class="docutils literal notranslate"><span class="pre">GemmHalfPlanned</span></code> dispatches the general FLOAT16 algorithm to
 the native <code class="docutils literal notranslate"><span class="pre">GemmFp16NativeGeneral</span></code> driver when the CPU reports
 AVX-512FP16 and <code class="docutils literal notranslate"><span class="pre">B</span></code> is not transposed, halving the <code class="docutils literal notranslate"><span class="pre">B</span></code> traffic; every
@@ -1555,7 +1555,7 @@ differential tests land with the existing converted-panel fallback.</p></td>
 <td><p>Implemented. A new <code class="docutils literal notranslate"><span class="pre">CpuSupportsAvx512Bf16()</span></code> CPUID gate
 (leaf 7 subleaf 1 <code class="docutils literal notranslate"><span class="pre">EAX[5]</span></code> plus OS AVX-512 state) selects the native
 path at runtime. The <code class="docutils literal notranslate"><span class="pre">gemm/avx512bf16</span></code> translation unit is compiled
-with <code class="docutils literal notranslate"><span class="pre">-mavx512bf16</span></code> and carries <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_AVX512BF16</span></code>, which
+with <code class="docutils literal notranslate"><span class="pre">-mavx512bf16</span></code> and carries <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_AVX512BF16</span></code>, which
 keeps both operands in BFLOAT16 – a packed BFLOAT16 <code class="docutils literal notranslate"><span class="pre">A</span></code> panel and the
 non-transposed BFLOAT16 <code class="docutils literal notranslate"><span class="pre">B</span></code> matrix – and reduces two <code class="docutils literal notranslate"><span class="pre">k</span></code> iterations
 at a time with the <code class="docutils literal notranslate"><span class="pre">vdpbf16ps</span></code> (<code class="docutils literal notranslate"><span class="pre">_mm512_dpbf16_ps</span></code>) dot-product,
@@ -1565,7 +1565,7 @@ assembled by zero-extending two consecutive BFLOAT16 <code class="docutils liter
 broadcasting the matching BFLOAT16 <code class="docutils literal notranslate"><span class="pre">A</span></code> pair; an odd <code class="docutils literal notranslate"><span class="pre">K</span></code> finishes with
 one pair whose second element is zeroed, and column counts that are not a
 multiple of sixteen finish through the shared scalar member
-<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarBf16</span></code> (also the portable, always-built family
+<code class="docutils literal notranslate"><span class="pre">GemmMicroTile_ScalarBf16</span></code> (also the portable, always-built family
 member). <code class="docutils literal notranslate"><span class="pre">GemmHalfPlanned</span></code> dispatches the general BFLOAT16 algorithm to
 the native <code class="docutils literal notranslate"><span class="pre">GemmBf16NativeGeneral</span></code> driver when the CPU reports
 AVX-512BF16 and <code class="docutils literal notranslate"><span class="pre">B</span></code> is not transposed; every other shape and ISA keeps
@@ -1611,9 +1611,9 @@ hardware, and falls back to AVX-512BF16. No INT8 work is included.</p></td>
 <td><p>PR07.4, PR07.5</p></td>
 <td><p>Implemented. A dedicated <code class="docutils literal notranslate"><span class="pre">gemm/amx/gemm_amx_bf16</span></code> translation unit
 compiled with <code class="docutils literal notranslate"><span class="pre">-mamx-tile</span> <span class="pre">-mamx-bf16</span></code> (guarded by
-<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_HAVE_AMX_BF16</span></code>) adds <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_AMXBF16</span></code>, a
+<code class="docutils literal notranslate"><span class="pre">ML_CPU_COMPUTE_HAVE_AMX_BF16</span></code>) adds <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_AMXBF16</span></code>, a
 native member of the BFLOAT16 micro-kernel family sharing the
-<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroKernel</span></code> signature so the PR07.4
+<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroTile</span></code> signature so the PR07.4
 <code class="docutils literal notranslate"><span class="pre">GemmBf16NativeGeneral</span></code> driver, BFLOAT16 <code class="docutils literal notranslate"><span class="pre">A</span></code> packing (including
 <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>), and column-tail handling are reused. The kernel configures
 three AMX tiles through the PR07.5 lifecycle (<code class="docutils literal notranslate"><span class="pre">AmxTileConfig</span></code> /
@@ -1641,7 +1641,7 @@ fallback; native arithmetic and SVE are excluded.</p></td>
 – a baseline zero-extend (<code class="docutils literal notranslate"><span class="pre">vmovl_u16</span></code>) and 16-bit left shift
 (<code class="docutils literal notranslate"><span class="pre">vshlq_n_u32</span></code>) – and, when the <code class="docutils literal notranslate"><span class="pre">vld1q_f16</span></code> / <code class="docutils literal notranslate"><span class="pre">vcvt_f32_f16</span></code>
 (<code class="docutils literal notranslate"><span class="pre">FCVTL</span></code>) intrinsics compile (probed as
-<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_HAVE_NEON_FP16</span></code>), <code class="docutils literal notranslate"><span class="pre">GemmConvertFloat16ToFloat32_NEON</span></code>.
+<code class="docutils literal notranslate"><span class="pre">ML_CPU_COMPUTE_HAVE_NEON_FP16</span></code>), <code class="docutils literal notranslate"><span class="pre">GemmConvertFloat16ToFloat32_NEON</span></code>.
 Both widen eight contiguous half-precision patterns per iteration with an
 exact scalar tail that reuses <code class="docutils literal notranslate"><span class="pre">Bfloat16BitsToFloat</span></code> /
 <code class="docutils literal notranslate"><span class="pre">Float16BitsToFloat</span></code> so the vectorized result is bit-identical to the
@@ -1662,11 +1662,11 @@ cross-compiled aarch64 QEMU CI and match the widen-then-float32 reference.</p></
 differential corpus while retaining PR08.1 as fallback.</p></td>
 <td><p>PR08.1</p></td>
 <td><p>Implemented. The NEON translation unit (<code class="docutils literal notranslate"><span class="pre">gemm/arm/gemm_kernel_neon</span></code>)
-adds <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_NEON_BF16</span></code> (always, baseline NEON) and, when the
+adds <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_NEON_BF16</span></code> (always, baseline NEON) and, when the
 FP16 vector load/convert intrinsics compile
-(<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_HAVE_NEON_FP16</span></code>), <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_NEON_FP16</span></code> – new
+(<code class="docutils literal notranslate"><span class="pre">ML_CPU_COMPUTE_HAVE_NEON_FP16</span></code>), <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_NEON_FP16</span></code> – new
 members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
-<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroKernel</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16MicroKernel</span></code> signatures so the PR07.4
+<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroTile</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16MicroTile</span></code> signatures so the PR07.4
 / PR07.3 <code class="docutils literal notranslate"><span class="pre">GemmBf16NativeGeneral</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16NativeGeneral</span></code> drivers,
 half-precision <code class="docutils literal notranslate"><span class="pre">A</span></code> packing (including <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>), and column-tail
 handling are reused. Unlike the PR08.1 convert-while-packing path, both
@@ -1676,7 +1676,7 @@ zero-extend / 16-bit shift, FLOAT16 with the <code class="docutils literal notra
 <code class="docutils literal notranslate"><span class="pre">FCVTL</span></code> instruction) into <code class="docutils literal notranslate"><span class="pre">float32x4</span></code> vectors register-blocked over
 up to <code class="docutils literal notranslate"><span class="pre">kGemmNeonMR</span></code> rows, the dot products accumulate in float32, and
 <code class="docutils literal notranslate"><span class="pre">alpha</span></code> is applied in the epilogue; the eight-, four-, and scalar
-(<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarBf16</span></code> / <code class="docutils literal notranslate"><span class="pre">ScalarFp16</span></code>) column paths keep the
+(<code class="docutils literal notranslate"><span class="pre">GemmMicroTile_ScalarBf16</span></code> / <code class="docutils literal notranslate"><span class="pre">ScalarFp16</span></code>) column paths keep the
 result identical to the widen-then-float32 reference.
 <code class="docutils literal notranslate"><span class="pre">GemmHalfPlanned&lt;kGeneral&gt;</span></code> dispatches here for non-transposed <code class="docutils literal notranslate"><span class="pre">B</span></code>
 (BFLOAT16 always on NEON, FLOAT16 only when the FP16 intrinsics are
@@ -1696,12 +1696,12 @@ comparison is tracked by PR10.5.</p></td>
 native hardware or QEMU, with NEON selected for short vector lengths.</p></td>
 <td><p>PR08.2</p></td>
 <td><p>Implemented. The SVE translation unit (<code class="docutils literal notranslate"><span class="pre">gemm/arm/gemm_kernel_sve</span></code>) adds
-<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_SVE_BF16</span></code> and <code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_SVE_FP16</span></code> – new
+<code class="docutils literal notranslate"><span class="pre">GemmMicroTile_SVE_BF16</span></code> and <code class="docutils literal notranslate"><span class="pre">GemmMicroTile_SVE_FP16</span></code> – new
 members of the BFLOAT16 / FLOAT16 micro-kernel families that share the
-<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroKernel</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16MicroKernel</span></code> signatures, so the
+<code class="docutils literal notranslate"><span class="pre">GemmBf16MicroTile</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16MicroTile</span></code> signatures, so the
 PR07.4 / PR07.3 <code class="docutils literal notranslate"><span class="pre">GemmBf16NativeGeneral</span></code> / <code class="docutils literal notranslate"><span class="pre">GemmFp16NativeGeneral</span></code>
 drivers, half-precision <code class="docutils literal notranslate"><span class="pre">A</span></code> packing (including <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>), and the
-<code class="docutils literal notranslate"><span class="pre">GemmMicroKernel_ScalarBf16</span></code> / <code class="docutils literal notranslate"><span class="pre">ScalarFp16</span></code> row fallback are reused.
+<code class="docutils literal notranslate"><span class="pre">GemmMicroTile_ScalarBf16</span></code> / <code class="docutils literal notranslate"><span class="pre">ScalarFp16</span></code> row fallback are reused.
 Like the PR08.2 NEON kernels both operands stay half-precision to the
 register file: each <code class="docutils literal notranslate"><span class="pre">B</span></code> row is widened on the fly (BFLOAT16 with a
 zero-extending halfword load <code class="docutils literal notranslate"><span class="pre">svld1uh_u32</span></code> plus a 16-bit shift, FLOAT16
@@ -2320,7 +2320,7 @@ targets without changing the completed implementation status.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 18, 2026.
+  Last updated on Oct 19, 2026.
 </p></div>
       
     </div>
