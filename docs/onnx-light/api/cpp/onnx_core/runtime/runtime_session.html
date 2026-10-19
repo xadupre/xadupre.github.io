@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>runtime_session.h &#8212; onnx-light 0.1.36 documentation</title>
+    <title>runtime_session.h &#8212; onnx-light 0.2.0 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../../_static/documentation_options.js?v=1c946a6c"></script>
+    <script src="../../../../_static/documentation_options.js?v=938c9ccc"></script>
     <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.36 documentation - Home"/>
-    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.36 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.0 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.0 documentation - Home"/>
   
   
 </a></div>
@@ -1573,23 +1573,40 @@ borrowed buffers cannot be retained. Python bindings retain the source model
 when exporting initializer views.</p>
 <section id="kernel-preparation">
 <h2>Kernel preparation<a class="headerlink" href="#kernel-preparation" title="Link to this heading">#</a></h2>
-<p>The first <code class="docutils literal notranslate"><span class="pre">Run</span></code> resolves every planned kernel and invokes preparation hooks
-for immutable inputs. It retains the <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> exposed by the root
-<code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>; <code class="docutils literal notranslate"><span class="pre">If</span></code>, <code class="docutils literal notranslate"><span class="pre">Loop</span></code>, <code class="docutils literal notranslate"><span class="pre">Scan</span></code>, <code class="docutils literal notranslate"><span class="pre">SequenceMap</span></code>, and model-local
-function contexts inherit the same store. A kernel binds a stable <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code>
-slot and retains it for the session lifetime. Subsequent runs read the slot directly, so ordinary
+<p>Construction fixes a non-null <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> owner, creating a private store
+unless <code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions::value_store</span></code> explicitly supplies one.
+The first <code class="docutils literal notranslate"><span class="pre">Run</span></code> resolves every planned kernel and invokes preparation hooks
+for immutable inputs. Each run installs the session’s store into the
+<code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>; it never adopts a context’s previous store. <code class="docutils literal notranslate"><span class="pre">If</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Loop</span></code>, <code class="docutils literal notranslate"><span class="pre">Scan</span></code>, <code class="docutils literal notranslate"><span class="pre">SequenceMap</span></code>, and model-local function sessions explicitly
+inherit the parent’s owner. A kernel binds a store-specific <code class="docutils literal notranslate"><span class="pre">ValueStore::Slot</span></code>
+with a stable integer index during initialization. After publication,
+<code class="docutils literal notranslate"><span class="pre">BindForRead</span></code> validates it once and returns a store-pointer/index binding.
+<code class="docutils literal notranslate"><span class="pre">Gemm</span></code> retains this binding for direct reads on subsequent runs, without
+rechecking ownership or readiness, so ordinary
 <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> replay does not wait on readiness, acquire a preparation
 mutex, or repeat a string-keyed lookup.</p>
 <p><code class="docutils literal notranslate"><span class="pre">Gemm</span></code> currently uses this path for a constant <code class="docutils literal notranslate"><span class="pre">B</span></code> initializer. An
 initializer that is also a graph input, or a value supplied by the caller
 before initialization, remains overridable and is not prepared.
-<code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes</span></code> reports the allocations owned by the shared
-hierarchy store, so the root session’s value includes preparations created by
-its nested sessions.</p>
+<code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes</span></code> reports live buffer sizes in the static
+store’s allocators, including allocated but unpublished values and preparations
+created by nested sessions. It excludes retained free capacity, execution/I/O
+arenas, and dynamic prepared-object residency. Explicitly sharing a store
+between otherwise independent sessions also shares this accounting: it is
+not a per-session partition. All sessions sharing one store must serialize
+their runs. Contexts may keep the owner alive after a session is destroyed.</p>
+<p><code class="docutils literal notranslate"><span class="pre">value_store()</span></code> returns a reference, available even before the first run.
+Use <code class="docutils literal notranslate"><span class="pre">value_store_owner()</span></code> when passing shared ownership to options or a
+nested session. Const session/context access returns <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">ValueStore&amp;</span></code>
+or <code class="docutils literal notranslate"><span class="pre">std::shared_ptr&lt;const</span> <span class="pre">ValueStore&gt;</span></code>; initialization-time mutation and
+sharing a mutable owner require a non-const session/context.</p>
 <p>This synchronous store is not <code class="docutils literal notranslate"><span class="pre">PreparedObjectStore</span></code>: asynchronous external
 data loading, dependency scheduling, generations, cache persistence, and
 eviction remain responsibilities of <code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code> and
-<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code>.</p>
+<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code>.
+Dynamic preparation does not automatically publish values into the static
+store, and its admission/residency budgets do not constrain static allocations.</p>
 <p>Declares :cpp:class:<code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code>, a reusable execution session that separates kernel initialization from execution. </p>
 <p>:cpp:class:<code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> binds a precomputed :cpp:class:<code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code> (which already carries the node list it drives) and, on its first :cpp:func:<code class="docutils literal notranslate"><span class="pre">Run</span></code>, resolves every executed node’s kernel once against the supplied :cpp:class:<code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>; subsequent runs reuse the cached kernels. Every entry point that runs a node list — model callers (via :cpp:func:<code class="docutils literal notranslate"><span class="pre">RegisterModelFunctions</span></code> followed by their own :cpp:class:<code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code>), :cpp:class:<code class="docutils literal notranslate"><span class="pre">SubgraphSession</span></code>, the model-local function call helper, and the <code class="docutils literal notranslate"><span class="pre">If</span></code> / <code class="docutils literal notranslate"><span class="pre">Loop</span></code> / <code class="docutils literal notranslate"><span class="pre">Scan</span></code> control-flow kernels — constructs one of these sessions (over the graph’s or function’s cached :cpp:class:<code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>) and calls :cpp:func:<code class="docutils literal notranslate"><span class="pre">Run</span></code> a single time. </p>
 <dl class="cpp type">
@@ -1667,7 +1684,7 @@ eviction remain responsibilities of <code class="docutils literal notranslate"><
 <li><p><strong>Execution</strong> — :cpp:func:<code class="docutils literal notranslate"><span class="pre">Run</span></code> replays the plan, invoking each pre-resolved kernel instance and releasing intermediates as scheduled. It may be called more than once (e.g. to re-run the same graph with fresh inputs) without redoing the per-node dispatch lookup or re-constructing the concrete per-node kernel objects.</p></li>
 </ol>
 </p>
-<p>Global and context-local factories (including adapted callbacks) follow this same lifecycle. Registration replacement or removal only affects future resolutions, including child sessions not yet initialized. A new input shape does not change kernel identity: the existing kernel adapts its internal plan/workspace or explicitly rejects an unsupported change. The original graph/model and its nodes and functions must remain alive and unchanged until the session and its kernels are destroyed; adapters do not copy or serialize nodes. Factories must return independent mutable kernel state for each resolution. Independent sessions and contexts may run concurrently with thread-safe user callbacks and immutable shared parameters, but runs on the same session/context must be serialized by the caller.</p>
+<p>Global and context-local factories (including adapted callbacks) follow this same lifecycle. Registration replacement or removal only affects future resolutions, including child sessions not yet initialized. A new input shape does not change kernel identity: the existing kernel adapts its internal plan/workspace or explicitly rejects an unsupported change. The original graph/model and its nodes and functions must remain alive and unchanged until the session and its kernels are destroyed; adapters do not copy or serialize nodes. Factories must return independent mutable kernel state for each resolution. Independent sessions and contexts may run concurrently with thread-safe user callbacks and immutable shared parameters, but runs on the same session/context must be serialized by the caller. Sessions explicitly sharing a <a class="reference internal" href="value_store.html#classonnx__light_1_1core_1_1runtime_1_1ValueStore"><span class="std std-ref">ValueStore</span></a> must also serialize their runs.</p>
 <p>This mirrors how an inference runtime prepares an executable graph once and then runs it repeatedly. Every caller that needs to run a node list builds one of these sessions over the list’s :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/execution_plan.html#classonnx__light_1_1core_1_1runtime_1_1ExecutionPlan"><span class="std std-ref"><span class="pre">ExecutionPlan</span></span></a></code> and calls :cpp:func:<code class="docutils literal notranslate"><span class="pre">Run</span></code> on it. </p>
 <p>Subclassed by <a class="reference internal" href="run_nodes.html#classonnx__light_1_1core_1_1runtime_1_1SubgraphSession"><span class="std std-ref">onnx_light::core::runtime::SubgraphSession</span></a></p>
 <div class="breathe-sectiondef docutils container">
@@ -1841,13 +1858,30 @@ eviction remain responsibilities of <code class="docutils literal notranslate"><
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime14RuntimeSession14prepared_bytesEv">
 <span id="_CPPv3NK10onnx_light4core7runtime14RuntimeSession14prepared_bytesEv"></span><span id="_CPPv2NK10onnx_light4core7runtime14RuntimeSession14prepared_bytesEv"></span><span id="onnx_light::core::runtime::RuntimeSession::prepared_bytesC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a5505592d58616547c331be80e27f43f5"></span><span class="n"><span class="pre">size_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">prepared_bytes</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession14prepared_bytesEv" title="Link to this definition">#</a><br /></dt>
-<dd><p>Returns bytes occupied by prepared kernel objects in the shared root, subgraph, and model-local function session hierarchy. </p>
+<dd><p>Returns live allocation bytes in this session’s static preparation store, including nested sessions and any other sessions explicitly sharing it. Includes allocated but unpublished values; excludes execution/I/O arenas, dynamic prepared-object residency, and retained free-buffer capacity. </p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime14RuntimeSession11value_storeEv">
+<span id="_CPPv3N10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="_CPPv2N10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="onnx_light::core::runtime::RuntimeSession::value_store"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a70cb3829104ed6cbf9737cff61f6eff8"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">value_store</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime14RuntimeSession11value_storeEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>Returns the non-null static preparation store fixed at construction. Kernels publish during initialization and use stable slots during replay. This is not the invocation value directory or dynamic <a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedExecutionState"><span class="std std-ref">PreparedExecutionState</span></a>. </p>
 </dd></dl>
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime14RuntimeSession11value_storeEv">
-<span id="_CPPv3NK10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="_CPPv2NK10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="onnx_light::core::runtime::RuntimeSession::value_storeC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a32e9695f0d7f58bfde9eee77c07123ce"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">value_store</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession11value_storeEv" title="Link to this definition">#</a><br /></dt>
-<dd><p>Returns the synchronous preparation store shared by this session hierarchy. This store supplies stable direct-lookup slots during ordinary :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/execution_plan.html#classonnx__light_1_1core_1_1runtime_1_1ExecutionPlan"><span class="std std-ref"><span class="pre">ExecutionPlan</span></span></a></code> replay; it is separate from the asynchronous :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedExecutionState"><span class="std std-ref"><span class="pre">PreparedExecutionState</span></span></a></code>. </p>
+<span id="_CPPv3NK10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="_CPPv2NK10onnx_light4core7runtime14RuntimeSession11value_storeEv"></span><span id="onnx_light::core::runtime::RuntimeSession::value_storeC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a201d468a70e045e7d996bdcb1e13211d"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">value_store</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession11value_storeEv" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv">
+<span id="_CPPv3N10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"></span><span id="_CPPv2N10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"></span><span id="onnx_light::core::runtime::RuntimeSession::value_store_owner"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a3a499dfedf44437e7e43a920009ee2b3"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">value_store_owner</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>Returns the owner to share explicitly with another session or nested kernel. </p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv">
+<span id="_CPPv3NK10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"></span><span id="_CPPv2NK10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"></span><span id="onnx_light::core::runtime::RuntimeSession::value_store_ownerC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1RuntimeSession_1a17462d3e2410f70924cf78e498f90ef5"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">value_store_owner</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>Returns a read-only shared owner without permitting preparation mutation. </p>
 </dd></dl>
 
 <dl class="cpp function">
@@ -2273,7 +2307,7 @@ eviction remain responsibilities of <code class="docutils literal notranslate"><
 <dl class="cpp var">
 <dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime21RuntimeSessionOptions11value_storeE">
 <span id="_CPPv3N10onnx_light4core7runtime21RuntimeSessionOptions11value_storeE"></span><span id="_CPPv2N10onnx_light4core7runtime21RuntimeSessionOptions11value_storeE"></span><span id="onnx_light::core::runtime::RuntimeSessionOptions::value_store__std::shared_ptr:ValueStore:"></span><span class="target" id="structonnx__light_1_1core_1_1runtime_1_1RuntimeSessionOptions_1a12753486d695b535f4c1910c1b3bbbad"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="value_store.html#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">value_store</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">nullptr</span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime21RuntimeSessionOptions11value_storeE" title="Link to this definition">#</a><br /></dt>
-<dd><p><a class="reference internal" href="../../onnx/common/ir.html#structonnx__light_1_1Value"><span class="std std-ref">Value</span></a> store inherited by nested graph and model-local function sessions. A root session left empty adopts the store exposed by its first runtime context. </p>
+<dd><p>Static preparation store shared with nested graph and model-local function sessions. When omitted, construction creates a private store independent of runtime contexts. Supplying an owner explicitly shares preparations and their allocation accounting. Runs of sessions sharing one store must be serialized. </p>
 </dd></dl>
 
 <dl class="cpp var">
@@ -2385,7 +2419,10 @@ eviction remain responsibilities of <code class="docutils literal notranslate"><
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession17tuning_generationEv"><code class="docutils literal notranslate"><span class="pre">tuning_generation()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession28tuning_resolution_statisticsEv"><code class="docutils literal notranslate"><span class="pre">tuning_resolution_statistics()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession14prepared_bytesEv"><code class="docutils literal notranslate"><span class="pre">prepared_bytes()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime14RuntimeSession11value_storeEv"><code class="docutils literal notranslate"><span class="pre">value_store()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession11value_storeEv"><code class="docutils literal notranslate"><span class="pre">value_store()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"><code class="docutils literal notranslate"><span class="pre">value_store_owner()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession17value_store_ownerEv"><code class="docutils literal notranslate"><span class="pre">value_store_owner()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession12check_shapesEv"><code class="docutils literal notranslate"><span class="pre">check_shapes()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession32allow_external_output_allocatorsEv"><code class="docutils literal notranslate"><span class="pre">allow_external_output_allocators()</span></code></a></li>
 <li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime14RuntimeSession25parallel_region_collectorEv"><code class="docutils literal notranslate"><span class="pre">parallel_region_collector()</span></code></a></li>

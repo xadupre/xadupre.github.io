@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Overlapping ONNX loading and prepacking &#8212; onnx-light 0.1.36 documentation</title>
+    <title>Overlapping ONNX loading and prepacking &#8212; onnx-light 0.2.0 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../_static/documentation_options.js?v=1c946a6c"></script>
+    <script src="../../_static/documentation_options.js?v=938c9ccc"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -141,8 +141,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.36 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.36 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.0 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.0 documentation - Home"/>
   
   
 </a></div>
@@ -646,21 +646,29 @@ has succeeded.</p>
 applying its tuning profile and before the first node executes. The CPU
 <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> implementation uses this hook to pack a constant <code class="docutils literal notranslate"><span class="pre">B</span></code> initializer
 into the root session hierarchy’s <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code>. Control-flow
-subgraphs and model-local function sessions inherit the same store. The kernel
-binds a stable integer slot while it initializes; later runs consume that slot
+subgraphs and model-local function sessions explicitly inherit the same store.
+The kernel binds a stable integer slot while it initializes; later runs consume that slot
 by direct vector indexing instead of repacking <code class="docutils literal notranslate"><span class="pre">B</span></code> or repeating a string-key
 lookup. FLOAT16 and BFLOAT16 weights are promoted and packed once as FLOAT
 because those kernels compute in FLOAT.</p>
 <p>An initializer that is also a graph input remains overridable and is therefore
 not prepared: every run continues to consume the caller’s current value.
-<code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes</span></code> reports the resident prepared allocation for
-diagnostics and tests.</p>
+<code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes</span></code> sums live buffer sizes in the static store’s
+allocators, including allocated but unpublished values. It excludes retained
+free capacity, execution/I/O arenas, and dynamic object residency.
+The owner is fixed at construction, independently of the first context.
+Sharing via <code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions::value_store</span></code> is explicit and shares the
+same accounting; all sharing sessions must serialize their runs.</p>
 <p>This synchronous direct-replay path intentionally has no readiness wait,
 mutex, generation state, eviction, or persistence. The
 <code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> described below remains the general scheduler and
 residency store for asynchronous loading/prepacking and cache-aware execution.
 It is not consulted when an already initialized <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> replays its
-ordinary <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>.</p>
+ordinary <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>.
+Dynamic publication does not populate the static store, and
+<code class="docutils literal notranslate"><span class="pre">PreparedSchedulerOptions</span></code> budgets apply only to dynamic task admission and
+residency. <code class="docutils literal notranslate"><span class="pre">PreparedObjectStore::resident_bytes()</span></code> is a separate dynamic
+metric, not an alias for <code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes()</span></code>.</p>
 </section>
 <section id="pool-ownership-and-dispatch">
 <h3>Pool ownership and dispatch<a class="headerlink" href="#pool-ownership-and-dispatch" title="Link to this heading">#</a></h3>
@@ -672,6 +680,12 @@ ordinary <code class="docutils literal notranslate"><span class="pre">ExecutionP
 <li><p><code class="docutils literal notranslate"><span class="pre">PrepareAsync</span></code> and <code class="docutils literal notranslate"><span class="pre">RunAsync</span></code> use one coordinating <code class="docutils literal notranslate"><span class="pre">std::thread</span></code> owned
 by their <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ExecutionHandle</span></code>.</p></li>
 </ul>
+<p>Each asynchronous submission owns its task callback, copying an lvalue
+<code class="docutils literal notranslate"><span class="pre">PreparedTaskExecutor</span></code> or moving an rvalue. Direct and named lambda arguments
+therefore remain safe after their temporary <code class="docutils literal notranslate"><span class="pre">std::function</span></code> conversion is
+destroyed. Reference captures still borrow their targets. The state and optional
+CPU executor must remain alive until completion; <code class="docutils literal notranslate"><span class="pre">RunAsync</span></code> also borrows its
+plan, whereas <code class="docutils literal notranslate"><span class="pre">PrepareAsync</span></code> retains a session-only plan of its own.</p>
 <p>The coordinator sorts ready tasks by effective priority and then by scope.
 Admitted I/O tasks are enqueued independently. Ready CPU tasks are collected
 and submitted as one <code class="docutils literal notranslate"><span class="pre">CpuExecutor::ParallelFor</span></code> batch. While that synchronous
@@ -854,7 +868,7 @@ that loading and prepacking overlapped.</p>
 <li><p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>:
 <a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_light/onnx_core/compute/prepared_execution.h">prepared execution interface</a>,
 <a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_light/onnx_core/compute/prepared_execution.cc">prepared scheduler</a>,
-<a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_light/onnx_proto/thread_pool.cc">I/O worker pool</a>,
+<a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_proto/src/thread_pool.cc">I/O worker pool</a>,
 <a class="reference internal" href="../../next_steps/2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>, and
 <a class="reference internal" href="../../next_steps/2026/2026-08_native_fast_loading_completion.html#l-next-steps-native-fast-loading-completion"><span class="std std-ref">Completing native fast model loading</span></a>.</p></li>
 <li><p>ONNX Runtime:

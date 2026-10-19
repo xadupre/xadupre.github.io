@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>value_store.h &#8212; onnx-light 0.1.36 documentation</title>
+    <title>value_store.h &#8212; onnx-light 0.2.0 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../../../_static/documentation_options.js?v=1c946a6c"></script>
+    <script src="../../../../_static/documentation_options.js?v=938c9ccc"></script>
     <script src="../../../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.1.36 documentation - Home"/>
-    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.1.36 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.0 documentation - Home"/>
+    <img src="../../../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.0 documentation - Home"/>
   
   
 </a></div>
@@ -1561,14 +1561,49 @@
 <p><code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> owns immutable values prepared synchronously while
 a <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> hierarchy initializes its kernels. <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code>
 always exposes a store, and child contexts inherit the same shared instance.
-The first <code class="docutils literal notranslate"><span class="pre">RuntimeSession::Run</span></code> retains that store for the session hierarchy.
-Kernels bind a stable <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> slot during initialization and read that
-slot directly during execution, without a map lookup, mutex, readiness wait,
-or scheduler dispatch on the hot path.</p>
+Each session owns a non-null store from construction and installs it into
+the context before initializing kernels. Nested graph/function sessions
+explicitly receive their parent’s owner. Independent sessions do not adopt
+the store of a reused context; cross-session sharing requires
+<code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions::value_store</span></code>.
+Kernels bind a <code class="docutils literal notranslate"><span class="pre">ValueStore::Slot</span></code> during initialization. This opaque handle
+associates a stable <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> index with the originating store. <code class="docutils literal notranslate"><span class="pre">IsReady</span></code>,
+<code class="docutils literal notranslate"><span class="pre">Publish</span></code>, and <code class="docutils literal notranslate"><span class="pre">Get</span></code> reject handles from any other store, even when both
+stores use the same numeric index. Raw integers cannot be used as handles;
+<code class="docutils literal notranslate"><span class="pre">Slot::index()</span></code> exposes the index only for diagnostics.</p>
+<p>After publication, <code class="docutils literal notranslate"><span class="pre">BindForRead(slot)</span></code> checks ownership, bounds, and readiness
+once and returns a <code class="docutils literal notranslate"><span class="pre">ValueStore::BoundSlot</span></code>. It contains only the store pointer
+and a <code class="docutils literal notranslate"><span class="pre">uint32_t</span></code> index. Its parameterless <code class="docutils literal notranslate"><span class="pre">Get()</span></code> reads the immutable value
+directly: no identity comparison, ownership copy, bounds/readiness validation,
+map lookup, mutex, readiness wait, or scheduler dispatch occurs on the hot path.
+There is no public unchecked <code class="docutils literal notranslate"><span class="pre">Get(uint32_t)</span></code> that could combine an arbitrary
+index with another store. <code class="docutils literal notranslate"><span class="pre">Gemm</span></code> retains this validated binding, not the
+identity-carrying setup handle. All sessions sharing a store must
+serialize their runs. Its allocations remain alive until the last shared
+owner, including any context, is released.</p>
+<p>A slot retains only a small identity token, not the store or its prepared
+allocations. The token remains distinct if the original store is destroyed
+and another is constructed at the same address. Default-constructed and
+moved-from setup slots are rejected. Checked store operations take setup
+handles by const reference, while replay bindings contain no shared pointer.
+Bindings can only be constructed after successful validation and cannot be
+default-constructed. They borrow the original store, which must remain alive
+through every read; neither kind of handle extends its allocation lifetime.</p>
+<p>The location under <code class="docutils literal notranslate"><span class="pre">runtime/kernels/</span></code> reflects its kernel-preparation role:
+it is not the invocation value directory. “Static” means publication once per
+slot followed by immutable replay, not a global C++ object or mutation-free
+initialization. <code class="docutils literal notranslate"><span class="pre">value_store()</span></code> returns a reference;
+<code class="docutils literal notranslate"><span class="pre">value_store_owner()</span></code> returns shared ownership. Both session and context
+accessors expose only read-only views through const objects.</p>
 <p>This store is deliberately narrower than <code class="docutils literal notranslate"><span class="pre">PreparedObjectStore</span></code>. It does not
 schedule asynchronous loading, track generations, evict values, or persist
 prepared payloads. Those responsibilities remain in
-<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> and <code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code>.</p>
+<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> and <code class="docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code>.
+Publishing through that dynamic path does not populate <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">prepared_bytes()</span></code> sums live buffer sizes in this static store’s allocators,
+including allocated but unpublished values. It excludes retained free-buffer
+capacity, execution/I/O arenas, and dynamic objects. There is no static-store
+admission budget or eviction policy; dynamic scheduler budgets do not apply.</p>
 <dl class="cpp type">
 <dt class="sig sig-object cpp" id="_CPPv410onnx_light">
 <span id="_CPPv310onnx_light"></span><span id="_CPPv210onnx_light"></span><span id="onnx_light"></span><span class="target" id="namespaceonnx__light"></span><span class="k"><span class="pre">namespace</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">onnx_light</span></span></span><br /></dt>
@@ -1596,8 +1631,9 @@ prepared payloads. Those responsibilities remain in
 <span id="_CPPv3N10onnx_light4core7runtime10ValueStoreE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStoreE"></span><span id="onnx_light::core::runtime::ValueStore"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">ValueStore</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="Link to this definition">#</a><br /></dt>
 <dd><div class="docutils container">
 <em>#include &lt;value_store.h&gt;</em></div>
-<p>Stores immutable prepared runtime values shared by one root session and all nested graph and model-local function sessions.</p>
-<p>The owning session hierarchy is serialized by contract. Registration, publication, and indexed reads therefore require no mutex or atomic state. A kernel retains the integer returned by :cpp:func:<code class="docutils literal notranslate"><span class="pre">Bind</span></code>, so execution is a direct indexed lookup. This synchronous store does not replace :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedObjectStore"><span class="std std-ref"><span class="pre">PreparedObjectStore</span></span></a></code>, which owns asynchronous generation, scheduling, residency, persistence, and eviction state. </p>
+<p>Stores statically prepared, immutable kernel values, not invocation values.</p>
+<p>A root session fixes its owner at construction and explicitly shares it with nested graph and model-local function sessions. Other sessions share it only when their construction options supply the same owner. The store and its allocations live until the last shared owner (including contexts) is released. “Static” means publication once per slot followed by immutable replay, not a global C++ object or mutation-free initialization.</p>
+<p>All sessions sharing the store are serialized by contract. Indexed reads neither copy identity ownership nor require mutexes or atomic updates. Initialization uses the store-bound slot returned by :cpp:func:<code class="docutils literal notranslate"><span class="pre">Bind</span></code>. Once published, :cpp:func:<code class="docutils literal notranslate"><span class="pre">BindForRead</span></code> validates it and returns a binding that performs direct indexed reads without repeating ownership checks. This synchronous store is separate from :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedExecutionState"><span class="std std-ref"><span class="pre">PreparedExecutionState</span></span></a></code> and its :cpp:class:<code class="docutils literal notranslate"><a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedObjectStore"><span class="std std-ref"><span class="pre">PreparedObjectStore</span></span></a></code>; the dynamic path manages asynchronous tasks, generations, residency, persistence, and eviction. </p>
 <div class="breathe-sectiondef docutils container">
 <p class="breathe-sectiondef-title rubric" id="breathe-section-title-public-functions">Public Functions</p>
 <dl class="cpp function">
@@ -1627,12 +1663,12 @@ prepared payloads. Those responsibilities remain in
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4BindENSt6stringE">
-<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4BindENSt6stringE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4BindENSt6stringE"></span><span id="onnx_light::core::runtime::ValueStore::Bind__ss"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a67224000d09160deb3a54b9df88c3d30"></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Bind</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">key</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4BindENSt6stringE" title="Link to this definition">#</a><br /></dt>
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4BindENSt6stringE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4BindENSt6stringE"></span><span id="onnx_light::core::runtime::ValueStore::Bind__ss"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a80da7d810a0a454f7536599bc0625bfa"></span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Bind</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">string</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">key</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4BindENSt6stringE" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyE8uint32_t">
-<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore7IsReadyE8uint32_t"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore7IsReadyE8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::IsReady__uint32_tC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1ae80dec7c74183cfeb677c39262cfccab"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">IsReady</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyE8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyERK4Slot">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore7IsReadyERK4Slot"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore7IsReadyERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::IsReady__SlotCRC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a7d6ce9fb8e404936b8e36ecb6f0b5243"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">IsReady</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyERK4Slot" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
 
 <dl class="cpp function">
@@ -1641,19 +1677,26 @@ prepared payloads. Those responsibilities remain in
 <dd></dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore7PublishE8uint32_t12RuntimeValue">
-<span id="_CPPv3N10onnx_light4core7runtime10ValueStore7PublishE8uint32_t12RuntimeValue"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore7PublishE8uint32_t12RuntimeValue"></span><span id="onnx_light::core::runtime::ValueStore::Publish__uint32_t.RuntimeValue"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a341e00e60c3c235709a71784d949d54d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Publish</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slot</span></span>, <a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7PublishE8uint32_t12RuntimeValue" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore7PublishERK4Slot12RuntimeValue">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore7PublishERK4Slot12RuntimeValue"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore7PublishERK4Slot12RuntimeValue"></span><span id="onnx_light::core::runtime::ValueStore::Publish__SlotCR.RuntimeValue"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1aa4429bee49c7eacdc34b5bee1adba29d"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Publish</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span>, <a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="w"> </span><span class="n sig-param"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7PublishERK4Slot12RuntimeValue" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore3GetE8uint32_t">
-<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore3GetE8uint32_t"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore3GetE8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::Get__uint32_tC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1aa956523daa759e5e842ad8001571ff23"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">Get</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore3GetE8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore3GetERK4Slot">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore3GetERK4Slot"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore3GetERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::Get__SlotCRC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a28ad8ccb3cae315d357dd3c27fc49a98"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">Get</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore3GetERK4Slot" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore11BindForReadERK4Slot">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore11BindForReadERK4Slot"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore11BindForReadERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::BindForRead__SlotCRC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a9e95c9afc885180435769aaf27060972"></span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlotE" title="onnx_light::core::runtime::ValueStore::BoundSlot"><span class="n"><span class="pre">BoundSlot</span></span></a><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">BindForRead</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore11BindForReadERK4Slot" title="Link to this definition">#</a><br /></dt>
+<dd><p>Validates a published slot once and binds it for direct immutable replay. </p>
+</dd></dl>
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore14prepared_bytesEv">
 <span id="_CPPv3NK10onnx_light4core7runtime10ValueStore14prepared_bytesEv"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore14prepared_bytesEv"></span><span id="onnx_light::core::runtime::ValueStore::prepared_bytesC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a4d2a77bcf9ba4e1f1c53c42720ebb9d5"></span><span class="n"><span class="pre">size_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">prepared_bytes</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore14prepared_bytesEv" title="Link to this definition">#</a><br /></dt>
-<dd></dd></dl>
+<dd><p>Returns the sum of live buffer sizes in this static store’s allocators. Includes allocated but unpublished values, not retained free capacity or dynamic <a class="reference internal" href="../compute/prepared_execution.html#classonnx__light_1_1core_1_1runtime_1_1PreparedObjectStore"><span class="std std-ref">PreparedObjectStore</span></a> residency. No dynamic budget or eviction applies. </p>
+</dd></dl>
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore10slot_countEv">
@@ -1664,18 +1707,23 @@ prepared payloads. Those responsibilities remain in
 <div class="breathe-sectiondef docutils container">
 <p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-functions">Private Functions</p>
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t">
-<span id="_CPPv3N10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::ValueAt__uint32_t"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1aef9083b2baed3449b2d2a6ccbf06413c"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ValueAt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::ValueAt__SlotCR"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1aa47f3dfa00239a0dcf51a8527fcd0152"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ValueAt</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t">
-<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::ValueAt__uint32_tC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a89e2f1cb97b2b2090496e8cf6815cb3a"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ValueAt</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::ValueAt__SlotCRC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a77b9e40d838c9c251a21538edf5233e8"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">optional</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">ValueAt</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">slot</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot" title="Link to this definition">#</a><br /></dt>
 <dd></dd></dl>
 
 </div>
 <div class="breathe-sectiondef docutils container">
 <p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-members">Private Members</p>
+<dl class="cpp var">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore9identity_E">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore9identity_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore9identity_E"></span><span id="onnx_light::core::runtime::ValueStore::identity___std::shared_ptr:IdentityC:"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a2dfd7c6a723b814f077bac89d3db11a1"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE" title="onnx_light::core::runtime::ValueStore::Identity"><span class="n"><span class="pre">Identity</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">identity_</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">make_shared</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE" title="onnx_light::core::runtime::ValueStore::Identity"><span class="n"><span class="pre">Identity</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="p"><span class="pre">(</span></span><span class="p"><span class="pre">)</span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9identity_E" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
 <dl class="cpp var">
 <dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore11allocators_E">
 <span id="_CPPv3N10onnx_light4core7runtime10ValueStore11allocators_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore11allocators_E"></span><span id="onnx_light::core::runtime::ValueStore::allocators___std::vector:std::unique_ptr:ExecutionArena::"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1a600590163106e1c9210af42ead351978"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">vector</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">unique_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><a class="reference internal" href="../compute/raw_buffer_allocator.html#_CPPv4N10onnx_light4core7runtime14ExecutionArenaE" title="onnx_light::core::runtime::ExecutionArena"><span class="n"><span class="pre">ExecutionArena</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">allocators_</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore11allocators_E" title="Link to this definition">#</a><br /></dt>
@@ -1697,6 +1745,115 @@ prepared payloads. Those responsibilities remain in
 <dd></dd></dl>
 
 </div>
+<dl class="cpp class">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlotE">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore9BoundSlotE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore9BoundSlotE"></span><span id="onnx_light::core::runtime::ValueStore::BoundSlot"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1BoundSlot"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">BoundSlot</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlotE" title="Link to this definition">#</a><br /></dt>
+<dd><div class="docutils container">
+<em>#include &lt;value_store.h&gt;</em></div>
+<p>Borrows a published value through a validated store pointer and integer index.</p>
+<p>Only BindForRead constructs bindings, after checking ownership and readiness. Publication is immutable, so reads need no further validation. The original store must outlive the binding’s use; this binding retains no shared owner. </p>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-public-functions">Public Functions</p>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore9BoundSlot3GetEv">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore9BoundSlot3GetEv"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore9BoundSlot3GetEv"></span><span id="onnx_light::core::runtime::ValueStore::BoundSlot::GetC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1BoundSlot_1a265e7365837ca05a0fbafc035ad185e4"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="runtime_value.html#_CPPv4N10onnx_light4core7runtime12RuntimeValueE" title="onnx_light::core::runtime::RuntimeValue"><span class="n"><span class="pre">RuntimeValue</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="sig-name descname"><span class="n"><span class="pre">Get</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore9BoundSlot3GetEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>Returns the immutable value directly, without ownership or readiness checks. </p>
+</dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-functions">Private Functions</p>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot9BoundSlotERK10ValueStore8uint32_t">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore9BoundSlot9BoundSlotERK10ValueStore8uint32_t"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore9BoundSlot9BoundSlotERK10ValueStore8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::BoundSlot::BoundSlot__ValueStoreCR.uint32_t"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1BoundSlot_1a05cad8e608e80fc9c259fcd74f989f71"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">BoundSlot</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="w"> </span><span class="p"><span class="pre">&amp;</span></span><span class="n sig-param"><span class="pre">store</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot9BoundSlotERK10ValueStore8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-members">Private Members</p>
+<dl class="cpp var">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6store_E">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore9BoundSlot6store_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore9BoundSlot6store_E"></span><span id="onnx_light::core::runtime::ValueStore::BoundSlot::store___ValueStoreCP"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1BoundSlot_1acb7c531bff89e7af9edbf7ecf70ec1d5"></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStoreE" title="onnx_light::core::runtime::ValueStore"><span class="n"><span class="pre">ValueStore</span></span></a><span class="w"> </span><span class="p"><span class="pre">*</span></span><span class="sig-name descname"><span class="n"><span class="pre">store_</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6store_E" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+<dl class="cpp var">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6index_E">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore9BoundSlot6index_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore9BoundSlot6index_E"></span><span id="onnx_light::core::runtime::ValueStore::BoundSlot::index___uint32_t"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1BoundSlot_1a6561167b8292d8c53c6edc43008baea0"></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">index_</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6index_E" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-friends">Friends</p>
+<dl>
+<dt class="sig sig-object cpp">
+<span class="property"><span class="pre">friend</span> <span class="pre">class</span></span> <span class="pre">ValueStore</span></dt>
+</dl>
+
+</div>
+</dd></dl>
+
+<dl class="cpp struct">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore8IdentityE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore8IdentityE"></span><span id="onnx_light::core::runtime::ValueStore::Identity"></span><span class="target" id="structonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Identity"></span><span class="k"><span class="pre">struct</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Identity</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+<dl class="cpp class">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4SlotE"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4SlotE"></span><span id="onnx_light::core::runtime::ValueStore::Slot"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Slot</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="Link to this definition">#</a><br /></dt>
+<dd><div class="docutils container">
+<em>#include &lt;value_store.h&gt;</em></div>
+<p>Identifies a stable index in one store, without retaining its allocations.</p>
+<p>A default-constructed or moved-from slot is unbound and rejected by store operations. The identity token prevents a slot from matching another store, even if the original store’s address is reused after destruction. </p>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-public-functions">Public Functions</p>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotEv">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4Slot4SlotEv"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4Slot4SlotEv"></span><span id="onnx_light::core::runtime::ValueStore::Slot::Slot"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1a95ceecbaa079a2ed42b2562f88f6516c"></span><span class="sig-name descname"><span class="n"><span class="pre">Slot</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">default</span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotEv" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore4Slot5indexEv">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore4Slot5indexEv"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore4Slot5indexEv"></span><span id="onnx_light::core::runtime::ValueStore::Slot::indexC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1a62c2c2099b0f120d2181951d336c4e59"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">index</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="k"><span class="pre">noexcept</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore4Slot5indexEv" title="Link to this definition">#</a><br /></dt>
+<dd><p>Returns the numeric index for diagnostics, not an interchangeable handle. </p>
+</dd></dl>
+
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4NK10onnx_light4core7runtime10ValueStore4SloteqERK4Slot">
+<span id="_CPPv3NK10onnx_light4core7runtime10ValueStore4SloteqERK4Slot"></span><span id="_CPPv2NK10onnx_light4core7runtime10ValueStore4SloteqERK4Slot"></span><span id="onnx_light::core::runtime::ValueStore::Slot::eq-operator__SlotCRC"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1ab53a29902f27e1a28e6f87998149b4a1"></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="k"><span class="pre">operator</span></span><span class="o"><span class="pre">==</span></span></span><span class="sig-paren">(</span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE" title="onnx_light::core::runtime::ValueStore::Slot"><span class="n"><span class="pre">Slot</span></span></a><span class="p"><span class="pre">&amp;</span></span><span class="sig-paren">)</span><span class="w"> </span><span class="k"><span class="pre">const</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">default</span></span><a class="headerlink" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore4SloteqERK4Slot" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-functions">Private Functions</p>
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotENSt10shared_ptrIK8IdentityEE8uint32_t">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4Slot4SlotENSt10shared_ptrIK8IdentityEE8uint32_t"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4Slot4SlotENSt10shared_ptrIK8IdentityEE8uint32_t"></span><span id="onnx_light::core::runtime::ValueStore::Slot::Slot__std::shared_ptr:IdentityC:.uint32_t"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1a538623cc5cb349d94eb31ae4219c472c"></span><span class="k"><span class="pre">inline</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">Slot</span></span></span><span class="sig-paren">(</span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE" title="onnx_light::core::runtime::ValueStore::Identity"><span class="n"><span class="pre">Identity</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">owner</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">index</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotENSt10shared_ptrIK8IdentityEE8uint32_t" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-private-members">Private Members</p>
+<dl class="cpp var">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6owner_E">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4Slot6owner_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4Slot6owner_E"></span><span id="onnx_light::core::runtime::ValueStore::Slot::owner___std::shared_ptr:IdentityC:"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1a13e2ba2f440cf59d22953fa367f47997"></span><a class="reference internal" href="../../onnx/version_converter/internal_symbol.html#_CPPv4St" title="std"><span class="n"><span class="pre">std</span></span></a><span class="p"><span class="pre">::</span></span><span class="n"><span class="pre">shared_ptr</span></span><span class="p"><span class="pre">&lt;</span></span><span class="k"><span class="pre">const</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE" title="onnx_light::core::runtime::ValueStore::Identity"><span class="n"><span class="pre">Identity</span></span></a><span class="p"><span class="pre">&gt;</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">owner_</span></span></span><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6owner_E" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+<dl class="cpp var">
+<dt class="sig sig-object cpp" id="_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6index_E">
+<span id="_CPPv3N10onnx_light4core7runtime10ValueStore4Slot6index_E"></span><span id="_CPPv2N10onnx_light4core7runtime10ValueStore4Slot6index_E"></span><span id="onnx_light::core::runtime::ValueStore::Slot::index___uint32_t"></span><span class="target" id="classonnx__light_1_1core_1_1runtime_1_1ValueStore_1_1Slot_1a940a608fea63fca265b6b2d9126ba3d8"></span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">index_</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><a class="reference internal" href="#_CPPv4N10onnx_light4core7runtime22kInvalidValueStoreSlotE" title="onnx_light::core::runtime::kInvalidValueStoreSlot"><span class="n"><span class="pre">kInvalidValueStoreSlot</span></span></a><a class="headerlink" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6index_E" title="Link to this definition">#</a><br /></dt>
+<dd></dd></dl>
+
+</div>
+<div class="breathe-sectiondef docutils container">
+<p class="breathe-sectiondef-title rubric" id="breathe-section-title-friends">Friends</p>
+<dl>
+<dt class="sig sig-object cpp">
+<span class="property"><span class="pre">friend</span> <span class="pre">class</span></span> <span class="pre">ValueStore</span></dt>
+</dl>
+
+</div>
+</dd></dl>
+
 </dd></dl>
 
 </dd></dl>
@@ -1765,18 +1922,37 @@ prepared payloads. Those responsibilities remain in
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore10ValueStoreERR10ValueStore"><code class="docutils literal notranslate"><span class="pre">ValueStore()</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStoreaSERR10ValueStore"><code class="docutils literal notranslate"><span class="pre">operator=()</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4BindENSt6stringE"><code class="docutils literal notranslate"><span class="pre">Bind()</span></code></a></li>
-<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyE8uint32_t"><code class="docutils literal notranslate"><span class="pre">IsReady()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7IsReadyERK4Slot"><code class="docutils literal notranslate"><span class="pre">IsReady()</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore14AllocateTensorE7int32_tRK5Shape6size_t"><code class="docutils literal notranslate"><span class="pre">AllocateTensor()</span></code></a></li>
-<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7PublishE8uint32_t12RuntimeValue"><code class="docutils literal notranslate"><span class="pre">Publish()</span></code></a></li>
-<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore3GetE8uint32_t"><code class="docutils literal notranslate"><span class="pre">Get()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7PublishERK4Slot12RuntimeValue"><code class="docutils literal notranslate"><span class="pre">Publish()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore3GetERK4Slot"><code class="docutils literal notranslate"><span class="pre">Get()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore11BindForReadERK4Slot"><code class="docutils literal notranslate"><span class="pre">BindForRead()</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore14prepared_bytesEv"><code class="docutils literal notranslate"><span class="pre">prepared_bytes()</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore10slot_countEv"><code class="docutils literal notranslate"><span class="pre">slot_count()</span></code></a></li>
-<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"><code class="docutils literal notranslate"><span class="pre">ValueAt()</span></code></a></li>
-<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtE8uint32_t"><code class="docutils literal notranslate"><span class="pre">ValueAt()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"><code class="docutils literal notranslate"><span class="pre">ValueAt()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore7ValueAtERK4Slot"><code class="docutils literal notranslate"><span class="pre">ValueAt()</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9identity_E"><code class="docutils literal notranslate"><span class="pre">identity_</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore11allocators_E"><code class="docutils literal notranslate"><span class="pre">allocators_</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore16allocator_index_E"><code class="docutils literal notranslate"><span class="pre">allocator_index_</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore13slots_by_key_E"><code class="docutils literal notranslate"><span class="pre">slots_by_key_</span></code></a></li>
 <li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore6slots_E"><code class="docutils literal notranslate"><span class="pre">slots_</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlotE"><code class="docutils literal notranslate"><span class="pre">onnx_light::core::runtime::ValueStore::BoundSlot</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore9BoundSlot3GetEv"><code class="docutils literal notranslate"><span class="pre">Get()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot9BoundSlotERK10ValueStore8uint32_t"><code class="docutils literal notranslate"><span class="pre">BoundSlot()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6store_E"><code class="docutils literal notranslate"><span class="pre">store_</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore9BoundSlot6index_E"><code class="docutils literal notranslate"><span class="pre">index_</span></code></a></li>
+</ul>
+</li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore8IdentityE"><code class="docutils literal notranslate"><span class="pre">onnx_light::core::runtime::ValueStore::Identity</span></code></a></li>
+<li class="toc-h6 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4SlotE"><code class="docutils literal notranslate"><span class="pre">onnx_light::core::runtime::ValueStore::Slot</span></code></a><ul class="nav section-nav flex-column">
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotEv"><code class="docutils literal notranslate"><span class="pre">Slot()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore4Slot5indexEv"><code class="docutils literal notranslate"><span class="pre">index()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4NK10onnx_light4core7runtime10ValueStore4SloteqERK4Slot"><code class="docutils literal notranslate"><span class="pre">operator==()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot4SlotENSt10shared_ptrIK8IdentityEE8uint32_t"><code class="docutils literal notranslate"><span class="pre">Slot()</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6owner_E"><code class="docutils literal notranslate"><span class="pre">owner_</span></code></a></li>
+<li class="toc-h7 nav-item toc-entry"><a class="reference internal nav-link" href="#_CPPv4N10onnx_light4core7runtime10ValueStore4Slot6index_E"><code class="docutils literal notranslate"><span class="pre">index_</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
