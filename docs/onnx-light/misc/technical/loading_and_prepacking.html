@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Overlapping ONNX loading and prepacking &#8212; onnx-light 0.2.0 documentation</title>
+    <title>Model loading and kernel preparation &#8212; onnx-light 0.2.0 documentation</title>
   
   
   
@@ -55,7 +55,6 @@
     <script src="../../_static/design-tabs.js?v=f930bc37"></script>
     <script async="async" src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <script>document.addEventListener('DOMContentLoaded', function() { mermaid.initialize({startOnLoad: true}); });</script>
-    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <script src="https://cdn.datatables.net/v/dt/dt-2.3.5/datatables.min.js"></script>
     <script src="../../_static/activate_datatables.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'misc/technical/loading_and_prepacking';</script>
@@ -408,7 +407,7 @@
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active has-children"><a class="reference internal" href="index.html">Technical</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul class="current">
 <li class="toctree-l2"><a class="reference internal" href="thread_pools.html">Thread-pool dispatch in onnx-light, OpenMP, and ONNX Runtime</a></li>
-<li class="toctree-l2 current active"><a aria-current="page" class="current reference internal" href="#">Overlapping ONNX loading and prepacking</a></li>
+<li class="toctree-l2 current active"><a aria-current="page" class="current reference internal" href="#">Model loading and kernel preparation</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../changelogs.html">Changelog</a></li>
@@ -459,7 +458,7 @@
     
     <li class="breadcrumb-item"><a href="index.html" class="nav-link">Technical</a></li>
     
-    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Overlapping ONNX loading and prepacking</span></li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">Model loading and kernel preparation</span></li>
   </ul>
 </nav>
 </div>
@@ -476,408 +475,54 @@
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section id="overlapping-onnx-loading-and-prepacking">
-<span id="l-technical-details-loading-prepacking"></span><span id="l-design-runtime-loading-prepacking"></span><h1>Overlapping ONNX loading and prepacking<a class="headerlink" href="#overlapping-onnx-loading-and-prepacking" title="Link to this heading">#</a></h1>
-<p>Loading a large ONNX model and preparing its weights do not have to be two
-global phases:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>read every weight -&gt; wait -&gt; prepack every weight -&gt; wait -&gt; run
-</pre></div>
-</div>
-<p>The useful unit is one prepared object. As soon as the bytes for one weight are
-available, its prepack can start while other weights are still being read:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>I/O:       read W0 | read W1 | read W2 | ...
-              |         |         |
-CPU:      prepack W0 | prepack W1 | prepack W2
-              |         |         |
-publish:   ready W0 | ready W1 | ready W2
-</pre></div>
-</div>
-<p>This page explains how <a class="reference internal" href="thread_pools.html#l-technical-details-thread-pools"><span class="std std-ref">the three execution systems compared previously</span></a> can implement that pipeline. It also
-distinguishes the implementation already present in <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> from
-possible OpenMP and ONNX Runtime mappings.</p>
-<section id="the-dependency-boundary">
-<h2>The dependency boundary<a class="headerlink" href="#the-dependency-boundary" title="Link to this heading">#</a></h2>
-<p>Prepacking cannot start merely because parsing has found a <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>.
-The runtime must first know which physical representation the selected kernel
-needs. In <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>, the safe boundary is a frozen <code class="docutils literal notranslate"><span class="pre">ResolvedModel</span></code> and
-its <code class="docutils literal notranslate"><span class="pre">RequiredPayloadManifest</span></code>:</p>
+  <section id="model-loading-and-kernel-preparation">
+<span id="l-technical-details-loading-prepacking"></span><span id="l-design-runtime-loading-prepacking"></span><h1>Model loading and kernel preparation<a class="headerlink" href="#model-loading-and-kernel-preparation" title="Link to this heading">#</a></h1>
+<p>Model loading and kernel preparation are separate operations. The current
+<code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> path prepares immutable kernel inputs synchronously during
+its first run; it does not overlap model execution with a dynamic graph of
+weight-loading and preparation tasks.</p>
+<section id="session-preparation">
+<h2>Session preparation<a class="headerlink" href="#session-preparation" title="Link to this heading">#</a></h2>
+<p>The root session owns a non-null <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code> from construction, creating
+one unless <code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions::value_store</span></code> explicitly supplies an owner.
+Nested graphs and model-local function sessions receive the same owner.</p>
+<p>During the first <code class="docutils literal notranslate"><span class="pre">RuntimeSession::Run</span></code>:</p>
 <ol class="arabic simple">
-<li><p>parse enough model metadata to construct and transform the graph;</p></li>
-<li><p>select the live graph, kernels, devices, and prepared layouts;</p></li>
-<li><p>freeze the payload manifest so no later rewrite adds another weight read;</p></li>
-<li><p>create one session-scoped chain for each required prepared object;</p></li>
-<li><p>submit independent chains as soon as their dependencies and memory budgets
-permit.</p></li>
+<li><p>The session installs its store into the runtime context.</p></li>
+<li><p>It resolves kernels and their tuning, and identifies immutable inputs.</p></li>
+<li><p>It invokes kernel preparation hooks before executing the session’s nodes.</p></li>
 </ol>
-<p>This ordering avoids reading dead initializers, prepacking a layout that a graph
-rewrite removes, or publishing bytes for a kernel variant that was not selected.
-It does not require all selected payloads to be resident before preparation
-starts.</p>
-<p>One weight has this dependency chain:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>source or packed-cache lookup
-         |
-   +-----+----------------------+
-   | cache hit                 | cache miss
-   v                           v
-read packed payload       read portable weight
-   |                           |
-   |                        prepack
-   |                           |
-   +------------+--------------+
-                v
-      atomically publish object
-                |
-         dependent kernel
-</pre></div>
-</div>
-<p>A compatible packed-cache hit skips both the portable-weight read and the
-prepack. A miss retains the portable source as the fallback, creates the packed
-object, publishes it before optional persistence, and may write the reusable
-cache entry in the background.</p>
+<p><code class="docutils literal notranslate"><span class="pre">Gemm</span></code> prepares a non-overridable constant <code class="docutils literal notranslate"><span class="pre">B</span></code> initializer through this
+path. Its key includes the source contents, type, shape, transpose mode, and
+prepared layout. Preparation allocates and publishes the packed tensor once.
+An initializer that is also a graph input remains overridable and is not
+treated as an immutable weight.</p>
+<p>The kernel retains a validated <code class="docutils literal notranslate"><span class="pre">ValueStore::BoundSlot</span></code> for replay. Subsequent
+runs read the prepared value by direct indexing, without a string-keyed lookup,
+readiness wait, preparation mutex, or scheduler dispatch.</p>
 </section>
-<section id="why-two-resource-pools-are-necessary">
-<h2>Why two resource pools are necessary<a class="headerlink" href="#why-two-resource-pools-are-necessary" title="Link to this heading">#</a></h2>
-<p>Reading external data is blocking and usually latency-bound. Prepacking is CPU-
-and memory-bandwidth-bound. A single undifferentiated pool permits all workers
-to block in file reads while ready prepacks wait, or all workers to prepack
-speculative weights while a critical read has no admission slot.</p>
-<p>The resources therefore have different ownership:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 22.0%" />
-<col style="width: 25.0%" />
-<col style="width: 26.0%" />
-<col style="width: 27.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Resource</p></th>
-<th class="head"><p>Work</p></th>
-<th class="head"><p>Waiting behavior</p></th>
-<th class="head"><p>Required bound</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>I/O workers</p></td>
-<td><p>External-data reads and packed-cache reads or writes</p></td>
-<td><p>May block in operating-system file calls</p></td>
-<td><p>Worker count and bytes in flight</p></td>
-</tr>
-<tr class="row-odd"><td><p>CPU executor</p></td>
-<td><p>Transpose, quantize, hash, pack, and inference kernels</p></td>
-<td><p>Must remain available for runnable compute</p></td>
-<td><p>Participants and preparation scratch</p></td>
-</tr>
-<tr class="row-even"><td><p>Inline coordinator</p></td>
-<td><p>Dependency updates, publication, and trivial tasks</p></td>
-<td><p>Must not perform long blocking or compute operations</p></td>
-<td><p>Short non-blocking work only</p></td>
-</tr>
-<tr class="row-odd"><td><p>Device queues</p></td>
-<td><p>Copies and device-side preparation</p></td>
-<td><p>Completion through backend events</p></td>
-<td><p>Streams, device memory, and staging bytes</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Separate pools do not mean that all work should run simultaneously.
-<code class="docutils literal notranslate"><span class="pre">estimated_input_bytes</span></code>, <code class="docutils literal notranslate"><span class="pre">estimated_output_bytes</span></code>, and
-<code class="docutils literal notranslate"><span class="pre">peak_temporary_bytes</span></code> are admitted before dispatch. A portable weight and
-its packed result may coexist during prepacking, so an unbounded pipeline can
-temporarily approach twice the model weight size plus scratch.</p>
+<section id="ownership-and-memory">
+<h2>Ownership and memory<a class="headerlink" href="#ownership-and-memory" title="Link to this heading">#</a></h2>
+<p>The store owns the prepared values and their allocation arenas. The session
+and any contexts sharing the store keep that owner alive, so prepared storage
+is not released while its session is still alive. A bound slot itself is
+borrowed and must not be used after the store is destroyed.</p>
+<p>Independent sessions have independent stores by default. Sharing a store must
+be explicit, and all sharing sessions must serialize their runs.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes()</span></code> sums live buffer sizes in the store,
+including allocated but unpublished values. It excludes free retained
+capacity and the context’s execution and I/O arenas. There is no preparation
+residency budget or eviction policy on this path.</p>
 </section>
-<section id="current-onnx-light-implementation">
-<h2>Current onnx-light implementation<a class="headerlink" href="#current-onnx-light-implementation" title="Link to this heading">#</a></h2>
-<section id="plan-representation">
-<h3>Plan representation<a class="headerlink" href="#plan-representation" title="Link to this heading">#</a></h3>
-<p><code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">PreparedExecutionPlan</span></code> stores loading, preparation, publication,
-and invocation work in one dependency graph. The relevant task descriptors are:</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 23.0%" />
-<col style="width: 20.0%" />
-<col style="width: 20.0%" />
-<col style="width: 37.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Task</p></th>
-<th class="head"><p>Scope</p></th>
-<th class="head"><p>Resource</p></th>
-<th class="head"><p>Meaning</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kReadPayload</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kSession</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kIo</span></code></p></td>
-<td><p>Reads one selected portable or packed payload.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kPrepare</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kSession</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kCpu</span></code></p></td>
-<td><p>Produces the kernel-specific packed allocation.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kPublish</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kSession</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kInline</span></code></p></td>
-<td><p>Makes the complete immutable object visible and satisfies its event.</p></td>
-</tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">kExecute</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kInvocation</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kCpu</span></code></p></td>
-<td><p>Pins and consumes the exact prepared generation.</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">kPersist</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">kSession</span></code></p></td>
-<td><p>normally <code class="docutils literal notranslate"><span class="pre">kIo</span></code></p></td>
-<td><p>Writes a reusable cache entry after publication.</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p><code class="docutils literal notranslate"><span class="pre">ExpandMaterializationRecipe</span></code> creates <code class="docutils literal notranslate"><span class="pre">read</span> <span class="pre">-&gt;</span> <span class="pre">prepack</span> <span class="pre">-&gt;</span> <span class="pre">publish</span></code> for a
-portable-weight miss. Dependencies are represented by <code class="docutils literal notranslate"><span class="pre">TaskId</span></code> values, not by
-waiting inside a worker. A task enters the ready set only when every producer
-has succeeded.</p>
-</section>
-<section id="runtimesession-integration">
-<h3>RuntimeSession integration<a class="headerlink" href="#runtimesession-integration" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> invokes each resolved kernel’s preparation hook once, after
-applying its tuning profile and before the first node executes. The CPU
-<code class="docutils literal notranslate"><span class="pre">Gemm</span></code> implementation uses this hook to pack a constant <code class="docutils literal notranslate"><span class="pre">B</span></code> initializer
-into the root session hierarchy’s <code class="docutils literal notranslate"><span class="pre">ValueStore</span></code>. Control-flow
-subgraphs and model-local function sessions explicitly inherit the same store.
-The kernel binds a stable integer slot while it initializes; later runs consume that slot
-by direct vector indexing instead of repacking <code class="docutils literal notranslate"><span class="pre">B</span></code> or repeating a string-key
-lookup. FLOAT16 and BFLOAT16 weights are promoted and packed once as FLOAT
-because those kernels compute in FLOAT.</p>
-<p>An initializer that is also a graph input remains overridable and is therefore
-not prepared: every run continues to consume the caller’s current value.
-<code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes</span></code> sums live buffer sizes in the static store’s
-allocators, including allocated but unpublished values. It excludes retained
-free capacity, execution/I/O arenas, and dynamic object residency.
-The owner is fixed at construction, independently of the first context.
-Sharing via <code class="docutils literal notranslate"><span class="pre">RuntimeSessionOptions::value_store</span></code> is explicit and shares the
-same accounting; all sharing sessions must serialize their runs.</p>
-<p>This synchronous direct-replay path intentionally has no readiness wait,
-mutex, generation state, eviction, or persistence. The
-<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> described below remains the general scheduler and
-residency store for asynchronous loading/prepacking and cache-aware execution.
-It is not consulted when an already initialized <code class="docutils literal notranslate"><span class="pre">RuntimeSession</span></code> replays its
-ordinary <code class="docutils literal notranslate"><span class="pre">ExecutionPlan</span></code>.
-Dynamic publication does not populate the static store, and
-<code class="docutils literal notranslate"><span class="pre">PreparedSchedulerOptions</span></code> budgets apply only to dynamic task admission and
-residency. <code class="docutils literal notranslate"><span class="pre">PreparedObjectStore::resident_bytes()</span></code> is a separate dynamic
-metric, not an alias for <code class="docutils literal notranslate"><span class="pre">RuntimeSession::prepared_bytes()</span></code>.</p>
-</section>
-<section id="pool-ownership-and-dispatch">
-<h3>Pool ownership and dispatch<a class="headerlink" href="#pool-ownership-and-dispatch" title="Link to this heading">#</a></h3>
-<p>The implementation combines three execution mechanisms:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">PreparedExecutionState::SchedulerState</span></code> owns a persistent bounded
-<code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">utils::WorkerPool</span></code> for <code class="docutils literal notranslate"><span class="pre">kIo</span></code> tasks;</p></li>
-<li><p>all <code class="docutils literal notranslate"><span class="pre">kCpu</span></code> tasks use the session’s existing <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">CpuExecutor</span></code>;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">PrepareAsync</span></code> and <code class="docutils literal notranslate"><span class="pre">RunAsync</span></code> use one coordinating <code class="docutils literal notranslate"><span class="pre">std::thread</span></code> owned
-by their <code class="xref cpp cpp-class docutils literal notranslate"><span class="pre">ExecutionHandle</span></code>.</p></li>
-</ul>
-<p>Each asynchronous submission owns its task callback, copying an lvalue
-<code class="docutils literal notranslate"><span class="pre">PreparedTaskExecutor</span></code> or moving an rvalue. Direct and named lambda arguments
-therefore remain safe after their temporary <code class="docutils literal notranslate"><span class="pre">std::function</span></code> conversion is
-destroyed. Reference captures still borrow their targets. The state and optional
-CPU executor must remain alive until completion; <code class="docutils literal notranslate"><span class="pre">RunAsync</span></code> also borrows its
-plan, whereas <code class="docutils literal notranslate"><span class="pre">PrepareAsync</span></code> retains a session-only plan of its own.</p>
-<p>The coordinator sorts ready tasks by effective priority and then by scope.
-Admitted I/O tasks are enqueued independently. Ready CPU tasks are collected
-and submitted as one <code class="docutils literal notranslate"><span class="pre">CpuExecutor::ParallelFor</span></code> batch. While that synchronous
-CPU batch prepackages <code class="docutils literal notranslate"><span class="pre">W0</span></code>, the I/O workers can continue reading <code class="docutils literal notranslate"><span class="pre">W1</span></code> and
-<code class="docutils literal notranslate"><span class="pre">W2</span></code>. Completion changes the dependency state, allowing their prepacks into a
-later CPU batch.</p>
-<p>CPU preparation does not create another compute pool. A prepack already running
-on one executor participant installs the same executor view; nested kernel
-parallelism therefore runs inline. This prevents a prepack from recursively
-waking another full team, but it also means that a single task must expose
-enough outer parallel work or be batched with other ready prepacks to use all
-participants.</p>
-<p>The scheduler implementation currently starts its <code class="docutils literal notranslate"><span class="pre">WorkerPool</span></code> when
-<code class="docutils literal notranslate"><span class="pre">PreparedExecutionState</span></code> constructs <code class="docutils literal notranslate"><span class="pre">SchedulerState</span></code>. The separate
-<code class="docutils literal notranslate"><span class="pre">utils::ThreadPool</span></code> batch adapter used by model parsing starts its underlying
-workers lazily on the first submitted task and stops them in <code class="docutils literal notranslate"><span class="pre">Wait</span></code>. That
-parse/load adapter is not the prepared-runtime scheduler: it has no dependency
-priorities, memory admission, or persistent session submissions.</p>
-</section>
-<section id="concrete-three-weight-trace">
-<h3>Concrete three-weight trace<a class="headerlink" href="#concrete-three-weight-trace" title="Link to this heading">#</a></h3>
-<p>Assume two I/O workers, four CPU participants, and three weights ordered by
-first use:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>time ---&gt;
-
-I/O 0:  read W0 --------| read W2 ----------------|
-I/O 1:  read W1 ------------------|
-
-CPU:                    | pack W0 |
-                                  | pack W1 | pack W2 |
-
-ready:                            W0         W1       W2
-</pre></div>
-</div>
-<p>The exact intervals depend on payload sizes. The important events are:</p>
-<ol class="arabic simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">read</span> <span class="pre">W0</span></code> and <code class="docutils literal notranslate"><span class="pre">read</span> <span class="pre">W1</span></code> are admitted up to <code class="docutils literal notranslate"><span class="pre">io_workers</span></code> and the I/O
-byte budget.</p></li>
-<li><p>Completion of <code class="docutils literal notranslate"><span class="pre">read</span> <span class="pre">W0</span></code> makes only <code class="docutils literal notranslate"><span class="pre">prepack</span> <span class="pre">W0</span></code> ready. The coordinator
-submits it to <code class="docutils literal notranslate"><span class="pre">CpuExecutor</span></code> without waiting for <code class="docutils literal notranslate"><span class="pre">W1</span></code>.</p></li>
-<li><p>The released I/O slot starts <code class="docutils literal notranslate"><span class="pre">read</span> <span class="pre">W2</span></code> while <code class="docutils literal notranslate"><span class="pre">W0</span></code> is packing.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">publish</span> <span class="pre">W0</span></code> runs only after the packed allocation is complete. Consumers
-can never observe a partial object.</p></li>
-<li><p>If inference is submitted, the load/prepack chain for the next blocked
-layer inherits <code class="docutils literal notranslate"><span class="pre">kCritical</span></code> priority. Later speculative weights remain
-<code class="docutils literal notranslate"><span class="pre">kPrefetch</span></code> or <code class="docutils literal notranslate"><span class="pre">kBackground</span></code>.</p></li>
-</ol>
-<p>With ideal independent resources, loading and preparation approach:</p>
-<div class="math notranslate nohighlight">
-\[T_{\mathrm{pipeline}} \gtrsim
-\max\left(T_{\mathrm{all\ reads}}, T_{\mathrm{all\ prepacks}}\right)
-+ T_{\mathrm{fill/drain}},\]</div>
-<p>rather than their sum. Memory bandwidth, page-cache traffic, NUMA placement,
-hashing, and CPU contention make this only a lower bound.</p>
-</section>
-<section id="backpressure-and-priority">
-<h3>Backpressure and priority<a class="headerlink" href="#backpressure-and-priority" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">PreparedSchedulerOptions</span></code> bounds global, I/O, preparation, prepared, and
-execution memory independently. Admission reserves
-<code class="docutils literal notranslate"><span class="pre">reserved_critical_memory</span></code> and, while critical work is pending, leaves one
-I/O slot unavailable to speculative tasks. This prevents prefetch from
-occupying every byte or worker needed by the next demanded weight.</p>
-<p>The three priorities are:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">kCritical</span></code> for invocation work and producer chains blocking it;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">kPrefetch</span></code> for selected near-future weights;</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">kBackground</span></code> for distant variants and cache persistence.</p></li>
-</ul>
-<p>Priority propagates backwards through dependencies before dispatch. It changes
-which ready task is considered first; it does not interrupt a prepack already
-running. Chunk sizes and the look-ahead window must therefore remain bounded so
-critical work does not wait behind one very large speculative task.</p>
-</section>
-</section>
-<section id="openmp-mapping">
-<h2>OpenMP mapping<a class="headerlink" href="#openmp-mapping" title="Link to this heading">#</a></h2>
-<p>OpenMP can express the CPU side with tasks and dependencies:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="cp">#pragma omp task depend(out : loaded[i])</span>
-<span class="n">read_weight</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
-
-<span class="cp">#pragma omp task depend(in : loaded[i]) depend(out : packed[i])</span>
-<span class="n">prepack_weight</span><span class="p">(</span><span class="n">i</span><span class="p">);</span>
-</pre></div>
-</div>
-<p>The simple form has an important flaw: a blocking <code class="docutils literal notranslate"><span class="pre">read_weight</span></code> occupies an
-OpenMP worker. If enough reads block, no worker remains to run a ready prepack.
-Neither <code class="docutils literal notranslate"><span class="pre">schedule(static)</span></code> nor a faster fork-join barrier solves resource
-starvation.</p>
-<p>A robust OpenMP integration still uses a bounded I/O service outside the
-OpenMP team. I/O completion then creates or releases CPU prepack tasks.
-<code class="docutils literal notranslate"><span class="pre">depend</span></code> provides ordering, but the application must still own:</p>
-<ul class="simple">
-<li><p>source and packed-buffer lifetimes;</p></li>
-<li><p>byte-based admission and backpressure;</p></li>
-<li><p>publication events visible outside the OpenMP region;</p></li>
-<li><p>priority inheritance from an inference consumer;</p></li>
-<li><p>cancellation and exception propagation.</p></li>
-</ul>
-<p>An outer persistent OpenMP region can amortize team fork-join overhead, but a
-prepack that internally opens another parallel region may serialize or create
-a nested team depending on runtime settings. Integrations should choose one
-parallelization level: parallel prepared objects at the scheduler level, or
-parallel tiles inside one prepack, rather than multiplying both team sizes.</p>
-</section>
-<section id="onnx-runtime-mapping">
-<h2>ONNX Runtime mapping<a class="headerlink" href="#onnx-runtime-mapping" title="Link to this heading">#</a></h2>
-<p>ONNX Runtime normally creates session state and performs provider prepacking
-before regular graph execution. Its intra-operator pool is suitable for CPU
-packing work, and its optional inter-operator pool schedules independent graph
-nodes, but neither pool is a substitute for bounded blocking I/O.</p>
-<p>An overlapped design would need the same resource split:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>dedicated I/O executor
-    -&gt; prepared-weight completion event
-        -&gt; ORT intra-op packing work
-            -&gt; immutable SessionState/EP object
-                -&gt; consuming node
-</pre></div>
-</div>
-<p>Using the inter-operator pool for reads would mix graph scheduling with blocking
-storage work. Using a separate per-session CPU pool for prepacking would
-oversubscribe the intra-operator pool when first inference begins. A shared
-intra-operator pool avoids the second team, but needs priority or reserved
-capacity so speculative packing does not delay a demanded node.</p>
-<p>ORT’s work-stealing pool can balance prepacks with different durations more
-dynamically than <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>’s static <code class="docutils literal notranslate"><span class="pre">ParallelFor</span></code> batch. Work stealing
-alone does not supply prepared-object identity, atomic publication, memory
-admission, or cross-session cache compatibility. Those belong to session
-initialization and execution planning.</p>
-</section>
-<section id="operational-choices">
-<h2>Operational choices<a class="headerlink" href="#operational-choices" title="Link to this heading">#</a></h2>
-<div class="pst-scrollable-table-container"><table class="table">
-<colgroup>
-<col style="width: 25.0%" />
-<col style="width: 25.0%" />
-<col style="width: 25.0%" />
-<col style="width: 25.0%" />
-</colgroup>
-<thead>
-<tr class="row-odd"><th class="head"><p>Mode</p></th>
-<th class="head"><p>Submission</p></th>
-<th class="head"><p>First inference</p></th>
-<th class="head"><p>Appropriate use</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Eager</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">PrepareAsync().Wait()</span></code></p></td>
-<td><p>Starts only after all required objects are resident</p></td>
-<td><p>Stable latency after startup</p></td>
-</tr>
-<tr class="row-odd"><td><p>Streaming</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">PrepareAsync()</span></code> and <code class="docutils literal notranslate"><span class="pre">RunAsync()</span></code> overlap</p></td>
-<td><p>Waits only at the first missing exact dependency</p></td>
-<td><p>Minimum time to first useful execution</p></td>
-</tr>
-<tr class="row-even"><td><p>On demand</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">RunAsync()</span></code> submits its required closure</p></td>
-<td><p>Loads each object when first reached</p></td>
-<td><p>Tight memory budgets or unpredictable branches</p></td>
-</tr>
-<tr class="row-odd"><td><p>Warm packed cache</p></td>
-<td><p>Reads compatible packed payloads</p></td>
-<td><p>Skips portable reads and prepacking</p></td>
-<td><p>Repeated startup on the same CPU/kernel ABI</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Measurements must report at least model resolution, first payload read, first
-prepack, first published object, first executable node, first output, and fully
-prepared time. A task trace should also include resource class, priority, bytes
-in flight, executor identity, and whether each object came from portable
-weights or the packed cache. Aggregate <code class="docutils literal notranslate"><span class="pre">load()</span></code> duration alone cannot prove
-that loading and prepacking overlapped.</p>
-</section>
-<section id="implementation-references">
-<h2>Implementation references<a class="headerlink" href="#implementation-references" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">onnx-light</span></code>:
-<a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_light/onnx_core/compute/prepared_execution.h">prepared execution interface</a>,
-<a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_light/onnx_core/compute/prepared_execution.cc">prepared scheduler</a>,
-<a class="reference external" href="https://github.com/xadupre/onnx-light/blob/main/onnx_proto/src/thread_pool.cc">I/O worker pool</a>,
-<a class="reference internal" href="../../next_steps/2026/2026-08_prepared_execution.html#l-next-steps-prepared-execution"><span class="std std-ref">Prepared and asynchronous execution</span></a>, and
-<a class="reference internal" href="../../next_steps/2026/2026-08_native_fast_loading_completion.html#l-next-steps-native-fast-loading-completion"><span class="std std-ref">Completing native fast model loading</span></a>.</p></li>
-<li><p>ONNX Runtime:
-<a class="reference external" href="https://onnxruntime.ai/docs/performance/tune-performance/threading.html">thread management</a>
-and <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/common/threadpool.cc">thread-pool construction</a>.</p></li>
-<li><p>OpenMP:
-<a class="reference external" href="https://www.openmp.org/spec-html/5.2/openmpsu33.html">task dependence syntax</a> and
-<a class="reference external" href="https://github.com/llvm/llvm-project/blob/main/openmp/runtime/src/kmp_tasking.cpp">LLVM task runtime</a>.</p></li>
-</ul>
+<section id="loading-and-execution-resources">
+<h2>Loading and execution resources<a class="headerlink" href="#loading-and-execution-resources" title="Link to this heading">#</a></h2>
+<p>The native loader’s external-data I/O workers are separate from the session’s
+CPU executor. They do not constitute a runtime preparation scheduler.</p>
+<p>Explicit preparation before inference and overlap with model loading are
+tracked by <a class="reference external" href="https://github.com/xadupre/onnx-light/issues/5382">issue #5382</a>.
+See <a class="reference internal" href="../../design/runtime/index.html#l-design-runtime"><span class="std std-ref">Runtime</span></a> and the C++ API pages for
+<a class="reference internal" href="../../api/cpp/onnx_core/runtime/runtime_session.html"><span class="doc">runtime_session.h</span></a> and
+<a class="reference internal" href="../../api/cpp/onnx_core/runtime/value_store.html"><span class="doc">value_store.h</span></a>.</p>
 </section>
 </section>
 
@@ -928,20 +573,9 @@ and <a class="reference external" href="https://github.com/microsoft/onnxruntime
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#the-dependency-boundary">The dependency boundary</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-two-resource-pools-are-necessary">Why two resource pools are necessary</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-onnx-light-implementation">Current onnx-light implementation</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#plan-representation">Plan representation</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#runtimesession-integration">RuntimeSession integration</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pool-ownership-and-dispatch">Pool ownership and dispatch</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#concrete-three-weight-trace">Concrete three-weight trace</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#backpressure-and-priority">Backpressure and priority</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#openmp-mapping">OpenMP mapping</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#onnx-runtime-mapping">ONNX Runtime mapping</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operational-choices">Operational choices</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#implementation-references">Implementation references</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-preparation">Session preparation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ownership-and-memory">Ownership and memory</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#loading-and-execution-resources">Loading and execution resources</a></li>
 </ul>
   </nav></div>
 
@@ -978,7 +612,7 @@ and <a class="reference external" href="https://github.com/microsoft/onnxruntime
         <div class="footer-item">
 
   <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.1.
   </p>
 </div>
       

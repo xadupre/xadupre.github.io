@@ -626,6 +626,90 @@ cmake<span class="w"> </span>--install<span class="w"> </span>build-install
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>--build<span class="w"> </span>build-install<span class="w"> </span>--parallel<span class="w"> </span><span class="m">8</span>
 </pre></div>
 </div>
+<p>Local builds use private precompiled headers (PCHs) to avoid repeatedly parsing
+common headers. The shape and pattern libraries precompile only their shared
+<code class="docutils literal notranslate"><span class="pre">shapes_context.h</span></code> and <code class="docutils literal notranslate"><span class="pre">graph_graph.h</span></code> interfaces, respectively; these PCHs
+are not propagated to consumers. Source files must still include their own
+dependencies and build without PCHs.</p>
+<p>Configure with <code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_USE_PCH=OFF</span></code> to disable PCHs. When <code class="docutils literal notranslate"><span class="pre">ccache</span></code> or
+<code class="docutils literal notranslate"><span class="pre">sccache</span></code> is configured as a compiler launcher, PCHs are disabled by default;
+<code class="docutils literal notranslate"><span class="pre">-DONNX_LIGHT_USE_PCH=ON</span></code> explicitly overrides that default.</p>
+</section>
+<section id="shape-and-pattern-precompiled-headers">
+<h3>Shape and pattern precompiled headers<a class="headerlink" href="#shape-and-pattern-precompiled-headers" title="Link to this heading">#</a></h3>
+<p>A single clean-build comparison for the shape and pattern PCHs used GCC 13.3,
+Unix Makefiles, Release <code class="docutils literal notranslate"><span class="pre">-O3</span> <span class="pre">-DNDEBUG</span></code>, kernels, Python bindings and tests
+enabled, and <code class="docutils literal notranslate"><span class="pre">--parallel</span> <span class="pre">6</span></code>, without compiler caches or reusable build
+outputs. Complete-build timing included PCH construction:</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id1">
+<caption><span class="caption-text">Single clean-build pair</span><a class="headerlink" href="#id1" title="Link to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Shape and pattern PCHs</p></th>
+<th class="head"><p>Elapsed</p></th>
+<th class="head"><p>Maximum RSS (KiB)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Disabled</p></td>
+<td><p>22m 46.43s</p></td>
+<td><p>2,923,976</p></td>
+</tr>
+<tr class="row-odd"><td><p>Enabled</p></td>
+<td><p>21m 19.36s</p></td>
+<td><p>2,923,840</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>This pair reduced complete-build elapsed time by 87.07s (6.37%). GNU
+<code class="docutils literal notranslate"><span class="pre">time</span></code> reports maximum process RSS, not aggregate concurrent memory.
+This is a single observation, not a statistical or cross-toolchain speedup
+claim, and predates the separate kernels PCH extension below. The two
+percentages must not be added to predict a combined improvement.</p>
+</section>
+<section id="kernels-precompiled-headers">
+<h3>Kernels precompiled headers<a class="headerlink" href="#kernels-precompiled-headers" title="Link to this heading">#</a></h3>
+<p>The private <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> PCH includes <code class="docutils literal notranslate"><span class="pre">test_case.h</span></code> and
+<code class="docutils literal notranslate"><span class="pre">node_helpers.h</span></code> (which includes <code class="docutils literal notranslate"><span class="pre">runtime_context.h</span></code>), plus standard
+headers. <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_USE_PCH=OFF</span></code> disables it through the existing PCH
+wrapper; compiler-cache launchers still disable PCH by default.</p>
+<p>A local GCC 13.3 comparison used Unix Makefiles, <code class="docutils literal notranslate"><span class="pre">/usr/bin/c++</span></code>, Release
+<code class="docutils literal notranslate"><span class="pre">-O3</span> <span class="pre">-DNDEBUG</span></code>, kernels, Python bindings and tests enabled, and
+<code class="docutils literal notranslate"><span class="pre">cmake</span> <span class="pre">--build</span> <span class="pre">&lt;build-dir&gt;</span> <span class="pre">--parallel</span> <span class="pre">6</span></code>. The build directory was deleted
+and configured afresh before each complete default-target build. Compiler
+launchers were empty and <code class="docutils literal notranslate"><span class="pre">CCACHE_DISABLE=1</span> <span class="pre">SCCACHE_DISABLE=1</span></code> were set.
+Timing covered all compilation and linking, including PCH construction,
+but excluded configuration.</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id2">
+<caption><span class="caption-text">Single clean-build pair</span><a class="headerlink" href="#id2" title="Link to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Kernels PCH</p></th>
+<th class="head"><p>Elapsed</p></th>
+<th class="head"><p>Maximum RSS (KiB)</p></th>
+<th class="head"><p>Kernels PCH size (bytes)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Existing headers</p></td>
+<td><p>23m 17.31s</p></td>
+<td><p>2,923,372</p></td>
+<td><p>152,606,520</p></td>
+</tr>
+<tr class="row-odd"><td><p>With <code class="docutils literal notranslate"><span class="pre">node_helpers.h</span></code></p></td>
+<td><p>22m 50.47s</p></td>
+<td><p>2,923,420</p></td>
+<td><p>179,695,275</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>This pair improved complete-build elapsed time by 26.84s (1.92%), with
+essentially unchanged maximum RSS reported by GNU <code class="docutils literal notranslate"><span class="pre">time</span> <span class="pre">-v</span></code>. That RSS is
+not the aggregate memory of six concurrent compiler processes. Filesystem
+caches were not flushed; this is not a statistical or cross-toolchain
+speedup claim. Generated <code class="docutils literal notranslate"><span class="pre">cmake_pch.hxx.gch.d</span></code> dependencies contained
+both runtime headers only after the extension. Target compiler flags and
+definitions were unchanged.</p>
 </section>
 <section id="verify-the-install">
 <h3>Verify the install<a class="headerlink" href="#verify-the-install" title="Link to this heading">#</a></h3>
@@ -759,6 +843,8 @@ parsing and serialization.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#common-install-patterns">Common install patterns</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#install-for-local-development">Install for local development</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#speed-up-the-build">Speed up the build</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#shape-and-pattern-precompiled-headers">Shape and pattern precompiled headers</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#kernels-precompiled-headers">Kernels precompiled headers</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#verify-the-install">Verify the install</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#load-a-model-with-the-proto-only-target">Load a model with the proto-only target</a></li>
 </ul>
@@ -801,7 +887,7 @@ parsing and serialization.</p></li>
         <div class="footer-item">
 
   <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.0.
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.1.
   </p>
 </div>
       
