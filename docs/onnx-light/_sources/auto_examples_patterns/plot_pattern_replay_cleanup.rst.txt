@@ -24,7 +24,7 @@ Replaying graph cleanup modifications
 =====================================
 
 Graph cleanup algorithms also produce
-:class:`~onnx_light.onnx_core.optimization.LocalRewriting` records. These
+:class:`~onnx_light.onnx.LocalRewritingProto` records. These
 records replay identity removal, dead-end removal, and initializer
 deduplication without running cleanup again.
 
@@ -39,7 +39,7 @@ deduplication without running cleanup again.
 
     from onnx_light.onnx import TensorProto
     import onnx_light.onnx.helper as oh
-    from onnx_light.onnx_core.optimization import GraphBuilder, GraphGraph, replay
+    from onnx_light.onnx_core.optimization import GraphBuilder, GraphGraph, apply_rewritings
     from onnx_light.tools import pretty_onnx
 
 
@@ -83,11 +83,11 @@ equal initializers used by retained nodes.
 
     builder = GraphBuilder(model)
     graph = GraphGraph(builder, patterns=False)
-    rewrites = list(graph.optimize())
+    rewrites = graph.optimize()
     optimized_graph = builder.build_graph()
 
     assert {"RemoveIdentityNodes", "RemoveUnusedNodes", "RemoveDuplicateInitializers"} <= {
-        rewrite.pattern_name for rewrite in rewrites
+        rewrite.pattern_name for rewrite in rewrites.rewrites
     }
 
     print("Original graph:")
@@ -131,7 +131,7 @@ equal initializers used by retained nodes.
 Inspect and replay the cleanup modifications
 ++++++++++++++++++++++++++++++++++++++++++++
 
-Every cleanup operation is captured as a ``LocalRewriting`` record. Replay
+Every cleanup operation is captured as a ``LocalRewritingProto`` record. ApplyRewriting
 applies the records to a fresh copy of the source model.
 
 .. GENERATED FROM PYTHON SOURCE LINES 68-76
@@ -139,10 +139,10 @@ applies the records to a fresh copy of the source model.
 .. code-block:: Python
 
 
-    for rewrite in rewrites:
+    for rewrite in rewrites.rewrites:
         print(rewrite)
 
-    replayed_graph = replay(model, rewrites)
+    replayed_graph = apply_rewritings(model, rewrites)
     assert replayed_graph.SerializeToString() == optimized_graph.SerializeToString()
     print("Replayed graph:")
     print(pretty_onnx(replayed_graph))
@@ -154,9 +154,9 @@ applies the records to a fresh copy of the source model.
 
  .. code-block:: none
 
-    LocalRewriting(pattern=RemoveIdentityNodes, graph_path=<root>, matched_nodes=4, added_nodes=3)
-    LocalRewriting(pattern=RemoveUnusedNodes, graph_path=<root>, matched_nodes=3, added_nodes=2)
-    LocalRewriting(pattern=RemoveDuplicateInitializers, graph_path=<root>, matched_nodes=2, added_nodes=2)
+    { pattern_name: "RemoveIdentityNodes" matched_nodes: [0, 1, 2, 3] added_nodes: [ { input: [ "x" "weight" ] output: [ "summed" ] op_type: "Add" } { input: [ "summed" "duplicate_weight" ] output: [ "y" ] op_type: "Add" } { input: [ "x" ] output: [ "dead_end" ] op_type: "Neg" } ] added_nodes_positions: [0, 1, 2] value_renames: [ { key: "forwarded" value: "summed" } ] }
+    { pattern_name: "RemoveUnusedNodes" matched_nodes: [0, 1, 2] added_nodes: [ { input: [ "x" "weight" ] output: [ "summed" ] op_type: "Add" } { input: [ "summed" "duplicate_weight" ] output: [ "y" ] op_type: "Add" } ] added_nodes_positions: [0, 1] }
+    { pattern_name: "RemoveDuplicateInitializers" matched_nodes: [0, 1] removed_initializers: [1] added_nodes: [ { input: [ "x" "weight" ] output: [ "summed" ] op_type: "Add" } { input: [ "summed" "weight" ] output: [ "y" ] op_type: "Add" } ] added_nodes_positions: [0, 1] value_renames: [ { key: "duplicate_weight" value: "weight" } ] }
     Replayed graph:
     graph: name='cleanup'
     input: float[1] x
@@ -171,7 +171,7 @@ applies the records to a fresh copy of the source model.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.003 seconds)
+   **Total running time of the script:** (0 minutes 0.004 seconds)
 
 
 .. _sphx_glr_download_auto_examples_patterns_plot_pattern_replay_cleanup.py:

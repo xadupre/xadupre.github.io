@@ -728,12 +728,19 @@ retained node pointers and replacement fields into a new
 </section>
 <section id="rewrites-as-data-localrewriting-and-replay">
 <h2>Rewrites as data: <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> and replay<a class="headerlink" href="#rewrites-as-data-localrewriting-and-replay" title="Link to this heading">#</a></h2>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This section describes the original in-memory record API. It has been
+superseded by <a class="reference internal" href="2026-10_serialized_graph_rewriting.html#l-next-steps-serialized-graph-rewriting"><span class="std std-ref">Serialized graph rewrites and model variants</span></a>: <code class="docutils literal notranslate"><span class="pre">Optimize</span></code>
+now returns a serializable <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> containing sequential
+<code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> edits, without pattern pointers, batch IDs or timings.</p>
+</div>
 <p>A <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> only describes a match in terms of the transient
 <code class="docutils literal notranslate"><span class="pre">const</span> <span class="pre">NodeProto</span> <span class="pre">*</span></code> pointers of one <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code>; those pointers become
 invalid as soon as the builder node field is rebuilt. To make rewrites
 reusable, <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> returns self-contained records of the applied rewrites
 instead of only mutating the builder in place:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">LocalRewriting</span><span class="o">&gt;</span><span class="w"> </span><span class="n">GraphGraph</span><span class="o">::</span><span class="n">Optimize</span><span class="p">(...);</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">RewritingProto</span><span class="w"> </span><span class="nf">GraphGraph::Optimize</span><span class="p">(...);</span>
 </pre></div>
 </div>
 <p>A <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> no longer refers to live node pointers: it records the
@@ -774,11 +781,10 @@ iteration.</p>
 <p>Given a <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> and an ordered list of <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code>, the final
 optimized graph can be reconstructed by replaying the rewrites, without
 re-running the matching phase:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">GraphProto</span><span class="w"> </span><span class="nf">Replay</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">ModelProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">model</span><span class="p">,</span>
-<span class="w">                  </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">LocalRewriting</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rewrites</span><span class="p">);</span>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">GraphBuilder</span><span class="w"> </span><span class="nf">GraphBuilder::ApplyRewritings</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">RewritingProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rewrites</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
 </pre></div>
 </div>
-<p>Replay groups consecutive records from the same rewrite batch, drops their
+<p><code class="docutils literal notranslate"><span class="pre">ApplyRewritings</span></code> groups consecutive compatible records, drops their
 matched nodes and removed initializers, and places every added node at its
 recorded <code class="docutils literal notranslate"><span class="pre">added_nodes_positions</span></code> in one rebuild. <code class="docutils literal notranslate"><span class="pre">MatchResult::insert_at</span></code>
 remains the pattern’s match-time insertion request, but <code class="docutils literal notranslate"><span class="pre">GraphGraph</span></code> resolves
@@ -835,7 +841,7 @@ node’s subgraphs are optimized in place, seeded with the values visible from t
 enclosing scope. The subgraph builders are already owned by <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>
 (<code class="docutils literal notranslate"><span class="pre">GraphBuilder::Subgraphs</span></code>), so the optimizer runs on each of them
 with an inherited context of input, initializer and preceding node names.
-Each rewrite stores the stable nested-builder path from the root graph. Replay
+Each rewrite stores the stable nested-builder path from the root graph. ApplyRewriting
 uses that path to route an ordered rewrite batch to the same subgraph rather
 than applying every record to the root builder.</p>
 </section>
@@ -869,7 +875,7 @@ durations, so the summary can attribute time both per phase and per pattern.
 The report is opt-in and populated through an optional output parameter,
 keeping aggregation and formatting out of the default path:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="n">OptimizationReport</span><span class="w"> </span><span class="n">report</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">LocalRewriting</span><span class="o">&gt;</span><span class="w"> </span><span class="n">rewrites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">Optimize</span><span class="p">(</span><span class="mi">-1</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">report</span><span class="p">);</span>
+<span class="n">RewritingProto</span><span class="w"> </span><span class="n">rewrites</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">graph</span><span class="p">.</span><span class="n">Optimize</span><span class="p">(</span><span class="mi">-1</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">report</span><span class="p">);</span>
 <span class="n">std</span><span class="o">::</span><span class="n">cout</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="n">ToString</span><span class="p">()</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">endl</span><span class="p">;</span>
 </pre></div>
 </div>
@@ -936,7 +942,7 @@ callbacks and is destroyed with the module, avoiding C++ static references
 past interpreter shutdown. The bindings expose registered C++ pattern names
 and selection so callers can combine the standard library with custom
 patterns.</p>
-<p>Tests cover a Python-only rewrite, positive and rejected matches, exact replay,
+<p>Tests cover a Python-only rewrite, positive and rejected matches, exact apply_rewritings,
 recursive subgraphs, callback exception propagation, pattern lifetime after
 garbage collection, registered C++ pattern selection, and mixed C++/Python
 pattern ordering by priority.</p>
@@ -956,7 +962,7 @@ plus <code class="docutils literal notranslate"><span class="pre">onnx_patterns:
 <li><p>Implement the match/apply loop and wire in the existing cleanup passes
 (<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4394">PR #4394</a>).</p></li>
 <li><p>Refactor <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> to return the applied <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> records and
-add <code class="docutils literal notranslate"><span class="pre">Replay</span></code> so a captured list of rewrites reconstructs the final graph
+add <code class="docutils literal notranslate"><span class="pre">ApplyRewriting</span></code> so a captured list of rewrites reconstructs the final graph
 from a <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>
 (<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4412">PR #4412</a>).</p></li>
 <li><p>Add logging with per-phase timing (match, rewrite, dead-branch removal,
@@ -987,7 +993,7 @@ batch in <a class="reference external" href="https://github.com/xadupre/onnx-lig
 <a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4455">PR #4455</a>.</p></li>
 <li><p>Resolve every <code class="docutils literal notranslate"><span class="pre">MatchResult::insert_at</span></code> while applying its rewrite batch,
 record exact <code class="docutils literal notranslate"><span class="pre">added_nodes_positions</span></code> in the returned <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code>,
-and make <code class="docutils literal notranslate"><span class="pre">Replay</span></code> use only those final coordinates; test multiple
+and make <code class="docutils literal notranslate"><span class="pre">ApplyRewriting</span></code> use only those final coordinates; test multiple
 disjoint replacements and multiple nodes added by one pattern
 (<a class="reference external" href="https://github.com/xadupre/onnx-light/pull/4539">PR #4539</a>).</p></li>
 </ol>

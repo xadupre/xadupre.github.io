@@ -506,50 +506,57 @@
 <dd class="field-odd"><p>2026-10-20</p>
 </dd>
 </dl>
-<p><strong>Discussion – not implemented.</strong> Proto names and export operations below
-are proposals, not available APIs.</p>
+<p><strong>Steps 1 and 2 implemented: proto records and extended replay.</strong> The optimizer
+captures initializer recipes and shared function definitions in
+<code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> / <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code>. <code class="docutils literal notranslate"><span class="pre">GraphBuilder::ApplyRewritings</span></code>
+(Python: <code class="docutils literal notranslate"><span class="pre">builder.apply_rewritings</span></code>) returns a new builder, prepares constants
+once and preserves model-level additions.
+The model envelope and export operations below remain proposals.</p>
 <section id="existing-building-blocks">
 <h2>Existing building blocks<a class="headerlink" href="#existing-building-blocks" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code> implements recognition (<code class="docutils literal notranslate"><span class="pre">Match</span></code>) and replacement
 construction (<code class="docutils literal notranslate"><span class="pre">Apply</span></code>), in C++ or Python. <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> identifies one
-match. <code class="docutils literal notranslate"><span class="pre">GraphGraph::Optimize</span></code> records concrete changes as <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code>:
+match. <code class="docutils literal notranslate"><span class="pre">GraphGraph::Optimize</span></code> returns a <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> containing ordered
+<code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> edits:
 matched node positions, added nodes and their positions, added/removed
-initializers, value renames, subgraph path and iteration.</p>
-<p><code class="docutils literal notranslate"><span class="pre">Replay(model,</span> <span class="pre">rewrites)</span></code> already reconstructs a <code class="docutils literal notranslate"><span class="pre">GraphProto</span></code> without
-running the matcher. Positions refer to the start of each iteration batch;
-added positions describe the result of that batch. One batch targets one
-graph. Later batches may consume nodes created by earlier ones.</p>
-<p>There is no dedicated <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code>, serialized rewrite collection,
-or rewrite map in <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>. The current record contains an in-memory
-pattern pointer; its <code class="docutils literal notranslate"><span class="pre">NodeProto</span></code> and <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code> members alone do not
-make the complete record serializable.</p>
-<p>Constant folding currently stores materialized results: after
-<code class="docutils literal notranslate"><span class="pre">ConstantFoldNodes</span></code>, the optimizer copies computed tensors into
-<code class="docutils literal notranslate"><span class="pre">added_initializers</span></code> and removes folded operations from <code class="docutils literal notranslate"><span class="pre">added_nodes</span></code>.
-It does not retain the computation that produced those tensors. Serializing
-this record alone would embed transformed weights, such as a second,
-transposed copy.</p>
-<p>The existing <code class="docutils literal notranslate"><span class="pre">LocalRewriting</span></code> in
-<code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_core/builder/pattern_optimization.h</span></code> contains:</p>
-<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// Existing fields; namespace qualifiers omitted.</span>
-<span class="n">std</span><span class="o">::</span><span class="n">shared_ptr</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">PatternOptimization</span><span class="o">&gt;</span><span class="w"> </span><span class="n">pattern</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">graph_path</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">matched_nodes</span><span class="p">;</span>
-<span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">NodeProto</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added_nodes</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added_nodes_positions</span><span class="p">;</span>
-<span class="n">RepeatedProtoField</span><span class="o">&lt;</span><span class="n">TensorProto</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added_initializers</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">added_initializer_positions</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">removed_initializers</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">pair</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">string</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">value_renames</span><span class="p">;</span>
-<span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">iteration</span><span class="p">;</span>
-<span class="kt">int64_t</span><span class="w"> </span><span class="n">match_time_ns</span><span class="p">;</span>
-<span class="kt">int64_t</span><span class="w"> </span><span class="n">apply_time_ns</span><span class="p">;</span>
-</pre></div>
-</div>
+initializers, value renames and subgraph path.</p>
+<p><code class="docutils literal notranslate"><span class="pre">builder.ApplyRewritings(rewrites)</span></code> reconstructs a <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> without
+running the matcher. Matched and removed positions refer to the graph
+immediately before each edit; added positions describe its result. Internal
+optimizer batches are normalized to this sequential coordinate system. Later
+edits may consume nodes created by earlier ones.
+Normalization keeps an indexed live order and materializes the final sequence
+once. Retained nodes displaced across other retained nodes are explicitly
+recorded in the edit, so replay preserves subsequent positional coordinates.
+These records own snapshots of displaced nodes, independent of later cleanup
+and mutations of the live builder.
+Every rewrite immediately maintains dependency-consistent node order, shapes,
+and compute annotations. Coordinates refer to that actual order, so the returned
+builder can receive another plan, including an empty plan, without exporting first.
+New producers are inserted before existing consumers whenever their own inputs
+permit it. Otherwise, only blocked consumers and their affected consumers are
+displaced. Independent retained nodes keep their relative order. Mutations do
+not topologically sort the graph, and export only uses that fallback if a
+dependency-order violation is actually detected.</p>
+<p>The two rewrite messages support binary serialization and Python bindings.
+Records contain a diagnostic pattern name, not a live pattern pointer or
+timings. Timing remains in <code class="docutils literal notranslate"><span class="pre">OptimizationReport</span></code>. There is not yet a rewrite
+map in <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>.</p>
+<p>Constant folding retains the computation as shared functions and ordered
+<code class="docutils literal notranslate"><span class="pre">initializer_calls</span></code>, not materialized results in <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>.
+Literal constants still use <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>. Cleanup records only
+removed initializer positions and renames, without re-embedding retained
+weights. Serializing a transposed-weight recipe therefore stores no second
+transposed payload.</p>
+<p>The messages are defined in <code class="docutils literal notranslate"><span class="pre">onnx_proto/include/onnx_proto/onnx.h</span></code> using
+the existing protobuf-free message layer. The schema below includes fields
+used by constant preparation. The returned builder exposes <code class="docutils literal notranslate"><span class="pre">BuildGraph()</span></code>
+for a graph-only result and <code class="docutils literal notranslate"><span class="pre">ToModel()</span></code> to export the graph together with its
+functions and opset imports.</p>
 </section>
 <section id="decision-use-protos-as-runtime-records">
 <h2>Decision: use protos as runtime records<a class="headerlink" href="#decision-use-protos-as-runtime-records" title="Link to this heading">#</a></h2>
-<p><strong>Replace ``LocalRewriting`` with ``LocalRewritingProto`` as the record used
+<p><strong>Use ``LocalRewritingProto`` as the record used
 by the optimizer and existing replay engine.</strong> <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> holds the
 ordered records and their shared function definitions/imports. Do not maintain
 parallel C++/proto records or introduce a second replay engine and conversion
@@ -557,10 +564,10 @@ layer.</p>
 <p>Migrate <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> results, replay arguments, cleanup recording, C++/Python
 bindings, diagnostics, tests and examples to the new messages. Keep matching
 and <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> separate: the live pattern pointer belongs to matching,
-not the recorded edit. Replay must stop requiring that pointer while retaining
+not the recorded edit. Applying rewrites must not require that pointer while retaining
 its structural validation. Keep timing in <code class="docutils literal notranslate"><span class="pre">OptimizationReport</span></code> rather than
 requiring it in replay records.</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Optimize + capture recipes -&gt; RewritingProto -&gt; existing Replay, extended
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Optimize + capture recipes -&gt; RewritingProto -&gt; GraphBuilder::ApplyRewritings
                                     |
                            file / ModelProto.rewritings
 </pre></div>
@@ -573,13 +580,16 @@ when producing the ordered proto records: rebase node/initializer positions
 and affected subgraph paths after each preceding edit. Internal batching may
 remain an implementation detail, not a second persistent record format.
 Verify that sequential replay preserves the batch result. Check integer
-ranges before converting proto positions to <code class="docutils literal notranslate"><span class="pre">size_t</span></code>.</p>
+ranges before converting proto positions to <code class="docutils literal notranslate"><span class="pre">size_t</span></code>.
+Normalization indexes insertion anchors and maintains live node and initializer
+ranks incrementally; it does not rescan or sort the full live order per edit.</p>
 </section>
 <section id="new-and-modified-proto-messages">
 <h2>New and modified proto messages<a class="headerlink" href="#new-and-modified-proto-messages" title="Link to this heading">#</a></h2>
-<p>The proposed wire schema is below. These are message definitions to implement
-with onnx-light’s existing <code class="docutils literal notranslate"><span class="pre">BEGIN_PROTO</span></code> / <code class="docutils literal notranslate"><span class="pre">FIELD_*</span></code> layer, parser and
-serializer, not a requirement to add a protobuf compiler or <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>.</p>
+<p>The wire schema is below. The first two messages use onnx-light’s existing
+<code class="docutils literal notranslate"><span class="pre">BEGIN_PROTO</span></code> / <code class="docutils literal notranslate"><span class="pre">FIELD_*</span></code> layer, parser and serializer, without adding a
+protobuf compiler or <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>. The <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> field
+remains deferred to step 3.</p>
 <div class="highlight-protobuf notranslate"><div class="highlight"><pre><span></span><span class="c1">// New messages; NodeProto/TensorProto and the other ONNX messages exist.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">LocalRewritingProto</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">pattern_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
@@ -594,6 +604,7 @@ serializer, not a requirement to add a protobuf compiler or <code class="docutil
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">StringStringEntryProto</span><span class="w"> </span><span class="na">metadata_props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="na">initializer_calls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">11</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="na">computed_initializer_positions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">12</span><span class="p">;</span>
+<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="na">removed_extended_initializers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">13</span><span class="p">;</span>
 <span class="p">}</span>
 
 <span class="kd">message</span><span class="w"> </span><span class="nc">RewritingProto</span><span class="w"> </span><span class="p">{</span>
@@ -602,18 +613,22 @@ serializer, not a requirement to add a protobuf compiler or <code class="docutil
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">StringStringEntryProto</span><span class="w"> </span><span class="na">metadata_props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">3</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">FunctionProto</span><span class="w"> </span><span class="na">added_functions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">4</span><span class="p">;</span>
 <span class="p">}</span>
-
-<span class="kd">message</span><span class="w"> </span><span class="nc">RewritingEntryProto</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">key</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
-<span class="w">  </span><span class="n">RewritingProto</span><span class="w"> </span><span class="na">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
-<span class="p">}</span>
 </pre></div>
 </div>
-<p><strong>Modify only onnx-light’s ``ModelProto``</strong> to add a repeated
-<code class="docutils literal notranslate"><span class="pre">RewritingEntryProto</span> <span class="pre">rewritings</span></code> field, exposed as a map keyed by variant
-name. Reserve and document its extension field number before implementation;
-no number is assigned by this proposal. The entry message is the wire
-representation of <code class="docutils literal notranslate"><span class="pre">map&lt;string,</span> <span class="pre">RewritingProto&gt;</span></code>. Reject duplicate keys.</p>
+<p>Removal positions are relative to the corresponding initializer list before
+each edit: <code class="docutils literal notranslate"><span class="pre">removed_initializers</span></code> indexes dense initializers,
+<code class="docutils literal notranslate"><span class="pre">removed_extended_initializers</span></code> indexes the unified
+<code class="docutils literal notranslate"><span class="pre">GraphProto.extended_initializer</span></code> list of encoded constants and paged caches.
+Both payload alternatives share this index space and retain their declaration
+order across builder import/export and replay.</p>
+<p><strong>Modify only onnx-light’s ``ModelProto``</strong> to add
+<code class="docutils literal notranslate"><span class="pre">map&lt;string,</span> <span class="pre">RewritingProto&gt;</span> <span class="pre">rewritings</span></code>, keyed by variant name, without
+introducing another named proto message in this plan. Reserve and document
+its extension field number before implementation: field <strong>1001</strong> is reserved
+for this map, following <code class="docutils literal notranslate"><span class="pre">struct_types</span></code> at 1000 within ModelProto’s local
+1000-1099 extension range. Reject duplicate keys. Each map entry uses the
+protobuf map encoding (string key at field 1, RewritingProto value at field 2);
+no additional public proto message is introduced.</p>
 <p><code class="docutils literal notranslate"><span class="pre">NodeProto</span></code>, <code class="docutils literal notranslate"><span class="pre">GraphProto</span></code>, <code class="docutils literal notranslate"><span class="pre">TensorProto</span></code>, <code class="docutils literal notranslate"><span class="pre">FunctionProto</span></code> and
 <code class="docutils literal notranslate"><span class="pre">OperatorSetIdProto</span></code> need no new fields. Their existing forms carry the
 replacement graph data. Extend model binary I/O and Python bindings to expose
@@ -631,7 +646,7 @@ not permission to reinterpret surviving operators.</p>
 </section>
 <section id="deferred-constant-folding-and-added-functions">
 <h2>Deferred constant folding and added functions<a class="headerlink" href="#deferred-constant-folding-and-added-functions" title="Link to this heading">#</a></h2>
-<p>Extend optimizer capture to populate <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto.initializer_calls</span></code>
+<p>Optimizer capture populates <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto.initializer_calls</span></code>
 and <code class="docutils literal notranslate"><span class="pre">computed_initializer_positions</span></code> directly. Collect and deduplicate
 definitions across all local edits into <code class="docutils literal notranslate"><span class="pre">RewritingProto.added_functions</span></code>
 during capture. Local records contain calls, not repeated definitions.
@@ -657,13 +672,13 @@ initializers. Then apply removals and install literal/computed initializers
 and replacement nodes. Keep <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code> for literal constants;
 do not serialize a computed payload as well as its recipe. Rebasing to
 sequential records must preserve preparation dependencies and positions too.</p>
-<p>Before applying local edits, replay adds collection-level functions to
-<code class="docutils literal notranslate"><span class="pre">ModelProto.functions</span></code>: add absent definitions, reuse identical definitions,
+<p>Before applying local edits, <code class="docutils literal notranslate"><span class="pre">ApplyRewritings</span></code> merges collection-level functions:
+add absent definitions, reuse identical definitions,
 and reject conflicting definitions with the same identity, including conflicts
-between local edits during capture. Add a model-level replay API for
-functions/imports while retaining the graph-only entry point where useful;
-both use the existing replay engine, migrated to proto records. Update
-dependent callers explicitly. Validate constant-only, deterministic preparation
+between local edits during capture. Return a new <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> containing
+the merged functions/imports, and use its existing <code class="docutils literal notranslate"><span class="pre">BuildGraph</span></code> / <code class="docutils literal notranslate"><span class="pre">ToModel</span></code>
+exports rather than separate graph/model replay functions. Update dependent
+callers explicitly. Validate constant-only, deterministic preparation
 operations and available implementations; do not execute arbitrary stateful
 functions as initializer recipes.</p>
 <p>This avoids storing a second transposed weight payload in the file, not
@@ -671,8 +686,8 @@ necessarily allocating a second buffer during preparation. Reuse a view only
 when supported by the tensor representation and consumer. Materialized plain
 ONNX export may intentionally store computed weights instead.</p>
 <p><code class="docutils literal notranslate"><span class="pre">LocalRewritingProto.value_renames</span></code> reuses <code class="docutils literal notranslate"><span class="pre">StringStringEntryProto</span></code>:
-<code class="docutils literal notranslate"><span class="pre">key</span></code> is the old reference and <code class="docutils literal notranslate"><span class="pre">value</span></code> its replacement. It mirrors
-existing <code class="docutils literal notranslate"><span class="pre">LocalRewriting.value_renames</span></code> and redirects references to an
+<code class="docutils literal notranslate"><span class="pre">key</span></code> is the old reference and <code class="docutils literal notranslate"><span class="pre">value</span></code> its replacement. It mirrors the
+former <code class="docutils literal notranslate"><span class="pre">LocalRewriting.value_renames</span></code> and redirects references to an
 eliminated value, rather than renaming a
 surviving producer. For example, removing <code class="docutils literal notranslate"><span class="pre">b</span> <span class="pre">=</span> <span class="pre">Identity(a)</span></code> redirects
 consumers of <code class="docutils literal notranslate"><span class="pre">b</span></code> to <code class="docutils literal notranslate"><span class="pre">a</span></code>. Existing identity/duplicate-node cleanup and
@@ -704,7 +719,7 @@ mutation and export APIs.</p>
 </thead>
 <tbody>
 <tr class="row-even"><td><ol class="arabic simple">
-<li><p>Proto records</p></li>
+<li><p>Proto records (implemented)</p></li>
 </ol>
 </td>
 <td><p>Add <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> and <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> and replace the
@@ -715,7 +730,7 @@ sequential replay preserves existing results, including batch edits;
 invalid positions rejected.</p></td>
 </tr>
 <tr class="row-odd"><td><ol class="arabic simple" start="2">
-<li><p>Extend existing replay</p></li>
+<li><p>Extend existing replay (implemented)</p></li>
 </ol>
 </td>
 <td><p>Capture initializer recipes and shared function definitions directly
@@ -724,14 +739,15 @@ and model-level function/import additions; preserve payload ownership.</p></td>
 <td><p>Serialized and in-memory replay agree; cover nested graphs, cleanup,
 initializers, renames, multi-batch edits and invalid plans. A transposed-weight
 recipe stores no duplicate payload; verify results, source removal
-ordering and function conflicts.</p></td>
+ordering and function conflicts. Retained initializer payloads are reused,
+not deep-copied for every edit, including node-only edits.</p></td>
 </tr>
 <tr class="row-even"><td><ol class="arabic simple" start="3">
-<li><p>Model envelope</p></li>
+<li><p>Model envelope (implemented)</p></li>
 </ol>
 </td>
-<td><p>Add <code class="docutils literal notranslate"><span class="pre">RewritingEntryProto</span></code> and the <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> field,
-model I/O and bindings; define explicit selection and compatibility.</p></td>
+<td><p>Add the <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> map, model I/O and bindings;
+define explicit selection and compatibility.</p></td>
 <td><p>Two independent variants survive save/load; the canonical graph stays
 unchanged; mutations invalidate variants; duplicate keys and missing
 kernels are diagnosed.</p></td>
@@ -751,6 +767,20 @@ outputs and states; plain exports use only standard ONNX fields.</p></td>
 </section>
 <section id="export-workflow">
 <h2>Export workflow<a class="headerlink" href="#export-workflow" title="Link to this heading">#</a></h2>
+<p>The model-envelope API reserves field 1001 for <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code>.
+<code class="docutils literal notranslate"><span class="pre">ModelProto.add_rewriting</span></code> (C++ <code class="docutils literal notranslate"><span class="pre">add_rewritings</span></code>) and
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder.add_rewriting</span></code> (C++ <code class="docutils literal notranslate"><span class="pre">AddRewriting</span></code>) reject duplicate names.
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder.apply_rewritings(name)</span></code> (C++ <code class="docutils literal notranslate"><span class="pre">ApplyRewritings</span></code>) selects exactly
+one independent plan using existing replay and checks reachable operator
+implementations, including local functions and nested graphs. The replay result
+has no attached variants. Loading a model never executes its plans.
+The method is overloaded to accept either a <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> or a plan name.
+GraphBuilder mutations invalidate the map, including mutations in nested
+builders and finalization that changes node order. Finalize before attaching
+plans. Callers editing proto fields directly must explicitly clear or
+regenerate the map; no source fingerprint or hidden repair is performed.
+ORT and standard-model export reject attached variants rather than dropping
+them. The export modes and packaging below remain step 4.</p>
 <ol class="arabic simple">
 <li><p>Finalize the canonical model first, including cleanup, ordering, names,
 imports and external-data layout.</p></li>
@@ -780,7 +810,7 @@ execution remains an explicit alternative, not a silent fallback.</p>
 proposes optional runtime fusion packages that match the graph after EP
 assignment and submit replacements using existing kernels. This proposal
 instead records concrete edits during export and bundles them with the
-canonical model for later replay, without rerunning the matcher. Updating
+canonical model for later apply_rewritings, without rerunning the matcher. Updating
 export-time matching decisions requires regenerating the affected plans;
 ORT’s proposed packages can update matching and adapter logic independently
 of the canonical artifact. Runtime matching can account for actual EP

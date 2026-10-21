@@ -410,6 +410,7 @@
 <li class="toctree-l2"><a class="reference internal" href="attribute_proto.html">AttributeProto</a></li>
 <li class="toctree-l2"><a class="reference internal" href="device_configuration_proto.html">DeviceConfigurationProto</a></li>
 <li class="toctree-l2"><a class="reference internal" href="encoded_value_proto.html">EncodedValueProto</a></li>
+<li class="toctree-l2"><a class="reference internal" href="extended_initializer_proto.html">ExtendedInitializerProto</a></li>
 <li class="toctree-l2"><a class="reference internal" href="function_proto.html">FunctionProto</a></li>
 <li class="toctree-l2"><a class="reference internal" href="graph_proto.html">GraphProto</a></li>
 <li class="toctree-l2"><a class="reference internal" href="int_int_list_entry_proto.html">IntIntListEntryProto</a></li>
@@ -1552,7 +1553,7 @@
 <h2>Relations between protos<a class="headerlink" href="#relations-between-protos" title="Link to this heading">#</a></h2>
 <p>The following graph shows containment relations between ONNX protos and the
 onnx-light extensions, including structured types, encoded values, persistent
-bindings and paged caches. Solid edges represent nested messages; dashed edges
+bindings, paged caches and rewrite records. Solid edges represent nested messages; dashed edges
 show selected model-scoped references, not containment or storage ownership.
 Each edge label is the attribute name (or names) that carries the nested proto.
 The diagram groups messages into <strong>Data</strong>, <strong>Container</strong>, and <strong>Struct and Types</strong>.
@@ -1616,19 +1617,20 @@ ModelProto
 │   │   └── metadata_props → StringStringEntryProto
 │   ├── quantization_annotation → TensorAnnotation
 │   │   └── quant_parameter_tensor_names → StringStringEntryProto
-│   ├── encoded_initializer → EncodedValueProto
-│   │   ├── affine → AffineLayoutProto
-│   │   │   └── scale, zero_point → TensorProto (↑)
-│   │   ├── struct_type → StructTypeProto (expanded below)
-│   │   ├── logical_type → TypeProto (↑)
-│   │   ├── external_data → StringStringEntryProto
-│   │   └── parameter_ref → TensorAnnotation (model catalogue name reference)
+│   ├── extended_initializer → ExtendedInitializerProto
+│   │   ├── encoded_value → EncodedValueProto
+│   │   │   ├── affine → AffineLayoutProto
+│   │   │   │   └── scale, zero_point → TensorProto (↑)
+│   │   │   ├── struct_type → StructTypeProto (expanded below)
+│   │   │   ├── logical_type → TypeProto (↑)
+│   │   │   ├── external_data → StringStringEntryProto
+│   │   │   └── parameter_ref → TensorAnnotation (model catalogue name reference)
+│   │   └── paged_cache → PagedCacheProto
+│   │       └── blocks → PagedCacheBlockProto
+│   │           ├── key, value → TensorProto (↑)
+│   │           └── encoded_key, encoded_value → EncodedValueProto (↑)
 │   ├── persistent_bindings → PersistentBindingProto
 │   │   └── input_name, output_name → ValueInfoProto (graph IO name references)
-│   ├── paged_cache_initializer → PagedCacheProto
-│   │   └── blocks → PagedCacheBlockProto
-│   │       ├── key, value → TensorProto (↑)
-│   │       └── encoded_key, encoded_value → EncodedValueProto (↑)
 │   └── metadata_props → StringStringEntryProto
 ├── opset_import → OperatorSetIdProto
 ├── functions → FunctionProto
@@ -1650,6 +1652,7 @@ ModelProto
 │   ├── decoder, encoder → FunctionProto (↑)
 │   ├── metadata_props → StringStringEntryProto
 │   └── type_ref → StructTypeProto (model catalogue ID reference)
+├── rewritings → RewritingProto (expanded below)
 └── metadata_props → StringStringEntryProto
 </pre></div>
 </div>
@@ -1678,14 +1681,28 @@ reference model-level type and parameter catalogues.</p>
     └── optional_value → OptionalProto (↑)
 </pre></div>
 </div>
+<p>Named rewrite plans are stored in <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> (local extension
+field 1001), a map from nonempty variant names to independent plans against the
+canonical graph. Loading a model never selects or executes a variant:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>RewritingProto
+├── rewrites → LocalRewritingProto
+│   ├── added_nodes, initializer_calls → NodeProto (↑)
+│   ├── added_initializers → TensorProto (↑)
+│   └── value_renames, metadata_props → StringStringEntryProto
+├── required_opset_imports → OperatorSetIdProto
+├── added_functions → FunctionProto (↑)
+└── metadata_props → StringStringEntryProto
+</pre></div>
+</div>
 </section>
 <section id="containment-attributes">
 <h2>Containment attributes<a class="headerlink" href="#containment-attributes" title="Link to this heading">#</a></h2>
 <p>Quick attribute list used in the graph:</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="pipeline_proto.html"><span class="doc">PipelineProto</span></a>: <code class="docutils literal notranslate"><span class="pre">embedding</span></code>, <code class="docutils literal notranslate"><span class="pre">prefill</span></code>, <code class="docutils literal notranslate"><span class="pre">decode</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code></p></li>
-<li><p><a class="reference internal" href="model_proto.html"><span class="doc">ModelProto</span></a>: <code class="docutils literal notranslate"><span class="pre">graph</span></code>, <code class="docutils literal notranslate"><span class="pre">opset_import</span></code>, <code class="docutils literal notranslate"><span class="pre">functions</span></code>, <code class="docutils literal notranslate"><span class="pre">configuration</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code>, <code class="docutils literal notranslate"><span class="pre">struct_types</span></code></p></li>
-<li><p><a class="reference internal" href="graph_proto.html"><span class="doc">GraphProto</span></a>: <code class="docutils literal notranslate"><span class="pre">node</span></code>, <code class="docutils literal notranslate"><span class="pre">initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">sparse_initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">input</span></code>, <code class="docutils literal notranslate"><span class="pre">output</span></code>, <code class="docutils literal notranslate"><span class="pre">value_info</span></code>, <code class="docutils literal notranslate"><span class="pre">quantization_annotation</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code>, <code class="docutils literal notranslate"><span class="pre">encoded_initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">persistent_bindings</span></code>, <code class="docutils literal notranslate"><span class="pre">paged_cache_initializer</span></code></p></li>
+<li><p><a class="reference internal" href="model_proto.html"><span class="doc">ModelProto</span></a>: <code class="docutils literal notranslate"><span class="pre">graph</span></code>, <code class="docutils literal notranslate"><span class="pre">opset_import</span></code>, <code class="docutils literal notranslate"><span class="pre">functions</span></code>, <code class="docutils literal notranslate"><span class="pre">configuration</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code>, <code class="docutils literal notranslate"><span class="pre">struct_types</span></code>, <code class="docutils literal notranslate"><span class="pre">rewritings</span></code></p></li>
+<li><p><a class="reference internal" href="graph_proto.html"><span class="doc">GraphProto</span></a>: <code class="docutils literal notranslate"><span class="pre">node</span></code>, <code class="docutils literal notranslate"><span class="pre">initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">sparse_initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">input</span></code>, <code class="docutils literal notranslate"><span class="pre">output</span></code>, <code class="docutils literal notranslate"><span class="pre">value_info</span></code>, <code class="docutils literal notranslate"><span class="pre">quantization_annotation</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code>, <code class="docutils literal notranslate"><span class="pre">extended_initializer</span></code>, <code class="docutils literal notranslate"><span class="pre">persistent_bindings</span></code></p></li>
+<li><p><a class="reference internal" href="extended_initializer_proto.html"><span class="doc">ExtendedInitializerProto</span></a>: <code class="docutils literal notranslate"><span class="pre">encoded_value</span></code> or <code class="docutils literal notranslate"><span class="pre">paged_cache</span></code></p></li>
 <li><p><a class="reference internal" href="function_proto.html"><span class="doc">FunctionProto</span></a>: <code class="docutils literal notranslate"><span class="pre">attribute_proto</span></code>, <code class="docutils literal notranslate"><span class="pre">node</span></code>, <code class="docutils literal notranslate"><span class="pre">opset_import</span></code>, <code class="docutils literal notranslate"><span class="pre">value_info</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code></p></li>
 <li><p><a class="reference internal" href="node_proto.html"><span class="doc">NodeProto</span></a>: <code class="docutils literal notranslate"><span class="pre">attribute</span></code>, <code class="docutils literal notranslate"><span class="pre">device_configurations</span></code>, <code class="docutils literal notranslate"><span class="pre">metadata_props</span></code></p></li>
 <li><p><a class="reference internal" href="node_device_configuration_proto.html"><span class="doc">NodeDeviceConfigurationProto</span></a>: <code class="docutils literal notranslate"><span class="pre">sharding_spec</span></code> (and <code class="docutils literal notranslate"><span class="pre">configuration_id</span></code>, a name reference to a <a class="reference internal" href="device_configuration_proto.html"><span class="doc">DeviceConfigurationProto</span></a> declared in <code class="docutils literal notranslate"><span class="pre">ModelProto.configuration</span></code>)</p></li>
@@ -1717,6 +1734,7 @@ reference model-level type and parameter catalogues.</p>
 <li class="toctree-l1"><a class="reference internal" href="attribute_proto.html">AttributeProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="device_configuration_proto.html">DeviceConfigurationProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="encoded_value_proto.html">EncodedValueProto</a></li>
+<li class="toctree-l1"><a class="reference internal" href="extended_initializer_proto.html">ExtendedInitializerProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="function_proto.html">FunctionProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="graph_proto.html">GraphProto</a></li>
 <li class="toctree-l1"><a class="reference internal" href="int_int_list_entry_proto.html">IntIntListEntryProto</a></li>
