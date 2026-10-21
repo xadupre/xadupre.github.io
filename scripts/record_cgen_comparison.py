@@ -19,9 +19,9 @@ The script:
    ``emx-onnx-cgen compile``) and stores the generated C source inline in
    the ``cgen_source_code`` field so the dashboard can display it without
    a network request. The test models come from the on-disk
-   ``onnx.backend.test.data`` directory when present, or from the
-   ``onnx-light`` backend test catalog otherwise (``onnx-weekly`` no longer
-   bundles the ONNX test data).
+   ``onnx.backend.test.data`` directory when present, or from ONNX's bundled
+   Python test generators otherwise (recent ONNX wheels no longer bundle
+   the test data files).
 
 The resulting JSON is consumed by
 ``dashboard/onnx-light/cgen-comparison.html``.
@@ -232,39 +232,28 @@ def _onnx_backend_test_node_dir() -> Optional[str]:
         return None
 
 
-def _materialize_onnx_light_node_dir(dest_dir: str) -> Optional[str]:
-    """Write onnx-light backend node test models under *dest_dir*.
+def _materialize_onnx_node_dir(dest_dir: str) -> Optional[str]:
+    """Write ONNX backend node test models under *dest_dir*.
 
-    ``onnx-weekly`` no longer ships the ``onnx.backend.test.data`` directory,
-    so the single-node test models used to feed ``emx-onnx-cgen compile`` are
-    taken from the ``onnx-light`` catalog instead (collected via
-    :func:`onnx_light.onnx_lib.backend.test.case.collect_test_case`).
+    Recent ONNX wheels no longer ship ``onnx.backend.test.data``, but still
+    bundle the Python generators used to produce those models.
 
     Each collected test case whose ``model`` carries exactly one node is
     written to ``<dest_dir>/<name>/model.onnx`` in the same layout that
     :func:`build_op_to_test_model_map` expects. Returns *dest_dir* when at
     least one model was written, otherwise ``None``.
     """
-    try:
-        import onnx  # noqa: PLC0415
-        from onnx_light.onnx_lib.backend.test.case import (  # noqa: PLC0415
-            collect_test_case,
-        )
-    except Exception:  # noqa: BLE001 - onnx-light or onnx not importable
-        return None
+    import onnx  # noqa: PLC0415
+    from onnx.backend.test.case.node import collect_testcases  # noqa: PLC0415
 
     written = 0
-    cases = collect_test_case(include_big=True)
-    for name, tc in cases.items():
+    for tc in collect_testcases(None):
+        name = tc.name
         if not name:
             continue
         model = getattr(tc, "model", None)
         if model is None:
             continue
-        if not isinstance(model, onnx.ModelProto):
-            out = onnx.ModelProto()
-            out.ParseFromString(model.SerializeToString())
-            model = out
         if len(model.graph.node) != 1:
             continue
         case_dir = os.path.join(dest_dir, str(name))
@@ -544,32 +533,31 @@ def build_payload(
     cgen_source_map = build_cgen_source_map(cgen_tree)
     _log(f"Built emx-onnx-cgen source map with {len(cgen_source_map)} entries.")
 
-    # Generate C source via emx-onnx-cgen compile (best-effort, optional).
+    # Generate C source via emx-onnx-cgen compile (optional).
     cgen_source_code_map: Optional[Dict[Tuple[str, str], str]] = None
     if not skip_cgen_compile and shutil.which("emx-onnx-cgen"):
         test_node_dir = _onnx_backend_test_node_dir()
         if test_node_dir:
             cgen_source_code_map = build_cgen_source_code_map(cgen_rows, test_node_dir)
         else:
-            # ``onnx-weekly`` no longer bundles ``onnx.backend.test.data``; fall
-            # back to the onnx-light backend test catalog and materialize the
+            # Recent ONNX wheels no longer bundle test data; materialize the
             # single-node models to a temporary directory.
             with tempfile.TemporaryDirectory() as tmp_node_dir:
-                materialized = _materialize_onnx_light_node_dir(tmp_node_dir)
+                materialized = _materialize_onnx_node_dir(tmp_node_dir)
                 if materialized:
                     _log(
                         "ONNX backend test data directory not found; using "
-                        "onnx-light backend test models instead."
+                        "ONNX Python test generators instead."
                     )
                     cgen_source_code_map = build_cgen_source_code_map(
                         cgen_rows, materialized
                     )
-                else:
-                    _log(
-                        "ONNX backend test data directory not found and onnx-light "
-                        "backend test models unavailable; skipping emx-onnx-cgen "
-                        "compile step."
-                    )
+        if not cgen_source_code_map:
+            raise RuntimeError(
+                "No emx-onnx-cgen C source was generated; refusing to publish "
+                "a snapshot without generated code. Use --skip-cgen-compile "
+                "to explicitly skip source generation."
+            )
     elif skip_cgen_compile:
         _log("Skipping emx-onnx-cgen compile step (--skip-cgen-compile).")
     else:
