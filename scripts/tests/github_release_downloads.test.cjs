@@ -65,6 +65,7 @@ test("owner scope excludes other ONNX projects and includes both requested famil
   for (const repo of [
     "xadupre/onnx-light", "xadupre/onnx-light-cpu", "xadupre/yet-another-tool",
     "onnx/onnx", "microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions",
+    "ggml-org/llama.cpp", "vllm-project/vllm",
   ]) assert.equal(context.isTrackedProject(repo), true, repo);
   for (const repo of [
     "xadupre/onnx-asv-benchmark", "xadupre/onnxruntime", "xadupre/onnx-diagnostic",

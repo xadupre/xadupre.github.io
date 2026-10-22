@@ -1,8 +1,8 @@
-"""Record daily GitHub release download counts for ONNX repositories.
+"""Record daily GitHub release download counts for ONNX and LLM repositories.
 
 Discover public xadupre onnx-light and yet-another projects, and include ONNX
-upstreams. Only attached release assets have counters; GitHub-generated source
-archives are excluded.
+upstreams, llama.cpp and vLLM. Only attached release assets have counters;
+GitHub-generated source archives are excluded.
 """
 
 from __future__ import annotations
@@ -18,7 +18,12 @@ from record_onnxruntime_release_sizes import fetch_pages
 
 API = "https://api.github.com"
 HOME = Path(__file__).resolve().parents[1] / "index.html"
-EXTRA_UPSTREAMS = ("microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions")
+EXTRA_UPSTREAMS = (
+    "microsoft/onnxruntime-genai",
+    "microsoft/onnxruntime-extensions",
+    "ggml-org/llama.cpp",
+    "vllm-project/vllm",
+)
 
 
 def is_owner_project(name: str) -> bool:
