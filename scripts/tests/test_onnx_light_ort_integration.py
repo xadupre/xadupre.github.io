@@ -104,6 +104,66 @@ class TestOnnxLightOrtIntegration(unittest.TestCase):
         self.assertIn("git add docs/onnx-light-ort", publish["run"])
         self.assertIn('git rebase -X ours "origin/${branch}"', publish["run"])
 
+    def test_documentation_gallery_native_dependencies(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/build_onnx_light_ort_docs.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        steps = workflow["jobs"]["build-and-publish"]["steps"]
+        names = [step["name"] for step in steps]
+        by_name = {step["name"]: step for step in steps}
+        checkout = by_name["Checkout onnx-light"]
+        self.assertEqual(checkout["with"]["repository"], "xadupre/onnx-light")
+        self.assertEqual(checkout["with"]["ref"], "main")
+        self.assertEqual(checkout["with"]["path"], "onnx-light")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        build = by_name["Build native libraries for the gallery"]
+        self.assertEqual(build["working-directory"], "onnx-light-ort")
+        for command in (
+            "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release",
+            '-DFETCHCONTENT_SOURCE_DIR_ONNX_LIGHT="$GITHUB_WORKSPACE/onnx-light"',
+            "-DONNX_LIGHT_ORT_BUILD_TESTS=OFF",
+            "-DONNX_LIGHT_ORT_BUILD_PYTHON=ON",
+            'cmake --build build --parallel "$(nproc)"',
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, build["run"])
+        self.assertLess(
+            names.index("Checkout onnx-light"),
+            names.index("Build native libraries for the gallery"),
+        )
+        self.assertLess(
+            names.index("Install documentation dependencies"),
+            names.index("Build native libraries for the gallery"),
+        )
+        self.assertLess(
+            names.index("Build native libraries for the gallery"),
+            names.index("Build documentation"),
+        )
+        env = by_name["Build documentation"]["env"]
+        build_dir = "${{ github.workspace }}/onnx-light-ort/build"
+        self.assertEqual(env["PYTHONPATH"], f"{build_dir}/python")
+        library_dir = f"{build_dir}/onnx_light_ort"
+        for variable, relative_path in (
+            (
+                "ONNX_LIGHT_ORT_PLUGIN_LIBRARY",
+                "custom_ops/libonnx_light_ort_custom_ops.so",
+            ),
+            (
+                "ONNX_LIGHT_ORT_HOST_LIBRARY",
+                "bridge_ops_ort_called_by_light/"
+                "libonnx_light_ort_bridge_ops_ort_called_by_light.so",
+            ),
+            (
+                "ONNX_LIGHT_ORT_INCOMING_CUSTOM_OP_LIBRARY",
+                "bridge_ops_ort_called_by_light/"
+                "libonnx_light_ort_ort_custom_ops.so",
+            ),
+        ):
+            with self.subTest(variable=variable):
+                self.assertEqual(env[variable], f"{library_dir}/{relative_path}")
+
 
 if __name__ == "__main__":
     unittest.main()
