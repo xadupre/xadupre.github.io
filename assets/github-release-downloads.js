@@ -70,6 +70,7 @@ function renderBatches(details, items, renderItem) {
     if (details.open && !iterator) appendBatch();
   });
   more.addEventListener("click", appendBatch);
+  if (details.open) appendBatch();
 }
 
 function renderReleaseDownloads(data) {
@@ -122,6 +123,7 @@ function renderReleaseDownloads(data) {
       },
     });
     const files = document.createElement("details");
+    files.open = true;
     const fileSummary = document.createElement("summary");
     fileSummary.textContent = "Files: check to add individual curves";
     files.appendChild(fileSummary);
@@ -264,7 +266,8 @@ function renderReleaseDownloads(data) {
       periodCanvas.hidden = true;
       const hint = document.createElement("p");
       hint.textContent = "Not enough daily history yet to calculate net changes. " +
-        "Expand the file list or releases above to see collected download counts.";
+        "Runs on the same UTC day update one snapshot, not multiple daily observations. " +
+        "Collected per-file download counts are shown above.";
       periodWrap.appendChild(hint);
     }
   }

@@ -174,9 +174,10 @@ test("projects omit aggregate totals and preserve period and selectable file cur
   const assetCell = assetRows.children[0].children[0];
   assert.equal(assetCell.textContent, "<script>alert(1)</script>.whl");
   const fileList = projects[0].children[2].children[1];
-  assert.equal(fileList.children.length, 0);
-  projects[0].children[2].open = true;
+  assert.equal(projects[0].children[2].open, true);
+  assert.equal(fileList.children.length, 2);
   projects[0].children[2].listeners.toggle();
+  assert.equal(fileList.children.length, 2);
   const first = fileList.children[0].children[0];
   const second = fileList.children[1].children[0];
   assert.equal(Boolean(first.checked), false);
@@ -212,7 +213,13 @@ test("projects omit aggregate totals and preserve period and selectable file cur
   assert.equal(periodCharts.length, 0);
   for (const project of document.getElementById("projects").children) {
     assert.match(project.children[4].children[1].textContent, /Not enough daily history/);
+    assert.match(project.children[4].children[1].textContent, /same UTC day update one snapshot/);
   }
+  const initialFiles = document.getElementById("projects").children[0].children[2];
+  assert.equal(initialFiles.open, true);
+  assert.equal(initialFiles.children[1].children.length, 2);
+  assert.equal(initialFiles.children[1].children[0].children[1].textContent,
+    " <script>alert(1)</script>.whl (v1): 12");
   assert.deepEqual(document.getElementById("totals").children[0].children.slice(1)
     .map(cell => cell.textContent), ["\u2014", "\u2014", "\u2014"]);
 });
@@ -257,6 +264,21 @@ test("empty and exactly full batches hide the continuation button", () => {
     assert.equal(rendered.length, length);
     assert.equal(details.children[0].hidden, true);
   }
+});
+
+test("initially open file lists show a bounded batch immediately", () => {
+  const details = context.document.createElement("details");
+  details.open = true;
+  const rendered = [];
+  context.renderBatches(details, function* () {
+    for (let i = 0; i < 250; i++) yield i;
+  }, item => rendered.push(item));
+  assert.deepEqual(rendered, Array.from({length: 100}, (_, i) => i));
+  assert.equal(details.children[0].hidden, false);
+  details.listeners.toggle();
+  assert.equal(rendered.length, 100);
+  details.children[0].listeners.click();
+  assert.deepEqual(rendered, Array.from({length: 200}, (_, i) => i));
 });
 
 test("summary headers show net changes without total downloads", () => {
