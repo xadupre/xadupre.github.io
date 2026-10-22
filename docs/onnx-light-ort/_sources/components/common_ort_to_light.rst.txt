@@ -1,33 +1,31 @@
 Shared support for hosting ORT-compatible plugins
 ==================================================
 
-``onnx_light_ort/common_ort_to_light/`` defines the interface target
-``onnx_light_ort::common_ort_to_light``. The runtime implementation is planned:
-it will expose audited API tables, opaque-value adapters and shared lifetime
-support to :doc:`bridge_ops_ort_to_light` and :doc:`bridge_ep_ort_to_light`.
-Those bridges, not this common layer, own profile-specific plugin registration.
-It must build, test and run without installing, loading or linking ORT.
+``onnx_light_ort::common_ort_to_light`` is a static library exposing the
+initial audited CPU custom-op subset of ``OrtApi`` over onnx-light tensors.
+It supplies opaque adapters for statuses, registration domains, kernel
+attributes, values and contexts. :doc:`bridge_ops_ort_called_by_light` owns loading,
+descriptor selection and the session/kernel/library lifecycle.
+The EP bridge remains unimplemented.
 
-This direction is independent of :doc:`common_light_to_ort`. In particular,
-the minimal host in ``tests/ort_test_host.h`` is explicit unit-test
-infrastructure for the reverse direction, not this production bridge.
+``OrtApiBase::GetApi`` accepts only version 18. The full pinned ``OrtApi``
+layout is preserved; unsupported slots remain null. Supported entries are:
 
-Current dependency tests
-------------------------
+* ``CreateStatus``, ``GetErrorCode``, ``GetErrorMessage``, ``ReleaseStatus``.
+* ``CreateCustomOpDomain``, ``CustomOpDomain_Add``, ``AddCustomOpDomain``,
+  ``ReleaseCustomOpDomain``.
+* ``KernelInfoGetAttribute_float``.
+* ``KernelContext_GetInputCount``, ``KernelContext_GetOutputCount``,
+  ``KernelContext_GetInput``, ``KernelContext_GetOutput``.
+* ``GetTensorTypeAndShape``, ``ReleaseTensorTypeAndShapeInfo``,
+  ``GetTensorElementType``, ``GetDimensionsCount``, ``GetDimensions``,
+  ``GetTensorShapeElementCount``, ``GetTensorMutableData``.
+* ``GetTensorMemoryInfo``, ``MemoryInfoGetDeviceType``.
 
-.. code-block:: bash
+These functions implement only dense float32 CPU values. Shape and byte counts
+are checked before allocating outputs. The component is independent of the
+outgoing common library and never loads ORT. ``tests/ort_test_host.h`` remains
+separate test infrastructure for outgoing callback units, not this host.
 
-   cmake -S . -B build -DONNX_LIGHT_ORT_BUILD_HOST=ON \
-     -DONNX_LIGHT_ORT_BUILD_PLUGIN=OFF -DONNX_LIGHT_ORT_TEST_WITH_ORT=OFF
-   cmake --build build --parallel "$(nproc)"
-   ctest --test-dir build -L common_ort_to_light --output-on-failure
-
-``tests/test_dependency_contract.cc`` lives in this component and checks
-custom-domain model serialization and a real onnx-light custom kernel across
-vector/matrix/scalar/empty shapes, including input preservation. It is labelled
-``dependency``, not a unit test of a loader that does not exist yet.
-
-The first implementation must add API negotiation, opaque-value ownership,
-registration failure, loader teardown and independent fixture-plugin tests
-alongside the actual bridge code. See :doc:`../newt_steps/2026/2026-10-start` for the API inventory
-and its no-ORT-runtime acceptance criteria.
+The dependency-contract smoke test is retained alongside the real incoming
+fixture tests. Select both using the ``common_ort_to_light`` CTest label.

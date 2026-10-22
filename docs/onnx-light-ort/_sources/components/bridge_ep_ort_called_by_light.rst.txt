@@ -1,14 +1,14 @@
-EP bridge: plugins in onnx-light
-================================
+EP bridge: ORT plugins called by onnx-light
+===========================================
 
-``onnx_light_ort::bridge_ep_ort_to_light`` is currently an interface target
+``onnx_light_ort::bridge_ep_ort_called_by_light`` is currently an interface target
 depending on :doc:`common_ort_to_light`. It will host foreign EP factory/device
 callbacks, provider selection and kernel-registry or compiled-partition
 execution in onnx-light.
 
 EP-specific registration belongs here. API tables, opaque values, tensor
 ownership and resource lifetime utilities are shared with
-:doc:`bridge_ops_ort_to_light` through the common library, never by linking the
+:doc:`bridge_ops_ort_called_by_light` through the common library, never by linking the
 two bridges to each other. This direction must not install, load or link ORT.
 
 Runtime implementation and executable tests remain planned. The first

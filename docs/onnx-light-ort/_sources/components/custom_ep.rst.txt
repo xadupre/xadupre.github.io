@@ -7,7 +7,7 @@ directory README states that limitation explicitly.
 
 The future library owns ``CreateEpFactories``, ``ReleaseEpFactory``, factory
 and device callbacks, node selection and kernel-registry or compiled-partition
-callbacks. It will use :doc:`bridge_ep_light_to_ort` and its
+callbacks. It will use :doc:`bridge_ep_light_called_by_ort` and its
 :doc:`common_light_to_ort` dependency, not :doc:`custom_ops` or the ops bridge.
 It must never link :doc:`common_ort_to_light` or the incoming bridges, or
 interpose their compatibility API tables.

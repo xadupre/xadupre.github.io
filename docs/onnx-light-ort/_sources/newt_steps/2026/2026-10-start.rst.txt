@@ -10,7 +10,10 @@ Adapted from the `original onnx-light proposal
 This page maintains the implementation roadmap for this repository;
 :doc:`../../architecture` describes its implemented profile.
 
-**Compatibility host -- planned.** Runs independently supplied custom kernels
+**Compatibility host -- limited custom-op profile implemented.** The current
+single-node float32 CPU host is documented in
+:doc:`../../components/bridge_ops_ort_called_by_light`. The broader proposal runs
+independently supplied custom kernels
 and plugin execution providers (EPs) in onnx-light, using their public ORT C
 interfaces but **without installing, loading, linking, or executing ONNX
 Runtime**. This proposal adds a compatibility host, not an ORT backend.
@@ -23,8 +26,9 @@ Only public interface declarations are reused; retain their license notices.
 **Reverse-direction milestone implemented:** the shared plugin exports
 ``RegisterCustomOps`` and runs the native float32 CPU ``LeakyRelu`` kernel in
 real ORT through API 18. It borrows tensor buffers, retains kernel state and
-has opt-in real-host tests. This does not implement the compatibility host,
-a plugin EP, or arbitrary custom-op compatibility. See :doc:`../../architecture`
+has opt-in real-host tests. The independent incoming host now has its own
+audited ORT custom-op example library and Python tests; neither direction implements
+a plugin EP or arbitrary custom-op compatibility. See :doc:`../../architecture`
 for the exact operator and ownership contract.
 
 Scope and compatibility boundary
@@ -120,25 +124,25 @@ entry-point libraries**, each in its own directory under
 * **custom_ops:** the loadable library exporting ``RegisterCustomOps``.
 * **custom_ep:** a different loadable library exporting ``CreateEpFactories``
   and ``ReleaseEpFactory``. Do not combine its entry points with custom ops.
-* **bridge_ops_light_to_ort:** custom-op callbacks and attribute contracts
+* **bridge_ops_light_called_by_ort:** custom-op callbacks and attribute contracts
   for native onnx-light kernels running in ORT.
-* **bridge_ep_light_to_ort:** EP-specific adaptation in the same direction.
-* **bridge_ops_ort_to_light:** custom-op hosting inside onnx-light.
-* **bridge_ep_ort_to_light:** EP hosting inside onnx-light.
+* **bridge_ep_light_called_by_ort:** EP-specific adaptation in the same direction.
+* **bridge_ops_ort_called_by_light:** custom-op hosting inside onnx-light.
+* **bridge_ep_ort_called_by_light:** EP hosting inside onnx-light.
 * **common_light_to_ort:** reusable kernel execution, tensor/context adaptation
   and status conversion shared by the two bridges targeting ORT.
 * **common_ort_to_light:** shared API tables, opaque values and resource
   lifetimes for the two bridges targeting onnx-light. Building, testing and
   using this direction must never install or load ORT.
 
-``custom_ops`` depends on ``bridge_ops_light_to_ort``, and ``custom_ep`` will
-depend on ``bridge_ep_light_to_ort``. Each bridge depends only on its direction's
+``custom_ops`` depends on ``bridge_ops_light_called_by_ort``, and ``custom_ep`` will
+depend on ``bridge_ep_light_called_by_ort``. Each bridge depends only on its direction's
 common library, not on another bridge or the opposite common library.
 Both common libraries depend on onnx-light and public API declarations,
 never an ORT link dependency.
 
 The first milestone builds ``custom_ops`` as a shared library, with
-``bridge_ops_light_to_ort`` and ``common_light_to_ort`` as static libraries.
+``bridge_ops_light_called_by_ort`` and ``common_light_to_ort`` as static libraries.
 The other three bridges and incoming common library are interface targets;
 ``custom_ep`` has no implementation or target yet.
 Each implemented component owns its CMake definition. Keep root CMake for
@@ -167,8 +171,9 @@ or automatically load the compatibility library.
 The original proposal in onnx-light documents that integration boundary.
 This copy tracks implementation in onnx-light-ort. Implementation PRs belong
 here; any missing generic extension points require separate, narrowly scoped
-onnx-light PRs. The current bootstrap provides build targets, dependency tests,
-documentation and CI, not the runtime compatibility implementations.
+onnx-light PRs. The current implementation adds a limited CPU custom-op host and executable
+Python examples to the original bootstrap. The broader compatibility profiles
+below remain a roadmap, not a claim that all listed API functions are available.
 
 .. code-block:: text
 
@@ -239,7 +244,7 @@ operators explicitly; do not present custom-op registration as transparent
 replacement of ORT's standard kernels.
 
 As a separate milestone, add a CPU kernel-based plugin EP in the independent
-``custom_ep`` library through ``bridge_ep_light_to_ort``, reusing
+``custom_ep`` library through ``bridge_ep_light_called_by_ort``, reusing
 ``common_light_to_ort`` rather than linking
 ``custom_ops``. Implement ``CreateEpFactories``, ``ReleaseEpFactory``,
 the factory/device callbacks, ``OrtEp::GetCapability`` /

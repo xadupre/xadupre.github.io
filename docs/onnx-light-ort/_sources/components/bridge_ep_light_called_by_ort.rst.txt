@@ -1,9 +1,9 @@
-EP bridge: onnx-light in ORT
-============================
+EP bridge: onnx-light called by ORT
+===================================
 
-``onnx_light_ort::bridge_ep_light_to_ort`` is currently an interface target.
+``onnx_light_ort::bridge_ep_light_called_by_ort`` is currently an interface target.
 It depends on :doc:`common_light_to_ort`, independently of
-:doc:`bridge_ops_light_to_ort`.
+:doc:`bridge_ops_light_called_by_ort`.
 
 The future :doc:`custom_ep` library will use this bridge for EP-specific
 capability selection, kernel-registry and executable-partition adaptation.

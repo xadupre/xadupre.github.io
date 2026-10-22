@@ -1,0 +1,77 @@
+Custom-op bridge: ORT custom ops called by onnx-light
+=====================================================
+
+``onnx_light_ort::bridge_ops_ort_called_by_light`` is a shared library depending only
+on :doc:`common_ort_to_light` and the platform loader. It does not install,
+load or link ORT. ``onnx_light_ort.CustomOpSession`` accesses its small C ABI
+through ``ctypes`` from the source checkout. Its model objects come from
+``onnx_light.onnx`` bindings built in the same tree, not the ``onnx`` package;
+no project artifact is installed into site-packages.
+Execution uses a real onnx-light ``RuntimeSession`` and context-local
+``KernelBase`` factory, not a substitute Python implementation.
+
+C++ consumers link only ``onnx_light_ort::bridge_ops_ort_called_by_light`` and
+include ``onnx_light_ort/bridge_ops_ort_called_by_light/host.h``. The target
+publishes the repository and ORT API include paths; its implementation
+libraries remain private. A consumer test builds without the test helper's
+additional include paths to verify this contract.
+
+Initial audited profile
+------------------------
+
+This is not a general ORT compatibility claim. Plugins are trusted executable
+code, loaded only from an explicit caller-supplied path resolved before loading.
+They must be audited against this API subset; unsupported function-table
+slots are null and must not be called. Arbitrary plugin binaries are not safe
+to probe for compatibility by executing them.
+
+The host accepts only API-18 descriptors, one required float32 CPU input and
+output, a custom-domain opset import, and status-returning ``CreateKernelV2``
+and ``KernelComputeV2`` callbacks with ``KernelDestroy``. The initial model
+must contain exactly one custom node, with distinct graph input and output,
+no initializers and no local functions. Model data is limited to 16 MiB and
+each runtime tensor to 64 MiB, with rank at most 16 and checked nonnegative
+dimension products. Scalars and empty tensors are supported.
+The Python wrapper checks serialized model size before parsing bytes and input
+size and rank before copying arrays. These checks raise ``ValueError``;
+native validation remains in place for C callers.
+
+Registration rejects missing descriptors, unsupported devices or types,
+duplicate names, incompatible opsets, optional/variadic arguments, alias
+callbacks and shape-inference callbacks. Overloads, legacy callbacks, EPs,
+logging/configuration, general allocator APIs and the remaining roadmap
+functions are not implemented. Output shapes are determined at execution.
+
+Kernels are initialized lazily once per session node and retained across
+changing input shapes. Every call reads the current runtime context.
+The Python wrapper serializes runs and close operations, copies inputs to
+protect caller-owned arrays from the API's mutable data accessor, and returns
+independent NumPy output copies. Output buffers are host-owned. This initial
+Python interface does not claim zero-copy execution.
+
+``close()`` and the context-manager protocol release kernels before unloading
+the plugin. A finalizer also releases abandoned sessions. Registration and
+compute errors propagate as Python exceptions; there is no ORT fallback.
+
+Tests and example
+-----------------
+
+The independent ``examples/custom_ops/ort_custom_ops.cc`` implements
+``ort_custom_ops::LeakyRelu`` using only pinned ORT headers and its own numerical
+code, without linking onnx-light. Native tests execute it under the standalone host, including
+scalar/empty inputs and API negotiation failure. Python tests check changing
+shapes, read-only and noncontiguous inputs, retained kernel state, independent
+sessions and outputs, close ordering, missing attributes, unsupported graphs,
+versions, names and dtypes. They assert that neither ORT nor the ``onnx`` package
+was imported.
+
+Run ``ctest --test-dir build -L bridge_ops_ort_called_by_light --output-on-failure``.
+Enable ``ONNX_LIGHT_ORT_TEST_PYTHON=ON`` for the Python cases.
+When the plugin target is enabled too, an additional Python suite loads the
+actual ``onnx_light_cpu::Log`` custom op through the same standalone host.
+It shares numerical cases with the real-ORT suite: SIMD tails, changing shapes,
+scalars, empty tensors, near-one and subnormal inputs, non-finite values,
+read-only inputs and recovery after type/rank errors. The host remains generic;
+it does not link the outgoing bridge or import ORT to execute this kernel.
+See :doc:`../auto_examples/plot_custom_ops_ort_called_by_light` for the executable example and
+:doc:`../development` for build and environment setup.
