@@ -47,6 +47,31 @@ function assetHistory(data, repository, asset) {
   });
 }
 
+function renderBatches(details, items, renderItem) {
+  const more = document.createElement("button");
+  more.type = "button";
+  more.textContent = "Show more";
+  more.hidden = true;
+  details.appendChild(more);
+  let iterator;
+  let next;
+  function appendBatch() {
+    if (!iterator) {
+      iterator = items();
+      next = iterator.next();
+    }
+    for (let count = 0; count < 100 && !next.done; count++) {
+      renderItem(next.value);
+      next = iterator.next();
+    }
+    more.hidden = next.done;
+  }
+  details.addEventListener("toggle", () => {
+    if (details.open && !iterator) appendBatch();
+  });
+  more.addEventListener("click", appendBatch);
+}
+
 function renderReleaseDownloads(data) {
   if (!Array.isArray(data.repositories) || !data.repositories.length ||
       !Array.isArray(data.history) || !data.history.length) {
@@ -105,38 +130,42 @@ function renderReleaseDownloads(data) {
     files.appendChild(fileList);
     project.appendChild(files);
     let fileIndex = 0;
-    for (const release of [...item.releases].reverse()) {
-      for (const asset of release.assets) {
-        const label = document.createElement("label");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        label.appendChild(checkbox);
-        const name = document.createElement("span");
-        const caption = asset.name + " (" + release.tag + ")";
-        name.textContent = " " + caption + ": " + formatCount(asset.download_count);
-        label.appendChild(name);
-        fileList.appendChild(label);
-        const color = "hsl(" + (fileIndex++ * 137.5 % 360) + ", 75%, 65%)";
-        checkbox.addEventListener("change", () => {
-          if (checkbox.checked) {
-            chart.data.datasets.push({
-              assetId: asset.id,
-              label: caption,
-              data: assetHistory(data, item.repository, asset),
-              borderColor: color,
-              backgroundColor: color,
-              spanGaps: false,
-            });
-          } else {
-            chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
-          }
-          chartWrap.hidden = chart.data.datasets.length === 0;
-          if (!chartWrap.hidden) chart.resize();
-          chart.update();
-        });
+    renderBatches(files, function* () {
+      for (const release of [...item.releases].reverse()) {
+        for (const asset of release.assets) yield {release, asset};
       }
+    }, ({release, asset}) => {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      label.appendChild(checkbox);
+      const name = document.createElement("span");
+      const caption = asset.name + " (" + release.tag + ")";
+      name.textContent = " " + caption + ": " + formatCount(asset.download_count);
+      label.appendChild(name);
+      fileList.appendChild(label);
+      const color = "hsl(" + (fileIndex++ * 137.5 % 360) + ", 75%, 65%)";
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          chart.data.datasets.push({
+            assetId: asset.id,
+            label: caption,
+            data: assetHistory(data, item.repository, asset),
+            borderColor: color,
+            backgroundColor: color,
+            spanGaps: false,
+          });
+        } else {
+          chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
+        }
+        chartWrap.hidden = chart.data.datasets.length === 0;
+        if (!chartWrap.hidden) chart.resize();
+        chart.update();
+      });
+    });
+    if (!item.releases.some(release => release.assets.length)) {
+      fileList.textContent = "No uploaded files.";
     }
-    if (!fileList.children.length) fileList.textContent = "No uploaded files.";
     const container = document.createElement("details");
     const releaseSummary = document.createElement("summary");
     releaseSummary.textContent = "Releases and download counts";
@@ -147,7 +176,9 @@ function renderReleaseDownloads(data) {
       empty.textContent = "No published releases.";
       container.appendChild(empty);
     }
-    for (const release of [...item.releases].reverse()) {
+    renderBatches(container, function* () {
+      yield* [...item.releases].reverse();
+    }, release => {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = release.tag + (release.prerelease ? " (prerelease)" : "");
@@ -174,25 +205,27 @@ function renderReleaseDownloads(data) {
         head.appendChild(header);
         table.appendChild(head);
         const body = document.createElement("tbody");
-        for (const asset of release.assets) {
+        renderBatches(details, function* () {
+          yield* release.assets;
+        }, asset => {
           const row = document.createElement("tr");
           cell(row, asset.name);
           cell(row, formatCount(asset.download_count));
           body.appendChild(row);
-        }
+        });
         table.appendChild(body);
         wrap.appendChild(table);
         details.appendChild(wrap);
       }
       container.appendChild(details);
-    }
+    });
     const periodWrap = document.createElement("div");
     periodWrap.className = "chart-wrap";
     const periodCanvas = document.createElement("canvas");
     periodCanvas.setAttribute("aria-label", item.repository + " daily, weekly and monthly release downloads");
     periodWrap.appendChild(periodCanvas);
     project.appendChild(periodWrap);
-    new Chart(periodCanvas, {
+    const periodConfig = {
       type: "line",
       data: {
         labels: data.history.map(row => row.date),
@@ -223,7 +256,17 @@ function renderReleaseDownloads(data) {
           },
         },
       },
-    });
+    };
+    if (periodConfig.data.datasets.some(series => series.data.some(value => value !== null))) {
+      new Chart(periodCanvas, periodConfig);
+    } else {
+      periodWrap.className = "hint";
+      periodCanvas.hidden = true;
+      const hint = document.createElement("p");
+      hint.textContent = "Not enough daily history yet to calculate net changes. " +
+        "Expand the file list or releases above to see collected download counts.";
+      periodWrap.appendChild(hint);
+    }
   }
   document.getElementById("message").textContent = "";
 }
