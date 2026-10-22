@@ -62,8 +62,12 @@ def collect_repository(repository: str, token: str) -> dict:
     for release in fetch_pages(url, token):
         if release["draft"]:
             continue
+        release_assets = release["assets"]
+        # Avoid one API request per release unless the embedded list may be full.
+        if len(release_assets) >= 100:
+            release_assets = fetch_pages(f"{url}/{int(release['id'])}/assets", token)
         assets = []
-        for asset in fetch_pages(f"{url}/{int(release['id'])}/assets", token):
+        for asset in release_assets:
             if asset["state"] != "uploaded":
                 continue
             count = asset["download_count"]
