@@ -14,6 +14,7 @@ REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGES = [
     ("index.html", 0),
     ("dashboard/pypi-downloads.html", 1),
+    ("dashboard/github-release-downloads.html", 1),
     ("dashboard/mbext/class-coverage.html", 2),
     ("dashboard/onnx/stats.html", 2),
     ("dashboard/onnx/pr-activity.html", 2),
