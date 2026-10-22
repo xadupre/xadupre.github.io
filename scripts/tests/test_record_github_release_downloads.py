@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class TestReleaseDownloads(unittest.TestCase):
     def setUp(self):
         self.count = 3
+        self.asset_count = 100
         self.fail_assets = False
         self.requests = []
         case = self
@@ -126,6 +127,15 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "draft": False,
                                 "prerelease": True,
                                 "published_at": "2026-01-01T00:00:00Z",
+                                "assets": [
+                                    {
+                                        "id": n,
+                                        "name": f"wheel-{n}.whl",
+                                        "state": "uploaded",
+                                        "download_count": case.count,
+                                    }
+                                    for n in range(case.asset_count)
+                                ],
                             },
                         ] + [{"id": n, "draft": True} for n in range(3, 102)]
                     else:
@@ -136,6 +146,7 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "draft": False,
                                 "prerelease": False,
                                 "published_at": "2025-01-01T00:00:00Z",
+                                "assets": [],
                             },
                         ]
                 else:
@@ -219,6 +230,20 @@ class TestReleaseDownloads(unittest.TestCase):
         empty = downloads.collect_repository("xadupre/onnx-empty", "")
         self.assertEqual(empty["total"], 0)
         self.assertEqual(empty["releases"], [])
+
+    def test_embedded_assets_avoid_per_release_requests(self):
+        self.asset_count = 2
+        self.fail_assets = True
+        result = downloads.collect_repository("ggml-org/llama.cpp", "")
+        self.assertEqual(result["total"], 6)
+        self.assertEqual(len(result["releases"][1]["assets"]), 2)
+        self.assertEqual(
+            self.requests,
+            [
+                ("/repos/ggml-org/llama.cpp/releases", 1),
+                ("/repos/ggml-org/llama.cpp/releases", 2),
+            ],
+        )
 
     def test_llm_repositories_record_release_downloads_and_history(self):
         repositories = ["ggml-org/llama.cpp", "vllm-project/vllm"]
