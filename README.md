@@ -34,11 +34,11 @@ are excluded, as are clones and PyPI installations.
 
 The daily `DATA GitHub release downloads` workflow publishes
 `github-release-downloads.json` to `xadupre/cache_data`, using the existing
-`CACHE_DATA_SSH_KEY`. The site displays current totals per repository, release
-and file, one cumulative graph per project, and 1-day/30-day net counter changes
-when the exact baseline date exists. Every graph initially shows the combined
-total of all files. Expand its file list and check filenames to add individual
-curves alongside the total; release tags distinguish identically named files.
+`CACHE_DATA_SSH_KEY`. The site displays current counts per file and
+1-day/7-day/30-day net counter changes when the exact baseline date exists,
+without aggregate repository or release totals. Expand each project's file list
+and check filenames to show individual cumulative curves; release tags distinguish
+identically named files. Per-file graphs are hidden until a file is selected.
 Daily samples retain counters keyed by GitHub asset ID. Existing total-only
 history is preserved, but per-file curves have gaps before per-file observations
 were collected (the latest snapshot can supply its own day's counts).
