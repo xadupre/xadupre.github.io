@@ -19,6 +19,32 @@ To refresh locally, run `python scripts/record_onnxruntime_release_sizes.py
 --cache-dir /tmp/cache_data`; set `GITHUB_TOKEN` for the authenticated API rate
 limit. Reruns replace the snapshot rather than duplicating releases.
 
+## GitHub release downloads
+
+The [release downloads dashboard](dashboard/github-release-downloads.html)
+tracks all public `xadupre` repositories whose names contain `onnx`, including
+`onnx-light-*` and forks, plus ONNX projects linked from the home page (currently
+`onnx/onnx` and `microsoft/onnxruntime`). Repositories are rediscovered daily.
+All published releases, including prereleases, and all uploaded asset types are
+included. GitHub-generated source archives have no asset download counter and
+are excluded, as are clones and PyPI installations.
+
+The daily `DATA GitHub release downloads` workflow publishes
+`github-release-downloads.json` to `xadupre/cache_data`, using the existing
+`CACHE_DATA_SSH_KEY`. The site displays current totals per repository, release
+and file, cumulative daily history, and 1-day/30-day net counter changes when
+the exact baseline date exists. History starts at collection time; past daily
+downloads cannot be reconstructed. Deleted/replaced assets can decrease totals,
+and counts do not represent unique users. Same-day reruns replace that day's
+totals; failed collections leave the previous file intact.
+
+To collect locally without publishing, run
+`python scripts/record_github_release_downloads.py --cache-dir /tmp/cache_data`.
+Set `GITHUB_TOKEN` for authenticated API limits. Repeat `--repo owner/name` to
+select explicit repositories instead of discovery. After merging, the workflow
+can be dispatched manually for the first collection; until then the dashboard
+reports that its data are not yet available.
+
 ## Branch protection and the auto-updating workflows
 
 Most of the workflows under [`.github/workflows`](.github/workflows) commit and

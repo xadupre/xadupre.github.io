@@ -1,0 +1,281 @@
+"""Exercise release download collection against a real local HTTP API."""
+
+import datetime as dt
+import json
+import subprocess
+import sys
+import tempfile
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlsplit
+
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import record_github_release_downloads as downloads
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class TestReleaseDownloads(unittest.TestCase):
+    def setUp(self):
+        self.count = 3
+        self.fail_assets = False
+        self.requests = []
+        case = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parsed = urlsplit(self.path)
+                page = int(parse_qs(parsed.query)["page"][0])
+                case.requests.append((parsed.path, page))
+                if parsed.path == "/users/xadupre/repos":
+                    if page == 1:
+                        payload = [
+                            {
+                                "full_name": f"xadupre/project-{i}",
+                                "name": f"project-{i}",
+                                "private": False,
+                            }
+                            for i in range(98)
+                        ] + [
+                            {
+                                "full_name": "xadupre/onnx-light-cpu",
+                                "name": "onnx-light-cpu",
+                                "private": False,
+                            },
+                            {
+                                "full_name": "xadupre/onnx-private",
+                                "name": "onnx-private",
+                                "private": True,
+                            },
+                        ]
+                    else:
+                        payload = [
+                            {
+                                "full_name": "xadupre/onnx-light-viewer",
+                                "name": "onnx-light-viewer",
+                                "private": False,
+                            },
+                        ]
+                elif parsed.path.endswith("/releases/1/assets"):
+                    if case.fail_assets:
+                        self.send_error(503, "asset API unavailable")
+                        return
+                    payload = (
+                        [
+                            {
+                                "id": n,
+                                "name": f"wheel-{n}.whl",
+                                "state": "uploaded",
+                                "download_count": case.count,
+                            }
+                            for n in range(100)
+                        ]
+                        if page == 1
+                        else [
+                            {
+                                "id": 101,
+                                "name": "checksums.txt",
+                                "state": "uploaded",
+                                "download_count": 2,
+                            },
+                            {
+                                "id": 102,
+                                "name": "pending.whl",
+                                "state": "starter",
+                                "download_count": 99,
+                            },
+                        ]
+                    )
+                elif (
+                    parsed.path.endswith("/releases/2/assets")
+                    or parsed.path == "/repos/xadupre/onnx-empty/releases"
+                ):
+                    payload = []
+                elif parsed.path.endswith("/releases"):
+                    if page == 1:
+                        payload = [
+                            {
+                                "id": 1,
+                                "tag_name": "v1/preview",
+                                "draft": False,
+                                "prerelease": True,
+                                "published_at": "2026-01-01T00:00:00Z",
+                            },
+                        ] + [{"id": n, "draft": True} for n in range(3, 102)]
+                    else:
+                        payload = [
+                            {
+                                "id": 2,
+                                "tag_name": "v0",
+                                "draft": False,
+                                "prerelease": False,
+                                "published_at": "2025-01-01T00:00:00Z",
+                            },
+                        ]
+                else:
+                    self.send_error(404)
+                    return
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.thread = threading.Thread(target=self.server.serve_forever)
+        self.thread.start()
+        self.original_api = downloads.API
+        downloads.API = f"http://127.0.0.1:{self.server.server_port}"
+        self.addCleanup(self.cleanup_server)
+
+    def cleanup_server(self):
+        downloads.API = self.original_api
+        self.server.shutdown()
+        self.thread.join()
+        self.server.server_close()
+
+    def test_discovery_includes_new_repositories_and_home_upstreams(self):
+        repositories = downloads.discover_repositories("")
+        self.assertEqual(
+            repositories,
+            [
+                "microsoft/onnxruntime",
+                "onnx/onnx",
+                "xadupre/onnx-light",
+                "xadupre/onnx-light-cpu",
+                "xadupre/onnx-light-kernel-images",
+                "xadupre/onnx-light-ort",
+                "xadupre/onnx-light-viewer",
+                "xadupre/yet-another-onnx-builder",
+                "xadupre/yet-another-onnxruntime-extensions",
+            ],
+        )
+        self.assertIn(("/users/xadupre/repos", 2), self.requests)
+
+    def test_all_release_and_asset_pages_previews_and_empty_repositories(self):
+        result = downloads.collect_repository("xadupre/onnx-light-cpu", "")
+        self.assertEqual(result["total"], 302)
+        self.assertEqual([r["tag"] for r in result["releases"]], ["v0", "v1/preview"])
+        self.assertTrue(result["releases"][1]["prerelease"])
+        self.assertEqual(len(result["releases"][1]["assets"]), 101)
+        self.assertEqual(result["releases"][1]["assets"][-1]["name"], "checksums.txt")
+        self.assertIn(("/repos/xadupre/onnx-light-cpu/releases", 2), self.requests)
+        self.assertIn(
+            ("/repos/xadupre/onnx-light-cpu/releases/1/assets", 2), self.requests
+        )
+        empty = downloads.collect_repository("xadupre/onnx-empty", "")
+        self.assertEqual(empty["total"], 0)
+        self.assertEqual(empty["releases"], [])
+
+    def test_daily_upsert_and_history_survives_counter_decrease(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repositories = ["xadupre/onnx-light-cpu", "xadupre/onnx-empty"]
+            now = dt.datetime(2026, 10, 20, 6, tzinfo=dt.UTC)
+            first = downloads.record_downloads(tmp, repositories=repositories, now=now)
+            repeated = downloads.record_downloads(
+                tmp, repositories=repositories, now=now
+            )
+            self.assertEqual(first, repeated)
+            self.count = 4
+            updated = downloads.record_downloads(
+                tmp, repositories=repositories, now=now
+            )
+            self.assertEqual(len(updated["history"]), 1)
+            self.assertEqual(
+                updated["history"][0]["totals"]["xadupre/onnx-light-cpu"], 402
+            )
+            self.count = 1
+            next_day = downloads.record_downloads(
+                tmp, repositories=repositories, now=now + dt.timedelta(days=1)
+            )
+            self.assertEqual(len(next_day["history"]), 2)
+            self.assertEqual(
+                [
+                    entry["totals"]["xadupre/onnx-light-cpu"]
+                    for entry in next_day["history"]
+                ],
+                [402, 102],
+            )
+            path = Path(tmp) / "github-release-downloads.json"
+            self.assertEqual(json.loads(path.read_text()), next_day)
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+    def test_failed_collection_never_replaces_existing_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "github-release-downloads.json"
+            path.write_text("existing data", encoding="utf-8")
+            self.fail_assets = True
+            with self.assertRaisesRegex(HTTPError, "503"):
+                downloads.record_downloads(
+                    tmp, repositories=["xadupre/onnx-empty", "xadupre/onnx-light-cpu"]
+                )
+            self.assertEqual(path.read_text(), "existing data")
+            with self.assertRaisesRegex(RuntimeError, "No ONNX repositories"):
+                downloads.record_downloads(tmp, repositories=[])
+            self.assertEqual(path.read_text(), "existing data")
+
+    def test_cli_explicit_repositories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(
+                downloads.main(["--cache-dir", tmp, "--repo", "xadupre/onnx-empty"]), 0
+            )
+            data = json.loads((Path(tmp) / "github-release-downloads.json").read_text())
+            self.assertEqual(
+                data["repositories"],
+                [
+                    {"repository": "xadupre/onnx-empty", "total": 0, "releases": []},
+                ],
+            )
+            self.assertNotIn(("/users/xadupre/repos", 1), self.requests)
+
+
+class TestDownloadIntegration(unittest.TestCase):
+    def test_daily_workflow_and_page_are_connected(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/record_github_release_downloads.yml").read_text()
+        )
+        triggers = workflow.get("on", workflow.get(True))
+        self.assertEqual(triggers["schedule"], [{"cron": "41 6 * * *"}])
+        self.assertIn("workflow_dispatch", triggers)
+        self.assertTrue(workflow["name"].startswith("DATA "))
+        steps = workflow["jobs"]["record"]["steps"]
+        self.assertTrue(
+            any(
+                step.get("run")
+                == "python -u scripts/record_github_release_downloads.py"
+                for step in steps
+            )
+        )
+        page = (ROOT / "dashboard/github-release-downloads.html").read_text()
+        self.assertIn("../assets/github-release-downloads.js", page)
+        self.assertIn("../cache_data/github-release-downloads.json", page)
+        self.assertIn("GitHub-generated source archives", page)
+        self.assertIn(
+            "dashboard/github-release-downloads.html", (ROOT / "index.html").read_text()
+        )
+
+    def test_browser_logic(self):
+        subprocess.run(
+            [
+                "node",
+                "--test",
+                str(ROOT / "scripts/tests/github_release_downloads.test.cjs"),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
