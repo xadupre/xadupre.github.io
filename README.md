@@ -24,8 +24,9 @@ limit. Reruns replace the snapshot rather than duplicating releases.
 The [release downloads dashboard](dashboard/github-release-downloads.html)
 tracks public `xadupre/onnx-light`, `xadupre/onnx-light-*` and
 `xadupre/yet-another-*` repositories, plus ONNX upstreams linked from the home
-page (`onnx/onnx` and `microsoft/onnxruntime`), `microsoft/onnxruntime-genai`
-and `microsoft/onnxruntime-extensions`. Other owner projects, including
+page (`onnx/onnx` and `microsoft/onnxruntime`), `microsoft/onnxruntime-genai`,
+`microsoft/onnxruntime-extensions`, `ggml-org/llama.cpp` and
+`vllm-project/vllm`. Other owner projects, including
 `onnx-asv-benchmark`, are excluded even if linked from the home page.
 Repositories are rediscovered daily.
 All published releases, including prereleases, and all uploaded asset types are

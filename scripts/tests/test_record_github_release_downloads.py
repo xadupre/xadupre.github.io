@@ -169,10 +169,12 @@ class TestReleaseDownloads(unittest.TestCase):
         self.assertEqual(
             repositories,
             [
+                "ggml-org/llama.cpp",
                 "microsoft/onnxruntime",
                 "microsoft/onnxruntime-extensions",
                 "microsoft/onnxruntime-genai",
                 "onnx/onnx",
+                "vllm-project/vllm",
                 "xadupre/onnx-light",
                 "xadupre/onnx-light-cpu",
                 "xadupre/onnx-light-kernel-images",
@@ -200,6 +202,8 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertIn("xadupre/yet-another-project", repositories)
             self.assertIn("microsoft/onnxruntime-genai", repositories)
             self.assertIn("microsoft/onnxruntime-extensions", repositories)
+            self.assertIn("ggml-org/llama.cpp", repositories)
+            self.assertIn("vllm-project/vllm", repositories)
 
     def test_all_release_and_asset_pages_previews_and_empty_repositories(self):
         result = downloads.collect_repository("xadupre/onnx-light-cpu", "")
@@ -215,6 +219,25 @@ class TestReleaseDownloads(unittest.TestCase):
         empty = downloads.collect_repository("xadupre/onnx-empty", "")
         self.assertEqual(empty["total"], 0)
         self.assertEqual(empty["releases"], [])
+
+    def test_llm_repositories_record_release_downloads_and_history(self):
+        repositories = ["ggml-org/llama.cpp", "vllm-project/vllm"]
+        with tempfile.TemporaryDirectory() as tmp:
+            result = downloads.record_downloads(tmp, repositories=repositories)
+            self.assertEqual(
+                [item["repository"] for item in result["repositories"]], repositories
+            )
+            self.assertEqual(
+                result["history"][0]["totals"],
+                {repository: 302 for repository in repositories},
+            )
+            for repository in repositories:
+                self.assertEqual(result["history"][0]["assets"][repository]["0"], 3)
+                self.assertIn((f"/repos/{repository}/releases", 2), self.requests)
+            self.assertEqual(
+                json.loads((Path(tmp) / "github-release-downloads.json").read_text()),
+                result,
+            )
 
     def test_daily_upsert_and_history_survives_counter_decrease(self):
         with tempfile.TemporaryDirectory() as tmp:
