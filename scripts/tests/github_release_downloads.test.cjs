@@ -142,17 +142,14 @@ test("projects omit aggregate totals and preserve period and selectable file cur
   assert.deepEqual(document.getElementById("totals").children[1].children.slice(1)
     .map(cell => cell.textContent), ["\u2014", "\u2014", "\u2014"]);
   assert.equal(charts.length, 2);
-  assert.equal(periodCharts.length, 2);
+  assert.equal(periodCharts.length, 1);
   assert.deepEqual(Array.from(periodCharts[0].data.datasets, series => series.label),
     ["Daily (1 day)", "Weekly (7 days)", "Monthly (30 days)"]);
   for (const [index, change] of [7, 9, 12].entries()) {
     assert.deepEqual(Array.from(periodCharts[0].data.datasets[index].data),
       [null, null, null, change]);
   }
-  for (const series of periodCharts[1].data.datasets) {
-    assert.deepEqual(Array.from(series.data), [null, null, null, null]);
-    assert.equal(series.spanGaps, false);
-  }
+  assert.equal(periodCharts[0].data.datasets[0].spanGaps, false);
   assert.equal(periodCharts[0].data.datasets[0].yAxisID, "y1");
   assert.equal(periodCharts[0].data.datasets[1].yAxisID, "y");
   assert.equal(periodCharts[0].data.datasets[2].yAxisID, "y");
@@ -163,12 +160,23 @@ test("projects omit aggregate totals and preserve period and selectable file cur
   assert.equal(projects.length, 2);
   assert.equal(projects[0].children[0].textContent, "onnx/onnx");
   assert.equal(projects[0].children[1].hidden, true);
-  const details = projects[0].children[3].children[1];
+  const releases = projects[0].children[3];
+  assert.equal(releases.children.length, 2);
+  releases.open = true;
+  releases.listeners.toggle();
+  const details = releases.children[2];
   assert.equal(details.children[0].textContent, "v1 (prerelease)");
-  assert.equal(projects[0].children[3].children[2].children[0].textContent, "v0");
-  const assetCell = details.children[2].children[0].children[1].children[0].children[0];
+  assert.equal(releases.children[3].children[0].textContent, "v0");
+  const assetRows = details.children[3].children[0].children[1];
+  assert.equal(assetRows.children.length, 0);
+  details.open = true;
+  details.listeners.toggle();
+  const assetCell = assetRows.children[0].children[0];
   assert.equal(assetCell.textContent, "<script>alert(1)</script>.whl");
   const fileList = projects[0].children[2].children[1];
+  assert.equal(fileList.children.length, 0);
+  projects[0].children[2].open = true;
+  projects[0].children[2].listeners.toggle();
   const first = fileList.children[0].children[0];
   const second = fileList.children[1].children[0];
   assert.equal(Boolean(first.checked), false);
@@ -193,6 +201,62 @@ test("projects omit aggregate totals and preserve period and selectable file cur
   assert.equal(projects[0].children[1].hidden, true);
   assert.equal(projects[1].children[1].hidden, true);
   assert.equal(projects[1].children[2].children[1].textContent, "No uploaded files.");
+  assert.equal(projects[1].children[4].children[0].hidden, true);
+  assert.match(projects[1].children[4].children[1].textContent, /Not enough daily history/);
+
+  data.history = [data.history.at(-1)];
+  document.getElementById("totals").replaceChildren();
+  document.getElementById("projects").replaceChildren();
+  periodCharts.length = 0;
+  context.renderReleaseDownloads(data);
+  assert.equal(periodCharts.length, 0);
+  for (const project of document.getElementById("projects").children) {
+    assert.match(project.children[4].children[1].textContent, /Not enough daily history/);
+  }
+  assert.deepEqual(document.getElementById("totals").children[0].children.slice(1)
+    .map(cell => cell.textContent), ["\u2014", "\u2014", "\u2014"]);
+});
+
+test("large lists render only on expansion and in bounded batches without duplicates", () => {
+  const details = context.document.createElement("details");
+  const rendered = [];
+  context.renderBatches(details, function* () {
+    for (let i = 0; i < 250; i++) yield i;
+  }, item => rendered.push(item));
+  const more = details.children[0];
+  assert.equal(rendered.length, 0);
+  assert.equal(more.hidden, true);
+  details.listeners.toggle();
+  assert.equal(rendered.length, 0);
+  details.open = true;
+  details.listeners.toggle();
+  assert.equal(rendered.length, 100);
+  assert.equal(more.hidden, false);
+  details.open = false;
+  details.listeners.toggle();
+  details.open = true;
+  details.listeners.toggle();
+  assert.equal(rendered.length, 100);
+  more.listeners.click();
+  assert.equal(rendered.length, 200);
+  assert.equal(more.hidden, false);
+  more.listeners.click();
+  assert.deepEqual(rendered, Array.from({length: 250}, (_, i) => i));
+  assert.equal(more.hidden, true);
+});
+
+test("empty and exactly full batches hide the continuation button", () => {
+  for (const length of [0, 100]) {
+    const details = context.document.createElement("details");
+    const rendered = [];
+    context.renderBatches(details, function* () {
+      for (let i = 0; i < length; i++) yield i;
+    }, item => rendered.push(item));
+    details.open = true;
+    details.listeners.toggle();
+    assert.equal(rendered.length, length);
+    assert.equal(details.children[0].hidden, true);
+  }
 });
 
 test("summary headers show net changes without total downloads", () => {
