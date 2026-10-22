@@ -41,7 +41,7 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "name": f"project-{i}",
                                 "private": False,
                             }
-                            for i in range(98)
+                            for i in range(94)
                         ] + [
                             {
                                 "full_name": "xadupre/onnx-light-cpu",
@@ -49,9 +49,29 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "private": False,
                             },
                             {
-                                "full_name": "xadupre/onnx-private",
-                                "name": "onnx-private",
+                                "full_name": "xadupre/onnx-light-private",
+                                "name": "onnx-light-private",
                                 "private": True,
+                            },
+                            {
+                                "full_name": "xadupre/onnx-asv-benchmark",
+                                "name": "onnx-asv-benchmark",
+                                "private": False,
+                            },
+                            {
+                                "full_name": "xadupre/onnx-diagnostic",
+                                "name": "onnx-diagnostic",
+                                "private": False,
+                            },
+                            {
+                                "full_name": "xadupre/yet-another-tool",
+                                "name": "yet-another-tool",
+                                "private": False,
+                            },
+                            {
+                                "full_name": "xadupre/onnx-lightish",
+                                "name": "onnx-lightish",
+                                "private": False,
                             },
                         ]
                     else:
@@ -150,6 +170,8 @@ class TestReleaseDownloads(unittest.TestCase):
             repositories,
             [
                 "microsoft/onnxruntime",
+                "microsoft/onnxruntime-extensions",
+                "microsoft/onnxruntime-genai",
                 "onnx/onnx",
                 "xadupre/onnx-light",
                 "xadupre/onnx-light-cpu",
@@ -158,9 +180,26 @@ class TestReleaseDownloads(unittest.TestCase):
                 "xadupre/onnx-light-viewer",
                 "xadupre/yet-another-onnx-builder",
                 "xadupre/yet-another-onnxruntime-extensions",
+                "xadupre/yet-another-tool",
             ],
         )
         self.assertIn(("/users/xadupre/repos", 2), self.requests)
+
+    def test_home_links_cannot_reintroduce_excluded_owner_projects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "index.html"
+            home.write_text(
+                '<a href="https://github.com/xadupre/onnx-asv-benchmark">excluded</a>'
+                '<a href="https://github.com/xadupre/onnxruntime">excluded</a>'
+                '<a href="https://github.com/xadupre/yet-another-project">included</a>',
+                encoding="utf-8",
+            )
+            repositories = downloads.discover_repositories("", home)
+            self.assertNotIn("xadupre/onnx-asv-benchmark", repositories)
+            self.assertNotIn("xadupre/onnxruntime", repositories)
+            self.assertIn("xadupre/yet-another-project", repositories)
+            self.assertIn("microsoft/onnxruntime-genai", repositories)
+            self.assertIn("microsoft/onnxruntime-extensions", repositories)
 
     def test_all_release_and_asset_pages_previews_and_empty_repositories(self):
         result = downloads.collect_repository("xadupre/onnx-light-cpu", "")
@@ -194,6 +233,10 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(
                 updated["history"][0]["totals"]["xadupre/onnx-light-cpu"], 402
             )
+            self.assertEqual(
+                updated["history"][0]["assets"]["xadupre/onnx-light-cpu"]["0"], 4
+            )
+            self.assertEqual(updated["history"][0]["assets"]["xadupre/onnx-empty"], {})
             self.count = 1
             next_day = downloads.record_downloads(
                 tmp, repositories=repositories, now=now + dt.timedelta(days=1)
@@ -209,6 +252,23 @@ class TestReleaseDownloads(unittest.TestCase):
             path = Path(tmp) / "github-release-downloads.json"
             self.assertEqual(json.loads(path.read_text()), next_day)
             self.assertFalse(path.with_suffix(".json.tmp").exists())
+
+    def test_legacy_history_retains_totals_without_inventing_asset_counts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "github-release-downloads.json"
+            legacy = {"date": "2026-10-20", "totals": {"xadupre/onnx-light-cpu": 99}}
+            path.write_text(json.dumps({"history": [legacy]}), encoding="utf-8")
+            result = downloads.record_downloads(
+                tmp,
+                repositories=["xadupre/onnx-light-cpu"],
+                now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
+            )
+            self.assertEqual(result["history"][0], legacy)
+            counts = result["history"][1]["assets"]["xadupre/onnx-light-cpu"]
+            self.assertEqual(counts["0"], 3)
+            self.assertEqual(counts["101"], 2)
+            self.assertNotIn("102", counts)
+            self.assertEqual(sum(counts.values()), 302)
 
     def test_failed_collection_never_replaces_existing_data(self):
         with tempfile.TemporaryDirectory() as tmp:

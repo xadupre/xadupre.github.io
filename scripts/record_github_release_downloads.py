@@ -1,8 +1,8 @@
 """Record daily GitHub release download counts for ONNX repositories.
 
-Discover public xadupre repositories containing 'onnx', including forks, and
-include the ONNX upstream projects linked from the home page. Only attached
-release assets have counters; GitHub-generated source archives are excluded.
+Discover public xadupre onnx-light and yet-another projects, and include ONNX
+upstreams. Only attached release assets have counters; GitHub-generated source
+archives are excluded.
 """
 
 from __future__ import annotations
@@ -18,6 +18,12 @@ from record_onnxruntime_release_sizes import fetch_pages
 
 API = "https://api.github.com"
 HOME = Path(__file__).resolve().parents[1] / "index.html"
+EXTRA_UPSTREAMS = ("microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions")
+
+
+def is_owner_project(name: str) -> bool:
+    """Limit owner discovery to the requested project families."""
+    return name == "onnx-light" or name.startswith(("onnx-light-", "yet-another-"))
 
 
 def discover_repositories(token: str, home: Path = HOME) -> list[str]:
@@ -25,13 +31,22 @@ def discover_repositories(token: str, home: Path = HOME) -> list[str]:
     repositories = {
         item["full_name"]
         for item in fetch_pages(f"{API}/users/xadupre/repos", token)
-        if not item["private"] and "onnx" in item["name"].lower()
+        if not item["private"] and is_owner_project(item["name"])
     }
     links = re.findall(
         r'href="https://github\.com/([^/"?#]+/[^/"?#]+)"',
         home.read_text(encoding="utf-8"),
     )
-    repositories.update(name for name in links if "onnx" in name.split("/")[1].lower())
+    repositories.update(
+        name
+        for name in links
+        if (
+            is_owner_project(name.split("/")[1])
+            if name.startswith("xadupre/")
+            else "onnx" in name.split("/")[1].lower()
+        )
+    )
+    repositories.update(EXTRA_UPSTREAMS)
     return sorted(repositories)
 
 
@@ -101,6 +116,14 @@ def record_downloads(
     history[day] = {
         "date": day,
         "totals": {item["repository"]: item["total"] for item in current},
+        "assets": {
+            item["repository"]: {
+                str(asset["id"]): asset["download_count"]
+                for release in item["releases"]
+                for asset in release["assets"]
+            }
+            for item in current
+        },
     }
     result = {
         "updated_at": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
