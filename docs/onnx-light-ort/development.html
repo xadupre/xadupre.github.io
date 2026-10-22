@@ -512,7 +512,10 @@ alignment or overlapping buffers. Expected values come from NumPy, not a
 substitute native kernel.
 They also execute <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::Log</span></code> and check its special values and SIMD
 tails against a NumPy float64 reference, rounded to float32, with relative
-tolerance <code class="docutils literal notranslate"><span class="pre">2e-6</span></code> and zero absolute tolerance.</p>
+tolerance <code class="docutils literal notranslate"><span class="pre">2e-6</span></code> and zero absolute tolerance.
+Both operators also run in float16, bfloat16 and float64 through real ORT and
+the standalone host, preserving dtype. The float64 cases include values
+that would lose precision or overflow if routed through float32.</p>
 <p>On Linux the loadable library is
 <code class="docutils literal notranslate"><span class="pre">build/onnx_light_ort/custom_ops/libonnx_light_ort_custom_ops.so</span></code>.
 CTest resolves the platform-specific path from the custom-op target, including
@@ -568,7 +571,7 @@ libraries placed under <code class="docutils literal notranslate"><span class="p
 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">cmake/run_python_with_dll_paths.py</span> <span class="pre">path/to/script.py</span> <span class="pre">...</span></code> as well.</p>
 <p><code class="docutils literal notranslate"><span class="pre">CustomOpSession</span></code> accepts an onnx-light <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> or serialized model
 bytes and explicit plugin/host library
-paths. Its audited single-node float32 profile is documented in
+paths. Its audited single-node floating-point profile is documented in
 <a class="reference internal" href="components/bridge_ops_ort_called_by_light.html"><span class="doc">Custom-op bridge: ORT custom ops called by onnx-light</span></a>; it is not a general plugin host.</p>
 </section>
 <section id="executable-python-gallery">
@@ -621,10 +624,79 @@ and combined configurations. It uses a compiler cache, cancels superseded
 branch runs, and builds against upstream main. A Linux check rejects an ORT
 shared-library dependency in the native test executable and plugin library.
 Real-host tests run in a separate Linux job; host-only jobs do not install ORT.
-Before staging tag-release executables, each platform reconfigures the same
-build tree with Python disabled and rebuilds the dependency test with static
-onnx-light libraries. Published executables do not require the shared
-onnx-light libraries used by the Python-enabled test builds.</p>
+Release publication is handled separately by <code class="docutils literal notranslate"><span class="pre">.github/workflows/releases.yml</span></code>;
+ordinary native CI does not create releases.</p>
+</section>
+<section id="tagged-releases">
+<h2>Tagged releases<a class="headerlink" href="#tagged-releases" title="Link to this heading">#</a></h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">Releases</span></code> workflow starts automatically when a tag is pushed.
+For version 0.2.0, both <code class="docutils literal notranslate"><span class="pre">0.2.0</span></code> and <code class="docutils literal notranslate"><span class="pre">v0.2.0</span></code> are accepted. It checks that the
+tag, CMake project, Python metadata and <code class="docutils literal notranslate"><span class="pre">__version__</span></code> agree before building.
+It resolves onnx-light’s main revision once and uses that immutable commit in
+every release job; onnx-light-cpu remains independently pinned. Each package
+includes <code class="docutils literal notranslate"><span class="pre">release-build-info.txt</span></code> and the dependency licenses.</p>
+<p>The targets match onnx-light’s release matrix:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Platform</p></th>
+<th class="head"><p>Architectures</p></th>
+<th class="head"><p>CPython wheels</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Linux, manylinux 2.28</p></td>
+<td><p>x86_64, aarch64</p></td>
+<td><p>3.12, 3.13, 3.14</p></td>
+</tr>
+<tr class="row-odd"><td><p>Windows</p></td>
+<td><p>AMD64, ARM64</p></td>
+<td><p>3.12, 3.13, 3.14</p></td>
+</tr>
+<tr class="row-even"><td><p>macOS 13.3+</p></td>
+<td><p>universal2 (arm64 + x86_64)</p></td>
+<td><p>3.12, 3.13, 3.14</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>There are fifteen wheels and five native C++ archives. Native archives use
+Ubuntu 24.04 on Linux; they are not the portable manylinux wheels.
+Windows archives are ZIP files; Linux and macOS archives are gzip-compressed
+tar files. All builds enable both custom-op directions and use all available
+processors. No ORT runtime or <code class="docutils literal notranslate"><span class="pre">onnx</span></code> Python package is bundled.</p>
+<p>Native archive builds disable Python and optional OpenSSL support. They contain
+the two shared libraries with statically linked onnx-light/CPU dependencies,
+public host and ORT API headers, and a relocatable CMake package. Each job moves
+the installation and builds/runs an independent downstream consumer:</p>
+<div class="highlight-cmake notranslate"><div class="highlight"><pre><span></span><span class="nb">find_package</span><span class="p">(</span><span class="s">onnx_light_ort</span><span class="w"> </span><span class="s">0.2</span><span class="w"> </span><span class="s">CONFIG</span><span class="w"> </span><span class="s">REQUIRED</span><span class="p">)</span>
+<span class="nb">target_link_libraries</span><span class="p">(</span><span class="s">my_host</span><span class="w"> </span><span class="s">PRIVATE</span><span class="w"> </span><span class="s">onnx_light_ort::bridge_ops_ort_called_by_light</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">onnx_light_ort::custom_ops</span></code> is the installed plugin target.</p>
+<p>Wheels bundle the host, plugin and their native runtime dependencies under
+<code class="docutils literal notranslate"><span class="pre">onnx_light_ort/_native</span></code>. Bundled dependency libraries use private names to
+avoid ABI collisions with a separately installed onnx-light model package.
+The matching onnx-light model bindings are built
+in the same tree for wheel smoke tests, but are not copied into this package.
+The tests load the installed libraries first and execute LeakyRelu and CPU Log
+without ORT. Dependency repair uses auditwheel, delvewheel or delocate as
+appropriate; Windows repair preserves already bundled DLLs.
+Success on one platform does not publish a partial release: publication waits
+for every wheel and native job, then attaches all artifacts and <code class="docutils literal notranslate"><span class="pre">SHA256SUMS</span></code>.
+A retry can replace artifacts on the same release.</p>
+<p><code class="docutils literal notranslate"><span class="pre">workflow_dispatch</span></code> without a tag builds and tests artifacts without
+publishing. With an existing tag it can retry a release. This workflow publishes
+to GitHub Releases, not PyPI; pushing a tag is an explicit maintainer action.</p>
+<p>To build a wheel locally without installing it, use the existing build tree.
+Set <code class="docutils literal notranslate"><span class="pre">CMAKE_GENERATOR</span></code> to its current generator (<code class="docutils literal notranslate"><span class="pre">Unix</span> <span class="pre">Makefiles</span></code> in this
+Linux example), rather than creating another compiled tree:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CMAKE_GENERATOR</span><span class="o">=</span><span class="s2">"Unix Makefiles"</span><span class="w"> </span><span class="nv">CMAKE_BUILD_PARALLEL_LEVEL</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>nproc<span class="k">)</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>wheel<span class="w"> </span>.<span class="w"> </span>--no-deps<span class="w"> </span>-w<span class="w"> </span>build/wheelhouse
+</pre></div>
+</div>
+<p>For source-checkout work, continue using <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> rather than installing
+local artifacts. Wheel builds reconfigure <code class="docutils literal notranslate"><span class="pre">build</span></code>; restore the desired native
+options and <code class="docutils literal notranslate"><span class="pre">-DSKBUILD=OFF</span></code> before returning to a plain CMake development build.</p>
 </section>
 <section id="daily-coverage">
 <h2>Daily coverage<a class="headerlink" href="#daily-coverage" title="Link to this heading">#</a></h2>
@@ -712,6 +784,7 @@ deployment and the coverage job for Codecov authentication.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#standalone-python-custom-op-tests">Standalone Python custom-op tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#executable-python-gallery">Executable Python gallery</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-and-documentation-publishing">CI and documentation publishing</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tagged-releases">Tagged releases</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#daily-coverage">Daily coverage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fuzzing-onnx-light">Fuzzing onnx-light</a></li>
 </ul>

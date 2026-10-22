@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy
 import onnxruntime
+import matplotlib.pyplot as plt
 from onnx_light.onnx import TensorProto, checker, helper
 
 # %%
@@ -68,3 +69,18 @@ cpu_values = numpy.linspace(0.01, 10, 21, dtype=numpy.float32).reshape(3, 7)
 cpu_result = cpu_session.run(None, {"X": cpu_values})[0]
 numpy.testing.assert_allclose(cpu_result, numpy.log(cpu_values), rtol=2e-6, atol=0)
 print("onnx-light-cpu Log custom op called by ORT:\n", cpu_result)
+
+# %%
+# Compare the custom-op outputs with their NumPy references.
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].plot(values, numpy.where(values < 0, values * 0.125, values), label="NumPy")
+axes[0].plot(values, result, "o", label="Custom op")
+axes[0].set(title="LeakyRelu: onnx-light called by ORT", xlabel="Input", ylabel="Output")
+axes[1].plot(cpu_values.ravel(), numpy.log(cpu_values).ravel(), label="NumPy")
+axes[1].plot(cpu_values.ravel(), cpu_result.ravel(), "o", label="Custom op")
+axes[1].set(title="Log: onnx-light-cpu called by ORT", xlabel="Input", ylabel="Output")
+for ax in axes:
+    ax.legend()
+    ax.grid(True)
+fig.tight_layout()
+plt.show()

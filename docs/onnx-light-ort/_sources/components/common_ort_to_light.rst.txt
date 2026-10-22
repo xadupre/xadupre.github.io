@@ -22,7 +22,9 @@ layout is preserved; unsupported slots remain null. Supported entries are:
   ``GetTensorShapeElementCount``, ``GetTensorMutableData``.
 * ``GetTensorMemoryInfo``, ``MemoryInfoGetDeviceType``.
 
-These functions implement only dense float32 CPU values. Shape and byte counts
+These functions implement dense float16, bfloat16, float32 and float64 CPU values.
+Type queries report the actual tensor type, and output allocation uses the
+selected descriptor's output type. Shape and dtype-dependent byte counts
 are checked before allocating outputs. The component is independent of the
 outgoing common library and never loads ORT. ``tests/ort_test_host.h`` remains
 separate test infrastructure for outgoing callback units, not this host.

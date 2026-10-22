@@ -12,8 +12,13 @@ onnx-light-ort
 Interoperability between onnx-light and ONNX Runtime custom operators and
 execution providers, in both directions.
 
+.. image:: _static/projects.svg
+   :alt: onnx-light handles ONNX models, onnx-light-cpu provides optimized CPU kernels, onnx-light-ort bridges ONNX Runtime, and onnx-light-viewer visualizes graphs.
+   :align: center
+   :width: 100%
+
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    introduction
    components/index

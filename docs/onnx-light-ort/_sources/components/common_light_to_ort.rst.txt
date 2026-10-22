@@ -8,13 +8,16 @@ to an ORT host's current tensors and kernel context. Both
 It contains no ops/EP registration, descriptor or factory ownership.
 
 The current ``LeakyReluKernel`` retains one native kernel and its alpha
-attribute. Each ``Compute`` call validates CPU memory, float32 type, rank,
+attribute. Each ``Compute`` call validates CPU memory, supported floating-point
+type, matching output type, rank,
 dimensions, checked element/byte counts, non-null nonempty buffers, alignment
 and non-overlap before borrowing payloads. It owns neither the input/output
 storage nor the ORT context and retains none of them between calls.
-``GetUnaryFloat32Buffers`` shares these checks with ``LogKernel``, which calls
-onnx-light-cpu's ``ml_cpu_compute::LogFloat32`` directly into the host's output
-buffer. The numerical dependency remains private to this common library;
+``GetUnaryTensorBuffers`` shares these checks with ``LogKernel``. Both kernels
+preserve float16, bfloat16, float32 and float64 storage. Log dispatches directly
+to onnx-light-cpu's matching typed function, using its default tuning; LeakyRelu
+passes the original typed tensor views to onnx-light's native kernel.
+The numerical dependency remains private to this common library;
 neither the incoming common library nor ONNX Runtime is linked.
 Native exceptions propagate to the bridge's C ABI boundary; ``api_status.h``
 provides the shared exception-to-status conversion used at those boundaries

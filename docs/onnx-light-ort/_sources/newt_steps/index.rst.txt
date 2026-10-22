@@ -7,4 +7,4 @@ scope, implemented milestones and remaining work.
 .. toctree::
    :maxdepth: 1
 
-   2026/2026-10-start
+   2026/index

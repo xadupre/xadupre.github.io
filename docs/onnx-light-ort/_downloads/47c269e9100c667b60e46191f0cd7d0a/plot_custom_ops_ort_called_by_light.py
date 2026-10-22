@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import numpy
+import matplotlib.pyplot as plt
 from onnx_light.onnx import TensorProto, checker, helper
 
 from onnx_light_ort import CustomOpSession
@@ -67,3 +68,20 @@ with CustomOpSession(cpu_model, library=cpu_library, host_library=host) as sessi
     cpu_result = session.run(None, {"X": cpu_values})[0]
     numpy.testing.assert_allclose(cpu_result, numpy.log(cpu_values), rtol=2e-6, atol=0)
 print("CPU Log through the ORT custom-op ABI, called by onnx-light:", cpu_result)
+
+# %%
+# Plot the standalone host's outputs alongside the NumPy references.
+fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+axes[0].plot(values, numpy.where(values < 0, values * 0.125, values), label="NumPy")
+axes[0].plot(values, result, "o", label="Custom op")
+axes[0].set(
+    title="LeakyRelu: ORT custom op called by onnx-light", xlabel="Input", ylabel="Output"
+)
+axes[1].plot(cpu_values, numpy.log(cpu_values), label="NumPy")
+axes[1].plot(cpu_values, cpu_result, "o", label="Custom op")
+axes[1].set(title="Log: CPU custom op called by onnx-light", xlabel="Input", ylabel="Output")
+for ax in axes:
+    ax.legend()
+    ax.grid(True)
+fig.tight_layout()
+plt.show()

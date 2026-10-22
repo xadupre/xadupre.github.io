@@ -25,8 +25,9 @@ They must be audited against this API subset; unsupported function-table
 slots are null and must not be called. Arbitrary plugin binaries are not safe
 to probe for compatibility by executing them.
 
-The host accepts only API-18 descriptors, one required float32 CPU input and
-output, a custom-domain opset import, and status-returning ``CreateKernelV2``
+The host accepts only API-18 descriptors, one required CPU input and output of
+matching float16, bfloat16, float32 or float64 type, a custom-domain opset import,
+and status-returning ``CreateKernelV2``
 and ``KernelComputeV2`` callbacks with ``KernelDestroy``. The initial model
 must contain exactly one custom node, with distinct graph input and output,
 no initializers and no local functions. Model data is limited to 16 MiB and
@@ -37,8 +38,10 @@ size and rank before copying arrays. These checks raise ``ValueError``;
 native validation remains in place for C callers.
 
 Registration rejects missing descriptors, unsupported devices or types,
-duplicate names, incompatible opsets, optional/variadic arguments, alias
-callbacks and shape-inference callbacks. Overloads, legacy callbacks, EPs,
+duplicate registrations for the same domain/name/type, incompatible opsets,
+optional/variadic arguments, alias callbacks and shape-inference callbacks.
+Concrete type overloads are selected by the model's tensor type; generic
+``UNDEFINED`` type descriptors are not supported. Legacy callbacks, EPs,
 logging/configuration, general allocator APIs and the remaining roadmap
 functions are not implemented. Output shapes are determined at execution.
 
@@ -49,6 +52,14 @@ protect caller-owned arrays from the API's mutable data accessor, and returns
 independent NumPy output copies. Output buffers are host-owned. This initial
 Python interface does not claim zero-copy execution.
 
+``LightOrtRunTyped`` accepts a raw input pointer, its ONNX element type and
+element count, and returns raw output storage of the same type. It checks
+the model type, element alignment and dtype-dependent byte limit before reading
+the input. The original ``LightOrtRun`` C ABI remains available for float32 and
+rejects models of another type. The Python wrapper uses the typed entry point,
+accepts NumPy float16/float32/float64 and ``ml_dtypes.bfloat16`` arrays, and rejects
+arrays whose dtype differs from the model instead of converting them.
+
 ``close()`` and the context-manager protocol release kernels before unloading
 the plugin. A finalizer also releases abandoned sessions. Registration and
 compute errors propagate as Python exceptions; there is no ORT fallback.
@@ -58,7 +69,8 @@ Tests and example
 
 The independent ``examples/custom_ops/ort_custom_ops.cc`` implements
 ``ort_custom_ops::LeakyRelu`` using only pinned ORT headers and its own numerical
-code, without linking onnx-light. Native tests execute it under the standalone host, including
+code, without linking onnx-light. This independent example remains float32-only.
+Native tests execute it under the standalone host, including
 scalar/empty inputs and API negotiation failure. Python tests check changing
 shapes, read-only and noncontiguous inputs, retained kernel state, independent
 sessions and outputs, close ordering, missing attributes, unsupported graphs,
@@ -68,8 +80,9 @@ was imported.
 Run ``ctest --test-dir build -L bridge_ops_ort_called_by_light --output-on-failure``.
 Enable ``ONNX_LIGHT_ORT_TEST_PYTHON=ON`` for the Python cases.
 When the plugin target is enabled too, an additional Python suite loads the
-actual ``onnx_light_cpu::Log`` custom op through the same standalone host.
-It shares numerical cases with the real-ORT suite: SIMD tails, changing shapes,
+actual ``onnx_light::LeakyRelu`` and ``onnx_light_cpu::Log`` custom ops in all four
+types through the same standalone host.
+These share numerical cases with the real-ORT suite: SIMD tails, changing shapes,
 scalars, empty tensors, near-one and subnormal inputs, non-finite values,
 read-only inputs and recovery after type/rank errors. The host remains generic;
 it does not link the outgoing bridge or import ORT to execute this kernel.

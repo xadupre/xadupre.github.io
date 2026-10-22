@@ -421,12 +421,19 @@
 <h1>Custom ops<a class="headerlink" href="#custom-ops" title="Link to this heading">#</a></h1>
 <p><code class="docutils literal notranslate"><span class="pre">onnx_light_ort/custom_ops/</span></code> builds <code class="docutils literal notranslate"><span class="pre">onnx_light_ort::custom_ops</span></code>, a shared
 library exporting only <code class="docutils literal notranslate"><span class="pre">RegisterCustomOps</span></code>. Its current profile registers
-<code class="docutils literal notranslate"><span class="pre">onnx_light::LeakyRelu</span></code> at custom opset 1, with one float32 CPU input and
+<code class="docutils literal notranslate"><span class="pre">onnx_light::LeakyRelu</span></code> at custom opset 1, with one floating-point CPU input and
 output and an explicit float <code class="docutils literal notranslate"><span class="pre">alpha</span></code> attribute.
 It also registers <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::Log</span></code> at custom opset 1, with the same
-float32 CPU input/output profile and no attributes. The numerical implementation
-is <code class="docutils literal notranslate"><span class="pre">ml_cpu_compute::LogFloat32</span></code> from onnx-light-cpu, with runtime SIMD dispatch.
+CPU input/output profile and no attributes. The numerical implementations
+are onnx-light-cpu’s <code class="docutils literal notranslate"><span class="pre">LogFloat32</span></code>, <code class="docutils literal notranslate"><span class="pre">LogFloat64</span></code>, <code class="docutils literal notranslate"><span class="pre">LogFloat16</span></code> and
+<code class="docutils literal notranslate"><span class="pre">LogBFloat16WithTuning</span></code>, using the dependency’s default tuning and dispatch.
 Both operators support changing shapes, scalars and empty tensors up to rank 16.</p>
+<p>Each operator exposes <code class="docutils literal notranslate"><span class="pre">float16</span></code>, <code class="docutils literal notranslate"><span class="pre">bfloat16</span></code>, <code class="docutils literal notranslate"><span class="pre">float32</span></code> and <code class="docutils literal notranslate"><span class="pre">float64</span></code>.
+Four concrete typed descriptors share the same domain, name and custom opset;
+ORT selects the matching implementation from the model’s element types.
+Input and output types must match. There is no bridge-level conversion or
+fallback to another operator. LeakyRelu delegates all four types to the native
+onnx-light kernel; its <code class="docutils literal notranslate"><span class="pre">alpha</span></code> attribute remains an ONNX float.</p>
 <p>This component owns descriptors, domain registration and callback wiring. It
 depends on <a class="reference internal" href="bridge_ops_light_called_by_ort.html"><span class="doc">Custom-op bridge: onnx-light called by ORT</span></a>, which uses <a class="reference internal" href="common_light_to_ort.html"><span class="doc">Shared support for onnx-light in ORT</span></a>
 for native state, tensor validation and status conversion, never
@@ -447,7 +454,47 @@ result, native execution through callbacks, exception-to-status translation,
 metadata cleanup and reuse after failure. No ORT runtime or mocking framework
 is needed. This fixture is not the production compatibility bridge.</p>
 <p>With <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_ORT_TEST_WITH_ORT=ON</span></code>, the same label also selects the
-real-ORT integration suite and runnable examples.</p>
+real-ORT integration suite and runnable examples.
+The real-ORT and standalone suites exercise all four types for both operators,
+including changing shapes, scalars, empty tensors, non-finite values and
+float64 values that cannot be represented as float32.
+The ORT 1.18 Python API cannot construct BFLOAT16 OrtValues directly. Its tests
+use float32 graph inputs/outputs with explicit Cast nodes around the BFLOAT16
+custom node, whose intermediate types are explicitly declared. The native
+custom kernel still receives and produces BFLOAT16, without changing either
+bridge or skipping this type. The standalone suite uses BFLOAT16 arrays directly.</p>
+</section>
+<section id="bfloat16-with-ort-s-python-api">
+<h2>BFLOAT16 with ORT’s Python API<a class="headerlink" href="#bfloat16-with-ort-s-python-api" title="Link to this heading">#</a></h2>
+<p>To avoid NumPy feed/output dtype-mapping limitations for <code class="docutils literal notranslate"><span class="pre">ml_dtypes.bfloat16</span></code>,
+bind typed OrtValues over the raw 16-bit storage. The session’s model
+input/output types must be <code class="docutils literal notranslate"><span class="pre">TensorProto.BFLOAT16</span></code>:</p>
+<p>This snippet requires an ORT Python build providing
+<code class="docutils literal notranslate"><span class="pre">ortvalue_from_numpy_with_onnx_type</span></code>; that convenience method is absent in
+ORT 1.18.1. With that older Python interface, use explicit Cast nodes at the
+graph boundaries as in the integration tests, or construct BFLOAT16 tensors
+through the C API’s <code class="docutils literal notranslate"><span class="pre">CreateTensorWithDataAsOrtValue</span></code>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">ml_dtypes</span><span class="w"> </span><span class="kn">import</span> <span class="n">bfloat16</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">TensorProto</span>
+
+<span class="n">values</span> <span class="o">=</span> <span class="n">numpy</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="o">-</span><span class="mi">4</span><span class="p">,</span> <span class="mi">2</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">output</span> <span class="o">=</span> <span class="n">numpy</span><span class="o">.</span><span class="n">empty_like</span><span class="p">(</span><span class="n">values</span><span class="p">)</span>
+<span class="n">input_value</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">OrtValue</span><span class="o">.</span><span class="n">ortvalue_from_numpy_with_onnx_type</span><span class="p">(</span>
+    <span class="n">values</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">uint16</span><span class="p">),</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">BFLOAT16</span>
+<span class="p">)</span>
+<span class="n">output_value</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">OrtValue</span><span class="o">.</span><span class="n">ortvalue_from_numpy_with_onnx_type</span><span class="p">(</span>
+    <span class="n">output</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">uint16</span><span class="p">),</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">BFLOAT16</span>
+<span class="p">)</span>
+<span class="n">binding</span> <span class="o">=</span> <span class="n">session</span><span class="o">.</span><span class="n">io_binding</span><span class="p">()</span>
+<span class="n">binding</span><span class="o">.</span><span class="n">bind_ortvalue_input</span><span class="p">(</span><span class="s2">"X"</span><span class="p">,</span> <span class="n">input_value</span><span class="p">)</span>
+<span class="n">binding</span><span class="o">.</span><span class="n">bind_ortvalue_output</span><span class="p">(</span><span class="s2">"Y"</span><span class="p">,</span> <span class="n">output_value</span><span class="p">)</span>
+<span class="n">session</span><span class="o">.</span><span class="n">run_with_iobinding</span><span class="p">(</span><span class="n">binding</span><span class="p">)</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">output</span></code> retains the bfloat16 dtype. The standalone <code class="docutils literal notranslate"><span class="pre">CustomOpSession</span></code> accepts
+these arrays directly. Keep bound arrays alive until inference completes.</p>
 </section>
 <section id="python-example">
 <h2>Python example<a class="headerlink" href="#python-example" title="Link to this heading">#</a></h2>
@@ -793,6 +840,7 @@ its timings must not be presented as the outgoing bridge’s speedup.</p>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#bfloat16-with-ort-s-python-api">BFLOAT16 with ORT’s Python API</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-example">Python example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#c-example">C++ example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cpu-log-in-both-custom-op-hosts">CPU Log in both custom-op hosts</a></li>
