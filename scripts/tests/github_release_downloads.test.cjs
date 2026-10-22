@@ -19,6 +19,8 @@ test("net changes require the exact date and repository baseline", () => {
   assert.equal(context.netChange(history, "repo", "2026-10-21", 30), 25);
   assert.equal(context.netChange(history, "repo", "2026-10-21", 2), null);
   assert.equal(context.netChange(history, "newRepo", "2026-10-21", 1), null);
+  assert.equal(context.netChange([{date: "2026-10-20"}, ...history],
+    "repo", "2026-10-21", 1), null);
   assert.equal(context.formatCount(0), "0");
   assert.equal(context.formatCount(null), "\u2014");
 });
@@ -26,6 +28,21 @@ test("net changes require the exact date and repository baseline", () => {
 test("release links encode special tag characters", () => {
   assert.equal(context.releaseLink("onnx/onnx", "v1/preview?#"),
     "https://github.com/onnx/onnx/releases/tag/v1%2Fpreview%3F%23");
+});
+
+test("rolling periods cross UTC month and year boundaries without clamping changes", () => {
+  const history = [
+    {date: "2025-12-02", totals: {repo: 5}},
+    {date: "2025-12-25", totals: {repo: 10}},
+    {date: "2025-12-31", totals: {repo: 12}},
+    {date: "2026-01-01", totals: {repo: 10}},
+    {date: "2026-02-28", totals: {repo: 20}},
+    {date: "2026-03-01", totals: {repo: 22}},
+  ];
+  assert.equal(context.netChange(history, "repo", "2026-01-01", 1), -2);
+  assert.equal(context.netChange(history, "repo", "2026-01-01", 7), 0);
+  assert.equal(context.netChange(history, "repo", "2026-01-01", 30), 5);
+  assert.equal(context.netChange(history, "repo", "2026-03-01", 1), 2);
 });
 
 test("per-file history preserves zero, missing observations and legacy totals", () => {
@@ -82,13 +99,16 @@ test("each project gets a total chart and independently selectable file curves",
     createElement() { return new Element(); },
   };
   const charts = [];
+  const periodCharts = [];
   context.document = document;
   context.Chart = class {
     constructor(canvas, config) {
       assert.equal(document.getElementById("content").hidden, false);
       this.data = config.data;
+      this.options = config.options;
       this.updates = 0;
-      charts.push(this);
+      if (config.data.datasets[0].label === "All files (total)") charts.push(this);
+      else periodCharts.push(this);
     }
     update() { this.updates++; }
   };
@@ -106,6 +126,8 @@ test("each project gets a total chart and independently selectable file curves",
       }]},
     ],
     history: [
+      {date: "2026-09-21", totals: {"onnx/onnx": 5}},
+      {date: "2026-10-14", totals: {"onnx/onnx": 8}},
       {date: "2026-10-20", totals: {"onnx/onnx": 10}},
       {date: "2026-10-21", totals: {"onnx/onnx": 17, "xadupre/onnx-light-empty": 0}},
     ],
@@ -113,10 +135,27 @@ test("each project gets a total chart and independently selectable file curves",
   context.renderReleaseDownloads(data);
   assert.equal(document.getElementById("content").hidden, false);
   assert.equal(document.getElementById("totals").children.length, 2);
+  const totalCells = document.getElementById("totals").children[0].children;
+  assert.deepEqual(totalCells.slice(1).map(cell => cell.textContent), ["17", "7", "9", "12"]);
   assert.equal(charts.length, 2);
+  assert.equal(periodCharts.length, 2);
+  assert.deepEqual(Array.from(periodCharts[0].data.datasets, series => series.label),
+    ["Daily (1 day)", "Weekly (7 days)", "Monthly (30 days)"]);
+  for (const [index, change] of [7, 9, 12].entries()) {
+    assert.deepEqual(Array.from(periodCharts[0].data.datasets[index].data),
+      [null, null, null, change]);
+  }
+  for (const series of periodCharts[1].data.datasets) {
+    assert.deepEqual(Array.from(series.data), [null, null, null, null]);
+    assert.equal(series.spanGaps, false);
+  }
+  assert.equal(periodCharts[0].data.datasets[0].yAxisID, "y1");
+  assert.equal(periodCharts[0].data.datasets[1].yAxisID, "y");
+  assert.equal(periodCharts[0].data.datasets[2].yAxisID, "y");
+  assert.equal(periodCharts[0].options.scales.y1.position, "right");
   assert.equal(charts[0].data.datasets.length, 1);
   assert.equal(charts[0].data.datasets[0].label, "All files (total)");
-  assert.equal(charts[0].data.datasets[0].data[0], 10);
+  assert.equal(charts[0].data.datasets[0].data[0], 5);
   const projects = document.getElementById("projects").children;
   assert.equal(projects.length, 2);
   assert.equal(projects[0].children[0].textContent, "onnx/onnx");
@@ -131,7 +170,7 @@ test("each project gets a total chart and independently selectable file curves",
   first.listeners.change();
   assert.equal(charts[0].data.datasets.length, 2);
   assert.equal(charts[0].data.datasets[1].label, "<script>alert(1)</script>.whl (v1)");
-  assert.deepEqual(Array.from(charts[0].data.datasets[1].data), [null, 12]);
+  assert.deepEqual(Array.from(charts[0].data.datasets[1].data), [null, null, null, 12]);
   assert.equal(charts[1].data.datasets.length, 1);
   second.checked = true;
   second.listeners.change();
@@ -142,7 +181,7 @@ test("each project gets a total chart and independently selectable file curves",
   assert.equal(charts[0].data.datasets[1].assetId, 1);
   assert.equal(charts[0].updates, 3);
   assert.equal(charts[1].data.datasets[0].data[0], null);
-  assert.equal(charts[1].data.datasets[0].data[1], 0);
+  assert.equal(charts[1].data.datasets[0].data[3], 0);
   assert.equal(projects[1].children[2].children[1].textContent, "No uploaded files.");
 });
 

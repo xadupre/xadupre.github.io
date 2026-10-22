@@ -3,11 +3,14 @@
 function netChange(history, repository, day, days) {
   const date = new Date(day + "T00:00:00Z");
   date.setUTCDate(date.getUTCDate() - days);
-  const baseline = history.find(row => row.date === date.toISOString().slice(0, 10));
-  const current = history.find(row => row.date === day);
+  const baselineDay = date.toISOString().slice(0, 10);
+  const baseline = history instanceof Map ? history.get(baselineDay) :
+    history.find(row => row.date === baselineDay);
+  const current = history instanceof Map ? history.get(day) :
+    history.find(row => row.date === day);
   if (!baseline || !current ||
-      !Object.hasOwn(baseline.totals, repository) ||
-      !Object.hasOwn(current.totals, repository)) return null;
+      !Object.hasOwn(baseline.totals ?? {}, repository) ||
+      !Object.hasOwn(current.totals ?? {}, repository)) return null;
   return current.totals[repository] - baseline.totals[repository];
 }
 
@@ -55,6 +58,7 @@ function renderReleaseDownloads(data) {
   const projects = document.getElementById("projects");
   const repositories = data.repositories.filter(item => isTrackedProject(item.repository))
     .sort((a, b) => b.total - a.total);
+  const historyByDate = new Map(data.history.map(row => [row.date, row]));
   document.getElementById("content").hidden = false;
   for (const item of repositories) {
     const row = document.createElement("tr");
@@ -65,6 +69,7 @@ function renderReleaseDownloads(data) {
     cell(row, "").appendChild(link);
     cell(row, formatCount(item.total));
     cell(row, formatCount(netChange(data.history, item.repository, day, 1)));
+    cell(row, formatCount(netChange(data.history, item.repository, day, 7)));
     cell(row, formatCount(netChange(data.history, item.repository, day, 30)));
     totals.appendChild(row);
     const project = document.createElement("section");
@@ -186,6 +191,44 @@ function renderReleaseDownloads(data) {
       }
       container.appendChild(details);
     }
+    const periodWrap = document.createElement("div");
+    periodWrap.className = "chart-wrap";
+    const periodCanvas = document.createElement("canvas");
+    periodCanvas.setAttribute("aria-label", item.repository + " daily, weekly and monthly release downloads");
+    periodWrap.appendChild(periodCanvas);
+    project.appendChild(periodWrap);
+    new Chart(periodCanvas, {
+      type: "line",
+      data: {
+        labels: data.history.map(row => row.date),
+        datasets: [
+          {days: 1, label: "Daily (1 day)", color: "#58a6ff", yAxisID: "y1"},
+          {days: 7, label: "Weekly (7 days)", color: "#f78166", yAxisID: "y"},
+          {days: 30, label: "Monthly (30 days)", color: "#3fb950", yAxisID: "y"},
+        ].map(metric => ({
+          label: metric.label,
+          data: data.history.map(row =>
+            netChange(historyByDate, item.repository, row.date, metric.days)),
+          borderColor: metric.color,
+          backgroundColor: metric.color,
+          yAxisID: metric.yAxisID,
+          spanGaps: false,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          y: { beginAtZero: true, title: { display: true, text: "Week / month net downloads" } },
+          y1: {
+            position: "right",
+            beginAtZero: true,
+            title: { display: true, text: "Daily net downloads" },
+            grid: { drawOnChartArea: false },
+          },
+        },
+      },
+    });
   }
   document.getElementById("message").textContent = "";
 }
