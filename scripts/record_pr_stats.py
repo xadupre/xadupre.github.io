@@ -59,6 +59,7 @@ DEFAULT_REPOS = (
     "xadupre/onnx-light-cpu",
     "xadupre/onnx-light-kernel-images",
     "xadupre/onnx-light-ort",
+    "xadupre/onnx-light-viewer",
     "xadupre/yet-another-onnx-builder",
     "xadupre/yet-another-onnxruntime-extensions",
 )
