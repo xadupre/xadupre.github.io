@@ -27,6 +27,23 @@ function formatCount(value) {
   return value === null ? "\u2014" : value.toLocaleString("en-US");
 }
 
+function isTrackedProject(repository) {
+  if (!repository.startsWith("xadupre/")) return true;
+  const name = repository.slice("xadupre/".length);
+  return name === "onnx-light" || name.startsWith("onnx-light-") ||
+    name.startsWith("yet-another-");
+}
+
+function assetHistory(data, repository, asset) {
+  return data.history.map(row => {
+    const counts = row.assets?.[repository];
+    if (counts && Object.hasOwn(counts, String(asset.id))) return counts[asset.id];
+    // The latest snapshot also supplies a real observation for legacy caches.
+    if (row.date === data.updated_at.slice(0, 10)) return asset.download_count;
+    return null;
+  });
+}
+
 function renderReleaseDownloads(data) {
   if (!Array.isArray(data.repositories) || !data.repositories.length ||
       !Array.isArray(data.history) || !data.history.length) {
@@ -35,8 +52,10 @@ function renderReleaseDownloads(data) {
   const day = data.updated_at.slice(0, 10);
   document.getElementById("updated").textContent = "Collected: " + data.updated_at;
   const totals = document.getElementById("totals");
-  const select = document.getElementById("repository");
-  const repositories = [...data.repositories].sort((a, b) => b.total - a.total);
+  const projects = document.getElementById("projects");
+  const repositories = data.repositories.filter(item => isTrackedProject(item.repository))
+    .sort((a, b) => b.total - a.total);
+  document.getElementById("content").hidden = false;
   for (const item of repositories) {
     const row = document.createElement("tr");
     const link = document.createElement("a");
@@ -48,18 +67,84 @@ function renderReleaseDownloads(data) {
     cell(row, formatCount(netChange(data.history, item.repository, day, 1)));
     cell(row, formatCount(netChange(data.history, item.repository, day, 30)));
     totals.appendChild(row);
-    const option = document.createElement("option");
-    option.value = item.repository;
-    option.textContent = item.repository;
-    select.appendChild(option);
-  }
-  let chart;
-  function renderSelected() {
-    const item = repositories.find(row => row.repository === select.value);
-    const container = document.getElementById("releases");
-    container.replaceChildren();
+    const project = document.createElement("section");
+    project.className = "project";
+    const title = document.createElement("h2");
+    title.textContent = item.repository;
+    project.appendChild(title);
+    const chartWrap = document.createElement("div");
+    chartWrap.className = "chart-wrap";
+    const canvas = document.createElement("canvas");
+    canvas.setAttribute("aria-label", item.repository + " cumulative release downloads");
+    chartWrap.appendChild(canvas);
+    project.appendChild(chartWrap);
+    projects.appendChild(project);
+    const chart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels: data.history.map(row => row.date),
+        datasets: [{
+          label: "All files (total)",
+          data: data.history.map(row => row.totals[item.repository] ?? null),
+          borderColor: "#58a6ff",
+          backgroundColor: "#58a6ff",
+          spanGaps: false,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { y: { beginAtZero: true, title: { display: true, text: "Downloads" } } },
+      },
+    });
+    const files = document.createElement("details");
+    const fileSummary = document.createElement("summary");
+    fileSummary.textContent = "Files: check to add individual curves";
+    files.appendChild(fileSummary);
+    const fileList = document.createElement("div");
+    fileList.className = "files";
+    files.appendChild(fileList);
+    project.appendChild(files);
+    let fileIndex = 0;
+    for (const release of [...item.releases].reverse()) {
+      for (const asset of release.assets) {
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        label.appendChild(checkbox);
+        const name = document.createElement("span");
+        const caption = asset.name + " (" + release.tag + ")";
+        name.textContent = " " + caption + ": " + formatCount(asset.download_count);
+        label.appendChild(name);
+        fileList.appendChild(label);
+        const color = "hsl(" + (fileIndex++ * 137.5 % 360) + ", 75%, 65%)";
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) {
+            chart.data.datasets.push({
+              assetId: asset.id,
+              label: caption,
+              data: assetHistory(data, item.repository, asset),
+              borderColor: color,
+              backgroundColor: color,
+              spanGaps: false,
+            });
+          } else {
+            chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
+          }
+          chart.update();
+        });
+      }
+    }
+    if (!fileList.children.length) fileList.textContent = "No uploaded files.";
+    const container = document.createElement("details");
+    const releaseSummary = document.createElement("summary");
+    releaseSummary.textContent = "Releases and download counts";
+    container.appendChild(releaseSummary);
+    project.appendChild(container);
     if (!item.releases.length) {
-      container.textContent = "No published releases.";
+      const empty = document.createElement("p");
+      empty.textContent = "No published releases.";
+      container.appendChild(empty);
     }
     for (const release of [...item.releases].reverse()) {
       const details = document.createElement("details");
@@ -101,29 +186,7 @@ function renderReleaseDownloads(data) {
       }
       container.appendChild(details);
     }
-    if (chart) chart.destroy();
-    chart = new Chart(document.getElementById("history"), {
-      type: "line",
-      data: {
-        labels: data.history.map(row => row.date),
-        datasets: [{
-          label: item.repository,
-          data: data.history.map(row => row.totals[item.repository] ?? null),
-          borderColor: "#58a6ff",
-          backgroundColor: "#58a6ff",
-          spanGaps: false,
-        }],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: { y: { beginAtZero: true, title: { display: true, text: "Downloads" } } },
-      },
-    });
   }
-  select.addEventListener("change", renderSelected);
-  document.getElementById("content").hidden = false;
-  renderSelected();
   document.getElementById("message").textContent = "";
 }
 

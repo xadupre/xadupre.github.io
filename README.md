@@ -22,9 +22,12 @@ limit. Reruns replace the snapshot rather than duplicating releases.
 ## GitHub release downloads
 
 The [release downloads dashboard](dashboard/github-release-downloads.html)
-tracks all public `xadupre` repositories whose names contain `onnx`, including
-`onnx-light-*` and forks, plus ONNX projects linked from the home page (currently
-`onnx/onnx` and `microsoft/onnxruntime`). Repositories are rediscovered daily.
+tracks public `xadupre/onnx-light`, `xadupre/onnx-light-*` and
+`xadupre/yet-another-*` repositories, plus ONNX upstreams linked from the home
+page (`onnx/onnx` and `microsoft/onnxruntime`), `microsoft/onnxruntime-genai`
+and `microsoft/onnxruntime-extensions`. Other owner projects, including
+`onnx-asv-benchmark`, are excluded even if linked from the home page.
+Repositories are rediscovered daily.
 All published releases, including prereleases, and all uploaded asset types are
 included. GitHub-generated source archives have no asset download counter and
 are excluded, as are clones and PyPI installations.
@@ -32,8 +35,14 @@ are excluded, as are clones and PyPI installations.
 The daily `DATA GitHub release downloads` workflow publishes
 `github-release-downloads.json` to `xadupre/cache_data`, using the existing
 `CACHE_DATA_SSH_KEY`. The site displays current totals per repository, release
-and file, cumulative daily history, and 1-day/30-day net counter changes when
-the exact baseline date exists. History starts at collection time; past daily
+and file, one cumulative graph per project, and 1-day/30-day net counter changes
+when the exact baseline date exists. Every graph initially shows the combined
+total of all files. Expand its file list and check filenames to add individual
+curves alongside the total; release tags distinguish identically named files.
+Daily samples retain counters keyed by GitHub asset ID. Existing total-only
+history is preserved, but per-file curves have gaps before per-file observations
+were collected (the latest snapshot can supply its own day's counts).
+History starts at collection time; past daily
 downloads cannot be reconstructed. Deleted/replaced assets can decrease totals,
 and counts do not represent unique users. Same-day reruns replace that day's
 totals; failed collections leave the previous file intact.

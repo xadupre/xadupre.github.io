@@ -28,7 +28,34 @@ test("release links encode special tag characters", () => {
     "https://github.com/onnx/onnx/releases/tag/v1%2Fpreview%3F%23");
 });
 
-test("dashboard renders totals, asset names, selection and chart without HTML injection", () => {
+test("per-file history preserves zero, missing observations and legacy totals", () => {
+  const data = {
+    updated_at: "2026-10-21T06:00:00Z",
+    history: [
+      {date: "2026-10-18", totals: {repo: 100}},
+      {date: "2026-10-19", assets: {repo: {"1": 0}}},
+      {date: "2026-10-20", assets: {repo: {"1": 4}}},
+      {date: "2026-10-21", assets: {repo: {"1": 6}}},
+    ],
+  };
+  assert.deepEqual(Array.from(context.assetHistory(data, "repo",
+    {id: 1, download_count: 6})), [null, 0, 4, 6]);
+  assert.deepEqual(Array.from(context.assetHistory(data, "repo",
+    {id: 2, download_count: 12})), [null, null, null, 12]);
+});
+
+test("owner scope excludes other ONNX projects and includes both requested families", () => {
+  for (const repo of [
+    "xadupre/onnx-light", "xadupre/onnx-light-cpu", "xadupre/yet-another-tool",
+    "onnx/onnx", "microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions",
+  ]) assert.equal(context.isTrackedProject(repo), true, repo);
+  for (const repo of [
+    "xadupre/onnx-asv-benchmark", "xadupre/onnxruntime", "xadupre/onnx-diagnostic",
+    "xadupre/onnx-lightish",
+  ]) assert.equal(context.isTrackedProject(repo), false, repo);
+});
+
+test("each project gets a total chart and independently selectable file curves", () => {
   class Element {
     constructor() {
       this.children = [];
@@ -44,6 +71,7 @@ test("dashboard renders totals, asset names, selection and chart without HTML in
     }
     replaceChildren() { this.children = []; }
     addEventListener(name, fn) { this.listeners[name] = fn; }
+    setAttribute(name, value) { this[name] = value; }
   }
   const elements = new Map();
   const document = {
@@ -53,41 +81,69 @@ test("dashboard renders totals, asset names, selection and chart without HTML in
     },
     createElement() { return new Element(); },
   };
-  let chartConfig;
-  let destroyed = 0;
+  const charts = [];
   context.document = document;
   context.Chart = class {
-    constructor(canvas, config) { chartConfig = config; }
-    destroy() { destroyed++; }
+    constructor(canvas, config) {
+      assert.equal(document.getElementById("content").hidden, false);
+      this.data = config.data;
+      this.updates = 0;
+      charts.push(this);
+    }
+    update() { this.updates++; }
   };
   const data = {
     updated_at: "2026-10-21T06:00:00Z",
     repositories: [
-      {repository: "xadupre/onnx-empty", total: 0, releases: []},
-      {repository: "onnx/onnx", total: 12, releases: [{
+      {repository: "xadupre/onnx-asv-benchmark", total: 999, releases: []},
+      {repository: "xadupre/onnx-light-empty", total: 0, releases: []},
+      {repository: "onnx/onnx", total: 17, releases: [{
+        tag: "v0", total: 5, prerelease: false,
+        assets: [{id: 1, name: "<script>alert(1)</script>.whl", download_count: 5}],
+      }, {
         tag: "v1", total: 12, prerelease: true,
-        assets: [{name: "<script>alert(1)</script>.whl", download_count: 12}],
+        assets: [{id: 2, name: "<script>alert(1)</script>.whl", download_count: 12}],
       }]},
     ],
     history: [
       {date: "2026-10-20", totals: {"onnx/onnx": 10}},
-      {date: "2026-10-21", totals: {"onnx/onnx": 12, "xadupre/onnx-empty": 0}},
+      {date: "2026-10-21", totals: {"onnx/onnx": 17, "xadupre/onnx-light-empty": 0}},
     ],
   };
   context.renderReleaseDownloads(data);
   assert.equal(document.getElementById("content").hidden, false);
   assert.equal(document.getElementById("totals").children.length, 2);
-  assert.equal(document.getElementById("repository").value, "onnx/onnx");
-  assert.equal(chartConfig.data.datasets[0].data[0], 10);
-  const details = document.getElementById("releases").children[0];
+  assert.equal(charts.length, 2);
+  assert.equal(charts[0].data.datasets.length, 1);
+  assert.equal(charts[0].data.datasets[0].label, "All files (total)");
+  assert.equal(charts[0].data.datasets[0].data[0], 10);
+  const projects = document.getElementById("projects").children;
+  assert.equal(projects.length, 2);
+  assert.equal(projects[0].children[0].textContent, "onnx/onnx");
+  const details = projects[0].children[3].children[1];
   const assetCell = details.children[2].children[0].children[1].children[0].children[0];
   assert.equal(assetCell.textContent, "<script>alert(1)</script>.whl");
-  document.getElementById("repository").value = "xadupre/onnx-empty";
-  document.getElementById("repository").listeners.change();
-  assert.equal(destroyed, 1);
-  assert.equal(document.getElementById("releases").textContent, "No published releases.");
-  assert.equal(chartConfig.data.datasets[0].data[0], null);
-  assert.equal(chartConfig.data.datasets[0].data[1], 0);
+  const fileList = projects[0].children[2].children[1];
+  const first = fileList.children[0].children[0];
+  const second = fileList.children[1].children[0];
+  assert.equal(Boolean(first.checked), false);
+  first.checked = true;
+  first.listeners.change();
+  assert.equal(charts[0].data.datasets.length, 2);
+  assert.equal(charts[0].data.datasets[1].label, "<script>alert(1)</script>.whl (v1)");
+  assert.deepEqual(Array.from(charts[0].data.datasets[1].data), [null, 12]);
+  assert.equal(charts[1].data.datasets.length, 1);
+  second.checked = true;
+  second.listeners.change();
+  assert.equal(charts[0].data.datasets.length, 3);
+  first.checked = false;
+  first.listeners.change();
+  assert.equal(charts[0].data.datasets.length, 2);
+  assert.equal(charts[0].data.datasets[1].assetId, 1);
+  assert.equal(charts[0].updates, 3);
+  assert.equal(charts[1].data.datasets[0].data[0], null);
+  assert.equal(charts[1].data.datasets[0].data[1], 0);
+  assert.equal(projects[1].children[2].children[1].textContent, "No uploaded files.");
 });
 
 test("missing data and network failures stay visible", async () => {
