@@ -73,7 +73,7 @@ test("owner scope excludes other ONNX projects and includes both requested famil
   ]) assert.equal(context.isTrackedProject(repo), false, repo);
 });
 
-test("each project gets a total chart and independently selectable file curves", () => {
+test("projects omit aggregate totals and preserve period and selectable file curves", () => {
   class Element {
     constructor() {
       this.children = [];
@@ -108,9 +108,10 @@ test("each project gets a total chart and independently selectable file curves",
       this.data = config.data;
       this.options = config.options;
       this.updates = 0;
-      if (config.data.datasets[0].label === "All files (total)") charts.push(this);
+      if (config.data.datasets.length === 0) charts.push(this);
       else periodCharts.push(this);
     }
+    resize() {}
     update() { this.updates++; }
   };
   const data = {
@@ -137,7 +138,9 @@ test("each project gets a total chart and independently selectable file curves",
   assert.equal(document.getElementById("content").hidden, false);
   assert.equal(document.getElementById("totals").children.length, 2);
   const totalCells = document.getElementById("totals").children[0].children;
-  assert.deepEqual(totalCells.slice(1).map(cell => cell.textContent), ["17", "7", "9", "12"]);
+  assert.deepEqual(totalCells.slice(1).map(cell => cell.textContent), ["7", "9", "12"]);
+  assert.deepEqual(document.getElementById("totals").children[1].children.slice(1)
+    .map(cell => cell.textContent), ["\u2014", "\u2014", "\u2014"]);
   assert.equal(charts.length, 2);
   assert.equal(periodCharts.length, 2);
   assert.deepEqual(Array.from(periodCharts[0].data.datasets, series => series.label),
@@ -154,13 +157,15 @@ test("each project gets a total chart and independently selectable file curves",
   assert.equal(periodCharts[0].data.datasets[1].yAxisID, "y");
   assert.equal(periodCharts[0].data.datasets[2].yAxisID, "y");
   assert.equal(periodCharts[0].options.scales.y1.position, "right");
-  assert.equal(charts[0].data.datasets.length, 1);
-  assert.equal(charts[0].data.datasets[0].label, "All files (total)");
-  assert.equal(charts[0].data.datasets[0].data[0], 5);
+  assert.equal(charts[0].data.datasets.length, 0);
+  assert.equal(charts[1].data.datasets.length, 0);
   const projects = document.getElementById("projects").children;
   assert.equal(projects.length, 2);
   assert.equal(projects[0].children[0].textContent, "onnx/onnx");
+  assert.equal(projects[0].children[1].hidden, true);
   const details = projects[0].children[3].children[1];
+  assert.equal(details.children[0].textContent, "v1 (prerelease)");
+  assert.equal(projects[0].children[3].children[2].children[0].textContent, "v0");
   const assetCell = details.children[2].children[0].children[1].children[0].children[0];
   assert.equal(assetCell.textContent, "<script>alert(1)</script>.whl");
   const fileList = projects[0].children[2].children[1];
@@ -169,21 +174,33 @@ test("each project gets a total chart and independently selectable file curves",
   assert.equal(Boolean(first.checked), false);
   first.checked = true;
   first.listeners.change();
-  assert.equal(charts[0].data.datasets.length, 2);
-  assert.equal(charts[0].data.datasets[1].label, "<script>alert(1)</script>.whl (v1)");
-  assert.deepEqual(Array.from(charts[0].data.datasets[1].data), [null, null, null, 12]);
-  assert.equal(charts[1].data.datasets.length, 1);
+  assert.equal(projects[0].children[1].hidden, false);
+  assert.equal(charts[0].data.datasets.length, 1);
+  assert.equal(charts[0].data.datasets[0].label, "<script>alert(1)</script>.whl (v1)");
+  assert.deepEqual(Array.from(charts[0].data.datasets[0].data), [null, null, null, 12]);
+  assert.equal(charts[1].data.datasets.length, 0);
   second.checked = true;
   second.listeners.change();
-  assert.equal(charts[0].data.datasets.length, 3);
+  assert.equal(charts[0].data.datasets.length, 2);
   first.checked = false;
   first.listeners.change();
-  assert.equal(charts[0].data.datasets.length, 2);
-  assert.equal(charts[0].data.datasets[1].assetId, 1);
+  assert.equal(charts[0].data.datasets.length, 1);
+  assert.equal(charts[0].data.datasets[0].assetId, 1);
   assert.equal(charts[0].updates, 3);
-  assert.equal(charts[1].data.datasets[0].data[0], null);
-  assert.equal(charts[1].data.datasets[0].data[3], 0);
+  second.checked = false;
+  second.listeners.change();
+  assert.equal(charts[0].data.datasets.length, 0);
+  assert.equal(projects[0].children[1].hidden, true);
+  assert.equal(projects[1].children[1].hidden, true);
   assert.equal(projects[1].children[2].children[1].textContent, "No uploaded files.");
+});
+
+test("summary headers show net changes without total downloads", () => {
+  const page = fs.readFileSync(
+    path.join(__dirname, "../../dashboard/github-release-downloads.html"), "utf8");
+  const headers = Array.from(page.matchAll(/<th>(.*?)<\/th>/g), match => match[1]);
+  assert.deepEqual(headers,
+    ["Repository", "1-day net change", "7-day net change", "30-day net change"]);
 });
 
 test("missing data and network failures stay visible", async () => {

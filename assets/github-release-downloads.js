@@ -67,7 +67,6 @@ function renderReleaseDownloads(data) {
       item.repository.split("/").map(encodeURIComponent).join("/");
     link.textContent = item.repository;
     cell(row, "").appendChild(link);
-    cell(row, formatCount(item.total));
     cell(row, formatCount(netChange(data.history, item.repository, day, 1)));
     cell(row, formatCount(netChange(data.history, item.repository, day, 7)));
     cell(row, formatCount(netChange(data.history, item.repository, day, 30)));
@@ -79,8 +78,9 @@ function renderReleaseDownloads(data) {
     project.appendChild(title);
     const chartWrap = document.createElement("div");
     chartWrap.className = "chart-wrap";
+    chartWrap.hidden = true;
     const canvas = document.createElement("canvas");
-    canvas.setAttribute("aria-label", item.repository + " cumulative release downloads");
+    canvas.setAttribute("aria-label", item.repository + " per-file cumulative release downloads");
     chartWrap.appendChild(canvas);
     project.appendChild(chartWrap);
     projects.appendChild(project);
@@ -88,13 +88,7 @@ function renderReleaseDownloads(data) {
       type: "line",
       data: {
         labels: data.history.map(row => row.date),
-        datasets: [{
-          label: "All files (total)",
-          data: data.history.map(row => row.totals[item.repository] ?? null),
-          borderColor: "#58a6ff",
-          backgroundColor: "#58a6ff",
-          spanGaps: false,
-        }],
+        datasets: [],
       },
       options: {
         responsive: true,
@@ -136,6 +130,8 @@ function renderReleaseDownloads(data) {
           } else {
             chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
           }
+          chartWrap.hidden = chart.data.datasets.length === 0;
+          if (!chartWrap.hidden) chart.resize();
           chart.update();
         });
       }
@@ -154,8 +150,7 @@ function renderReleaseDownloads(data) {
     for (const release of [...item.releases].reverse()) {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = release.tag + (release.prerelease ? " (prerelease)" : "") +
-        ": " + formatCount(release.total) + " downloads";
+      summary.textContent = release.tag + (release.prerelease ? " (prerelease)" : "");
       details.appendChild(summary);
       const link = document.createElement("a");
       link.href = releaseLink(item.repository, release.tag);
