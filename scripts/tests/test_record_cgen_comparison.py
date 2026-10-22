@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
+import types
 import unittest
 import unittest.mock as mock
 
@@ -307,98 +309,69 @@ class TestBuildOpToTestModelMap(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAS_ONNX, "onnx is required for these tests")
-class TestMaterializeOnnxLightNodeDir(unittest.TestCase):
-    def _make_model(self, op_type: str):
-        node = helper.make_node(op_type, ["x"], ["y"])
-        graph = helper.make_graph(
-            [node],
-            "g",
-            [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
-            [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
-        )
-        return helper.make_model(
-            graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
-        )
-
+class TestMaterializeOnnxNodeDir(unittest.TestCase):
     def test_writes_single_node_models_from_catalog(self):
-        import sys
-        import types
+        from onnx.backend.test.case.node import collect_testcases
 
-        abs_model = self._make_model("Abs")
-        multi_node = helper.make_node("Relu", ["x"], ["t"])
-        multi_node2 = helper.make_node("Abs", ["t"], ["y"])
-        multi_graph = helper.make_graph(
-            [multi_node, multi_node2],
-            "g",
-            [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1])],
-            [helper.make_tensor_value_info("y", TensorProto.FLOAT, [1])],
-        )
-        multi_model = helper.make_model(
-            multi_graph, opset_imports=[helper.make_opsetid("", _TEST_OPSET_VERSION)]
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self.assertEqual(rcc._materialize_onnx_node_dir(tmpdir), tmpdir)
+            op_map = rcc.build_op_to_test_model_map(tmpdir)
+            self.assertIn(("ai.onnx", "Abs"), op_map)
+            original = next(
+                c.model for c in collect_testcases(None) if c.name == "test_abs"
+            )
+            materialized = onnx.load(op_map[("ai.onnx", "Abs")])
+            self.assertEqual(materialized, original)
+            for case in collect_testcases(None):
+                if case.model is not None and len(case.model.graph.node) != 1:
+                    self.assertFalse(os.path.exists(os.path.join(tmpdir, case.name)))
 
-        cases = {
-            "test_abs": types.SimpleNamespace(model=abs_model),
-            "test_multi": types.SimpleNamespace(model=multi_model),
-            "test_no_model": types.SimpleNamespace(model=None),
+    @unittest.skipUnless(shutil.which("emx-onnx-cgen"), "emx-onnx-cgen is required")
+    def test_generated_source_reaches_merged_rows(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rcc._materialize_onnx_node_dir(tmpdir)
+            cgen_rows = [{"domain": "ai.onnx", "name": "Abs", "in_cgen": True}]
+            source_map = rcc.build_cgen_source_code_map(cgen_rows, tmpdir)
+            self.assertIn(("ai.onnx", "Abs"), source_map)
+            rows = rcc.merge_rows(cgen_rows, [], cgen_source_code_map=source_map)
+            self.assertIn("void", rows[0]["cgen_source_code"])
+            self.assertIn("model", rows[0]["cgen_source_code"])
+
+
+@unittest.skipUnless(_HAS_ONNX, "onnx is required for these tests")
+class TestBuildPayload(unittest.TestCase):
+    def _build_payload(self, source_map, skip_cgen_compile=False):
+        replacements = {
+            "fetch_support_ops_md": lambda: "| Abs | ✅ |\n",
+            "fetch_github_tree": lambda *args, **kwargs: [],
+            "_onnx_backend_test_node_dir": lambda: None,
+            "build_cgen_source_code_map": lambda rows, directory: source_map,
+            "shutil": types.SimpleNamespace(which=lambda tool: "/usr/bin/emx-onnx-cgen"),
         }
-
-        fake_module = types.ModuleType("onnx_light.onnx_lib.backend.test.case")
-        fake_module.collect_test_case = lambda include_big=False: cases
-        parents = [
-            ("onnx_light", types.ModuleType("onnx_light")),
-            ("onnx_light.onnx_lib", types.ModuleType("onnx_light.onnx_lib")),
-            (
-                "onnx_light.onnx_lib.backend",
-                types.ModuleType("onnx_light.onnx_lib.backend"),
-            ),
-            (
-                "onnx_light.onnx_lib.backend.test",
-                types.ModuleType("onnx_light.onnx_lib.backend.test"),
-            ),
-            ("onnx_light.onnx_lib.backend.test.case", fake_module),
-        ]
-        saved = {name: sys.modules.get(name) for name, _ in parents}
+        saved = {name: getattr(rcc, name) for name in replacements}
         try:
-            for name, mod in parents:
-                sys.modules[name] = mod
+            for name, replacement in replacements.items():
+                setattr(rcc, name, replacement)
             with tempfile.TemporaryDirectory() as tmpdir:
-                result = rcc._materialize_onnx_light_node_dir(tmpdir)
-                self.assertEqual(result, tmpdir)
-                # Only the single-node case is materialized.
-                self.assertTrue(
-                    os.path.exists(os.path.join(tmpdir, "test_abs", "model.onnx"))
+                return rcc.build_payload(
+                    os.path.join(tmpdir, "schema_comparison.json"),
+                    skip_cgen_compile=skip_cgen_compile,
                 )
-                self.assertFalse(os.path.isdir(os.path.join(tmpdir, "test_multi")))
-                self.assertFalse(os.path.isdir(os.path.join(tmpdir, "test_no_model")))
-                # The layout is understood by build_op_to_test_model_map.
-                op_map = rcc.build_op_to_test_model_map(tmpdir)
-                self.assertIn(("ai.onnx", "Abs"), op_map)
         finally:
-            for name, mod in saved.items():
-                if mod is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = mod
+            for name, original in saved.items():
+                setattr(rcc, name, original)
 
-    def test_returns_none_when_onnx_light_missing(self):
-        import sys
+    def test_uses_generated_models_without_packaged_data(self):
+        payload = self._build_payload({("ai.onnx", "Abs"): "/* generated C */"})
+        self.assertEqual(payload["rows"][0]["cgen_source_code"], "/* generated C */")
 
-        saved = sys.modules.get("onnx_light")
-        # Insert a sentinel that has no backend.test.case submodule so the
-        # import inside _materialize_onnx_light_node_dir fails cleanly.
-        import types
+    def test_rejects_snapshot_without_generated_code(self):
+        with self.assertRaisesRegex(RuntimeError, "No emx-onnx-cgen C source"):
+            self._build_payload({})
 
-        sys.modules["onnx_light"] = types.ModuleType("onnx_light")
-        sys.modules.pop("onnx_light.onnx_lib.backend.test.case", None)
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                self.assertIsNone(rcc._materialize_onnx_light_node_dir(tmpdir))
-        finally:
-            if saved is None:
-                sys.modules.pop("onnx_light", None)
-            else:
-                sys.modules["onnx_light"] = saved
+    def test_explicit_skip_allows_snapshot_without_generated_code(self):
+        payload = self._build_payload({}, skip_cgen_compile=True)
+        self.assertNotIn("cgen_source_code", payload["rows"][0])
 
 
 class TestGenerateCgenSourceForOp(unittest.TestCase):
