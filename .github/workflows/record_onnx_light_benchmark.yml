@@ -80,40 +80,21 @@ jobs:
           # ``_cpuregister`` extension. That extension is only built when
           # onnx-light-cpu is compiled with ``ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON``,
           # and that build links onnx-light's ``lib_onnx_core`` located via
-          # ``find_package(onnx_light)``. A prebuilt wheel / plain editable
-          # install does not ship the CMake package config needed for that, so
-          # build onnx-light from source (with sccache to keep repeat runs
-          # fast), install its CMake package and expose it on
-          # ``CMAKE_PREFIX_PATH``, then ``pip install`` it for the Python
-          # runtime. This mirrors ``build_onnx_light_cpu_docs.yml``. Without it
-          # ``register_kernels()`` raises ``No module named
-          # 'onnx_light_cpu.onnx_py._cpuregister'`` and every onnx-light-cpu test
-          # is recorded as a load failure.
+          # ``find_package(onnx_light)``. Build the Python runtime and CMake
+          # package in one wheel so both extensions use the same libraries.
+          # Explicitly use the regular Python ABI in both builds: nanobind
+          # cannot share RuntimeContext types across regular and stable ABIs.
           python -m pip install --upgrade pip
           pip install onnx onnxruntime numpy scikit-build-core nanobind
-          cmake -S ./onnx-light -B ./onnx-light/build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=./onnx-light/install \
-            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-          cmake --build ./onnx-light/build --config Release --parallel "${CMAKE_BUILD_PARALLEL_LEVEL}"
-          cmake --install ./onnx-light/build --config Release
-          pip install ./onnx-light
-          onnx_light_install="$(cd ./onnx-light/install && pwd)"
-          echo "CMAKE_PREFIX_PATH=${onnx_light_install}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
-          # The onnx-light-cpu ``_cpuregister`` extension links onnx-light's
-          # shared libraries, so the install lib dir must be on
-          # ``LD_LIBRARY_PATH`` or the import fails with "cannot open shared
-          # object file: liblib_onnx_core.so".
-          onnx_light_lib="$(find "${onnx_light_install}" -name 'liblib_onnx_core.so' | head -1)"
-          if [ -z "${onnx_light_lib}" ]; then
-            echo "liblib_onnx_core.so not found under ${onnx_light_install};" >&2
-            echo "the onnx-light C++ install is incomplete, so onnx-light-cpu's" >&2
-            echo "_cpuregister extension cannot link against it." >&2
-            exit 1
-          fi
-          onnx_light_libdir="$(dirname "${onnx_light_lib}")"
-          echo "LD_LIBRARY_PATH=${onnx_light_libdir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          pip install ./onnx-light \
+            -C cmake.define.ONNX_LIGHT_INSTALL=ON \
+            -C cmake.define.ONNX_LIGHT_PYTHON_STABLE_ABI=OFF \
+            -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
+            -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache
+          onnx_light_prefix="$(python -c 'import sysconfig; print(sysconfig.get_path("platlib"))')"
+          test -f "${onnx_light_prefix}/lib/cmake/onnx_light/onnx_lightConfig.cmake"
+          echo "CMAKE_PREFIX_PATH=${onnx_light_prefix}${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=${onnx_light_prefix}/onnx_light/onnx_py:${onnx_light_prefix}/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Build and install onnx-light-cpu with the onnx-light integration
         working-directory: onnx-light-cpu
@@ -129,12 +110,32 @@ jobs:
             -C build-dir=build \
             -C cmake.build-type=Release \
             -C cmake.define.ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON \
+            -C cmake.define.ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF \
             -C cmake.define.CMAKE_C_COMPILER_LAUNCHER=sccache \
             -C cmake.define.CMAKE_CXX_COMPILER_LAUNCHER=sccache \
             -e . -v
 
       - name: pip freeze
         run: pip freeze
+
+      - name: Verify onnx-light runtime compatibility
+        run: |
+          PYTHONPATH=scripts python - <<'PY'
+          import numpy as np
+          from onnx import TensorProto, helper
+          from record_onnx_light_benchmark import _make_onnx_light_cpu_runner
+
+          x = helper.make_tensor_value_info("X", TensorProto.FLOAT, [2])
+          y = helper.make_tensor_value_info("Y", TensorProto.FLOAT, [2])
+          model = helper.make_model(
+              helper.make_graph([helper.make_node("Abs", ["X"], ["Y"])], "abs", [x], [y]),
+              opset_imports=[helper.make_opsetid("", 18)],
+          )
+          (result,) = _make_onnx_light_cpu_runner(model)(
+              [np.array([-1.0, 2.0], dtype=np.float32)]
+          )
+          np.testing.assert_array_equal(result, [1.0, 2.0])
+          PY
 
       - name: Record benchmark snapshot
         run: |
