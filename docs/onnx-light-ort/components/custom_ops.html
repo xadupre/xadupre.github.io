@@ -34,6 +34,7 @@
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="../_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+    <link rel="stylesheet" type="text/css" href="../_static/projects.css?v=3d3ec892" />
   
   <!-- So that users can add custom icons -->
   <script defer src="../_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
@@ -145,6 +146,13 @@
 <li class="nav-item ">
   <a class="nav-link nav-internal" href="../introduction.html">
     Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../python_api.html">
+    Python API
   </a>
 </li>
 
@@ -271,6 +279,13 @@
 </li>
 
 
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="../python_api.html">
+    Python API
+  </a>
+</li>
+
+
 <li class="nav-item current active">
   <a class="nav-link nav-internal" href="index.html">
     Projects
@@ -351,10 +366,10 @@
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1 current active"><a aria-current="page" class="current reference internal" href="#">Custom ops</a></li>
 <li class="toctree-l1"><a class="reference internal" href="custom_ep.html">Custom execution provider</a></li>
-<li class="toctree-l1"><a class="reference internal" href="bridge_ops_light_called_by_ort.html">Custom-op bridge: onnx-light called by ORT</a></li>
-<li class="toctree-l1"><a class="reference internal" href="bridge_ep_light_called_by_ort.html">EP bridge: onnx-light called by ORT</a></li>
-<li class="toctree-l1"><a class="reference internal" href="bridge_ops_ort_called_by_light.html">Custom-op bridge: ORT custom ops called by onnx-light</a></li>
-<li class="toctree-l1"><a class="reference internal" href="bridge_ep_ort_called_by_light.html">EP bridge: ORT plugins called by onnx-light</a></li>
+<li class="toctree-l1"><a class="reference internal" href="bridge_ops_light_called_by_ort.html">onnx-light called by onnxruntime through a custom operator</a></li>
+<li class="toctree-l1"><a class="reference internal" href="bridge_ep_light_called_by_ort.html">onnx-light called by onnxruntime through an execution provider</a></li>
+<li class="toctree-l1"><a class="reference internal" href="bridge_ops_ort_called_by_light.html">onnxruntime custom operators called by onnx-light</a></li>
+<li class="toctree-l1"><a class="reference internal" href="bridge_ep_ort_called_by_light.html">onnxruntime execution-provider plugins called by onnx-light</a></li>
 <li class="toctree-l1"><a class="reference internal" href="common_light_to_ort.html">Shared support for onnx-light in ORT</a></li>
 <li class="toctree-l1"><a class="reference internal" href="common_ort_to_light.html">Shared support for hosting ORT-compatible plugins</a></li>
 </ul>
@@ -435,7 +450,7 @@ Input and output types must match. There is no bridge-level conversion or
 fallback to another operator. LeakyRelu delegates all four types to the native
 onnx-light kernel; its <code class="docutils literal notranslate"><span class="pre">alpha</span></code> attribute remains an ONNX float.</p>
 <p>This component owns descriptors, domain registration and callback wiring. It
-depends on <a class="reference internal" href="bridge_ops_light_called_by_ort.html"><span class="doc">Custom-op bridge: onnx-light called by ORT</span></a>, which uses <a class="reference internal" href="common_light_to_ort.html"><span class="doc">Shared support for onnx-light in ORT</span></a>
+depends on <a class="reference internal" href="bridge_ops_light_called_by_ort.html"><span class="doc">onnx-light called by onnxruntime through a custom operator</span></a>, which uses <a class="reference internal" href="common_light_to_ort.html"><span class="doc">Shared support for onnx-light in ORT</span></a>
 for native state, tensor validation and status conversion, never
 on the opposite bridge or the EP library. It requests the supplied API 18
 table and has no link dependency on ORT. See <a class="reference internal" href="../architecture.html"><span class="doc">Architecture</span></a> for domain,
@@ -493,7 +508,7 @@ through the C API’s <code class="docutils literal notranslate"><span class="pr
 <span class="n">session</span><span class="o">.</span><span class="n">run_with_iobinding</span><span class="p">(</span><span class="n">binding</span><span class="p">)</span>
 </pre></div>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">output</span></code> retains the bfloat16 dtype. The standalone <code class="docutils literal notranslate"><span class="pre">CustomOpSession</span></code> accepts
+<p><code class="docutils literal notranslate"><span class="pre">output</span></code> retains the bfloat16 dtype. The standalone <code class="docutils literal notranslate"><span class="pre">CustomOpSessionOrtCalledByLight</span></code> accepts
 these arrays directly. Keep bound arrays alive until inference completes.</p>
 </section>
 <section id="python-example">
@@ -748,8 +763,14 @@ python<span class="w"> </span>docs/examples/plot_benchmark_log_custom_ops.py<spa
 <span class="w">  </span>--output<span class="w"> </span>build/cpu-custom-ops-log-benchmark.json
 </pre></div>
 </div>
-<p>The script compares steady-state <code class="docutils literal notranslate"><span class="pre">session.run</span></code> calls, including output
-allocation and Python interfaces, not isolated arithmetic. It uses identical
+<p>The script compares steady-state ORT I/O binding calls with preallocated buffers
+and standalone onnx-light <code class="docutils literal notranslate"><span class="pre">run</span></code> calls with protective input/output copies.
+It measures Python interfaces, not isolated arithmetic, over eleven sizes
+from 1 to 1,048,576 elements. NumPy is not a timed backend.
+Both custom-op directions are labelled explicitly; speedup is the median
+ORT built-in Log latency divided by the path’s median latency at the same
+input size and node count. Separate latency and speedup plots show one or ten
+Log nodes; the standalone host supports only one node. It uses identical
 float32 inputs from <code class="docutils literal notranslate"><span class="pre">default_rng(42).uniform(0.01,</span> <span class="pre">10)</span></code> and validates complete
 outputs against NumPy float64 Log rounded to float32, before and after timing.
 Each backend runs in its own child process, with sequential, one-thread ORT
@@ -757,7 +778,9 @@ sessions and no private CPU-kernel worker pool. Three trials rotate backend
 order; each size receives ten warmups followed by 31 timed batches of 20 calls.
 The report retains every per-call batch sample and records versions, affinity
 and measurement settings. The table reports the median of the 93 batch samples.</p>
-<p>The following local diagnostic results used a Xeon Platinum 8480C, affinity
+<p>The following historical diagnostic results used <code class="docutils literal notranslate"><span class="pre">session.run</span></code>, including
+output allocation, rather than the current I/O binding setup. They used a
+Xeon Platinum 8480C, affinity
 restricted to CPU 0 with <code class="docutils literal notranslate"><span class="pre">taskset</span> <span class="pre">-c</span> <span class="pre">0</span></code>, GCC 13.2.0, Release mode, runtime SIMD
 dispatch, Python 3.12.15 and source-built ORT 1.32.0. The onnx-light revision was
 <code class="docutils literal notranslate"><span class="pre">5c899bdd2c1011e2825728b4fc950dcc88fc6aeb</span></code> and onnx-light-cpu was

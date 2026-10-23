@@ -1,5 +1,5 @@
-EP bridge: ORT plugins called by onnx-light
-===========================================
+onnxruntime execution-provider plugins called by onnx-light
+===========================================================
 
 ``onnx_light_ort::bridge_ep_ort_called_by_light`` is currently an interface target
 depending on :doc:`common_ort_to_light`. It will host foreign EP factory/device

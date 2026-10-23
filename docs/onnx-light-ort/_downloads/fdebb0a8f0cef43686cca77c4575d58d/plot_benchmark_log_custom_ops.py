@@ -1,19 +1,21 @@
 """
-Benchmark Log: built-in and custom operators
-============================================
+Benchmark Log custom ops: onnx-light and ORT callers
+====================================================
 
-Compare synchronous CPU calls to ``Log`` using NumPy, ORT's built-in operator,
-and the ``onnx_light_cpu`` custom operator (not an execution provider).
+Compare ORT's built-in ``Log`` with onnx-light-cpu's ``Log`` custom operator
+called by ORT, and the same ORT-ABI custom operator called by onnx-light's
+standalone host. These are custom operators, not execution providers.
 Two graph topologies are used: ``X -> Log -> Y`` and
 ``X -> Log -> ... -> Log -> Y`` with ten consecutive nodes. Both use float32,
 dynamic one-dimensional inputs and models built with ``onnx_light.onnx``.
 
 ORT executes each topology with either standard-domain or custom-domain nodes,
-using all four synchronous Python calling interfaces: ``run``,
-``run_with_ort_values``, ``run_with_iobinding`` and ``run_with_ortvaluevector``.
+using only ``run_with_iobinding`` with preallocated input and output buffers.
 The standalone onnx-light custom-op host exposes only ``run`` and accepts only
 one node. Its ten-node result is therefore unavailable, not ten Python calls
-misrepresented as a graph. NumPy provides a baseline with one or ten ufunc calls.
+misrepresented as a graph. ORT's built-in Log with I/O binding is the baseline:
+speedup is its median latency divided by the measured path's median latency.
+NumPy is used only for input preparation and correctness checks, not timed.
 
 Repeated real-valued logarithms inevitably leave the positive domain in float32.
 The ten-node graph produces NaNs: this is a literal Log chain, not a benchmark
@@ -35,6 +37,13 @@ import time
 
 import numpy
 from onnx_light.onnx import TensorProto, checker, helper
+
+SIZES = [4**power for power in range(11)]
+LABELS = {
+    "ort": "ONNX Runtime built-in Log (I/O binding)",
+    "custom": "onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)",
+    "standalone": "ORT-ABI CPU Log custom op called by onnx-light (run)",
+}
 
 # %%
 # Construct both graph topologies here, so the downloaded gallery example
@@ -61,55 +70,22 @@ def make_model(custom, nodes=1):
     return model.SerializeToString()
 
 
-def numpy_log(values, nodes):
-    for _ in range(nodes):
-        values = numpy.log(values)
-    return values
-
-
 # %%
-# Prepare reusable inputs and outputs before timing each ORT calling interface.
+# Prepare reusable inputs and outputs before timing ORT's I/O binding interface.
 # Import ORT only inside these functions: standalone workers must not load it.
 
 
-def ort_runner(session, values, api):
+def ort_runner(session, values):
     """Prepares reusable inputs and outputs outside the measured region."""
     import onnxruntime
 
-    feeds = {"X": values}
-    if api == "run":
-        return lambda: session.run(["Y"], feeds), lambda result: result[0]
     input_value = onnxruntime.OrtValue.ortvalue_from_numpy(values)
-    if api == "ortvalues":
-        feeds = {"X": input_value}
-        return (
-            lambda: session.run_with_ort_values(["Y"], feeds),
-            lambda result: result[0].numpy(),
-        )
     output = numpy.empty_like(values)
     output_value = onnxruntime.OrtValue.ortvalue_from_numpy(output)
-    if api == "iobinding":
-        binding = session.io_binding()
-        binding.bind_ortvalue_input("X", input_value)
-        binding.bind_ortvalue_output("Y", output_value)
-        return lambda: session.run_with_iobinding(binding), lambda result: output
-    if api != "ortvaluevector":
-        raise ValueError(f"Unsupported ORT API: {api}")
-    from onnxruntime.capi import _pybind_state as C
-
-    inputs = C.OrtValueVector()
-    inputs.push_back(input_value._get_c_value())
-    outputs = C.OrtValueVector()
-    outputs.push_back(output_value._get_c_value())
-    devices = [C.OrtDevice(C.OrtDevice.cpu(), C.OrtDevice.default_memory(), 0)]
-    options = onnxruntime.RunOptions()
-    input_names, output_names = ["X"], ["Y"]
-    return (
-        lambda: session.run_with_ortvaluevector(
-            options, input_names, inputs, output_names, outputs, devices
-        ),
-        lambda result: output,
-    )
+    binding = session.io_binding()
+    binding.bind_ortvalue_input("X", input_value)
+    binding.bind_ortvalue_output("Y", output_value)
+    return lambda: session.run_with_iobinding(binding), lambda result: output
 
 
 # %%
@@ -117,17 +93,17 @@ def ort_runner(session, values, api):
 
 
 def measure(args):
-    if args.backend == "standalone" and (args.nodes != 1 or args.api != "run"):
-        raise ValueError("The standalone host supports only one node and the run API")
+    if args.backend not in LABELS:
+        raise ValueError(f"Unsupported backend: {args.backend}")
+    if args.backend == "standalone" and args.nodes != 1:
+        raise ValueError("The standalone host supports only one node")
     custom = args.backend != "ort"
     if args.backend == "standalone":
-        from onnx_light_ort import CustomOpSession
+        from onnx_light_ort import CustomOpSessionOrtCalledByLight
 
-        session = CustomOpSession(
+        session = CustomOpSessionOrtCalledByLight(
             make_model(custom, args.nodes), library=args.library, host_library=args.host
         )
-        version = None
-    elif args.backend == "numpy":
         version = None
     else:
         import onnxruntime
@@ -150,14 +126,8 @@ def measure(args):
         feeds = {"X": values}
         if args.backend == "standalone":
             run, get_output = partial(session.run, None, feeds), lambda result: result[0]
-        elif args.backend == "numpy":
-            run = partial(numpy_log, values, args.nodes)
-
-            def get_output(result):
-                return result
-
         else:
-            run, get_output = ort_runner(session, values, args.api)
+            run, get_output = ort_runner(session, values)
         # Repeated real-valued logarithms eventually leave the positive domain.
         with numpy.errstate(divide="ignore", invalid="ignore"):
             expected = values.copy()
@@ -185,7 +155,7 @@ def measure(args):
     assert "onnx" not in sys.modules
     return {
         "backend": args.backend,
-        "api": args.api,
+        "api": "run" if args.backend == "standalone" else "iobinding",
         "nodes": args.nodes,
         "ort_version": version,
         "rows": rows,
@@ -200,21 +170,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", type=Path, required=True)
     parser.add_argument("--host", type=Path, required=True)
-    parser.add_argument(
-        "--sizes", type=int, nargs="+", default=[1024, 32768, 65536, 262144, 1048576]
-    )
+    parser.add_argument("--sizes", type=int, nargs="+", default=SIZES)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repeat", type=int, default=31)
     parser.add_argument("--number", type=int, default=20)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--nodes", type=int, choices=[1, 10], default=1)
-    parser.add_argument(
-        "--api", choices=["run", "ortvalues", "iobinding", "ortvaluevector"], default="run"
-    )
     parser.add_argument("--output", type=Path)
-    parser.add_argument(
-        "--backend", choices=["ort", "custom", "standalone", "numpy"], help=argparse.SUPPRESS
-    )
+    parser.add_argument("--backend", choices=list(LABELS), help=argparse.SUPPRESS)
     args = parser.parse_args()
     if min(args.sizes) <= 0 or max(args.sizes) > 16 * 1024 * 1024:
         parser.error("sizes must be positive and fit the host's 64 MiB tensor limit")
@@ -227,7 +190,7 @@ def main():
         return
 
     backends = ["ort", "custom"]
-    if args.nodes == 1 and args.api == "run":
+    if args.nodes == 1:
         backends.append("standalone")
     results = []
     for trial in range(args.trials):
@@ -252,14 +215,15 @@ def main():
                 backend,
                 "--nodes",
                 str(args.nodes),
-                "--api",
-                args.api,
             ]
             completed = subprocess.run(command, check=True, stdout=subprocess.PIPE, text=True)
             results.append(json.loads(completed.stdout))
 
     report = {
-        "measurement": f"steady-state {args.api}; includes Python interfaces",
+        "measurement": "steady-state ORT I/O binding / standalone run, including Python",
+        "baseline": LABELS["ort"],
+        "speedup": "median ORT built-in Log latency / median path latency",
+        "labels": LABELS,
         "nodes": args.nodes,
         "threads": 1,
         "operator": "Log",
@@ -276,24 +240,18 @@ def main():
     }
     if args.output:
         args.output.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    standalone = " CPU custom op / standalone (us) |" if "standalone" in backends else ""
-    print(f"| Elements | ORT Log (us) | CPU custom op / ORT (us) | Speedup |{standalone}")
-    print("| ---: | ---: | ---: | ---: |" + (" ---: |" if standalone else ""))
-    for index, size in enumerate(args.sizes):
-        times = {}
-        for backend in backends:
-            samples = [
-                value
-                for result in results
-                if result["backend"] == backend
-                for value in result["rows"][index]["samples_s"]
-            ]
-            times[backend] = statistics.median(samples)
-        standalone_time = f" {times['standalone'] * 1e6:.3f} |" if standalone else ""
-        print(
-            f"| {size:,} | {times['ort'] * 1e6:.3f} | {times['custom'] * 1e6:.3f} "
-            f"| {times['ort'] / times['custom']:.2f}x |{standalone_time}"
-        )
+    summary = summarize(results)
+    print(f"Baseline: {LABELS['ort']}; speedup = baseline latency / path latency.")
+    print("| Elements | Path | Median (us) | Speedup vs ORT |")
+    print("| ---: | --- | ---: | ---: |")
+    for backend in backends:
+        for row in summary[(args.nodes, backend)]:
+            print(
+                f"| {row['size']:,} | {LABELS[backend]} | {row['median_s'] * 1e6:.3f} "
+                f"| {row['speedup']:.2f}x |"
+            )
+    if args.nodes != 1:
+        print(f"{LABELS['standalone']}: unavailable (single-node host).")
     print(
         "Raw samples, when --output is supplied, include all trials; "
         "standalone timings include protective input and output copies."
@@ -309,9 +267,8 @@ def main():
 # time per *whole graph*, not per node. Correctness checks and output conversion
 # to NumPy are excluded from timing.
 #
-# ``run`` and ``run_with_ort_values`` allocate outputs; I/O binding and
-# ``run_with_ortvaluevector`` reuse preallocated output buffers. The standalone
-# wrapper includes protective input and output copies. These are end-to-end
+# ORT I/O binding reuses preallocated output buffers. The standalone wrapper
+# includes protective input and output copies. These are end-to-end
 # Python interface timings, not isolated kernel timings or universal speedups.
 
 
@@ -325,22 +282,14 @@ def run_gallery():
         launcher.append(str(root / "cmake/run_python_with_dll_paths.py"))
     library = Path(os.environ["ONNX_LIGHT_ORT_PLUGIN_LIBRARY"]).resolve(strict=True)
     host = Path(os.environ["ONNX_LIGHT_ORT_HOST_LIBRARY"]).resolve(strict=True)
-    sizes = [1, 1024, 65536]
-    apis = ["run", "ortvalues", "iobinding", "ortvaluevector"]
-    paths = [
-        ("numpy", "run"),
-        ("standalone", "run"),
-        *((backend, api) for backend in ("ort", "custom") for api in apis),
-    ]
+    sizes = SIZES
     print(f"Python {platform.python_version()}, {platform.platform()}")
     results = []
     for nodes in (1, 10):
         print(f"\n{nodes} Log node(s), median microseconds per graph")
-        print(f"{'Backend / API':<34}" + "".join(f"{size:>14,}" for size in sizes))
-        for backend, api in paths:
-            label = f"{backend} / {api}"
+        for backend, label in LABELS.items():
             if backend == "standalone" and nodes != 1:
-                print(f"{label:<34}  unavailable (single-node host)")
+                print(f"{label}: unavailable (single-node host)")
                 continue
             command = [
                 *launcher,
@@ -353,8 +302,6 @@ def run_gallery():
                 *(str(size) for size in sizes),
                 "--nodes",
                 str(nodes),
-                "--api",
-                api,
                 "--backend",
                 backend,
                 "--warmup",
@@ -369,12 +316,87 @@ def run_gallery():
             )
             result = json.loads(completed.stdout)
             results.append(result)
-            times = [statistics.median(row["samples_s"]) * 1e6 for row in result["rows"]]
-            print(f"{label:<34}" + "".join(f"{value:>14.3f}" for value in times))
+        print(f"{'Elements':>10}  {'Median (us)':>12}  {'Speedup vs ORT':>14}  Path")
+        for (topology, backend), rows in summarize(results).items():
+            if topology == nodes:
+                for row in rows:
+                    print(
+                        f"{row['size']:>10,}  {row['median_s'] * 1e6:>12.3f}  "
+                        f"{row['speedup']:>13.2f}x  {LABELS[backend]}"
+                    )
     ort_version = next(result["ort_version"] for result in results if result["backend"] == "ort")
-    print(f"\nONNX Runtime {ort_version}; NumPy and onnx-light model bindings; float32 CPU")
+    print(f"\nONNX Runtime {ort_version}; onnx-light model bindings; float32 CPU")
+    print(f"Speedup baseline: {LABELS['ort']}; values above 1 mean faster than ORT.")
     assert "onnx" not in sys.modules
     return results
+
+
+def summarize(results):
+    """Pool trials and compare each path to ORT at the same size and node count."""
+    samples = {}
+    for result in results:
+        rows = samples.setdefault((result["nodes"], result["backend"]), {})
+        for row in result["rows"]:
+            rows.setdefault(row["size"], []).extend(row["samples_s"])
+    medians = {
+        key: {size: statistics.median(values) for size, values in rows.items()}
+        for key, rows in samples.items()
+    }
+    return {
+        (nodes, backend): [
+            {
+                "size": size,
+                "median_s": median,
+                "speedup": medians[(nodes, "ort")][size] / median,
+            }
+            for size, median in sorted(rows.items())
+        ]
+        for (nodes, backend), rows in medians.items()
+    }
+
+
+def plot_results(results):
+    """Separate latency and ORT-relative speedups for each graph topology."""
+    import matplotlib.pyplot as plt
+
+    summary = summarize(results)
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+    for column, nodes in enumerate((1, 10)):
+        latency, speedup = axes[:, column]
+        for index, (backend, label) in enumerate(LABELS.items()):
+            rows = summary.get((nodes, backend))
+            if rows is None:
+                continue
+            sizes = [row["size"] for row in rows]
+            style = {"marker": "o", "color": f"C{index}"}
+            latency.plot(
+                sizes,
+                [row["median_s"] * 1e6 for row in rows],
+                label=label.replace(" called by ", "\ncalled by "),
+                **style,
+            )
+            speedup.plot(sizes, [row["speedup"] for row in rows], **style)
+        latency.set(title=f"{nodes} Log node(s)", yscale="log")
+        speedup.axhline(1, color="black", linestyle="--", linewidth=1)
+        speedup.set(xlabel="Input elements (float32)", ylim=(0, None))
+        for ax in (latency, speedup):
+            ax.set_xscale("log")
+            ax.grid(True, which="both", alpha=0.3)
+    axes[0, 0].set_ylabel("Median latency per graph (µs)")
+    axes[1, 0].set_ylabel("Speedup vs ORT (baseline / path latency)")
+    axes[0, 1].text(
+        0.03,
+        0.97,
+        "NaN outputs; onnx-light host unavailable\n(single-node host only)",
+        transform=axes[0, 1].transAxes,
+        va="top",
+    )
+    fig.suptitle(
+        "Log custom ops: onnx-light-cpu called by ORT,\nORT-ABI custom op called by onnx-light"
+    )
+    fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", fontsize=10)
+    fig.tight_layout(rect=(0, 0.17, 1, 0.94))
+    return fig
 
 
 # %%
@@ -387,33 +409,8 @@ if __name__ == "__main__":
         results = run_gallery()
 
         # %%
-        # Compare whole-graph latency for every backend and calling interface.
+        # Compare whole-graph latency and speedup relative to ORT's built-in Log.
         import matplotlib.pyplot as plt
 
-        fig, axes = plt.subplots(1, 2, figsize=(14, 5), sharey=True)
-        labels = list(dict.fromkeys(f"{r['backend']} / {r['api']}" for r in results))
-        for ax, nodes in zip(axes, (1, 10), strict=True):
-            for result in results:
-                if result["nodes"] != nodes:
-                    continue
-                label = f"{result['backend']} / {result['api']}"
-                ax.plot(
-                    [row["size"] for row in result["rows"]],
-                    [statistics.median(row["samples_s"]) * 1e6 for row in result["rows"]],
-                    marker="o",
-                    label=label,
-                    color=f"C{labels.index(label)}",
-                )
-            ax.set(
-                title=f"{nodes} Log node(s)",
-                xlabel="Input elements",
-                xscale="log",
-                yscale="log",
-            )
-            ax.grid(True)
-        axes[0].set_ylabel("Median latency per graph (µs)")
-        axes[1].legend(
-            *axes[0].get_legend_handles_labels(), loc="upper left", bbox_to_anchor=(1, 1)
-        )
-        fig.tight_layout()
+        fig = plot_results(results)
         plt.show()

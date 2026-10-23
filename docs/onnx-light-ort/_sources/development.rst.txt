@@ -34,6 +34,68 @@ On macOS use ``sysctl -n hw.logicalcpu`` in place of ``nproc``.
 Keep one build tree; reconfigure it rather than maintaining stale parallel
 compiled copies.
 
+The Python source-build frontend follows onnx-light's command:
+
+.. code-block:: bash
+
+   python -m pip install -r requirements/host-tests.txt
+   python setup.py build_ext --inplace --cpp-tests
+   export PYTHONPATH="$PWD:$PWD/build/python:$PYTHONPATH"
+
+It configures Release libraries and matching model bindings in the existing
+``build`` tree, without installing or copying compiled artifacts.
+``--cpp-tests`` enables, builds and runs the native CTest suites; omit it to
+build without tests. Native unit, dependency and consumer tests are selected,
+not opt-in Python/ORT or gallery tests. ``--parallel N`` or
+``CMAKE_BUILD_PARALLEL_LEVEL`` controls concurrency (all available CPUs by
+default).
+``CMAKE_ARGS`` forwards additional configuration options and existing
+dependency-source overrides are preserved. The frontend enforces Release
+even if ``CMAKE_ARGS`` contains another build type, matching its build and
+CTest configuration. For example:
+
+.. code-block:: bash
+
+   CMAKE_ARGS="-DONNX_LIGHT_ORT_TEST_PYTHON=ON -DONNX_LIGHT_ORT_TEST_WITH_ORT=ON" \
+     python setup.py build_ext --inplace --cpp-tests
+   ctest --test-dir build -C Release --output-on-failure
+
+To use a locally built onnx-light runtime, as with onnx-light-cpu:
+
+.. code-block:: bash
+
+   PYTHONPATH="/path/to/onnx-light:$PYTHONPATH" \
+     python setup.py build_ext --inplace --cpp-tests --onnx-light-source
+
+``--onnx-light-source`` uses ``onnx_light.get_cpp_build_info()`` from the
+package selected by Python (including ``PYTHONPATH``). It links against that
+runtime's existing core, proto and threading shared libraries, without
+fetching or rebuilding onnx-light or copying its Python bindings.
+The checkout must already be built. If its model package lives outside the
+source checkout, set ``ONNX_LIGHT_ORT_ONNX_LIGHT_SOURCE_DIR`` to that matching
+checkout. Windows also requires the matching import libraries reported by
+``get_cpp_build_info()``. Missing headers or libraries fail the build explicitly.
+If the import libraries live in another build tree, supply their exact paths
+with ``ONNX_LIGHT_ORT_ONNX_LIGHT_CORE_IMPLIB``,
+``ONNX_LIGHT_ORT_ONNX_LIGHT_PROTO_IMPLIB`` and
+``ONNX_LIGHT_ORT_ONNX_LIGHT_THREADS_IMPLIB``.
+If external runtime DLLs are found through ``PATH``, launch the frontend with
+``python cmake/run_python_with_dll_paths.py setup.py build_ext --inplace --cpp-tests --onnx-light-source``.
+This registers the DLL directories in that Python process; registrations in a
+parent process are not inherited by subprocesses.
+This mode disables installation and does not support upstream fuzzers;
+release packages continue to use the fetched dependency build.
+Omit the flag to restore the fetched dependency configuration in the same tree.
+The onnx-light-cpu compute dependency still uses its existing source override.
+
+The default Python APIs read ``build/CMakeCache.txt`` and resolve libraries
+using the manifest generated from CMake's actual targets: the active build
+type for single-configuration generators, or
+``build/Release/python_libraries.json`` for multi-configuration generators.
+An unset single-config build type uses ``build/python_libraries.json``.
+Explicit library paths remain available for other multi-config configurations
+or custom build locations. See :doc:`python_api`.
+
 Build either direction independently:
 
 .. code-block:: bash
@@ -125,8 +187,9 @@ On Linux the loadable library is
 CTest resolves the platform-specific path from the custom-op target, including
 multi-configuration build directories.
 
-The real-host CI job uses ORT
-1.18.1 with NumPy below 2 to exercise the requested API-18 baseline.
+The real-host CI job resolves the latest stable ONNX Runtime release on each
+run, installs its Python wheel, and downloads the matching C++ runtime archive
+with SHA-256 verification against the release asset digest.
 Models are created and checked with ``onnx_light.onnx``, never the ``onnx``
 Python package.
 
@@ -181,9 +244,10 @@ This includes external DLLs needed by the onnx-light libraries, not just the
 libraries placed under ``build/python``. Direct Windows invocations can use
 ``python cmake/run_python_with_dll_paths.py path/to/script.py ...`` as well.
 
-``CustomOpSession`` accepts an onnx-light ``ModelProto`` or serialized model
-bytes and explicit plugin/host library
-paths. Its audited single-node floating-point profile is documented in
+``CustomOpSessionOrtCalledByLight`` accepts a model path, an onnx-light ``ModelProto`` or
+serialized model bytes. Plugin/host paths default to the bundled libraries or
+the source build and can be overridden explicitly.
+Its audited single-node floating-point profile is documented in
 :doc:`components/bridge_ops_ort_called_by_light`; it is not a general plugin host.
 
 Executable Python gallery
@@ -221,18 +285,22 @@ the native tests. Existing CMake dependency-source overrides are preserved,
 and explicitly supplied gallery library environment variables take precedence.
 
 The ``gallery_benchmark_log_custom_ops`` test executes the Log benchmark gallery.
-It compares NumPy, all four synchronous ORT calling interfaces with built-in
-and CPU custom operators, and the standalone single-node host. It uses one
+It compares ORT's built-in Log and the onnx-light-cpu custom op called by ORT,
+both using I/O binding with preallocated buffers, with the ORT-ABI CPU custom op
+called by the standalone onnx-light single-node host. NumPy is used only for
+input preparation and correctness checks, not as a timed backend. It uses one
 Log or ten consecutive Logs, checks results before and after timing, and
-reports median microseconds per graph over several input sizes. Ten Logs
+reports median microseconds per graph and speedup relative to ORT's built-in
+Log over eleven input sizes from 1 to 1,048,576 elements. Latency and speedup
+are plotted separately for each topology. Ten Logs
 produce NaNs in float32; this measures the literal chain, including special
 values. The standalone host cannot execute that topology and is marked
 unavailable. Measurements run in separate processes to keep ORT out of the
 standalone host. Use the same library environment variables shown above.
 All benchmark code lives in ``docs/examples/plot_benchmark_log_custom_ops.py``,
 including model construction, timing, isolated workers and the CLI entry point.
-The command-line benchmark also accepts ``--nodes 1|10`` and
-``--api run|ortvalues|iobinding|ortvaluevector``.
+The command-line benchmark also accepts ``--nodes 1|10`` and ``--sizes``.
+ORT always uses I/O binding; the standalone host uses ``run``.
 
 CI and documentation publishing
 -------------------------------
@@ -249,6 +317,10 @@ Tagged releases
 ---------------
 
 The ``Releases`` workflow starts automatically when a tag is pushed.
+It calls the reusable ``Python release package`` workflow
+(``.github/workflows/release-python.yml``) to build wheels and a source
+distribution. That workflow can also be dispatched independently to build
+downloadable Actions artifacts without publishing or creating a tag.
 For version 0.2.0, both ``0.2.0`` and ``v0.2.0`` are accepted. It checks that the
 tag, CMake project, Python metadata and ``__version__`` agree before building.
 It resolves onnx-light's main revision once and uses that immutable commit in
@@ -273,7 +345,8 @@ The targets match onnx-light's release matrix:
      - universal2 (arm64 + x86_64)
      - 3.12, 3.13, 3.14
 
-There are fifteen wheels and five native C++ archives. Native archives use
+There are fifteen wheels, one Python source distribution and five native C++
+archives. Native archives use
 Ubuntu 24.04 on Linux; they are not the portable manylinux wheels.
 Windows archives are ZIP files; Linux and macOS archives are gzip-compressed
 tar files. All builds enable both custom-op directions and use all available
@@ -325,12 +398,13 @@ Daily coverage
 
 The ``Coverage`` workflow runs every day at 07:00 UTC on ``main`` and can
 also be started manually. It builds both native directions with GCC coverage
-instrumentation and runs all native CTest tests. Coverage includes the C++
-implementation and headers under ``onnx_light_ort/``, excluding test sources,
-downloaded dependencies, generated files and examples. Python and opt-in
-real-ORT tests are not included.
+instrumentation and runs native tests, Python tests in both custom-op
+directions, and the Python gallery through CTest. Coverage includes the C++
+implementation, headers and Python modules under ``onnx_light_ort/``, excluding
+test sources, downloaded dependencies, generated files and examples.
+Python coverage also follows subprocesses, including benchmark workers.
 
-The workflow uploads the Cobertura XML report to
+The workflow uploads the C++ and Python Cobertura XML reports to
 `Codecov <https://codecov.io/gh/xadupre/onnx-light-ort>`_ using GitHub OIDC.
 Enable this repository in Codecov before the first upload; no
 ``CODECOV_TOKEN`` secret is required. Upload failures fail the workflow.
@@ -339,7 +413,7 @@ HTML and XML reports are also retained as the ``coverage`` Actions artifact
 for 14 days. Relevant pull requests generate these artifacts without
 publishing to Codecov, so they do not replace the daily ``main`` report.
 
-To reproduce the native report locally, reconfigure the existing build tree:
+To reproduce both reports locally, reconfigure the existing build tree:
 
 .. code-block:: bash
 
@@ -349,14 +423,21 @@ To reproduce the native report locally, reconfigure the existing build tree:
      -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
      -DCMAKE_SHARED_LINKER_FLAGS="--coverage" \
      -DONNX_LIGHT_ORT_BUILD_HOST=ON -DONNX_LIGHT_ORT_BUILD_PLUGIN=ON \
-     -DONNX_LIGHT_ORT_BUILD_TESTS=ON -DONNX_LIGHT_ORT_TEST_WITH_ORT=OFF
+     -DONNX_LIGHT_ORT_BUILD_TESTS=ON -DONNX_LIGHT_ORT_TEST_WITH_ORT=ON \
+     -DONNX_LIGHT_ORT_TEST_PYTHON=ON -DONNX_LIGHT_ORT_PYTHON_COVERAGE=ON
    cmake --build build --parallel "$(nproc)"
-   ctest --test-dir build --output-on-failure
    mkdir -p build/coverage
+   export COVERAGE_FILE="$PWD/build/coverage/.coverage"
+   python -m coverage erase
+   ctest --test-dir build --output-on-failure
    python -m gcovr build --root . \
      --filter 'onnx_light_ort/' --exclude '.*/tests/.*' \
      --xml-pretty --xml build/coverage/coverage.xml \
      --html-details build/coverage/index.html --print-summary
+   python -m coverage combine
+   python -m coverage xml -o build/coverage/python.xml
+   python -m coverage html -d build/coverage/python
+   python -m coverage report
 
 Fuzzing onnx-light
 ------------------

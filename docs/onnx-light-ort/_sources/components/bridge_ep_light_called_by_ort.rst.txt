@@ -1,5 +1,5 @@
-EP bridge: onnx-light called by ORT
-===================================
+onnx-light called by onnxruntime through an execution provider
+==============================================================
 
 ``onnx_light_ort::bridge_ep_light_called_by_ort`` is currently an interface target.
 It depends on :doc:`common_light_to_ort`, independently of

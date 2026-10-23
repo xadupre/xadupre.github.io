@@ -34,6 +34,7 @@
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-binder.css?v=f4aeca0c" />
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-dataframe.css?v=2082cf3c" />
     <link rel="stylesheet" type="text/css" href="_static/sg_gallery-rendered-html.css?v=1277b6f3" />
+    <link rel="stylesheet" type="text/css" href="_static/projects.css?v=3d3ec892" />
   
   <!-- So that users can add custom icons -->
   <script defer src="_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
@@ -49,7 +50,7 @@
     <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="Projects" href="components/index.html" />
+    <link rel="next" title="Python API" href="python_api.html" />
     <link rel="prev" title="Architecture" href="architecture.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
@@ -145,6 +146,13 @@
 <li class="nav-item current active">
   <a class="nav-link nav-internal" href="introduction.html">
     Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="python_api.html">
+    Python API
   </a>
 </li>
 
@@ -267,6 +275,13 @@
 <li class="nav-item current active">
   <a class="nav-link nav-internal" href="introduction.html">
     Introduction
+  </a>
+</li>
+
+
+<li class="nav-item ">
+  <a class="nav-link nav-internal" href="python_api.html">
+    Python API
   </a>
 </li>
 
@@ -442,6 +457,60 @@ ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class=
 On macOS use <code class="docutils literal notranslate"><span class="pre">sysctl</span> <span class="pre">-n</span> <span class="pre">hw.logicalcpu</span></code> in place of <code class="docutils literal notranslate"><span class="pre">nproc</span></code>.
 Keep one build tree; reconfigure it rather than maintaining stale parallel
 compiled copies.</p>
+<p>The Python source-build frontend follows onnx-light’s command:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements/host-tests.txt
+python<span class="w"> </span>setup.py<span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--cpp-tests
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">:</span><span class="nv">$PWD</span><span class="s2">/build/python:</span><span class="nv">$PYTHONPATH</span><span class="s2">"</span>
+</pre></div>
+</div>
+<p>It configures Release libraries and matching model bindings in the existing
+<code class="docutils literal notranslate"><span class="pre">build</span></code> tree, without installing or copying compiled artifacts.
+<code class="docutils literal notranslate"><span class="pre">--cpp-tests</span></code> enables, builds and runs the native CTest suites; omit it to
+build without tests. Native unit, dependency and consumer tests are selected,
+not opt-in Python/ORT or gallery tests. <code class="docutils literal notranslate"><span class="pre">--parallel</span> <span class="pre">N</span></code> or
+<code class="docutils literal notranslate"><span class="pre">CMAKE_BUILD_PARALLEL_LEVEL</span></code> controls concurrency (all available CPUs by
+default).
+<code class="docutils literal notranslate"><span class="pre">CMAKE_ARGS</span></code> forwards additional configuration options and existing
+dependency-source overrides are preserved. The frontend enforces Release
+even if <code class="docutils literal notranslate"><span class="pre">CMAKE_ARGS</span></code> contains another build type, matching its build and
+CTest configuration. For example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CMAKE_ARGS</span><span class="o">=</span><span class="s2">"-DONNX_LIGHT_ORT_TEST_PYTHON=ON -DONNX_LIGHT_ORT_TEST_WITH_ORT=ON"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>setup.py<span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--cpp-tests
+ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>-C<span class="w"> </span>Release<span class="w"> </span>--output-on-failure
+</pre></div>
+</div>
+<p>To use a locally built onnx-light runtime, as with onnx-light-cpu:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"/path/to/onnx-light:</span><span class="nv">$PYTHONPATH</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>setup.py<span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--cpp-tests<span class="w"> </span>--onnx-light-source
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">--onnx-light-source</span></code> uses <code class="docutils literal notranslate"><span class="pre">onnx_light.get_cpp_build_info()</span></code> from the
+package selected by Python (including <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>). It links against that
+runtime’s existing core, proto and threading shared libraries, without
+fetching or rebuilding onnx-light or copying its Python bindings.
+The checkout must already be built. If its model package lives outside the
+source checkout, set <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_ORT_ONNX_LIGHT_SOURCE_DIR</span></code> to that matching
+checkout. Windows also requires the matching import libraries reported by
+<code class="docutils literal notranslate"><span class="pre">get_cpp_build_info()</span></code>. Missing headers or libraries fail the build explicitly.
+If the import libraries live in another build tree, supply their exact paths
+with <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_ORT_ONNX_LIGHT_CORE_IMPLIB</span></code>,
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_ORT_ONNX_LIGHT_PROTO_IMPLIB</span></code> and
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_ORT_ONNX_LIGHT_THREADS_IMPLIB</span></code>.
+If external runtime DLLs are found through <code class="docutils literal notranslate"><span class="pre">PATH</span></code>, launch the frontend with
+<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">cmake/run_python_with_dll_paths.py</span> <span class="pre">setup.py</span> <span class="pre">build_ext</span> <span class="pre">--inplace</span> <span class="pre">--cpp-tests</span> <span class="pre">--onnx-light-source</span></code>.
+This registers the DLL directories in that Python process; registrations in a
+parent process are not inherited by subprocesses.
+This mode disables installation and does not support upstream fuzzers;
+release packages continue to use the fetched dependency build.
+Omit the flag to restore the fetched dependency configuration in the same tree.
+The onnx-light-cpu compute dependency still uses its existing source override.</p>
+<p>The default Python APIs read <code class="docutils literal notranslate"><span class="pre">build/CMakeCache.txt</span></code> and resolve libraries
+using the manifest generated from CMake’s actual targets: the active build
+type for single-configuration generators, or
+<code class="docutils literal notranslate"><span class="pre">build/Release/python_libraries.json</span></code> for multi-configuration generators.
+An unset single-config build type uses <code class="docutils literal notranslate"><span class="pre">build/python_libraries.json</span></code>.
+Explicit library paths remain available for other multi-config configurations
+or custom build locations. See <a class="reference internal" href="python_api.html"><span class="doc">Python API</span></a>.</p>
 <p>Build either direction independently:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>-DONNX_LIGHT_ORT_BUILD_HOST<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-DONNX_LIGHT_ORT_BUILD_PLUGIN<span class="o">=</span>OFF
@@ -520,8 +589,9 @@ that would lose precision or overflow if routed through float32.</p>
 <code class="docutils literal notranslate"><span class="pre">build/onnx_light_ort/custom_ops/libonnx_light_ort_custom_ops.so</span></code>.
 CTest resolves the platform-specific path from the custom-op target, including
 multi-configuration build directories.</p>
-<p>The real-host CI job uses ORT
-1.18.1 with NumPy below 2 to exercise the requested API-18 baseline.
+<p>The real-host CI job resolves the latest stable ONNX Runtime release on each
+run, installs its Python wheel, and downloads the matching C++ runtime archive
+with SHA-256 verification against the release asset digest.
 Models are created and checked with <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx</span></code>, never the <code class="docutils literal notranslate"><span class="pre">onnx</span></code>
 Python package.</p>
 </section>
@@ -569,10 +639,11 @@ with <code class="docutils literal notranslate"><span class="pre">os.add_dll_dir
 This includes external DLLs needed by the onnx-light libraries, not just the
 libraries placed under <code class="docutils literal notranslate"><span class="pre">build/python</span></code>. Direct Windows invocations can use
 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">cmake/run_python_with_dll_paths.py</span> <span class="pre">path/to/script.py</span> <span class="pre">...</span></code> as well.</p>
-<p><code class="docutils literal notranslate"><span class="pre">CustomOpSession</span></code> accepts an onnx-light <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> or serialized model
-bytes and explicit plugin/host library
-paths. Its audited single-node floating-point profile is documented in
-<a class="reference internal" href="components/bridge_ops_ort_called_by_light.html"><span class="doc">Custom-op bridge: ORT custom ops called by onnx-light</span></a>; it is not a general plugin host.</p>
+<p><code class="docutils literal notranslate"><span class="pre">CustomOpSessionOrtCalledByLight</span></code> accepts a model path, an onnx-light <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code> or
+serialized model bytes. Plugin/host paths default to the bundled libraries or
+the source build and can be overridden explicitly.
+Its audited single-node floating-point profile is documented in
+<a class="reference internal" href="components/bridge_ops_ort_called_by_light.html"><span class="doc">onnxruntime custom operators called by onnx-light</span></a>; it is not a general plugin host.</p>
 </section>
 <section id="executable-python-gallery">
 <h2>Executable Python gallery<a class="headerlink" href="#executable-python-gallery" title="Link to this heading">#</a></h2>
@@ -604,18 +675,22 @@ ORT session. No EP is involved, and failures are not skipped or hidden.</p>
 the native tests. Existing CMake dependency-source overrides are preserved,
 and explicitly supplied gallery library environment variables take precedence.</p>
 <p>The <code class="docutils literal notranslate"><span class="pre">gallery_benchmark_log_custom_ops</span></code> test executes the Log benchmark gallery.
-It compares NumPy, all four synchronous ORT calling interfaces with built-in
-and CPU custom operators, and the standalone single-node host. It uses one
+It compares ORT’s built-in Log and the onnx-light-cpu custom op called by ORT,
+both using I/O binding with preallocated buffers, with the ORT-ABI CPU custom op
+called by the standalone onnx-light single-node host. NumPy is used only for
+input preparation and correctness checks, not as a timed backend. It uses one
 Log or ten consecutive Logs, checks results before and after timing, and
-reports median microseconds per graph over several input sizes. Ten Logs
+reports median microseconds per graph and speedup relative to ORT’s built-in
+Log over eleven input sizes from 1 to 1,048,576 elements. Latency and speedup
+are plotted separately for each topology. Ten Logs
 produce NaNs in float32; this measures the literal chain, including special
 values. The standalone host cannot execute that topology and is marked
 unavailable. Measurements run in separate processes to keep ORT out of the
 standalone host. Use the same library environment variables shown above.
 All benchmark code lives in <code class="docutils literal notranslate"><span class="pre">docs/examples/plot_benchmark_log_custom_ops.py</span></code>,
 including model construction, timing, isolated workers and the CLI entry point.
-The command-line benchmark also accepts <code class="docutils literal notranslate"><span class="pre">--nodes</span> <span class="pre">1|10</span></code> and
-<code class="docutils literal notranslate"><span class="pre">--api</span> <span class="pre">run|ortvalues|iobinding|ortvaluevector</span></code>.</p>
+The command-line benchmark also accepts <code class="docutils literal notranslate"><span class="pre">--nodes</span> <span class="pre">1|10</span></code> and <code class="docutils literal notranslate"><span class="pre">--sizes</span></code>.
+ORT always uses I/O binding; the standalone host uses <code class="docutils literal notranslate"><span class="pre">run</span></code>.</p>
 </section>
 <section id="ci-and-documentation-publishing">
 <h2>CI and documentation publishing<a class="headerlink" href="#ci-and-documentation-publishing" title="Link to this heading">#</a></h2>
@@ -630,6 +705,10 @@ ordinary native CI does not create releases.</p>
 <section id="tagged-releases">
 <h2>Tagged releases<a class="headerlink" href="#tagged-releases" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Releases</span></code> workflow starts automatically when a tag is pushed.
+It calls the reusable <code class="docutils literal notranslate"><span class="pre">Python</span> <span class="pre">release</span> <span class="pre">package</span></code> workflow
+(<code class="docutils literal notranslate"><span class="pre">.github/workflows/release-python.yml</span></code>) to build wheels and a source
+distribution. That workflow can also be dispatched independently to build
+downloadable Actions artifacts without publishing or creating a tag.
 For version 0.2.0, both <code class="docutils literal notranslate"><span class="pre">0.2.0</span></code> and <code class="docutils literal notranslate"><span class="pre">v0.2.0</span></code> are accepted. It checks that the
 tag, CMake project, Python metadata and <code class="docutils literal notranslate"><span class="pre">__version__</span></code> agree before building.
 It resolves onnx-light’s main revision once and uses that immutable commit in
@@ -659,7 +738,8 @@ includes <code class="docutils literal notranslate"><span class="pre">release-bu
 </tbody>
 </table>
 </div>
-<p>There are fifteen wheels and five native C++ archives. Native archives use
+<p>There are fifteen wheels, one Python source distribution and five native C++
+archives. Native archives use
 Ubuntu 24.04 on Linux; they are not the portable manylinux wheels.
 Windows archives are ZIP files; Linux and macOS archives are gzip-compressed
 tar files. All builds enable both custom-op directions and use all available
@@ -702,11 +782,12 @@ options and <code class="docutils literal notranslate"><span class="pre">-DSKBUI
 <h2>Daily coverage<a class="headerlink" href="#daily-coverage" title="Link to this heading">#</a></h2>
 <p>The <code class="docutils literal notranslate"><span class="pre">Coverage</span></code> workflow runs every day at 07:00 UTC on <code class="docutils literal notranslate"><span class="pre">main</span></code> and can
 also be started manually. It builds both native directions with GCC coverage
-instrumentation and runs all native CTest tests. Coverage includes the C++
-implementation and headers under <code class="docutils literal notranslate"><span class="pre">onnx_light_ort/</span></code>, excluding test sources,
-downloaded dependencies, generated files and examples. Python and opt-in
-real-ORT tests are not included.</p>
-<p>The workflow uploads the Cobertura XML report to
+instrumentation and runs native tests, Python tests in both custom-op
+directions, and the Python gallery through CTest. Coverage includes the C++
+implementation, headers and Python modules under <code class="docutils literal notranslate"><span class="pre">onnx_light_ort/</span></code>, excluding
+test sources, downloaded dependencies, generated files and examples.
+Python coverage also follows subprocesses, including benchmark workers.</p>
+<p>The workflow uploads the C++ and Python Cobertura XML reports to
 <a class="reference external" href="https://codecov.io/gh/xadupre/onnx-light-ort">Codecov</a> using GitHub OIDC.
 Enable this repository in Codecov before the first upload; no
 <code class="docutils literal notranslate"><span class="pre">CODECOV_TOKEN</span></code> secret is required. Upload failures fail the workflow.
@@ -714,21 +795,28 @@ The README and documentation badges show the latest <code class="docutils litera
 HTML and XML reports are also retained as the <code class="docutils literal notranslate"><span class="pre">coverage</span></code> Actions artifact
 for 14 days. Relevant pull requests generate these artifacts without
 publishing to Codecov, so they do not replace the daily <code class="docutils literal notranslate"><span class="pre">main</span></code> report.</p>
-<p>To reproduce the native report locally, reconfigure the existing build tree:</p>
+<p>To reproduce both reports locally, reconfigure the existing build tree:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements/coverage.txt
 <span class="nv">CC</span><span class="o">=</span>gcc<span class="w"> </span><span class="nv">CXX</span><span class="o">=</span>g++<span class="w"> </span>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Debug<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-DCMAKE_CXX_FLAGS<span class="o">=</span><span class="s2">"--coverage -O0 -g"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-DCMAKE_EXE_LINKER_FLAGS<span class="o">=</span><span class="s2">"--coverage"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-DCMAKE_SHARED_LINKER_FLAGS<span class="o">=</span><span class="s2">"--coverage"</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-DONNX_LIGHT_ORT_BUILD_HOST<span class="o">=</span>ON<span class="w"> </span>-DONNX_LIGHT_ORT_BUILD_PLUGIN<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-DONNX_LIGHT_ORT_BUILD_TESTS<span class="o">=</span>ON<span class="w"> </span>-DONNX_LIGHT_ORT_TEST_WITH_ORT<span class="o">=</span>OFF
+<span class="w">  </span>-DONNX_LIGHT_ORT_BUILD_TESTS<span class="o">=</span>ON<span class="w"> </span>-DONNX_LIGHT_ORT_TEST_WITH_ORT<span class="o">=</span>ON<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-DONNX_LIGHT_ORT_TEST_PYTHON<span class="o">=</span>ON<span class="w"> </span>-DONNX_LIGHT_ORT_PYTHON_COVERAGE<span class="o">=</span>ON
 cmake<span class="w"> </span>--build<span class="w"> </span>build<span class="w"> </span>--parallel<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>nproc<span class="k">)</span><span class="s2">"</span>
-ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
 mkdir<span class="w"> </span>-p<span class="w"> </span>build/coverage
+<span class="nb">export</span><span class="w"> </span><span class="nv">COVERAGE_FILE</span><span class="o">=</span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">/build/coverage/.coverage"</span>
+python<span class="w"> </span>-m<span class="w"> </span>coverage<span class="w"> </span>erase
+ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>--output-on-failure
 python<span class="w"> </span>-m<span class="w"> </span>gcovr<span class="w"> </span>build<span class="w"> </span>--root<span class="w"> </span>.<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--filter<span class="w"> </span><span class="s1">'onnx_light_ort/'</span><span class="w"> </span>--exclude<span class="w"> </span><span class="s1">'.*/tests/.*'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--xml-pretty<span class="w"> </span>--xml<span class="w"> </span>build/coverage/coverage.xml<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--html-details<span class="w"> </span>build/coverage/index.html<span class="w"> </span>--print-summary
+python<span class="w"> </span>-m<span class="w"> </span>coverage<span class="w"> </span>combine
+python<span class="w"> </span>-m<span class="w"> </span>coverage<span class="w"> </span>xml<span class="w"> </span>-o<span class="w"> </span>build/coverage/python.xml
+python<span class="w"> </span>-m<span class="w"> </span>coverage<span class="w"> </span>html<span class="w"> </span>-d<span class="w"> </span>build/coverage/python
+python<span class="w"> </span>-m<span class="w"> </span>coverage<span class="w"> </span>report
 </pre></div>
 </div>
 </section>

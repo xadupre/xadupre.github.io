@@ -1,18 +1,19 @@
 """
-Custom ops: onnx-light called by ORT
-====================================
+onnx-light called by onnxruntime through a custom operator
+==========================================================
 
 The real ORT host loads native ``LeakyRelu`` and optimized CPU ``Log`` custom ops.
 The model calls the custom domain explicitly; no EP is involved.
 """
 
 import os
-from pathlib import Path
 
 import numpy
 import onnxruntime
 import matplotlib.pyplot as plt
 from onnx_light.onnx import TensorProto, checker, helper
+
+from onnx_light_ort import register_custom_ops_light_called_by_ort
 
 # %%
 # Create a model calling the custom domain ``onnx_light``.
@@ -34,11 +35,12 @@ checker.check_model(model)
 # %%
 # ORT supplies its API table and allocates the outputs. The plugin delegates
 # the numerical work to onnx-light's native CPU kernel.
-library = Path(os.environ["ONNX_LIGHT_ORT_PLUGIN_LIBRARY"]).resolve(strict=True)
 options = onnxruntime.SessionOptions()
 options.intra_op_num_threads = 1
 options.inter_op_num_threads = 1
-options.register_custom_ops_library(str(library))
+register_custom_ops_light_called_by_ort(
+    options, library=os.environ.get("ONNX_LIGHT_ORT_PLUGIN_LIBRARY")
+)
 session = onnxruntime.InferenceSession(
     model.SerializeToString(), options, providers=["CPUExecutionProvider"]
 )

@@ -1,5 +1,5 @@
-Custom-op bridge: onnx-light called by ORT
-==========================================
+onnx-light called by onnxruntime through a custom operator
+==========================================================
 
 ``onnx_light_ort::bridge_ops_light_called_by_ort`` is a static library implementing
 the custom-op kernel lifecycle. ``CreateLeakyRelu`` reads the required float

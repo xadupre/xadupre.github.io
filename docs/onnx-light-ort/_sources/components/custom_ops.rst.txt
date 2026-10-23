@@ -85,7 +85,7 @@ through the C API's ``CreateTensorWithDataAsOrtValue``.
    binding.bind_ortvalue_output("Y", output_value)
    session.run_with_iobinding(binding)
 
-``output`` retains the bfloat16 dtype. The standalone ``CustomOpSession`` accepts
+``output`` retains the bfloat16 dtype. The standalone ``CustomOpSessionOrtCalledByLight`` accepts
 these arrays directly. Keep bound arrays alive until inference completes.
 
 Python example
@@ -165,8 +165,14 @@ and the onnx-light model bindings in Release mode:
      --host build/onnx_light_ort/bridge_ops_ort_called_by_light/libonnx_light_ort_bridge_ops_ort_called_by_light.so \
      --output build/cpu-custom-ops-log-benchmark.json
 
-The script compares steady-state ``session.run`` calls, including output
-allocation and Python interfaces, not isolated arithmetic. It uses identical
+The script compares steady-state ORT I/O binding calls with preallocated buffers
+and standalone onnx-light ``run`` calls with protective input/output copies.
+It measures Python interfaces, not isolated arithmetic, over eleven sizes
+from 1 to 1,048,576 elements. NumPy is not a timed backend.
+Both custom-op directions are labelled explicitly; speedup is the median
+ORT built-in Log latency divided by the path's median latency at the same
+input size and node count. Separate latency and speedup plots show one or ten
+Log nodes; the standalone host supports only one node. It uses identical
 float32 inputs from ``default_rng(42).uniform(0.01, 10)`` and validates complete
 outputs against NumPy float64 Log rounded to float32, before and after timing.
 Each backend runs in its own child process, with sequential, one-thread ORT
@@ -175,7 +181,9 @@ order; each size receives ten warmups followed by 31 timed batches of 20 calls.
 The report retains every per-call batch sample and records versions, affinity
 and measurement settings. The table reports the median of the 93 batch samples.
 
-The following local diagnostic results used a Xeon Platinum 8480C, affinity
+The following historical diagnostic results used ``session.run``, including
+output allocation, rather than the current I/O binding setup. They used a
+Xeon Platinum 8480C, affinity
 restricted to CPU 0 with ``taskset -c 0``, GCC 13.2.0, Release mode, runtime SIMD
 dispatch, Python 3.12.15 and source-built ORT 1.32.0. The onnx-light revision was
 ``5c899bdd2c1011e2825728b4fc950dcc88fc6aeb`` and onnx-light-cpu was
