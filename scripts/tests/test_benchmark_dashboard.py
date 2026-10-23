@@ -26,7 +26,8 @@ class TestBenchmarkDashboard(unittest.TestCase):
     def test_workflow_builds_benchmark_backends_from_source(self):
         text = _read(WORKFLOW)
         self.assertIn("repository: xadupre/onnx-light", text)
-        self.assertIn("cmake -S ./onnx-light -B ./onnx-light/build", text)
+        self.assertIn("-C cmake.define.ONNX_LIGHT_INSTALL=ON", text)
+        self.assertNotIn("cmake --install", text)
         self.assertIn("pip install ./onnx-light", text)
         self.assertIn("repository: xadupre/onnx-light-cpu", text)
         self.assertIn("ONNX_LIGHT_CPU_WITH_ONNX_LIGHT=ON", text)
