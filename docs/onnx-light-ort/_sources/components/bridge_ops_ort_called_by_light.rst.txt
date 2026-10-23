@@ -1,8 +1,14 @@
 onnxruntime custom operators called by onnx-light
 =================================================
 
+Run trusted ORT-compatible custom-op libraries in the standalone onnx-light
+runtime, without installing or loading ONNX Runtime. This project is implemented.
+
+Design
+------
+
 ``onnx_light_ort::bridge_ops_ort_called_by_light`` is a shared library depending only
-on :doc:`common_ort_to_light` and the platform loader. It does not install,
+on ``common_ort_to_light`` and the platform loader. It does not install,
 load or link ORT. ``onnx_light_ort.CustomOpSessionOrtCalledByLight`` accesses its small C ABI
 through ``ctypes`` from the source checkout. Its model objects come from
 ``onnx_light.onnx`` bindings built in the same tree, not the ``onnx`` package;
@@ -15,6 +21,16 @@ include ``onnx_light_ort/bridge_ops_ort_called_by_light/host.h``. The target
 publishes the repository and ORT API include paths; its implementation
 libraries remain private. A consumer test builds without the test helper's
 additional include paths to verify this contract.
+
+Requirements
+------------
+
+Build with a C++20 compiler, CMake 3.28 or newer and
+``ONNX_LIGHT_ORT_BUILD_HOST=ON``. CMake supplies onnx-light and pinned ORT
+headers; no ORT runtime is needed. Use only explicitly selected, trusted native
+plugins matching the audited API-18 profile below.
+Python callers need NumPy, ml-dtypes and matching ``onnx_light.onnx`` bindings
+from ``build/python``. See :doc:`../development` for source-build instructions.
 
 Initial audited profile
 ------------------------
@@ -89,3 +105,18 @@ read-only inputs and recovery after type/rank errors. The host remains generic;
 it does not link the outgoing bridge or import ORT to execute this kernel.
 See :doc:`../auto_examples/plot_custom_ops_ort_called_by_light` for the executable example and
 :doc:`../development` for build and environment setup.
+
+Python snippet
+--------------
+
+After building the host and independent example plugin, set
+``ONNX_LIGHT_ORT_INCOMING_CUSTOM_OP_LIBRARY`` to the plugin's absolute path.
+``ONNX_LIGHT_ORT_HOST_LIBRARY`` optionally selects the host library explicitly.
+This excerpt constructs a model and runs the trusted custom operator without ORT:
+
+.. literalinclude:: ../examples/plot_custom_ops_ort_called_by_light.py
+   :language: python
+   :start-at: import os
+   :end-at: print("ORT custom op called by onnx-light:", result)
+
+.. include:: common_ort_to_light.inc

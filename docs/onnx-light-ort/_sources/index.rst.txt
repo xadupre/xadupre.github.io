@@ -12,11 +12,23 @@ onnx-light-ort
 Interoperability between onnx-light and ONNX Runtime custom operators and
 execution providers, in both directions.
 
-.. image:: _static/projects.svg
-   :alt: Four bridges inside onnx-light-ort: custom operators and execution providers in both directions between onnx-light and ONNX Runtime. Custom operators are implemented; execution providers are planned.
-   :class: project-diagram
-   :align: center
-   :width: 100%
+.. raw:: html
+
+   <object class="project-diagram" type="image/svg+xml" data="_static/projects.svg"
+           aria-label="Four projects: select a custom-operator or execution-provider bridge">
+     <ul>
+       <li><a href="components/bridge_ops_light_called_by_ort.html">onnx-light custom operators called by ORT</a></li>
+       <li><a href="components/bridge_ops_ort_called_by_light.html">ORT custom operators called by onnx-light</a></li>
+       <li><a href="components/bridge_ep_light_called_by_ort.html">onnx-light execution provider called by ORT (planned)</a></li>
+       <li><a href="components/bridge_ep_ort_called_by_light.html">ORT execution providers called by onnx-light (planned)</a></li>
+     </ul>
+   </object>
+
+.. only:: not html
+
+   .. image:: _static/projects.svg
+      :alt: Four bridges: custom operators (implemented) and execution providers (planned), in both directions between onnx-light and ONNX Runtime.
+      :width: 100%
 
 .. toctree::
    :maxdepth: 1

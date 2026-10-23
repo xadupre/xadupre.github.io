@@ -144,7 +144,7 @@ See :doc:`components/index` for each component's page and precise coverage.
 
 The C++ custom-op example is built by default when plugins are enabled,
 without linking ORT. ``ONNX_LIGHT_ORT_BUILD_EXAMPLES=OFF`` disables it.
-Both :doc:`components/custom_ops` examples run inference in a real ORT host.
+Both :doc:`components/bridge_ops_light_called_by_ort` examples run inference in a real ORT host.
 To additionally execute the C++ example through CTest, pass an existing runtime:
 
 .. code-block:: bash

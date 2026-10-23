@@ -1,19 +1,16 @@
 Projects
 ========
 
-Each project has its own page, source directory and README. Implemented targets
-own their CMake definitions and native tests; integration tests additionally
-exercise the real ORT host. Planned components are identified explicitly,
-without placeholder tests that would imply an implementation exists.
+The four projects correspond to the four clickable zones on the home-page
+diagram. Each page describes its purpose, design, requirements and example code.
+Custom operators work in both directions; execution providers remain planned.
+Shared support and entry-point libraries are documented within their project,
+not as separate projects.
 
 .. toctree::
    :maxdepth: 1
 
-   custom_ops
-   custom_ep
    bridge_ops_light_called_by_ort
-   bridge_ep_light_called_by_ort
    bridge_ops_ort_called_by_light
+   bridge_ep_light_called_by_ort
    bridge_ep_ort_called_by_light
-   common_light_to_ort
-   common_ort_to_light
