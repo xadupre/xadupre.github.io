@@ -57,6 +57,16 @@ reports that its data are not yet available.
 
 ## Branch protection and the auto-updating workflows
 
+The `Report workflow failure` workflow automatically opens an issue when a
+`DATA` workflow (including benchmarks) or `DOC` documentation workflow fails
+or times out.
+The issue links to the failed run and records its branch, commit, and attempt.
+Further failures of the same workflow add comments to its existing open issue;
+after that issue is closed, a new failure opens a new issue. Successful,
+cancelled, and skipped runs do not create issues. This listener uses the
+built-in `GITHUB_TOKEN` with `issues: write`, and becomes active once its
+workflow file is on the default branch.
+
 Most of the workflows under [`.github/workflows`](.github/workflows) commit and
 push to a default branch (`main`) on their own. Documentation workflows update
 `docs/` in this repository. Data workflows check out `xadupre/cache_data` at
