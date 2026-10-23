@@ -6,6 +6,8 @@ import os
 import sys
 import unittest
 
+import yaml
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 PAGE = os.path.join(REPO_ROOT, "dashboard", "onnx-light-cpu", "cpu-benchmark.html")
@@ -292,6 +294,53 @@ class TestWorkflow(unittest.TestCase):
         self.assertIn('type: choice', text)
         self.assertIn('--type "${{ needs.select-type.outputs.type }}"', text)
         self.assertIn("cache_data/onnx-light-cpu/examples_benchmark.json", text)
+
+
+class TestBenchmarkRuntimeCompatibility(unittest.TestCase):
+    def test_benchmark_workflows_share_runtime_and_python_abi(self):
+        for workflow in (
+            "record_onnx_light_benchmark.yml",
+            "record_onnx_light_cpu_examples_benchmark.yml",
+        ):
+            with self.subTest(workflow=workflow):
+                path = os.path.join(REPO_ROOT, ".github", "workflows", workflow)
+                steps = yaml.safe_load(_read(path))["jobs"]["record"]["steps"]
+                by_name = {step["name"]: step for step in steps}
+                build = by_name[
+                    "Install onnx, onnxruntime and build onnx-light from source"
+                ]["run"]
+                self.assertIn("pip install ./onnx-light", build)
+                self.assertIn("-C cmake.define.ONNX_LIGHT_INSTALL=ON", build)
+                self.assertIn(
+                    "-C cmake.define.ONNX_LIGHT_PYTHON_STABLE_ABI=OFF", build
+                )
+                self.assertNotIn("cmake --install", build)
+                self.assertIn("CMAKE_PREFIX_PATH=${onnx_light_prefix}", build)
+                self.assertIn(
+                    "${onnx_light_prefix}/onnx_light/onnx_py:${onnx_light_prefix}/lib",
+                    build,
+                )
+                cpu_build = by_name[
+                    "Build and install onnx-light-cpu with the onnx-light integration"
+                ]["run"]
+                self.assertIn("--no-deps", cpu_build)
+                self.assertIn(
+                    "-C cmake.define.ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF",
+                    cpu_build,
+                )
+                names = list(by_name)
+                self.assertLess(
+                    names.index("Verify onnx-light runtime compatibility"),
+                    names.index("Record benchmark snapshot"),
+                )
+                check = by_name["Verify onnx-light runtime compatibility"]["run"]
+                if workflow == "record_onnx_light_benchmark.yml":
+                    self.assertIn("_make_onnx_light_cpu_runner(model)", check)
+                    self.assertIn(
+                        "np.testing.assert_array_equal(result, [1.0, 2.0])", check
+                    )
+                else:
+                    self.assertIn("set_kernel_usage_recording(session, True)", check)
 
 
 class TestScriptCLI(unittest.TestCase):
