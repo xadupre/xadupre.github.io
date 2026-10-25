@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -15,9 +16,104 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 
 import record_pr_activity as rpa
+from record_pr_stats import DEFAULT_REPOS
 
 
 class TestRecordPrActivity(unittest.TestCase):
+    def test_browser_logic(self):
+        subprocess.run(
+            ["node", "--test", os.path.join(HERE, "pr_activity.test.cjs")],
+            check=True, capture_output=True, text=True,
+        )
+
+    def test_all_statistics_pages_include_activity(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        with open(os.path.join(root, "assets", "pr-activity.js"), encoding="utf-8") as stream:
+            script = stream.read()
+        for repository in DEFAULT_REPOS:
+            project = repository.split("/")[1]
+            with self.subTest(project=project):
+                with open(os.path.join(root, "dashboard", project, "pr-stats.html"),
+                          encoding="utf-8") as stream:
+                    page = stream.read()
+                self.assertIn(f'data-pr-activity="{repository}"', page)
+                self.assertIn('src="../../assets/pr-activity.js"', page)
+                self.assertIn('href="../../assets/pr-activity.css"', page)
+                self.assertIn(f"../../cache_data/{project}/pr_stats.csv", page)
+                self.assertIn('id="chartActivity"', page)
+                self.assertIn('id="lastObservationsBody"', page)
+                self.assertLess(page.index("pr-activity.js"), page.index("last-updated.js"))
+        for field in rpa.CSV_FIELDS:
+            self.assertIn(f'"{field}"', script)
+        for chart in ("chartOpen", "chartActivity", "chartAge", "chartAgeDistribution"):
+            self.assertIn(f'data-id="{chart}"', script)
+        self.assertIn('unit: "day"', script)
+        self.assertIn('yAxisID: "yMerged"', script)
+        self.assertIn("row[key] / 7", script)
+        self.assertIn("10 latest open pull requests", script)
+        self.assertIn("10 oldest open pull requests", script)
+        self.assertIn("ages_days", script)
+        self.assertIn("pr_activity.csv", script)
+        self.assertIn("open_pulls.json", script)
+        self.assertIn('root.querySelector', script)
+        self.assertNotIn("document.getElementById", script)
+        self.assertIn('link.textContent =', script)
+
+    def test_statistics_workflow_collects_daily_activity_for_all_projects(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, ".github", "workflows", "record_pr_stats.yml")
+        with open(path, encoding="utf-8") as stream:
+            workflow = stream.read()
+        self.assertIn('cron: "42 4 * * *"', workflow)
+        self.assertIn("python -u scripts/record_pr_activity.py", workflow)
+        self.assertEqual(
+            re.findall(r"--repo (\S+)", workflow), list(DEFAULT_REPOS)
+        )
+        self.assertIn("python -u scripts/record_pr_stats.py", workflow)
+        self.assertIn("bash scripts/commit_cache_data.sh cache_data", workflow)
+
+    def test_main_collects_default_single_and_multiple_repositories(self):
+        original = rpa.iter_pulls
+        calls = []
+
+        def iter_pulls(repo, state, token):
+            calls.append((repo, state))
+            return iter([] if state == "closed" else [{
+                "number": 42, "title": repo, "user": {"login": "author"},
+                "created_at": "2026-01-01T00:00:00Z",
+            }])
+
+        rpa.iter_pulls = iter_pulls
+        try:
+            for repositories in ([], ["owner/first"], ["owner/first", "owner/second"]):
+                with self.subTest(repositories=repositories), tempfile.TemporaryDirectory() as tmp:
+                    calls.clear()
+                    args = ["--cache-dir", tmp]
+                    for repo in repositories:
+                        args.extend(["--repo", repo])
+                    self.assertEqual(rpa.main(args), 0)
+                    expected = repositories or [rpa.DEFAULT_REPO]
+                    self.assertEqual(
+                        calls, [(repo, state) for repo in expected for state in ("open", "closed")]
+                    )
+                    self.assertEqual(set(os.listdir(tmp)), {repo.split("/")[1] for repo in expected})
+                    for repo in expected:
+                        directory = os.path.join(tmp, repo.split("/")[1])
+                        with open(os.path.join(directory, "pr_activity.csv"),
+                                  encoding="utf-8", newline="") as stream:
+                            rows = list(csv.DictReader(stream))
+                        self.assertEqual(len(rows), 1)
+                        self.assertEqual(rows[0]["open_prs"], "1")
+                        self.assertEqual(rows[0]["avg_merged_age_days_365d"], "")
+                        with open(os.path.join(directory, "open_pulls.json"),
+                                  encoding="utf-8") as stream:
+                            tables = json.load(stream)
+                        self.assertEqual(tables["latest"][0]["title"], repo)
+                        self.assertEqual(tables["oldest"], tables["latest"])
+                        self.assertEqual(len(tables["ages_days"]), 1)
+        finally:
+            rpa.iter_pulls = original
+
     def test_dashboard_age_series_use_separate_axes(self):
         root = os.path.dirname(os.path.dirname(HERE))
         for project, options in (("onnx", "options"), ("onnxruntime", "commonOptions")):

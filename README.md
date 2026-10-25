@@ -55,6 +55,23 @@ select explicit repositories instead of discovery. After merging, the workflow
 can be dispatched manually for the first collection; until then the dashboard
 reports that its data are not yet available.
 
+## Pull request statistics
+
+All PR statistics dashboards include the ONNX Runtime-style daily activity
+charts, open/merged PR ages, open-age distribution, and the ten newest and
+oldest currently open PRs. The smaller projects also retain their merged-PR
+commit, comment, and Copilot statistics.
+
+The daily `DATA PR statistics` workflow records `pr_activity.csv`,
+`open_pulls.json`, and `pr_stats.csv` for the seven tracked `xadupre` projects.
+ONNX and ONNX Runtime retain their separate daily activity workflows.
+Activity history starts with collection; it is not reconstructed from merged
+PR statistics. Until the first collection, activity panels report unavailable
+data without hiding the existing merged-PR charts.
+To collect locally, run `python scripts/record_pr_activity.py
+--cache-dir /tmp/cache_data --repo xadupre/onnx-light`; repeat `--repo` to
+collect multiple projects. Set `GITHUB_TOKEN` for authenticated API limits.
+
 ## Branch protection and the auto-updating workflows
 
 The `Report workflow failure` workflow automatically opens an issue when a

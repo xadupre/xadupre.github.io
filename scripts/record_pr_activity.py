@@ -1,4 +1,4 @@
-"""Record a daily snapshot of pull request activity for ONNX Runtime.
+"""Record daily snapshots of pull request activity for GitHub repositories.
 
 The snapshot contains the current number of open pull requests; the numbers
 opened, closed, and merged during the preceding day and seven days; and the
@@ -10,7 +10,7 @@ no valid ages are available. Rows are stored in ``cache_data/<repo>/pr_activity.
 Usage::
 
     python scripts/record_pr_activity.py [--cache-dir DIR]
-        [--repo owner/name]
+        [--repo owner/name [--repo owner/name ...]]
 """
 
 from __future__ import annotations
@@ -236,26 +236,30 @@ def main(argv: list[str] | None = None) -> int:
         default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "cache_data"),
         help="Path to the cache_data directory.",
     )
-    parser.add_argument("--repo", default=DEFAULT_REPO, help="Repository to track.")
+    parser.add_argument(
+        "--repo", action="append",
+        help=f"Repository to track (repeatable; default: {DEFAULT_REPO}).",
+    )
     args = parser.parse_args(argv)
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-    repo_name = args.repo.split("/", 1)[-1]
-    csv_path = os.path.join(args.cache_dir, repo_name, "pr_activity.csv")
-    json_path = os.path.join(args.cache_dir, repo_name, "open_pulls.json")
-    _log(f"collecting daily PR activity for {args.repo}")
-    open_pulls = list(iter_pulls(args.repo, "open", token))
-    now = dt.datetime.now(tz=dt.timezone.utc)
-    snapshot = collect_snapshot(args.repo, token, now=now, open_pulls=open_pulls)
-    write_snapshot(csv_path, snapshot)
-    write_open_pull_tables(json_path, open_pulls, now=now)
-    _log(
-        f"saved {csv_path}: open={snapshot['open_prs']}, "
-        f"opened_7d={snapshot['opened_prs_7d']}, "
-        f"closed_7d={snapshot['closed_prs_7d']}, "
-        f"merged_7d={snapshot['merged_prs_7d']}, "
-        f"average_open_age={snapshot['avg_open_age_days']} days"
-    )
+    for repo in args.repo or [DEFAULT_REPO]:
+        repo_name = repo.split("/", 1)[-1]
+        csv_path = os.path.join(args.cache_dir, repo_name, "pr_activity.csv")
+        json_path = os.path.join(args.cache_dir, repo_name, "open_pulls.json")
+        _log(f"collecting daily PR activity for {repo}")
+        open_pulls = list(iter_pulls(repo, "open", token))
+        now = dt.datetime.now(tz=dt.timezone.utc)
+        snapshot = collect_snapshot(repo, token, now=now, open_pulls=open_pulls)
+        write_snapshot(csv_path, snapshot)
+        write_open_pull_tables(json_path, open_pulls, now=now)
+        _log(
+            f"saved {csv_path}: open={snapshot['open_prs']}, "
+            f"opened_7d={snapshot['opened_prs_7d']}, "
+            f"closed_7d={snapshot['closed_prs_7d']}, "
+            f"merged_7d={snapshot['merged_prs_7d']}, "
+            f"average_open_age={snapshot['avg_open_age_days']} days"
+        )
     return 0
 
 
