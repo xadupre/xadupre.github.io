@@ -9,6 +9,12 @@ The CSV columns are::
 
     pr_number,title,author,merged_at,commits,comments,copilot_comments,copilot_commits
 
+Additional columns count inline review-agent comments, explicit severity labels,
+security mentions, resolved/unresolved agent-started review threads, added/deleted
+lines and changed files. Resolution is a snapshot, not proof that feedback was
+addressed or ignored. Missing values in older caches mean unknown; use ``--since``
+to refresh historical rows. GraphQL thread status requires authentication.
+
 Where ``comments`` counts both PR review comments (inline comments left on
 the diff) and issue-style comments on the PR conversation, and the
 ``copilot_*`` columns count those whose author login looks like a GitHub
@@ -33,7 +39,9 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -73,7 +81,97 @@ PR_CSV_FIELDS = (
     "comments",
     "copilot_comments",
     "copilot_commits",
+    "review_agent_comments",
+    "review_agent_high",
+    "review_agent_medium",
+    "review_agent_low",
+    "review_agent_unclassified",
+    "review_agent_security",
+    "review_agent_resolved_threads",
+    "review_agent_unresolved_threads",
+    "additions",
+    "deletions",
+    "changed_files",
 )
+
+
+def is_review_agent(login: str | None) -> bool:
+    """Recognize Copilot and known review bots, not arbitrary bot accounts."""
+    return is_copilot_login(login) or (login or "").lower() in {
+        "coderabbitai[bot]",
+        "gemini-code-assist[bot]",
+        "chatgpt-codex-connector[bot]",
+        "cursor[bot]",
+        "greptile-apps[bot]",
+        "sourcery-ai[bot]",
+        "claude[bot]",
+        "qodo-code-review[bot]",
+    }
+
+
+def review_severity(body: str) -> str:
+    """Classify explicit labels (including Codex P0–P3 and Gemini badges)."""
+    body = re.sub(r"[*_`]", "", body)
+    for severity, pattern in (
+        ("high", r"\bP[01]\b|\b(?:high|critical)[ -](?:priority|severity)\b|\b(?:priority|severity)\s*:\s*(?:high|critical)\b"),
+        ("medium", r"\bP2\b|\bmedium[ -](?:priority|severity)\b|\b(?:priority|severity)\s*:\s*medium\b"),
+        ("low", r"\bP3\b|\blow[ -](?:priority|severity)\b|\b(?:priority|severity)\s*:\s*low\b"),
+    ):
+        if re.search(pattern, body, re.IGNORECASE):
+            return severity
+    return "unclassified"
+
+
+def fetch_review_threads(repo: str, number: int, token: str | None) -> dict:
+    """Count agent-started threads by resolution; leave unavailable data blank."""
+    fields = ("review_agent_resolved_threads", "review_agent_unresolved_threads")
+    if not token:
+        return dict.fromkeys(fields, "")
+    owner, name = repo.split("/", 1)
+    query = """
+    query($owner: String!, $name: String!, $number: Int!, $after: String) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100, after: $after) {
+            nodes { isResolved comments(first: 1) { nodes { author { login } } } }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    }
+    """
+    counts = dict.fromkeys(fields, 0)
+    after = None
+    while True:
+        request = urllib.request.Request(
+            f"{GITHUB_API}/graphql",
+            data=json.dumps({
+                "query": query,
+                "variables": {"owner": owner, "name": name, "number": number, "after": after},
+            }).encode("utf-8"),
+            headers={
+                "Authorization": "Bearer " + token,
+                "Content-Type": "application/json",
+                "User-Agent": "xadupre.github.io-record-pr-stats",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                payload = json.load(response)
+        except urllib.error.URLError as exc:
+            _log(f"[{repo}] thread status unavailable for PR #{number}: {exc.reason}")
+            return dict.fromkeys(fields, "")
+        if payload.get("errors"):
+            _log(f"[{repo}] thread status unavailable for PR #{number}")
+            return dict.fromkeys(fields, "")
+        connection = payload["data"]["repository"]["pullRequest"]["reviewThreads"]
+        for thread in connection["nodes"]:
+            comments = thread["comments"]["nodes"]
+            if comments and is_review_agent((comments[0].get("author") or {}).get("login")):
+                counts[fields[0] if thread["isResolved"] else fields[1]] += 1
+        if not connection["pageInfo"]["hasNextPage"]:
+            return {key: str(value) for key, value in counts.items()}
+        after = connection["pageInfo"]["endCursor"]
 
 
 def is_copilot_login(login: str | None) -> bool:
@@ -233,6 +331,10 @@ def fetch_pr_stats(repo: str, pr: dict, token: str | None) -> dict:
 
     comments_total = 0
     copilot_comments = 0
+    review_counts = dict.fromkeys((
+        "review_agent_comments", "review_agent_high", "review_agent_medium",
+        "review_agent_low", "review_agent_unclassified", "review_agent_security",
+    ), 0)
     for comment in _iter_paginated(
         f"{GITHUB_API}/repos/{repo}/issues/{pr_number}/comments", token
     ):
@@ -247,6 +349,15 @@ def fetch_pr_stats(repo: str, pr: dict, token: str | None) -> dict:
         user = comment.get("user") or {}
         if is_copilot_login(user.get("login")):
             copilot_comments += 1
+        if is_review_agent(user.get("login")):
+            body = comment.get("body") or ""
+            review_counts["review_agent_comments"] += 1
+            review_counts["review_agent_" + review_severity(body)] += 1
+            if re.search(r"\bsecurity\b", body, re.IGNORECASE):
+                review_counts["review_agent_security"] += 1
+
+    details, _ = _request(f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}", token)
+    threads = fetch_review_threads(repo, pr_number, token)
 
     user = pr.get("user") or {}
     return {
@@ -254,31 +365,33 @@ def fetch_pr_stats(repo: str, pr: dict, token: str | None) -> dict:
         "title": (pr.get("title") or "").replace("\r", " ").replace("\n", " "),
         "author": user.get("login") or "",
         "merged_at": pr.get("merged_at") or "",
-        "commits": str(commits_total),
+        "commits": str(details.get("commits", commits_total)),
         "comments": str(comments_total),
         "copilot_comments": str(copilot_comments),
         "copilot_commits": str(copilot_commits),
+        **{key: str(value) for key, value in review_counts.items()},
+        **threads,
+        **{key: str(details[key]) if details.get(key) is not None else ""
+           for key in ("additions", "deletions", "changed_files")},
     }
 
 
 def append_rows(csv_path: str, rows: Iterable[dict]) -> int:
-    """Append ``rows`` to ``csv_path``, creating the file with a header if needed."""
+    """Upsert rows and migrate old headers, preserving unknown values as blanks."""
     rows = list(rows)
-    if not rows:
-        if not os.path.exists(csv_path):
-            os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-            with open(csv_path, "w", newline="", encoding="utf-8") as fh:
-                writer = csv.DictWriter(fh, fieldnames=PR_CSV_FIELDS)
-                writer.writeheader()
-        return 0
+    existing = {}
+    if os.path.exists(csv_path):
+        with open(csv_path, newline="", encoding="utf-8") as fh:
+            existing = {row["pr_number"]: row for row in csv.DictReader(fh)}
+    for row in rows:
+        existing[row["pr_number"]] = row
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    file_exists = os.path.exists(csv_path)
-    with open(csv_path, "a", newline="", encoding="utf-8") as fh:
+    temporary = csv_path + ".tmp"
+    with open(temporary, "w", newline="", encoding="utf-8") as fh:
         writer = csv.DictWriter(fh, fieldnames=PR_CSV_FIELDS)
-        if not file_exists:
-            writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+        writer.writeheader()
+        writer.writerows(existing.values())
+    os.replace(temporary, csv_path)
     _log(f"saved {len(rows)} row(s) to {csv_path}")
     return len(rows)
 
@@ -290,10 +403,10 @@ def process_repo(
     token: str | None,
     since_override: dt.datetime | None = None,
 ) -> int:
-    """Fetch new merged PRs for ``repo`` and append them to the cache file.
+    """Fetch merged PRs for ``repo`` and update the cache file.
 
     When ``since_override`` is provided the script fetches from that date
-    regardless of what is already cached, enabling a historical backfill.
+    regardless of what is already cached, refreshing historical rows as well.
     """
     repo_name = repo.split("/", 1)[-1]
     csv_path = os.path.join(cache_dir, repo_name, "pr_stats.csv")
@@ -316,7 +429,7 @@ def process_repo(
                 # Closed but not merged.
                 continue
             pr_number = str(pr.get("number", ""))
-            if not pr_number or pr_number in seen:
+            if not pr_number or (pr_number in seen and since_override is None):
                 continue
             try:
                 merged_dt = _parse_iso(merged_at)
@@ -326,7 +439,7 @@ def process_repo(
                 # Older than the lower bound: do not record again.
                 continue
             _log(
-                f"[{repo}] new merged PR #{pr_number} "
+                f"[{repo}] merged PR #{pr_number} "
                 f"by {(pr.get('user') or {}).get('login')!r}; "
                 "fetching its commits and comments..."
             )
@@ -363,7 +476,7 @@ def process_repo(
     elapsed = (dt.datetime.now(tz=dt.timezone.utc) - started).total_seconds()
     _log(
         f"[{repo}] processed {processed} closed PR(s) from GitHub in "
-        f"{elapsed:.1f}s; appended {added} new PR(s) to {csv_path}"
+        f"{elapsed:.1f}s; saved {added} PR(s) to {csv_path}"
     )
     return added
 
@@ -455,11 +568,11 @@ def main(argv: list[str] | None = None) -> int:
         dt.datetime.now(tz=dt.timezone.utc) - overall_started
     ).total_seconds()
     _log(
-        f"Done. {total} new PR(s) recorded in total across {len(repos)} "
+        f"Done. {total} PR(s) recorded in total across {len(repos)} "
         f"repository(ies) in {overall_elapsed:.1f}s "
         f"({failures} repository failure(s))."
     )
-    print(f"Done. {total} new PR(s) recorded in total.")
+    print(f"Done. {total} PR(s) recorded in total.")
     if failures and failures == len(repos):
         return 1
     return 0
