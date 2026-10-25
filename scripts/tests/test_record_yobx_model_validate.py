@@ -175,6 +175,56 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(summary["export"], "OK")
         self.assertEqual(calls, [("mistralai/Mistral-7B-v0.3", {"use_fast": False})])
 
+    def test_run_validate_one_uses_runtime_compatible_opset(self):
+        _require_modules(self, "onnx", "onnxruntime")
+        import onnx
+        import onnxruntime
+
+        def validate_model(**kwargs):
+            model = onnx.helper.make_model(
+                onnx.helper.make_graph(
+                    [onnx.helper.make_node("Identity", ["X"], ["Y"])],
+                    "runtime_opset",
+                    [
+                        onnx.helper.make_tensor_value_info(
+                            "X", onnx.TensorProto.FLOAT, [1]
+                        )
+                    ],
+                    [
+                        onnx.helper.make_tensor_value_info(
+                            "Y", onnx.TensorProto.FLOAT, [1]
+                        )
+                    ],
+                ),
+                opset_imports=[
+                    onnx.helper.make_opsetid(
+                        "", kwargs.get("opset", onnx.defs.onnx_opset_version())
+                    )
+                ],
+                ir_version=10,
+            )
+            session = onnxruntime.InferenceSession(
+                model.SerializeToString(), providers=["CPUExecutionProvider"]
+            )
+            return {"inputs": [value.name for value in session.get_inputs()]}, None
+
+        module_name = "yobx.torch.validate"
+        original = sys.modules.get(module_name)
+        module = types.ModuleType(module_name)
+        module.validate_model = validate_model
+        sys.modules[module_name] = module
+        try:
+            summary = rymv.run_validate_one(
+                {"model": "a/b"},
+                {"exporter": "yobx", "optimization": "default"},
+            )
+        finally:
+            if original is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = original
+        self.assertEqual(summary["inputs"], ["X"])
+
     def test_stringify_error_collapses_whitespace_and_truncates(self):
         self.assertEqual(rymv._stringify_error(None), "")
         self.assertEqual(rymv._stringify_error("boom"), "boom")
