@@ -40,19 +40,19 @@ def _run_real_export_test(testcase, entry, cfg, dump_folder):
     }
     _require_modules(testcase, *required[cfg["exporter"]])
     observed = rymv.run_validate_one(
-        entry, cfg, dump_folder=dump_folder, quiet=False, verbose=1
+        entry, cfg, dump_folder=dump_folder, quiet=False, verbose=2
     )
     hub_error = observed.get("error_config") or observed.get("error_export")
     if rymv._is_hf_hub_access_error(hub_error):
         testcase.skipTest(hub_error)
-    testcase.assertEqual("OK", observed["export"])
+    testcase.assertEqual("OK", observed["export"], dict(observed.items()))
     row = rymv._normalise_result(
         entry["model"], cfg, observed, model_atol=entry.get("atol")
     )
     if cfg["exporter"] == "olive-modelbuilder":
         testcase.assertIn(row["discrepancies"], {"OK", "SKIPPED"})
     else:
-        testcase.assertEqual("OK", row["discrepancies"])
+        testcase.assertEqual("OK", row["discrepancies"], row)
 
 
 class TestRecordYobxModelValidate(unittest.TestCase):
@@ -174,6 +174,40 @@ class TestRecordYobxModelValidate(unittest.TestCase):
 
         self.assertEqual(summary["export"], "OK")
         self.assertEqual(calls, [("mistralai/Mistral-7B-v0.3", {"use_fast": False})])
+
+    def test_run_validate_one_uses_runtime_compatible_model(self):
+        _require_modules(self, "yobx", "onnxruntime")
+        import onnxruntime
+        from onnx_light.onnx import TensorProto
+        from yobx.builder.onnxlight import OnnxLightGraphBuilder
+
+        def validate_model(**kwargs):
+            builder = OnnxLightGraphBuilder(kwargs["opset"])
+            builder.make_tensor_input("X", TensorProto.FLOAT, (1,))
+            builder.make_node("Identity", ["X"], outputs=["Y"])
+            builder.make_tensor_output("Y", TensorProto.FLOAT, (1,))
+            model = builder.to_onnx(optimize=False).get_proto()
+            session = onnxruntime.InferenceSession(
+                model.SerializeToString(), providers=["CPUExecutionProvider"]
+            )
+            return {"inputs": [value.name for value in session.get_inputs()]}, None
+
+        module_name = "yobx.torch.validate"
+        original = sys.modules.get(module_name)
+        module = types.ModuleType(module_name)
+        module.validate_model = validate_model
+        sys.modules[module_name] = module
+        try:
+            summary = rymv.run_validate_one(
+                {"model": "a/b"},
+                {"exporter": "yobx", "optimization": "default"},
+            )
+        finally:
+            if original is None:
+                sys.modules.pop(module_name, None)
+            else:
+                sys.modules[module_name] = original
+        self.assertEqual(summary["inputs"], ["X"])
 
     def test_stringify_error_collapses_whitespace_and_truncates(self):
         self.assertEqual(rymv._stringify_error(None), "")
