@@ -551,8 +551,8 @@ def run_validate_one(
         dump_folder=dump_folder,
         config_overrides={"num_hidden_layers": 2},
         random_weights=True,
-        # ONNX Runtime 1.31 supports released opsets through 26, not the latest 29.
-        opset=26,
+        # The native exporter uses IR 14 at opset 26; ONNX Runtime supports IR 13.
+        opset=25,
     )
     patch_ctx = nullcontext()
     if not entry.get("tokenizer_use_fast", True):

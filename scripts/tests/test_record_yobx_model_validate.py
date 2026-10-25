@@ -175,34 +175,18 @@ class TestRecordYobxModelValidate(unittest.TestCase):
         self.assertEqual(summary["export"], "OK")
         self.assertEqual(calls, [("mistralai/Mistral-7B-v0.3", {"use_fast": False})])
 
-    def test_run_validate_one_uses_runtime_compatible_opset(self):
-        _require_modules(self, "onnx", "onnxruntime")
-        import onnx
+    def test_run_validate_one_uses_runtime_compatible_model(self):
+        _require_modules(self, "yobx", "onnxruntime")
         import onnxruntime
+        from onnx_light.onnx import TensorProto
+        from yobx.builder.onnxlight import OnnxLightGraphBuilder
 
         def validate_model(**kwargs):
-            model = onnx.helper.make_model(
-                onnx.helper.make_graph(
-                    [onnx.helper.make_node("Identity", ["X"], ["Y"])],
-                    "runtime_opset",
-                    [
-                        onnx.helper.make_tensor_value_info(
-                            "X", onnx.TensorProto.FLOAT, [1]
-                        )
-                    ],
-                    [
-                        onnx.helper.make_tensor_value_info(
-                            "Y", onnx.TensorProto.FLOAT, [1]
-                        )
-                    ],
-                ),
-                opset_imports=[
-                    onnx.helper.make_opsetid(
-                        "", kwargs.get("opset", onnx.defs.onnx_opset_version())
-                    )
-                ],
-                ir_version=10,
-            )
+            builder = OnnxLightGraphBuilder(kwargs["opset"])
+            builder.make_tensor_input("X", TensorProto.FLOAT, (1,))
+            builder.make_node("Identity", ["X"], outputs=["Y"])
+            builder.make_tensor_output("Y", TensorProto.FLOAT, (1,))
+            model = builder.to_onnx(optimize=False).get_proto()
             session = onnxruntime.InferenceSession(
                 model.SerializeToString(), providers=["CPUExecutionProvider"]
             )
