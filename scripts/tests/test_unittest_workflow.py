@@ -15,7 +15,7 @@ class TestUnittestWorkflow(unittest.TestCase):
         commands = step["run"].splitlines()
         wheel = (
             'pip install "https://github.com/xadupre/onnx-light/releases/download/'
-            "0.1.33/onnx_light-0.1.33-cp312-cp312-manylinux_2_27_x86_64."
+            "0.2.0/onnx_light-0.2.0-cp312-cp312-manylinux_2_27_x86_64."
             'manylinux_2_28_x86_64.whl"'
         )
         self.assertIn(wheel, commands)
