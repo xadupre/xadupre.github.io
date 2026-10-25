@@ -40,19 +40,19 @@ def _run_real_export_test(testcase, entry, cfg, dump_folder):
     }
     _require_modules(testcase, *required[cfg["exporter"]])
     observed = rymv.run_validate_one(
-        entry, cfg, dump_folder=dump_folder, quiet=False, verbose=1
+        entry, cfg, dump_folder=dump_folder, quiet=False, verbose=2
     )
     hub_error = observed.get("error_config") or observed.get("error_export")
     if rymv._is_hf_hub_access_error(hub_error):
         testcase.skipTest(hub_error)
-    testcase.assertEqual("OK", observed["export"])
+    testcase.assertEqual("OK", observed["export"], dict(observed.items()))
     row = rymv._normalise_result(
         entry["model"], cfg, observed, model_atol=entry.get("atol")
     )
     if cfg["exporter"] == "olive-modelbuilder":
         testcase.assertIn(row["discrepancies"], {"OK", "SKIPPED"})
     else:
-        testcase.assertEqual("OK", row["discrepancies"])
+        testcase.assertEqual("OK", row["discrepancies"], row)
 
 
 class TestRecordYobxModelValidate(unittest.TestCase):
