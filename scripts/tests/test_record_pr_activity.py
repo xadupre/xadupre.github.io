@@ -22,9 +22,23 @@ from record_pr_stats import DEFAULT_REPOS
 class TestRecordPrActivity(unittest.TestCase):
     def test_browser_logic(self):
         subprocess.run(
-            ["node", "--test", os.path.join(HERE, "pr_activity.test.cjs")],
+            [
+                "node", "--test",
+                os.path.join(HERE, "pr_activity.test.cjs"),
+                os.path.join(HERE, "lost_compute.test.cjs"),
+            ],
             check=True, capture_output=True, text=True,
         )
+
+    def test_onnx_lost_compute_uses_daily_pr_activity(self):
+        root = os.path.dirname(os.path.dirname(HERE))
+        path = os.path.join(root, "dashboard", "onnx", "lost-compute.html")
+        with open(path, encoding="utf-8") as stream:
+            page = stream.read()
+        self.assertIn('const PR_CSV_URL = "../../cache_data/onnx/pr_activity.csv";', page)
+        self.assertIn('"merged_prs_1d"', page)
+        self.assertIn("bucket.count += r.mergedCount;", page)
+        self.assertNotIn("pr_stats.csv", page)
 
     def test_all_statistics_pages_include_activity(self):
         root = os.path.dirname(os.path.dirname(HERE))
