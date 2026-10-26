@@ -279,6 +279,58 @@ page documents the available options.</p>
 </pre></div>
 </div>
 </section>
+<section id="multi-model-artifacts">
+<h2>Multi-model artifacts<a class="headerlink" href="#multi-model-artifacts" title="Link to this heading">¶</a></h2>
+<p>A multi-component export automatically adds <strong>pipeline.onnx</strong>, an onnx-light
+<code class="docutils literal notranslate"><span class="pre">PipelineProto</span></code>, beside the standalone models and <code class="docutils literal notranslate"><span class="pre">genai_config.json</span></code>.
+It is an additional artifact, not a merged graph or a replacement GenAI config.
+Single-model and config-only exports are unchanged.</p>
+<p>The pipeline embeds the saved embedding, prefill and (when separate) decode
+ModelProtos. A decoder used for both phases occupies only <code class="docutils literal notranslate"><span class="pre">prefill</span></code>.
+Transferred tensors keep their declared names; cache input/output pairs use
+<code class="docutils literal notranslate"><span class="pre">GraphProto.persistent_bindings</span></code>. Available sampling settings and token IDs
+come from the GenAI configuration; greedy decoding uses temperature zero.
+The CLI reports the pipeline filename when it is saved.</p>
+<p>No weights are loaded or externalized again. For example:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">export</span><span class="o">/</span>
+  <span class="n">pipeline</span><span class="o">.</span><span class="n">onnx</span>
+  <span class="n">embedding</span><span class="o">.</span><span class="n">onnx</span>
+  <span class="n">model</span><span class="o">.</span><span class="n">onnx</span>
+  <span class="n">embedding</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">data</span>
+  <span class="n">model</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">data</span><span class="mf">.0</span>
+  <span class="n">model</span><span class="o">.</span><span class="n">onnx</span><span class="o">.</span><span class="n">data</span><span class="mf">.1</span>
+  <span class="o">.</span><span class="n">weights</span><span class="o">/</span><span class="n">model</span><span class="o">.</span><span class="n">safetensors</span>
+  <span class="n">genai_config</span><span class="o">.</span><span class="n">json</span>
+</pre></div>
+</div>
+<p>Both artifacts reference the same external-data locations, offsets and lengths,
+including quantized storage, <code class="docutils literal notranslate"><span class="pre">--max-shard-size</span></code> shards and reused source files
+under <code class="docutils literal notranslate"><span class="pre">.weights/</span></code>. Keep component protos beside <code class="docutils literal notranslate"><span class="pre">pipeline.onnx</span></code> and relocate
+the whole output folder, including relative weight subdirectories, as a unit.
+Re-exporting overwrites the pipeline without creating pipeline-specific shards.</p>
+<p>Load the bundle explicitly as a pipeline, not with <code class="docutils literal notranslate"><span class="pre">load_model</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx</span><span class="w"> </span><span class="kn">import</span> <span class="n">PipelineProto</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_proto.verify</span><span class="w"> </span><span class="kn">import</span> <span class="n">verify_pipeline</span>
+
+<span class="n">pipeline</span> <span class="o">=</span> <span class="n">PipelineProto</span><span class="p">()</span>
+<span class="n">pipeline</span><span class="o">.</span><span class="n">ParseFromFile</span><span class="p">(</span><span class="s2">"export/pipeline.onnx"</span><span class="p">)</span>
+<span class="n">verify_pipeline</span><span class="p">(</span><span class="n">pipeline</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>Runtime support is distinct from serialization: onnx-light currently rejects
+execution of a separate <code class="docutils literal notranslate"><span class="pre">decode</span></code> model. Such bundles can be loaded and
+validated, and their recovered components executed independently; integrated
+generation must wait for runtime support. The offline tests compare generation
+and state updates from recovered and standalone components using available kernels.</p>
+<p>The current onnx-light schema supports only <code class="docutils literal notranslate"><span class="pre">embedding</span></code>, <code class="docutils literal notranslate"><span class="pre">prefill</span></code> and
+<code class="docutils literal notranslate"><span class="pre">decode</span></code>. Full Mistral/Phi/Qwen vision/audio exports and Whisper’s audio
+encoder therefore need additional component ModelProto fields (vision, speech
+or encoder) and tensor/state interface support in onnx-light. These exports
+retain every standalone model and GenAI configuration but explicitly report
+that no complete PipelineProto can be written; they never emit a bundle that
+silently drops a component. Multiple EOS IDs also require a schema extension;
+the pipeline currently uses the first ID and reports this limitation.</p>
+</section>
 <section id="main-arguments">
 <h2>Main arguments<a class="headerlink" href="#main-arguments" title="Link to this heading">¶</a></h2>
 <dl class="simple">
@@ -317,15 +369,40 @@ INT4 DML and INT4 WebGPU.</p>
 <section id="reusing-downloaded-weights">
 <span id="reuse-weights"></span><h2>Reusing downloaded weights<a class="headerlink" href="#reusing-downloaded-weights" title="Link to this heading">¶</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">--reuse-weights</span></code> saves disk space by referencing byte ranges in the original
-<code class="docutils literal notranslate"><span class="pre">.safetensors</span></code> files as ONNX external data. With <code class="docutils literal notranslate"><span class="pre">--model_name</span></code>, the
-checkpoint is downloaded to <code class="docutils literal notranslate"><span class="pre">&lt;output&gt;/.weights</span></code>; keep that directory with the
-exported model. Any initializers derived by the builder are still written to
-<code class="docutils literal notranslate"><span class="pre">model.onnx.data</span></code>.</p>
-<p>The option is only supported for floating-point exports, because quantization
-changes the weight representation. If using <code class="docutils literal notranslate"><span class="pre">--input</span></code>, the checkpoint must be
-inside the output directory and its <code class="docutils literal notranslate"><span class="pre">.safetensors</span></code> files must not be symbolic
-links. When the checkpoint dtype differs from the requested ONNX dtype, the
-export contains ONNX <code class="docutils literal notranslate"><span class="pre">Cast</span></code> nodes rather than a copied, converted checkpoint.</p>
+<code class="docutils literal notranslate"><span class="pre">.safetensors</span></code> files as ONNX external data. With <code class="docutils literal notranslate"><span class="pre">--input</span></code>, checkpoint weight
+shards outside the export are <strong>moved</strong> into <code class="docutils literal notranslate"><span class="pre">&lt;output&gt;/.weights</span></code>: ownership is
+transferred and the source weight files are removed. Unrelated checkpoint files
+are not moved. The original directory is no longer a complete checkpoint.
+With <code class="docutils literal notranslate"><span class="pre">--model_name</span></code>, the checkpoint is downloaded to <code class="docutils literal notranslate"><span class="pre">&lt;output&gt;/.weights</span></code>.
+Files already inside the export are not moved again. Safetensors must be regular
+files, not symbolic links; destination collisions are rejected, not overwritten.
+Relocation publishes a complete destination file before removing its source,
+including across filesystems, and preserves source permissions and timestamps.</p>
+<p>Both floating-point and integer-precision exports can reuse compatible original
+tensor storage. Original shards are never rewritten or resharded, and offsets
+include the safetensors header. Quantization, repacking, and other transformations
+that change the representation produce new payloads in a separate generated
+external-data file (<code class="docutils literal notranslate"><span class="pre">model.onnx.data</span></code> for a single model). Constants smaller
+than 1024 bytes stay inline. No empty generated-weight file is created.
+<code class="docutils literal notranslate"><span class="pre">--max-shard-size</span></code> applies only to generated weights. Multi-model exports and
+their additional <code class="docutils literal notranslate"><span class="pre">pipeline.onnx</span></code> share the original shards and deduplicated
+generated storage. Each component writes only its new generated payloads through
+onnx-light external storage; component protos never stage those bytes inline.
+Finalization also reuses this generated-storage index for additional components
+discovered through <code class="docutils literal notranslate"><span class="pre">genai_config.json</span></code>. New payloads discovered at that stage
+use fresh onnx-light-assigned external-data filenames, preserving the contents
+and offsets of all previously referenced shards.</p>
+<p>Use a clean output directory for each independent export. Shared-weight
+finalization does not prune existing generated data files, because other
+components may still reference them.</p>
+<p>Configuration-only exports do not inspect or relocate checkpoint weight files,
+even when <code class="docutils literal notranslate"><span class="pre">--reuse-weights</span></code> is enabled.
+Otherwise, a missing safetensors checkpoint is reported before relocation.</p>
+<p>Keep the entire export directory together when relocating it: relative external
+locations do not depend on the old checkpoint path or the working directory.
+When a reusable checkpoint dtype differs from the requested ONNX dtype, the
+export contains ONNX <code class="docutils literal notranslate"><span class="pre">Cast</span></code> nodes rather than a copied, converted checkpoint;
+transpose views can similarly reuse the original bytes through <code class="docutils literal notranslate"><span class="pre">Transpose</span></code>.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>modelbuilder.builder<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-m<span class="w"> </span>Qwen/Qwen3-8B<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>-o<span class="w"> </span>qwen3-8b-cuda-fp16<span class="w"> </span><span class="se">\</span>
@@ -412,6 +489,7 @@ of converting a model:</p>
             <ul>
 <li><a class="reference internal" href="#">Command lines</a><ul>
 <li><a class="reference internal" href="#converting-a-model">Converting a model</a></li>
+<li><a class="reference internal" href="#multi-model-artifacts">Multi-model artifacts</a></li>
 <li><a class="reference internal" href="#main-arguments">Main arguments</a></li>
 <li><a class="reference internal" href="#reusing-downloaded-weights">Reusing downloaded weights</a></li>
 <li><a class="reference internal" href="#full-help">Full help</a></li>
@@ -427,7 +505,7 @@ of converting a model:</p>
       
     </aside>
   </div>
-</div><script src="_static/documentation_options.js?v=1019fba8"></script>
+</div><script src="_static/documentation_options.js?v=37f418d5"></script>
     <script src="_static/doctools.js?v=fd6eb6e6"></script>
     <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/scripts/furo.js?v=46bd48cc"></script>
