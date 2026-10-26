@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 21, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 26, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -614,6 +614,40 @@ a positive CPU <code class="docutils literal notranslate"><span class="pre">qmoe
 contents cannot be identified from tensor shapes alone; do not pass them as
 raw CPU tensors.</p>
 </section>
+<section id="microsoft-gatherblockquantized">
+<h2>Microsoft GatherBlockQuantized<a class="headerlink" href="#microsoft-gatherblockquantized" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::GatherBlockQuantized</span></code> version 1 gathers embeddings directly
+from packed <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> weights, without expanding the checkpoint to a dense
+floating-point table. <code class="docutils literal notranslate"><span class="pre">bits</span></code> supports <strong>2, 4, and 8</strong> (default 4).
+Codes occupy consecutive low-to-high bit fields within each byte.
+<code class="docutils literal notranslate"><span class="pre">block_size</span></code> defaults to 128 and must be a power of two of at least 16.</p>
+<p>The supported layout has <code class="docutils literal notranslate"><span class="pre">gather_axis=0</span></code> and <code class="docutils literal notranslate"><span class="pre">quantize_axis</span></code> on the last
+dimension (default 1); equivalent negative axes are accepted. Weights have
+rank at least two. If their stored shape is <code class="docutils literal notranslate"><span class="pre">[V,</span> <span class="pre">...,</span> <span class="pre">P]</span></code>, the logical
+last dimension is <code class="docutils literal notranslate"><span class="pre">D</span> <span class="pre">=</span> <span class="pre">P</span> <span class="pre">*</span> <span class="pre">(8</span> <span class="pre">/</span> <span class="pre">bits)</span></code>. Scales have the same rank and
+dimensions, except their last dimension is <code class="docutils literal notranslate"><span class="pre">ceil(D</span> <span class="pre">/</span> <span class="pre">block_size)</span></code>.
+Their type, <code class="docutils literal notranslate"><span class="pre">FLOAT</span></code> or <code class="docutils literal notranslate"><span class="pre">FLOAT16</span></code>, determines the output type.</p>
+<p>Optional <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> zero points use the same packing as the weights, with
+<code class="docutils literal notranslate"><span class="pre">ceil(number_of_groups</span> <span class="pre">/</span> <span class="pre">(8</span> <span class="pre">/</span> <span class="pre">bits))</span></code> bytes per last-axis row.
+Packing restarts for each row; unused fields in its final byte are ignored.
+When omitted, the zero point is <code class="docutils literal notranslate"><span class="pre">2</span> <span class="pre">**</span> <span class="pre">(bits</span> <span class="pre">-</span> <span class="pre">1)</span></code>.
+Each selected code is dequantized as <code class="docutils literal notranslate"><span class="pre">(code</span> <span class="pre">-</span> <span class="pre">zero_point)</span> <span class="pre">*</span> <span class="pre">scale</span></code>.
+<code class="docutils literal notranslate"><span class="pre">INT32</span></code> or <code class="docutils literal notranslate"><span class="pre">INT64</span></code> indices may have any rank, including scalars.
+Negative indices wrap from the end; out-of-range indices produce zero
+embeddings, matching the <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/quantization/gather_block_quantized.cc">ONNX Runtime CPU implementation</a>.
+Older ORT releases, including 1.30, may instead reject out-of-range indices.
+The output shape is <code class="docutils literal notranslate"><span class="pre">indices.shape</span> <span class="pre">+</span> <span class="pre">weights.shape[1:-1]</span> <span class="pre">+</span> <span class="pre">[D]</span></code>.</p>
+<p>Register with <a class="reference internal" href="registration.html#register_kernels_global" title="register_kernels_global"><code class="xref py py-func docutils literal notranslate"><span class="pre">register_kernels_global()</span></code></a> before creating evaluators,
+or register the operator on the decoder session with
+<code class="docutils literal notranslate"><span class="pre">register_kernel_for_session(decoder,</span> <span class="pre">&quot;com.microsoft&quot;,</span> <span class="pre">&quot;GatherBlockQuantized&quot;)</span></code>.
+It can then execute in <code class="docutils literal notranslate"><span class="pre">decoder.generate(...,</span> <span class="pre">embedding=embedding)</span></code>:
+the embedding model retains packed initializers and only selected rows are
+dequantized into the output. No heap scratch, dense-weight preparation,
+gradient rule, or graph fusion is registered. Logical <code class="docutils literal notranslate"><span class="pre">INT4</span></code>/<code class="docutils literal notranslate"><span class="pre">UINT4</span></code>
+tensors and floating-point quantized formats are not supported.</p>
+<p>See <a class="reference internal" href="../../auto_examples/benchmarks/plot_gather_block_quantized_benchmark.html#sphx-glr-auto-examples-benchmarks-plot-gather-block-quantized-benchmark-py"><span class="std std-ref">Packed embedding gather against ONNX Runtime</span></a>
+for bounded ONNX Runtime parity checks and timings.</p>
+</section>
 <section id="microsoft-matmulnbits">
 <h2>Microsoft MatMulNBits<a class="headerlink" href="#microsoft-matmulnbits" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MatMulNBits</span></code> version 1 multiplies floating-point activations by a
@@ -1088,6 +1122,7 @@ returns it.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-groupqueryattention">Microsoft GroupQueryAttention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-moe">Microsoft MoE</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-qmoe">Microsoft QMoE</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-gatherblockquantized">Microsoft GatherBlockQuantized</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-matmulnbits">Microsoft MatMulNBits</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#muse-glimmer-projections">Muse-Glimmer projections</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#representative-kernel-measurements">Representative kernel measurements</a></li>
@@ -1137,7 +1172,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 21, 2026.
+  Last updated on Oct 26, 2026.
 </p></div>
       
     </div>

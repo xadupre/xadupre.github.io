@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 21, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 26, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -400,6 +400,8 @@
 <li class="toctree-l2"><a class="reference internal" href="kernels/gemm_kernel_design.html">Gemm Kernel Design</a></li>
 <li class="toctree-l2"><a class="reference internal" href="kernels/matmul_kernel_design.html">MatMul Kernel Design</a></li>
 <li class="toctree-l2"><a class="reference internal" href="kernels/attention_kernel_design.html">Attention Kernel Design</a></li>
+<li class="toctree-l2"><a class="reference internal" href="kernels/rotary_embedding_kernel_design.html">RotaryEmbedding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="kernels/causal_conv_with_state_kernel_design.html">CausalConvWithState</a></li>
 </ul>
 </details></li>
 </ul>
@@ -536,6 +538,221 @@ best observation.</p>
 constant weights are prepacked, label that result separately from dynamic
 weights, whose packing belongs in every invocation.</p>
 </section>
+<section id="avx2-lessorequal-october-25-2026">
+<h2>AVX2 LessOrEqual (October 25, 2026)<a class="headerlink" href="#avx2-lessorequal-october-25-2026" title="Link to this heading">#</a></h2>
+<p>Issue #991 identified the float32 right-scalar case with 4,194,304 elements.
+The float32 adapter omitted LessOrEqual from its AVX2 dispatch. Disassembly
+of the baseline right-scalar bulk function showed SSE comparisons followed
+by multiple unpacking operations to produce boolean bytes. The change
+reuses the existing ordered AVX2 greater-or-equal comparison with swapped
+operands, including its scalar-broadcast variants and 32-element byte-packing
+loop. NaNs remain false; equality, signed zero, tails, scheduling, and
+allocation behavior are unchanged. Dispatch-pointer assertions verify that
+the AVX2 functions are selected, and the scalar adapter remains the
+correctness oracle.</p>
+<p><strong>Steady-state end-to-end:</strong> AMD EPYC 7763 virtual runner, four logical CPUs,
+two physical cores, AVX2 (<code class="docutils literal notranslate"><span class="pre">simd_level=3</span></code>), GCC 13.3.0 Release, Python 3.13.16,
+NumPy 2.5.4. Baseline source was <code class="docutils literal notranslate"><span class="pre">ff886f3</span></code> and optimized source <code class="docutils literal notranslate"><span class="pre">b62211d</span></code>,
+both <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> 0.2.0. ONNX Runtime was the 1.31.0 Release wheel,
+commit <code class="docutils literal notranslate"><span class="pre">402979a</span></code>. The dependency was the published <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> 0.2.0
+cp313 manylinux x86-64 wheel, SHA-256
+<code class="docutils literal notranslate"><span class="pre">8e47ccce3f3a70bbe31cd99c66c144bd3feb1e85b2dae1d1f4c5e849344595ae</span></code>;
+its source commit was not exposed. The integration linked that wheel’s
+libraries with matching non-stable Python ABI.</p>
+<p>The unchanged backend CLI used native CPU tensor feeds, the original model
+and inputs, one session thread, one ORT inter-op thread, ORT sequential
+execution, no process pinning (CPUs 0–3 available), and no spin overrides.
+These are runtime defaults, not a claim of identical spin policies. CPU was
+timed first, then ORT, with the CPU session still alive. Each build had three
+independent CLI invocations, each with 20 warmups and 400 measured iterations,
+separately capped at one second. All 400 samples were retained per phase.
+The higher iteration counts than the CLI’s 8/40 defaults reduce sampling
+noise. Untimed kernel recording confirmed <code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::LessOrEqual</span></code>
+and <code class="docutils literal notranslate"><span class="pre">Binary.LessOrEqual.bulk</span></code>.</p>
+<p>For the issue’s exact
+<code class="docutils literal notranslate"><span class="pre">test_cpu_lessorequal_v16_right_scalar_float32xfloat32_to_bool_n4194304_benchmark</span></code>
+case, timings in milliseconds were:</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id1">
+<caption><span class="caption-text">Exact right-scalar case, independent runs</span><a class="headerlink" href="#id1" title="Link to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Build / run</p></th>
+<th class="head"><p>CPU median</p></th>
+<th class="head"><p>CPU p10–p90</p></th>
+<th class="head"><p>ORT median</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Before / 1</p></td>
+<td><p>1.089853</p></td>
+<td><p>1.010284–1.186939</p></td>
+<td><p>1.104075</p></td>
+</tr>
+<tr class="row-odd"><td><p>Before / 2</p></td>
+<td><p>0.954795</p></td>
+<td><p>0.858319–1.056098</p></td>
+<td><p>0.922956</p></td>
+</tr>
+<tr class="row-even"><td><p>Before / 3</p></td>
+<td><p>0.845310</p></td>
+<td><p>0.719767–0.968528</p></td>
+<td><p>0.938575</p></td>
+</tr>
+<tr class="row-odd"><td><p>After / 1</p></td>
+<td><p>0.320317</p></td>
+<td><p>0.281366–0.384238</p></td>
+<td><p>0.676565</p></td>
+</tr>
+<tr class="row-even"><td><p>After / 2</p></td>
+<td><p>0.426725</p></td>
+<td><p>0.391075–0.509189</p></td>
+<td><p>0.780679</p></td>
+</tr>
+<tr class="row-odd"><td><p>After / 3</p></td>
+<td><p>0.458295</p></td>
+<td><p>0.409620–0.546783</p></td>
+<td><p>0.832301</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The published 1.47x ORT advantage <strong>did not reproduce consistently</strong>: ORT
+was faster in only one baseline run. The median of the three CPU medians
+improved from 0.954795 to 0.426725 ms (2.24x); corresponding ORT medians were
+0.938575 and 0.780679 ms. ORT also improved between phases, demonstrating
+shared-runner variability. CPU was 1.82–2.11x faster than ORT within each
+post-change run; these diagnostic results are not a parity guarantee.</p>
+<p>The same runs covered contiguous and left-scalar inputs at 4,096, 65,536,
+and 4,194,304 elements. Small cases were approximately unchanged. At 65,536
+elements, scalar broadcasts improved about 1.4x, but the contiguous CPU
+median increased from 0.017182 to 0.018464 ms (ORT also increased from
+0.020108 to 0.021485 ms). At 4,194,304 elements, contiguous and left-scalar
+CPU medians improved from 1.420518 to 0.917705 ms and from 0.992826 to
+0.471053 ms. Thus this experiment does not establish a win at every size.</p>
+<p>Reproduce each run before and after the change with the same Release AVX2
+build. <code class="docutils literal notranslate"><span class="pre">--dtype</span> <span class="pre">bool</span></code> selects the output token in comparison case names;
+the regex fixes the inputs to float32:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROOT</span><span class="o">=</span>/home/runner/work/onnx-light-cpu/onnx-light-cpu
+<span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$ROOT</span><span class="s2">"</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--test<span class="w"> </span><span class="s1">'^test_cpu_lessorequal_v16_(right_scalar|left_scalar|contiguous)_float32xfloat32_to_bool_n(4096|65536|4194304)_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dtype<span class="w"> </span>bool<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--warmup<span class="w"> </span><span class="m">20</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">400</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output<span class="w"> </span>/tmp/lessorequal-results.xlsx
+</pre></div>
+</div>
+<p>The workbook retains raw samples and percentile summaries. Hardware-counter
+profiling was restricted (<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>). AVX-512 hardware was
+unavailable; no AVX-512-specific performance claim is made.</p>
+</section>
+<section id="avx2-sigmoid-october-23-2026">
+<h2>AVX2 Sigmoid (October 23, 2026)<a class="headerlink" href="#avx2-sigmoid-october-23-2026" title="Link to this heading">#</a></h2>
+<p>Issue #993’s latency gap reproduced on an AMD EPYC 7763 virtual runner exposing
+four logical CPUs and two physical cores. This is diagnostic shared-runner
+data, not a parity gate or an exact reconstruction of the published campaign.
+The build selected AVX2/FMA (<code class="docutils literal notranslate"><span class="pre">simd_level=3</span></code>), GCC 13.3.0, Release, Python
+3.13.16, and NumPy 2.5.4. Baseline <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> 0.2.0 source was
+<code class="docutils literal notranslate"><span class="pre">6e96d12</span></code> (kernel sources identical to <code class="docutils literal notranslate"><span class="pre">765a814</span></code>); optimized source was
+<code class="docutils literal notranslate"><span class="pre">ad4c521</span></code>. ONNX Runtime was the 1.31.0 Release wheel, reporting commit
+<code class="docutils literal notranslate"><span class="pre">402979a</span></code>. <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> was the GitHub 0.2.0 cp313 manylinux x86-64 release
+wheel, SHA-256
+<code class="docutils literal notranslate"><span class="pre">8e47ccce3f3a70bbe31cd99c66c144bd3feb1e85b2dae1d1f4c5e849344595ae</span></code>;
+its source commit was not exposed by the wheel’s build metadata.</p>
+<p>Disassembly showed register pressure in the two-vector loop: the generated
+float32 Sigmoid function had 37 stack references, versus two after keeping
+only one vector live. Setting the sign bit also replaces subtraction and
+absolute-value masking when forming <code class="docutils literal notranslate"><span class="pre">-abs(x)</span></code>. The exponential polynomial,
+division, exceptional-range handling, executor tuning, inputs, and correctness
+tolerances are unchanged. Reciprocal refinement and more aggressive unrolling
+were measured and rejected because they regressed throughput.</p>
+<p><strong>Steady-state end-to-end:</strong> the unchanged backend CLI measures the exact
+<code class="docutils literal notranslate"><span class="pre">test_cpu_sigmoid_n1048576_float32_benchmark</span></code> and
+<code class="docutils literal notranslate"><span class="pre">test_cpu_sigmoid_n4194304_float32_benchmark</span></code> cases, using their native tensor
+feeds and original seeded inputs. Kernel recording confirmed
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::Sigmoid</span></code> before timing. Requested session threads were one
+or two, inter-op threads one, with no worker affinity, no process pinning
+(CPUs 0–3 available), and no spin overrides for either backend. These are the
+runtime defaults, not an assertion that the two pools have identical spin
+policies. The standard CLI times CPU first, then constructs and times ORT;
+the CPU session remains alive during the ORT phase.</p>
+<p>Three separate CLI invocations were run per build/thread setting. Each used
+20 warmups and 400 repetitions, separately capped at one second, instead of
+the CLI’s 8/40 defaults to reduce the noise seen in the initial run. All 400
+samples were retained in each phase. The table reports the median of the
+three campaign medians, in milliseconds:</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id2">
+<caption><span class="caption-text">End-to-end float32 Sigmoid</span><a class="headerlink" href="#id2" title="Link to this table">#</a></caption>
+<thead>
+<tr class="row-odd"><th class="head"><p>Elements</p></th>
+<th class="head"><p>Threads</p></th>
+<th class="head"><p>CPU before</p></th>
+<th class="head"><p>CPU after</p></th>
+<th class="head"><p>ORT before / after</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>1,048,576</p></td>
+<td><p>1</p></td>
+<td><p>0.474917</p></td>
+<td><p>0.450487</p></td>
+<td><p>0.353392 / 0.359387</p></td>
+</tr>
+<tr class="row-odd"><td><p>4,194,304</p></td>
+<td><p>1</p></td>
+<td><p>1.930034</p></td>
+<td><p>1.833611</p></td>
+<td><p>1.495081 / 1.500843</p></td>
+</tr>
+<tr class="row-even"><td><p>1,048,576</p></td>
+<td><p>2</p></td>
+<td><p>0.240246</p></td>
+<td><p>0.227567</p></td>
+<td><p>0.181477 / 0.181848</p></td>
+</tr>
+<tr class="row-odd"><td><p>4,194,304</p></td>
+<td><p>2</p></td>
+<td><p>0.994773</p></td>
+<td><p>0.951007</p></td>
+<td><p>0.778456 / 0.778631</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Two-thread campaign medians ranged from 0.238322–0.240858 ms before to
+0.226636–0.234610 ms after for 1,048,576 elements, and
+0.992990–1.005287 ms before to 0.928128–0.973949 ms after for 4,194,304.
+Thus the gap was repeatable and latency improved, but <strong>ORT remains faster</strong>.
+The standard CLI stores raw samples and percentile summaries in its workbook.
+Reproduce each campaign, changing <code class="docutils literal notranslate"><span class="pre">--threads</span></code> to one for the serial run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROOT</span><span class="o">=</span>/home/runner/work/onnx-light-cpu/onnx-light-cpu
+python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--test<span class="w"> </span><span class="s1">'^test_cpu_sigmoid_n(1048576|4194304)_float32_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dtype<span class="w"> </span>float32<span class="w"> </span>--threads<span class="w"> </span><span class="m">2</span><span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--warmup<span class="w"> </span><span class="m">20</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">400</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output<span class="w"> </span>/tmp/sigmoid-results.xlsx
+</pre></div>
+</div>
+<p><strong>Kernel throughput:</strong> the extended existing driver uses preallocated buffers,
+three warmups, 101 samples, one thread pinned to CPU 0, alternating scalar/SIMD
+order, and a uniform sweep over [-8, 8). This is deliberately separate from
+the unchanged random-normal backend workload. For 64-byte-aligned buffers,
+median (IQR) seconds were 0.000456638 (0.000011100) before versus
+0.000404111 (0.000011050) after at 1,048,576 elements, and
+0.001863161 (0.000016330) versus 0.001683889 (0.000026049) at 4,194,304.
+With a one-float offset, the corresponding medians were
+0.000498466 versus 0.000450157, and 0.002087909 versus 0.001884280.
+The 65,535-element tail case improved from 0.000027732 to 0.000024777 seconds
+when aligned, and from 0.000029124 to 0.000026510 with the offset.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>-S<span class="w"> </span><span class="s2">"</span><span class="nv">$ROOT</span><span class="s2">"</span><span class="w"> </span>-B<span class="w"> </span><span class="s2">"</span><span class="nv">$ROOT</span><span class="s2">/build/temp"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL<span class="o">=</span>AVX2<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-DONNX_LIGHT_CPU_BUILD_BENCHMARKS<span class="o">=</span>ON
+cmake<span class="w"> </span>--build<span class="w"> </span><span class="s2">"</span><span class="nv">$ROOT</span><span class="s2">/build/temp"</span><span class="w"> </span>--target<span class="w"> </span>exp_log_throughput<span class="w"> </span>--parallel<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>nproc<span class="k">)</span><span class="s2">"</span>
+taskset<span class="w"> </span>-c<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="s2">"</span><span class="nv">$ROOT</span><span class="s2">/build/temp/exp_log_throughput"</span><span class="w"> </span><span class="m">101</span><span class="w"> </span>sigmoid
+</pre></div>
+</div>
+<p>Hardware-counter profiling was unavailable (<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>).
+Disassembly and controlled timing experiments support the register-pressure
+diagnosis, not a measured hardware-counter attribution. AVX-512 hardware was
+not available; scalar and AVX-512 production paths were not changed.</p>
+</section>
 <section id="normalization-moments-october-8-2026">
 <h2>Normalization moments (October 8, 2026)<a class="headerlink" href="#normalization-moments-october-8-2026" title="Link to this heading">#</a></h2>
 <p>Float32 normalization keeps the single-pass SIMD raw-moments path when its
@@ -553,8 +770,8 @@ distribution adds 65,536 to a repeating low-variance pattern and exercises the
 cancellation path. The test host was a 13th Gen Intel Core i7-13800H pinned to
 one CPU, GCC 14.2.0, Release mode, and AVX2/FMA dispatch
 (<code class="docutils literal notranslate"><span class="pre">detected_simd_level=3</span></code>). Baseline source was <code class="docutils literal notranslate"><span class="pre">0239e12</span></code>.</p>
-<div class="pst-scrollable-table-container"><table class="table" id="id1">
-<caption><span class="caption-text">Shifted float32 moments</span><a class="headerlink" href="#id1" title="Link to this table">#</a></caption>
+<div class="pst-scrollable-table-container"><table class="table" id="id3">
+<caption><span class="caption-text">Shifted float32 moments</span><a class="headerlink" href="#id3" title="Link to this table">#</a></caption>
 <thead>
 <tr class="row-odd"><th class="head"><p>Elements</p></th>
 <th class="head"><p>Baseline median (s)</p></th>
@@ -620,8 +837,8 @@ thread pinned to CPU 0. Baseline source was <code class="docutils literal notran
 used either the saved baseline operator library or the changed library, with
 unchanged core and low-level dependencies. Two runs reversed backend order;
 the table averages the two per-run medians.</p>
-<div class="pst-scrollable-table-container"><table class="table" id="id2">
-<caption><span class="caption-text">Shape [2000, 64], spatial extent 1</span><a class="headerlink" href="#id2" title="Link to this table">#</a></caption>
+<div class="pst-scrollable-table-container"><table class="table" id="id4">
+<caption><span class="caption-text">Shape [2000, 64], spatial extent 1</span><a class="headerlink" href="#id4" title="Link to this table">#</a></caption>
 <thead>
 <tr class="row-odd"><th class="head"><p>Type / mode</p></th>
 <th class="head"><p>Baseline (s)</p></th>
@@ -905,6 +1122,113 @@ machine. Retain existing dispatch and scalar tails until a representative
 end-to-end benchmark demonstrates a repeatable improvement.</p>
 </section>
 </section>
+<section id="cdist-avx2-output-tiling-october-23-2026">
+<h2>CDist AVX2 output tiling (October 23, 2026)<a class="headerlink" href="#cdist-avx2-output-tiling-october-23-2026" title="Link to this heading">#</a></h2>
+<p>Measurement layer: <strong>steady-state end-to-end</strong>, addressing issue #987.
+The two unchanged registered cases
+<code class="docutils literal notranslate"><span class="pre">test_cpu_cdist_m512_k512_n128_sqeuclidean_float32_benchmark</span></code> and
+<code class="docutils literal notranslate"><span class="pre">test_cpu_cdist_m512_k512_n128_euclidean_float32_benchmark</span></code> use dynamic
+float32 inputs of shape <code class="docutils literal notranslate"><span class="pre">[512,</span> <span class="pre">128]</span></code> and produce <code class="docutils literal notranslate"><span class="pre">[512,</span> <span class="pre">512]</span></code> outputs.
+Their models, input generators, tolerances, and runtime tuning were not changed.</p>
+<p>Environment: AMD EPYC 7763, Linux x86-64 Azure VM exposing four logical CPUs
+(two cores with SMT), affinity CPU 0, detected SIMD level 3, CMake
+<code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2</span></code>, Release GCC 13.3.0
+(<code class="docutils literal notranslate"><span class="pre">-O3</span> <span class="pre">-DNDEBUG</span></code>, with <code class="docutils literal notranslate"><span class="pre">-mavx2</span> <span class="pre">-mfma</span></code> only on the AVX2/FMA sources).
+Python 3.13.16, NumPy 2.5.4, official onnx-light 0.2.0 Linux cp313 release
+wheel, ONNX Runtime 1.31.0 (build commit <code class="docutils literal notranslate"><span class="pre">402979a</span></code>), and onnx-light-cpu
+0.2.0 built from baseline <code class="docutils literal notranslate"><span class="pre">28de81093ecfb8a7886e7d77966e55268aa108d9</span></code>
+before and with this change after. Both builds link the same onnx-light
+wheel libraries and use matching non-stable Python/nanobind ABIs.</p>
+<p>For the named-case CLI measurements below, each backend uses one intra-op
+thread (ORT inter-op threads: one, sequential execution); there are no worker
+threads to spin. That CLI retains each runtime’s default spin policy, unlike
+the alternating parity driver described separately below. Outputs are allocated
+by each session; CPU tensor feeds and ORT NumPy views reuse the registered input data.
+Two invocations per build use 100 warmups and up to 1,000 repetitions, each
+phase bounded at one second. CPU phases precede ORT phases, with ORT sessions
+created afterwards. CPU phases retained 921–931 samples before and 1,000
+after; ORT phases retained 982–1,000 samples. Kernel recording verified
+<code class="docutils literal notranslate"><span class="pre">onnx_light_cpu::CDist</span></code> and was disabled during timing.</p>
+<p>Reproduce the named-case measurements from the repository checkout:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>taskset<span class="w"> </span>-c<span class="w"> </span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--test<span class="w"> </span><span class="s1">'^test_cpu_cdist_m512_k512_n128_.*_float32_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--dtype<span class="w"> </span>float32<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--onnxruntime<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>-r<span class="w"> </span><span class="m">1000</span><span class="w"> </span>-w<span class="w"> </span><span class="m">100</span><span class="w"> </span>-t<span class="w"> </span><span class="m">1</span><span class="w"> </span>-o<span class="w"> </span>/tmp/cdist-results.xlsx
+</pre></div>
+</div>
+<p>Per-invocation medians in milliseconds (not best samples):</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric / invocation</p></th>
+<th class="head"><p>CPU before</p></th>
+<th class="head"><p>CPU after</p></th>
+<th class="head"><p>ORT before</p></th>
+<th class="head"><p>ORT after</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>sqeuclidean / 1</p></td>
+<td><p>1.068642</p></td>
+<td><p>0.873116</p></td>
+<td><p>0.928530</p></td>
+<td><p>0.931677</p></td>
+</tr>
+<tr class="row-odd"><td><p>sqeuclidean / 2</p></td>
+<td><p>1.078174</p></td>
+<td><p>0.880599</p></td>
+<td><p>0.931461</p></td>
+<td><p>0.928876</p></td>
+</tr>
+<tr class="row-even"><td><p>euclidean / 1</p></td>
+<td><p>1.073480</p></td>
+<td><p>0.873606</p></td>
+<td><p>1.012359</p></td>
+<td><p>1.008356</p></td>
+</tr>
+<tr class="row-odd"><td><p>euclidean / 2</p></td>
+<td><p>1.066997</p></td>
+<td><p>0.877068</p></td>
+<td><p>1.008072</p></td>
+<td><p>1.008772</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>CPU p90 ranges fell from 1.0867–1.0975 to 0.8863–0.8926 ms
+(sqeuclidean), and from 1.0863–1.0941 to 0.8841–0.8864 ms (euclidean).
+The ORT advantage was repeatable but smaller than the published 1.55–1.67x:
+about 1.15–1.16x and 1.06x respectively. Afterward CPU latency is about
+18% lower, beating the local ORT medians by 1.05–1.07x and 1.15x.
+This shared VM does not establish parity on a dedicated machine, and the
+dashboard’s per-case build, thread, and spin provenance is unavailable.</p>
+<p>Investigation: the parity driver’s Python profile placed over 99% of the
+call inside native evaluation; isolated kernel latency was approximately
+1.01–1.03 ms before, confirming arithmetic/packing rather than Python
+adaptation dominated. Hardware counters were unavailable
+(<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>). Disassembly showed eight A broadcasts for each
+8x8 output tile. The AVX2 float32 fast path uses a 4x16 tile with eight
+independent accumulators, halving broadcasts per output while retaining
+direct <code class="docutils literal notranslate"><span class="pre">(a-b)^2</span></code> accumulation and vector square roots. It packs B on every
+call into bounded 16 KiB stack storage; there is no persistent prepacking.
+Small shapes, double precision, scalar, and AVX-512 retain their existing paths.
+Existing runtime scheduling is unchanged.</p>
+<p>The alternating parity driver independently confirmed the one-thread win
+with random inputs and explicit non-spinning settings: CPU
+<code class="docutils literal notranslate"><span class="pre">spin_policy=&quot;park_immediately&quot;</span></code> and ORT
+<code class="docutils literal notranslate"><span class="pre">session.intra_op.allow_spinning=&quot;0&quot;</span></code> /
+<code class="docutils literal notranslate"><span class="pre">session.inter_op.allow_spinning=&quot;0&quot;</span></code>. The driver records these settings
+separately as <code class="docutils literal notranslate"><span class="pre">cpu_spin_policy</span></code>, <code class="docutils literal notranslate"><span class="pre">ort_intra_op_allow_spinning</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">ort_inter_op_allow_spinning</span></code>. Its current implementation passes the same
+NumPy arrays through each evaluator’s public <code class="docutils literal notranslate"><span class="pre">run</span></code> API rather than constructing
+CPU tensors through a private binding. Those calls include each runtime’s
+input adaptation overhead; the named-case CLI measurements above still use
+the registered tensor feeds. A two-thread
+diagnostic pinned to SMT siblings 0–1 remained slower than ORT: roughly
+2.28–2.30 ms before and 2.21–2.22 ms after, versus 0.94–1.02 ms ORT.
+This optimization does not resolve that pre-existing scheduling/SMT gap.
+Boundary, unaligned-buffer, special-value, and concurrent-executor tests cover
+the new tile, including the exact benchmark shape and all partial column widths.</p>
+</section>
 </section>
 
 
@@ -958,6 +1282,8 @@ end-to-end benchmark demonstrates a repeatable improvement.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prove-the-selected-kernel-ran">Prove the selected kernel ran</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#keep-executors-separate">Keep executors separate</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#use-the-script-safeguards">Use the script safeguards</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#avx2-lessorequal-october-25-2026">AVX2 LessOrEqual (October 25, 2026)</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#avx2-sigmoid-october-23-2026">AVX2 Sigmoid (October 23, 2026)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#normalization-moments-october-8-2026">Normalization moments (October 8, 2026)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#batchnormalization-contiguous-channels-october-6-2026">BatchNormalization contiguous channels (October 6, 2026)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cast-simd-measurements-september-16-2026">Cast SIMD measurements (September 16, 2026)</a><ul class="nav section-nav flex-column">
@@ -971,6 +1297,7 @@ end-to-end benchmark demonstrates a repeatable improvement.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#protocol-and-raw-measurements">Protocol and raw measurements</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cdist-avx2-output-tiling-october-23-2026">CDist AVX2 output tiling (October 23, 2026)</a></li>
 </ul>
   </nav></div>
 
@@ -1005,7 +1332,7 @@ end-to-end benchmark demonstrates a repeatable improvement.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 21, 2026.
+  Last updated on Oct 26, 2026.
 </p></div>
       
     </div>

@@ -61,13 +61,13 @@
     <link rel="icon" href="../../_static/logo.svg"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="ByOp" href="../../byop.html" />
+    <link rel="next" title="RotaryEmbedding" href="rotary_embedding_kernel_design.html" />
     <link rel="prev" title="MatMul Kernel Design" href="matmul_kernel_design.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 21, 2026"/>
+    <meta name="docbuild:last-update" content="Oct 26, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -400,6 +400,8 @@
 <li class="toctree-l2"><a class="reference internal" href="gemm_kernel_design.html">Gemm Kernel Design</a></li>
 <li class="toctree-l2"><a class="reference internal" href="matmul_kernel_design.html">MatMul Kernel Design</a></li>
 <li class="toctree-l2 current active"><a aria-current="page" class="current reference internal" href="#">Attention Kernel Design</a></li>
+<li class="toctree-l2"><a class="reference internal" href="rotary_embedding_kernel_design.html">RotaryEmbedding</a></li>
+<li class="toctree-l2"><a class="reference internal" href="causal_conv_with_state_kernel_design.html">CausalConvWithState</a></li>
 </ul>
 </details></li>
 </ul>
@@ -535,7 +537,9 @@ Half-storage inputs and outputs use full FP32 conversion buffers.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Tiled</p></td>
 <td><p>FLOAT/FLOAT16, no past state, at least 16 query rows and more than one
-key, when materialized dispatch is not required.</p></td>
+key, when materialized dispatch is not required. AVX2/FMA also uses
+tiles for 8–15 rows with Q/K and V head dimensions in [16, 256]
+and finite V in the KV rows consumed by the query tile.</p></td>
 <td><p>Online softmax over bounded query/KV tiles with FP32 accumulation.</p></td>
 </tr>
 <tr class="row-even"><td><p>Streaming</p></td>
@@ -715,6 +719,505 @@ with <code class="docutils literal notranslate"><span class="pre">-DCMAKE_CXX_FL
 then profile tiled and streaming test filters separately using <code class="docutils literal notranslate"><span class="pre">gprof</span></code>.
 Hardware <code class="docutils literal notranslate"><span class="pre">perf</span></code> counters were unavailable on this host.</p>
 </section>
+<section id="issue-982-avx2-tile-products-and-short-queries">
+<h2>Issue 982: AVX2 tile products and short queries<a class="headerlink" href="#issue-982-avx2-tile-products-and-short-queries" title="Link to this heading">#</a></h2>
+<p>The 2026-10-24 investigation reproduced all 37 named gaps on an AMD EPYC
+7763 virtual machine (four visible logical CPUs). Baseline code was
+<code class="docutils literal notranslate"><span class="pre">f9adcb9</span></code>; optimized code was <code class="docutils literal notranslate"><span class="pre">b33e854</span></code>. Both used onnx-light-cpu 0.2.0,
+GCC 13.3.0, CMake Release, and <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2</span></code>.
+The runtime dependencies were the onnx-light 0.2.0 CPython 3.13 Linux
+release wheel (tag commit <code class="docutils literal notranslate"><span class="pre">6400f0f812b13bc32469e405bd2f762ba3cba7f0</span></code>),
+ONNX Runtime 1.31.0, NumPy 2.4.3, and ml-dtypes 0.5.4; Python was 3.13.16.
+The CPU extension linked the exact wheel libraries using matching tag
+headers and <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF</span></code>.</p>
+<p>Measurements used the registered backend cases without changing their
+models, inputs, or tolerances. Both backends used one thread and affinity
+CPU 0, with 20 warmups and up to 100 alternating samples (one second per
+candidate). ORT used sequential execution, one inter-op thread, and disabled
+intra/inter-op spinning. With one effective thread neither backend has idle
+worker threads competing between samples. Compilation and profiling did not
+overlap timed runs. The runner checked every output against ORT before timing.</p>
+<p>Two bottlenecks were isolated by dispatch A/B measurements:</p>
+<ul class="simple">
+<li><p>The tiled probability/value product repacked already contiguous attention
+tiles through general GEMM. Calling the existing six-row AVX2/FMA microkernel
+directly avoids that packing and inner scheduling. The fast path is bounded
+to V dimensions 16–256 and at most 512 keys. Full 128-row tiles with V
+dimensions above 64 retain general GEMM, since measurements did not establish
+a benefit there. Outer runtime scheduling is unchanged.</p></li>
+<li><p>Short queries reread K/V row by row. Eligible FP32/FP16 queries with 8–15
+rows now reuse tiled products; aligned FP16 queries with 16 rows no longer
+take the old streaming override on AVX2/FMA. An invocation-local vectorized
+finite-value check preserves the old streaming behavior for NaN/Inf in V:
+streaming skips zero probabilities, whereas dense GEMM evaluates zero times
+NaN/Inf. This scan is inside the measured invocation; it is not cached.
+It shares the tiled product’s causal, window and per-batch nonpad bounds,
+so unavailable V prefixes and suffixes are not scanned. Rank-three scans
+include the interleaved KV heads only within the selected rows.</p></li>
+</ul>
+<p>Both decisions cache CPU feature detection and leave unsupported CPUs,
+dimensions, tensor-cache inputs, sink attention, and materialized dispatch
+on the existing paths. Products retain FP32 accumulation and the existing
+softmax. No new packing buffer or executor is introduced.</p>
+<p>Contiguous additive masks retain AVX2 decode for finite rows. Only rows with
+reachable NaN mask entries fall back to scalar streaming. Tiled AVX2 softmax
+also preserves NaNs computed by QK: a check limited to its otherwise-zero
+branch distinguishes these from fully masked rows. Normal finite blocks
+do not incur an extra score scan.</p>
+<p>A <code class="docutils literal notranslate"><span class="pre">gprof</span></code> run of the new differential test, repeated 100 times, confirmed
+the six-row AVX2/FMA GEMM microkernel and AVX2 softmax execute. This includes
+materialized-oracle, data-generation, and assertion costs, so its self-time
+percentages are not end-to-end phase percentages. Hardware and software
+<code class="docutils literal notranslate"><span class="pre">perf</span></code> events were blocked by <code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>.</p>
+<p>The table reports median milliseconds for <strong>every issue case</strong>. Restore the
+full name by adding <code class="docutils literal notranslate"><span class="pre">test_cpu_attention_</span></code> and <code class="docutils literal notranslate"><span class="pre">_benchmark</span></code> to the case
+column. <code class="docutils literal notranslate"><span class="pre">Repeat</span></code> is a second baseline-equivalent campaign with both new
+dispatch gates disabled, before restoring the final implementation. <code class="docutils literal notranslate"><span class="pre">ORT</span></code>
+is from the final optimized campaign.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 64.0%" />
+<col style="width: 9.0%" />
+<col style="width: 9.0%" />
+<col style="width: 9.0%" />
+<col style="width: 9.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>Repeat</p></th>
+<th class="head"><p>ORT</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv128_hd64_none_stateless_float32</p></td>
+<td><p>1.0400</p></td>
+<td><p>1.0048</p></td>
+<td><p>1.0389</p></td>
+<td><p>0.6975</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd64_causal_stateless_float32</p></td>
+<td><p>1.0109</p></td>
+<td><p>0.8456</p></td>
+<td><p>1.0100</p></td>
+<td><p>0.7237</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv128_hd64_bool_stateless_float32</p></td>
+<td><p>1.0998</p></td>
+<td><p>1.0579</p></td>
+<td><p>1.0845</p></td>
+<td><p>0.7719</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd64_additive_stateless_float32</p></td>
+<td><p>1.1059</p></td>
+<td><p>1.0660</p></td>
+<td><p>1.0963</p></td>
+<td><p>0.7206</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_float32</p></td>
+<td><p>1.3368</p></td>
+<td><p>1.1152</p></td>
+<td><p>1.3296</p></td>
+<td><p>0.9517</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mqa_q128_kv128_hd64_causal_stateless_float32</p></td>
+<td><p>1.3450</p></td>
+<td><p>1.1170</p></td>
+<td><p>1.3398</p></td>
+<td><p>0.9478</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank3_mha_q128_kv128_hd64_none_stateless_float32</p></td>
+<td><p>1.1128</p></td>
+<td><p>1.0903</p></td>
+<td><p>1.0945</p></td>
+<td><p>0.7019</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q8_kv128_hd64_none_stateless_float32</p></td>
+<td><p>0.1420</p></td>
+<td><p>0.1283</p></td>
+<td><p>0.1546</p></td>
+<td><p>0.0936</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q16_kv128_hd64_none_stateless_float32</p></td>
+<td><p>0.1943</p></td>
+<td><p>0.1723</p></td>
+<td><p>0.1948</p></td>
+<td><p>0.1272</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q512_kv128_hd64_none_stateless_float32</p></td>
+<td><p>4.2331</p></td>
+<td><p>4.0650</p></td>
+<td><p>4.0970</p></td>
+<td><p>2.6250</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv1024_hd64_none_stateless_float32</p></td>
+<td><p>8.1838</p></td>
+<td><p>7.5957</p></td>
+<td><p>8.2445</p></td>
+<td><p>5.2784</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv4096_hd64_none_stateless_float32</p></td>
+<td><p>33.5599</p></td>
+<td><p>31.7309</p></td>
+<td><p>33.8006</p></td>
+<td><p>22.2247</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv8192_hd64_none_stateless_float32</p></td>
+<td><p>67.0251</p></td>
+<td><p>63.8923</p></td>
+<td><p>67.6594</p></td>
+<td><p>44.4586</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd128_causal_stateless_float32</p></td>
+<td><p>1.5140</p></td>
+<td><p>1.3283</p></td>
+<td><p>1.4905</p></td>
+<td><p>1.2738</p></td>
+</tr>
+<tr class="row-even"><td><p>opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float32</p></td>
+<td><p>1.0805</p></td>
+<td><p>0.7461</p></td>
+<td><p>1.1581</p></td>
+<td><p>0.6090</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd64_none_stateless_float16</p></td>
+<td><p>1.0505</p></td>
+<td><p>1.0647</p></td>
+<td><p>1.0984</p></td>
+<td><p>0.8203</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv128_hd64_causal_stateless_float16</p></td>
+<td><p>1.0591</p></td>
+<td><p>0.8821</p></td>
+<td><p>1.0750</p></td>
+<td><p>0.8467</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd64_bool_stateless_float16</p></td>
+<td><p>1.0835</p></td>
+<td><p>1.0922</p></td>
+<td><p>1.1246</p></td>
+<td><p>0.8683</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_gqa_q128_kv128_hd64_causal_stateless_float16</p></td>
+<td><p>1.3663</p></td>
+<td><p>1.1383</p></td>
+<td><p>1.3694</p></td>
+<td><p>1.1274</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mqa_q128_kv128_hd64_causal_stateless_float16</p></td>
+<td><p>1.3617</p></td>
+<td><p>1.1357</p></td>
+<td><p>1.3641</p></td>
+<td><p>1.1164</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q16_kv128_hd64_none_stateless_float16</p></td>
+<td><p>0.3177</p></td>
+<td><p>0.1814</p></td>
+<td><p>0.2990</p></td>
+<td><p>0.1664</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q512_kv128_hd64_none_stateless_float16</p></td>
+<td><p>4.1415</p></td>
+<td><p>4.1963</p></td>
+<td><p>4.3767</p></td>
+<td><p>3.0960</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv1024_hd64_none_stateless_float16</p></td>
+<td><p>8.1760</p></td>
+<td><p>7.6773</p></td>
+<td><p>8.3561</p></td>
+<td><p>6.3736</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv4096_hd64_none_stateless_float16</p></td>
+<td><p>32.9396</p></td>
+<td><p>30.9296</p></td>
+<td><p>33.5952</p></td>
+<td><p>25.6175</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv8192_hd64_none_stateless_float16</p></td>
+<td><p>66.0318</p></td>
+<td><p>61.6873</p></td>
+<td><p>66.4951</p></td>
+<td><p>51.4994</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16</p></td>
+<td><p>1.3200</p></td>
+<td><p>0.7385</p></td>
+<td><p>1.2315</p></td>
+<td><p>0.7577</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q16_kv257_hd63_none_stateless_float32</p></td>
+<td><p>0.3838</p></td>
+<td><p>0.3290</p></td>
+<td><p>0.3798</p></td>
+<td><p>0.2449</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd128_none_stateless_float32</p></td>
+<td><p>1.8693</p></td>
+<td><p>1.8063</p></td>
+<td><p>1.8225</p></td>
+<td><p>1.2474</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv128_hd256_none_stateless_float32</p></td>
+<td><p>3.4873</p></td>
+<td><p>3.4405</p></td>
+<td><p>3.4513</p></td>
+<td><p>2.3648</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank3_mha_q129_kv257_hd64_none_stateless_float32</p></td>
+<td><p>2.4668</p></td>
+<td><p>2.2694</p></td>
+<td><p>2.4674</p></td>
+<td><p>1.4101</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q129_kv257_hd256_none_stateless_float32</p></td>
+<td><p>7.7981</p></td>
+<td><p>7.2656</p></td>
+<td><p>7.7610</p></td>
+<td><p>4.8871</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q8_kv257_hd128_none_stateless_float32</p></td>
+<td><p>0.4851</p></td>
+<td><p>0.3845</p></td>
+<td><p>0.4899</p></td>
+<td><p>0.3047</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q16_kv257_hd63_none_stateless_float16</p></td>
+<td><p>0.4018</p></td>
+<td><p>0.3496</p></td>
+<td><p>0.4027</p></td>
+<td><p>0.3125</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q128_kv128_hd128_none_stateless_float16</p></td>
+<td><p>1.8976</p></td>
+<td><p>1.9155</p></td>
+<td><p>1.9752</p></td>
+<td><p>1.4050</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q128_kv128_hd256_none_stateless_float16</p></td>
+<td><p>3.5762</p></td>
+<td><p>3.5596</p></td>
+<td><p>3.7049</p></td>
+<td><p>2.6132</p></td>
+</tr>
+<tr class="row-odd"><td><p>opset23_rank4_mha_q129_kv257_hd256_none_stateless_float16</p></td>
+<td><p>7.8824</p></td>
+<td><p>7.2710</p></td>
+<td><p>7.9491</p></td>
+<td><p>5.4344</p></td>
+</tr>
+<tr class="row-even"><td><p>opset23_rank4_mha_q8_kv257_hd128_none_stateless_float16</p></td>
+<td><p>0.5517</p></td>
+<td><p>0.3718</p></td>
+<td><p>0.5447</p></td>
+<td><p>0.4047</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The median before/after ratio across all 37 cases is 1.077x. The largest
+improvement is 1.787x for FP16 causal/nonpad q8/kv1024/hd64. Repeated baselines
+confirm the short-query and causal improvements. Small dense-case differences
+overlap baseline variation: in particular no repeatable improvement is claimed
+for rank-three q128 or full-width FP16 hd128/256. The latter retain the original
+value-product dispatch. FP16 dense hd64 and q512 also remain effectively
+unchanged rather than establishing a regression.</p>
+<p><strong>Parity is not achieved:</strong> ORT remains faster on 35 of 37 final measurements.
+Even the FP16 nonpad case that crosses parity is near enough to require caution.
+All original gaps reproduced; no missing or failed timing was counted as a win.
+The absolute latencies are not interchangeable with the dashboard campaign.</p>
+<p>To repeat a table row, use its full case name as an anchored <code class="docutils literal notranslate"><span class="pre">--case</span></code> filter
+with the existing runner, and apply the same settings to each row:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">REPO</span><span class="o">=</span>/home/runner/work/onnx-light-cpu/onnx-light-cpu
+python<span class="w"> </span><span class="s2">"</span><span class="nv">$REPO</span><span class="s2">/tools/benchmark_attention_parity.py"</span><span class="w"> </span>--large<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--cpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">20</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">100</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span><span class="s1">'^test_cpu_attention_opset24_rank4_mha_q8_kv1024_hd64_causal_nonpad_float16_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/tmp/attention-case.json
+</pre></div>
+</div>
+<p>Validation comprises all 90 <code class="docutils literal notranslate"><span class="pre">test_attention_plan</span></code> tests, the 37 runner
+correctness comparisons, and clang-format checks. New tests cover tile and
+eligibility boundaries, both layouts, grouped heads, empty/single-key inputs,
+nonpad and fully masked rows, runtime-owned scheduling without nesting, and
+every finite-check tail through 33 elements including NaN and both infinities.
+They also verify that unavailable V rows do not disable short-query tiles under
+causal, window and per-batch nonpad bounds. The test target mirrors the library’s
+AVX2/FMA availability definition while retaining runtime CPU feature checks.
+This build system does not expose a scalar-only ceiling; no scalar or
+AVX-512 performance claim is made.</p>
+</section>
+<section id="issue-986-short-causal-groupqueryattention-on-avx2">
+<h2>Issue 986: short causal GroupQueryAttention on AVX2<a class="headerlink" href="#issue-986-short-causal-groupqueryattention-on-avx2" title="Link to this heading">#</a></h2>
+<p>The 2026-10-25 reproduction used an AMD EPYC 7763 VM with four visible logical
+CPUs, GCC 13.3.0 Release, Python 3.13.16, and an AVX2 ceiling (reported SIMD
+level 3). Baseline production code was <code class="docutils literal notranslate"><span class="pre">c945d91</span></code>; the optimized code is
+<code class="docutils literal notranslate"><span class="pre">b50c0fb</span></code>. Dependencies were onnx-light-cpu 0.2.0, the onnx-light 0.2.0
+CPython 3.13 Linux release wheel (tag commit
+<code class="docutils literal notranslate"><span class="pre">6400f0f812b13bc32469e405bd2f762ba3cba7f0</span></code>), ONNX Runtime 1.31.0 (build
+commit <code class="docutils literal notranslate"><span class="pre">402979a</span></code>), NumPy 2.4.4, and ml-dtypes 0.6.0. The CPU extension linked
+the wheel’s libraries with matching <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF</span></code>.</p>
+<p>All four reported gaps reproduced twice before optimization. Measurements
+used the exact registered <code class="docutils literal notranslate"><span class="pre">com.microsoft::GroupQueryAttention</span></code> benchmark
+models and inputs, not replacement workloads. Both backends used one thread,
+affinity CPU 0, 100 warmups, and 1,000 measured iterations per case, with a
+three-second cap that was never reached. The existing benchmark CLI measures
+the CPU phase before constructing ORT, then measures ORT; it does not
+alternate individual samples. CPU feeds were backend tensors, ORT feeds were
+NumPy arrays, and recording was disabled during timing. ORT used sequential
+execution and one inter-op thread. Spin defaults were unchanged: onnx-light
+resolved adaptive spinning with 10,000 iterations and ORT retained its default
+spinning. With one effective thread neither has idle workers to spin.
+Compilation and profiling did not overlap timed runs.</p>
+<p>Short grouped prefill was paying packing and GEMM setup costs for every
+16-row query tile. AVX2/FMA now uses up to 32 rows for causal rank-three grouped
+attention with query/KV lengths at most 64 and both head dimensions 64.
+The executor, input conversions, accumulation precision, and softmax are
+unchanged. A 64-row experiment was rejected: GQA FP32/FP16 measured
+0.439922/0.430304 ms versus 0.419815/0.398470 ms for the corresponding
+32-row experiment without the safety scan.</p>
+<p>Wider tiles evaluate additional masked products. An invocation-local
+vectorized V check retains the original 16-row tiles for NaN/Inf and unsafe
+FP32 magnitudes, preserving earlier causal rows that must not acquire
+zero-times-NaN/Inf. BF16 retains its old tile size. The check is inside the
+measured call, does not cache input contents, and adds no scratch allocation.
+Execution telemetry reports the actual tile size, including fallback.</p>
+<p>Callgrind 3.22.0 profiled
+<code class="docutils literal notranslate"><span class="pre">ComputeAttentionFloat32Streaming.SmallCausalGqaCapsWorkerCount</span></code> repeated
+20 times. Original versus final QK GEMM and transpose-packing calls fell from
+1,280 to 640 each. Transpose-packing instructions fell from 2,901,760 to
+1,840,000; the final finite-value scan ran 20 times. AVX2/FMA microkernels
+and softmax were present in both profiles. Wider tiles do more masked
+arithmetic, so total instructions increased: this is an amortization/latency
+improvement, not a FLOP reduction. These native-test profiles include data
+generation and assertions and are not end-to-end phase percentages.
+Hardware <code class="docutils literal notranslate"><span class="pre">perf</span></code> events were blocked by <code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>.</p>
+<p>The following are median milliseconds. Restore each full benchmark name with
+the prefix <code class="docutils literal notranslate"><span class="pre">test_cpu_group_query_attention_</span></code> and suffix <code class="docutils literal notranslate"><span class="pre">_benchmark</span></code>.
+<code class="docutils literal notranslate"><span class="pre">Before</span> <span class="pre">repeat</span></code> restores the 16-row target after the initial experiments;
+<code class="docutils literal notranslate"><span class="pre">After</span></code> and <code class="docutils literal notranslate"><span class="pre">After</span> <span class="pre">repeat</span></code> both include the safety scan. <code class="docutils literal notranslate"><span class="pre">ORT</span></code> is from
+the final repeated campaign.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 55.9%" />
+<col style="width: 8.8%" />
+<col style="width: 8.8%" />
+<col style="width: 8.8%" />
+<col style="width: 8.8%" />
+<col style="width: 8.8%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>Before repeat</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>After repeat</p></th>
+<th class="head"><p>ORT</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>mqa_b4_s32_qh8_kvh1_hd64_causal_float32</p></td>
+<td><p>0.336033</p></td>
+<td><p>0.337977</p></td>
+<td><p>0.315289</p></td>
+<td><p>0.316967</p></td>
+<td><p>0.198666</p></td>
+</tr>
+<tr class="row-odd"><td><p>mqa_b4_s32_qh8_kvh1_hd64_causal_float16</p></td>
+<td><p>0.351492</p></td>
+<td><p>0.355936</p></td>
+<td><p>0.323084</p></td>
+<td><p>0.322213</p></td>
+<td><p>0.226002</p></td>
+</tr>
+<tr class="row-even"><td><p>gqa_b2_s64_qh8_kvh2_hd64_causal_float32</p></td>
+<td><p>0.478579</p></td>
+<td><p>0.480137</p></td>
+<td><p>0.432013</p></td>
+<td><p>0.431441</p></td>
+<td><p>0.291990</p></td>
+</tr>
+<tr class="row-odd"><td><p>gqa_b2_s64_qh8_kvh2_hd64_causal_float16</p></td>
+<td><p>0.428896</p></td>
+<td><p>0.432323</p></td>
+<td><p>0.402422</p></td>
+<td><p>0.401309</p></td>
+<td><p>0.313496</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Latency falls approximately 6–10% on all four single-thread cases.
+<strong>ORT remains faster on all four</strong>; parity is not claimed. Absolute timings
+are not interchangeable with the dashboard’s unspecified thread/build
+provenance.</p>
+<p>A separate four-thread check used affinity CPUs 0–3 with the same warmup,
+repetition, phase order, and unchanged spin defaults. These are before/after
+CPU milliseconds, with ORT from the final run:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 64.0%" />
+<col style="width: 12.0%" />
+<col style="width: 12.0%" />
+<col style="width: 12.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>ORT</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>MQA FP32</p></td>
+<td><p>0.163416</p></td>
+<td><p>0.154810</p></td>
+<td><p>0.134000</p></td>
+</tr>
+<tr class="row-odd"><td><p>MQA FP16</p></td>
+<td><p>0.174170</p></td>
+<td><p>0.173730</p></td>
+<td><p>0.185992</p></td>
+</tr>
+<tr class="row-even"><td><p>GQA FP32</p></td>
+<td><p>0.228642</p></td>
+<td><p>0.215218</p></td>
+<td><p>0.185827</p></td>
+</tr>
+<tr class="row-odd"><td><p>GQA FP16</p></td>
+<td><p>0.221760</p></td>
+<td><p>0.209146</p></td>
+<td><p>0.213048</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The four-thread MQA FP16 difference is within noise; no improvement is
+claimed there. Its dashboard gap does not reproduce at four threads even
+before optimization. GQA FP16 finishes near parity, which requires caution
+rather than a general parity claim. No failed or missing measurement was
+counted as a win.</p>
+<p>Reproduce all four cases with the existing CLI:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">REPO</span><span class="o">=</span>/home/runner/work/onnx-light-cpu/onnx-light-cpu
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="s2">"</span><span class="nv">$REPO</span><span class="si">${</span><span class="nv">PYTHONPATH</span><span class="p">:+:</span><span class="nv">$PYTHONPATH</span><span class="si">}</span><span class="s2">"</span>
+<span class="nv">CMAKE_ARGS</span><span class="o">=</span><span class="s1">'-DONNX_LIGHT_CPU_MAX_SIMD_LEVEL=AVX2 -DONNX_LIGHT_CPU_BUILD_TESTS=ON -DONNX_LIGHT_CPU_PYTHON_STABLE_ABI=OFF'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span><span class="s2">"</span><span class="nv">$REPO</span><span class="s2">/setup.py"</span><span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--onnx-light-source
+taskset<span class="w"> </span>-c<span class="w"> </span><span class="m">0</span><span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>onnx_light_cpu<span class="w"> </span>benchmark<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--test<span class="w"> </span><span class="s1">'^test_cpu_group_query_attention_(mqa_b4_s32_qh8_kvh1|gqa_b2_s64_qh8_kvh2)_hd64_causal_float(16|32)_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--dtype<span class="w"> </span>float32<span class="w"> </span>float16<span class="w"> </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">100</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">1000</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-repeat-time<span class="w"> </span><span class="m">3</span><span class="w"> </span>--onnxruntime<span class="w"> </span>--output<span class="w"> </span>/tmp/gqa.xlsx
+</pre></div>
+</div>
+<p>Validation passed all 91 shared Attention tests, 20 GQA adapter tests,
+10 naive-GQA tests, and 12 MHA adapter tests. The exact four registered
+benchmark inputs also matched ORT (FP32 rtol/atol 2e-4/2e-5; FP16
+2e-2/2e-3). Added differential cases cover lengths 31/32/33 and 63/64/65
+in both layouts and types, causal/nonpad, boolean/additive and fully masked
+rows, and runtime scheduling without nesting. The unsafe-value regression
+checks NaN, both infinities, and extreme FP32 values, then changes V back to
+finite values to verify invocation-local selection. No AVX-512 or scalar
+performance claim is made.</p>
+</section>
 </section>
 
 
@@ -737,11 +1240,11 @@ Hardware <code class="docutils literal notranslate"><span class="pre">perf</span
       </div>
     </a>
     <a class="right-next"
-       href="../../byop.html"
+       href="rotary_embedding_kernel_design.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">ByOp</p>
+        <p class="prev-next-title">RotaryEmbedding</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -772,6 +1275,8 @@ Hardware <code class="docutils literal notranslate"><span class="pre">perf</span
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#execution-telemetry">Execution telemetry</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#native-half-precision-arithmetic">Native half-precision arithmetic</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#avx2-measurements-and-remaining-gap">AVX2 measurements and remaining gap</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-982-avx2-tile-products-and-short-queries">Issue 982: AVX2 tile products and short queries</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-986-short-causal-groupqueryattention-on-avx2">Issue 986: short causal GroupQueryAttention on AVX2</a></li>
 </ul>
   </nav></div>
 
@@ -806,7 +1311,7 @@ Hardware <code class="docutils literal notranslate"><span class="pre">perf</span
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 21, 2026.
+  Last updated on Oct 26, 2026.
 </p></div>
       
     </div>
