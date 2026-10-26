@@ -416,373 +416,268 @@
                   
   <section id="application-design">
 <h1>Application design<a class="headerlink" href="#application-design" title="Link to this heading">#</a></h1>
-<p>The application has three boundaries: VS Code owns files and panels, a native
-Node-API addon owns ONNX models and analysis, and a webview owns the interactive
-display. Python is not part of the runtime. See <a class="reference internal" href="features.html"><span class="doc">Implemented features</span></a> for user controls
-and <a class="reference internal" href="development.html"><span class="doc">Development</span></a> for building and testing.</p>
-<section id="architecture">
-<h2>Architecture<a class="headerlink" href="#architecture" title="Link to this heading">#</a></h2>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Local ONNX file                 Released backend test catalog
-      | file path / workspace.fs.readFile  |
-      v                                   v
-VS Code extension host: src/extension.ts
-      |
-      | typed calls through src/graph.ts
-      v
-Node-API addon: native/addon.cc &lt;--&gt; published onnx-light C++ libraries
-      |
-      | graph / tensor / metadata snapshots returned to the host
-      v
-Extension host &lt;-- postMessage --&gt; webview
-                                   |
-                                   +-- src/webview.ts: HTML shell
-                                   +-- media/viewer.js: SVG and interaction
-                                   +-- media/viewer.css: presentation
-</pre></div>
-</div>
-<p>File access and native calls happen in the extension host, not in the webview.
-Local model files are parsed on a native worker so the loading progress bar stays
-responsive. Graph projection and analysis methods are synchronous; there is no
-model-execution service.
-Only the selected graph is projected for display, rather than recursively
-serializing all its descendants.</p>
-</section>
-<section id="typescript-source-guide">
-<h2>TypeScript source guide<a class="headerlink" href="#typescript-source-guide" title="Link to this heading">#</a></h2>
-<section id="src-extension-ts">
-<h3><code class="docutils literal notranslate"><span class="pre">src/extension.ts</span></code><a class="headerlink" href="#src-extension-ts" title="Link to this heading">#</a></h3>
-<p><a class="reference download internal" download="" href="_downloads/832dd557dbcc6c7b53592db80314c594/extension.ts"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">extension.ts</span></code></a>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">activate</span></code> registers the demo and symbolic-model commands, plus the custom
-editor for <code class="docutils literal notranslate"><span class="pre">.onnx</span></code> files. <code class="docutils literal notranslate"><span class="pre">readGraph</span></code> streams local files through the native
-loader; other URI schemes use VS Code’s filesystem API. Both create a retained
-native model with its initial graph snapshot.</p>
-<p><code class="docutils literal notranslate"><span class="pre">configurePanel</span></code> owns a panel-local <code class="docutils literal notranslate"><span class="pre">LoadedModel</span></code>: its native handle,
-currently displayed <code class="docutils literal notranslate"><span class="pre">Graph</span></code> and optional cached <code class="docutils literal notranslate"><span class="pre">GraphMetadata</span></code>. It
-configures media access, installs the message router and supplies the HTML.
-The message subscription is disposed with the panel. A reload factory retains
-the local file path, original virtual-file bytes or backend case ID independently
-of the native handle.</p>
-<p>Opening another model replaces that state only after successful loading.
-Navigation changes the current graph and clears its metadata snapshot.
-Asynchronous recovery results are ignored after panel disposal, model replacement
-or navigation to another graph. Shape and metadata refreshes of the same graph
-can share recovery without invalidating each other’s results.
-A subsequent <code class="docutils literal notranslate"><span class="pre">ready</span></code> message resends the current graph and any cached
-metadata; it does not reload the source file or return to the root graph.</p>
-<p><code class="docutils literal notranslate"><span class="pre">isGraphPath</span></code> checks incoming message structure. Native path resolution
-also validates indices against the retained model. Native failures are
-reported through VS Code notifications; navigation, shape and metadata errors
-also have dedicated webview responses.</p>
-</section>
-<section id="src-log-ts">
-<h3><code class="docutils literal notranslate"><span class="pre">src/log.ts</span></code><a class="headerlink" href="#src-log-ts" title="Link to this heading">#</a></h3>
-<p><a class="reference download internal" download="" href="_downloads/9868638dd4e68f6afb75b51f982a7472/log.ts"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">log.ts</span></code></a>.</p>
-<p>Defines structured action entries, retains each panel’s history and publishes
-status updates. It validates incoming operation events and correlates native
-operations with the webview’s action IDs.</p>
-</section>
-<section id="src-huggingface-ts">
-<h3><code class="docutils literal notranslate"><span class="pre">src/huggingface.ts</span></code><a class="headerlink" href="#src-huggingface-ts" title="Link to this heading">#</a></h3>
-<p><a class="reference download internal" download="" href="_downloads/ee110ef2656e258c2b974b028230dcc1/huggingface.ts"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">huggingface.ts</span></code></a>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">parseHuggingFaceInput</span></code> accepts public repository IDs, repository URLs and ONNX
-file URLs. <code class="docutils literal notranslate"><span class="pre">listHuggingFaceModels</span></code> queries the Hub model API for ONNX files;
-the host offers a variant picker when several files are present.
-<code class="docutils literal notranslate"><span class="pre">parseHuggingFaceUrl</span></code> normalizes blob file links to resolve links.
-<code class="docutils literal notranslate"><span class="pre">cachedHuggingFaceModel</span></code> keys an
-extension-owned cache by the normalized URL’s SHA-256 hash. Downloads follow
-Hub/CDN redirects and stream to a uniquely named temporary file; the host’s
-native loading callback must succeed before an atomic rename publishes it.
-Failed or cancelled transfers remove their temporary file. Cache hits are
-loaded directly without a network request. Repository inputs still require a
-network request to list files; direct cached file URLs work offline.</p>
-<p>Cache storage is under <code class="docutils literal notranslate"><span class="pre">context.globalStorageUri/huggingface</span></code> in the extension
-host. The original remote basename is passed to the native loader, not the
-temporary cache name. After publication, the recovery factory uses the final
-cache path, not the renamed temporary file. Recovery streams that local file
-without another download. Authentication, external weight downloads and model
-execution are outside this action’s scope.</p>
-</section>
-<section id="src-graph-ts">
-<h3><code class="docutils literal notranslate"><span class="pre">src/graph.ts</span></code><a class="headerlink" href="#src-graph-ts" title="Link to this heading">#</a></h3>
-<p><a class="reference download internal" download="" href="_downloads/38def7758c0e262abcfb45e632702e0a/graph.ts"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">graph.ts</span></code></a>.</p>
-<p>This file defines the snapshot contracts and loads
-<code class="docutils literal notranslate"><span class="pre">dist/native/onnx_light_viewer.node</span></code>. Its wrappers expose <code class="docutils literal notranslate"><span class="pre">loadModel</span></code>,
-<code class="docutils literal notranslate"><span class="pre">loadModelFile</span></code>, <code class="docutils literal notranslate"><span class="pre">decodeGraph</span></code>, <code class="docutils literal notranslate"><span class="pre">listBackendTests</span></code> and <code class="docutils literal notranslate"><span class="pre">loadBackendTest</span></code>.</p>
+<p>Three layers: <strong>VS Code manages sources and panel state</strong>, <strong>C++ retains and
+analyzes the model</strong>, and <strong>the webview draws lightweight snapshots</strong>.
+There is no Python runtime or model-execution service on the default branch.
+Saving explicitly writes a new model copy; it does not modify the source file.
+See <a class="reference internal" href="features.html"><span class="doc">Implemented features</span></a> for implemented/in-progress capabilities.</p>
+<section id="who-owns-what">
+<h2>Who owns what?<a class="headerlink" href="#who-owns-what" title="Link to this heading">#</a></h2>
+<figure class="align-default" id="id1">
+<a class="reference internal image-reference" href="_images/viewer-architecture.svg"><img alt="The webview sends requests to the extension host. The host calls the native addon and returns graph, tensor and metadata snapshots." src="_images/viewer-architecture.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Files and native handles stay outside the browser; the browser owns the view.</span><a class="headerlink" href="#id1" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">Graph</span></code> contains nodes, input/output names, tensor descriptions, an
-initializer count and breadcrumbs. <code class="docutils literal notranslate"><span class="pre">GraphNode</span></code> contains explicit inputs,
-implicit captures, attributes, initializer metadata and an optional schema.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">TensorInformation</span></code> preserves dimensions as strings, including symbols.
-A shape of <code class="docutils literal notranslate"><span class="pre">[]</span></code> means scalar, <code class="docutils literal notranslate"><span class="pre">null</span></code> means unknown rank, and an omitted
-shape is used for non-tensor types. Unknown element types can be <code class="docutils literal notranslate"><span class="pre">null</span></code>.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">GraphMetadata</span></code> is a separate analysis snapshot, not a replacement graph.
-It contains stored metadata entries, constant/tag information and per-node
-lifetime lists.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">BackendTest.id</span></code> is the original native collection index. Sorting names
-for the selector does not change IDs; names need not be unique.</p></li>
+<li><p>Local files are streamed on a native worker, omitting large tensor payloads.
+Virtual sources retain their backing byte buffer; backend cases retain their
+native owner. Keep borrowed buffers unchanged while a handle is alive.
+Small available tensor values can be included in previews.</p></li>
+<li><p>Hugging Face downloads enter the persistent cache only after successful native
+loading and atomic publication. Recovery uses the final local cache path.</p></li>
+<li><p>Graph projection and analysis are synchronous. Only the selected graph is
+projected, not every descendant.</p></li>
+<li><p>Inline Open/Save submit masked password fields, cleared after submission or
+closing their panel. Direct editor opening uses a host password prompt.
+Decryption passwords remain in panel-local reload closures and are never logged.</p></li>
 </ul>
-<p>The retained model interface is:</p>
-<div class="highlight-typescript notranslate"><div class="highlight"><pre><span></span><span class="kd">interface</span><span class="w"> </span><span class="nx">NativeModel</span><span class="w"> </span><span class="p">{</span>
-<span class="w">  </span><span class="nx">graph</span><span class="p">(</span><span class="nx">inferShapes?</span><span class="o">:</span><span class="w"> </span><span class="kt">boolean</span><span class="p">,</span><span class="w"> </span><span class="nx">path?</span><span class="o">:</span><span class="w"> </span><span class="kt">GraphPath</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">Graph</span><span class="p">;</span>
-<span class="w">  </span><span class="nx">metadata</span><span class="p">(</span><span class="nx">path?</span><span class="o">:</span><span class="w"> </span><span class="kt">GraphPath</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="nx">GraphMetadata</span><span class="p">;</span>
-<span class="p">}</span>
-</pre></div>
-</div>
-<p>An omitted path selects the root graph. <code class="docutils literal notranslate"><span class="pre">graph()</span></code> does not infer shapes;
-<code class="docutils literal notranslate"><span class="pre">graph(true,</span> <span class="pre">path)</span></code> first infers the enclosing model and then returns the
-selected graph. <code class="docutils literal notranslate"><span class="pre">decodeGraph</span></code> instead produces a one-shot snapshot, skipping
-raw tensor bytes by default, without retaining a model for future refreshes.</p>
 </section>
-<section id="src-webview-ts">
-<h3><code class="docutils literal notranslate"><span class="pre">src/webview.ts</span></code><a class="headerlink" href="#src-webview-ts" title="Link to this heading">#</a></h3>
-<p><a class="reference download internal" download="" href="_downloads/4d9366917cdd411e032ed95f54cf49c1/webview.ts"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">webview.ts</span></code></a>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">webviewHtml</span></code> generates the Model/Logs/Status tabs, toolbar, SVG canvas, inspector,
-breadcrumbs and operator-documentation dialog. Its resource callback converts
-bundled media filenames to webview URIs. The content security policy permits
-local images/styles and authorizes the viewer script with a per-panel nonce.
-The host restricts local resource roots to <code class="docutils literal notranslate"><span class="pre">media/</span></code>.</p>
-<p>Model-derived strings are not interpolated into this HTML. They arrive through
-messages and are inserted as DOM text by the viewer, including metadata values.
-Schema documentation uses the bundled markdown-it renderer with raw HTML
-disabled, HTTP(S)-only links and image labels rendered as escaped text.
-Only this renderer’s output is inserted as HTML in the documentation dialog;
-no remote scripts or images are required.</p>
-</section>
-</section>
-<section id="native-c-source-guide">
-<h2>Native C++ source guide<a class="headerlink" href="#native-c-source-guide" title="Link to this heading">#</a></h2>
-<p><a class="reference download internal" download="" href="_downloads/d8dd325ca6ab581afe93ae185ce9b193/addon.cc"><code class="xref download docutils literal notranslate"><span class="pre">Source:</span> <span class="pre">native/addon.cc</span></code></a>.</p>
-<p><code class="docutils literal notranslate"><span class="pre">Initialize</span></code> exports <code class="docutils literal notranslate"><span class="pre">loadModel</span></code>, <code class="docutils literal notranslate"><span class="pre">loadModelFile</span></code>, <code class="docutils literal notranslate"><span class="pre">decodeGraph</span></code>, <code class="docutils literal notranslate"><span class="pre">getSchema</span></code>,
-<code class="docutils literal notranslate"><span class="pre">listBackendTests</span></code> and <code class="docutils literal notranslate"><span class="pre">loadBackendTest</span></code> through Node-API. The addon
-validates JavaScript arguments and converts C++ exceptions to JavaScript errors
-at this boundary.</p>
-<section id="parsing-and-ownership">
-<h3>Parsing and ownership<a class="headerlink" href="#parsing-and-ownership" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">ReadModel</span></code> parses bytes with onnx-light and checks that a model graph and
-valid IR version exist. <code class="docutils literal notranslate"><span class="pre">loadModelFile</span></code> uses a buffered descriptor stream;
-Windows paths are converted from UTF-8 before opening. Large inline raw and typed
-tensor payloads are skipped, while constants with payloads smaller than
-256 bytes remain available for shape inference and tiny initializer previews.
-This accommodates up to 15 complex128 elements. Omitted payloads are
-represented as external tensors in the retained model so structural validation
-can still verify graph connectivity without requiring the values. Their storage
-is shown as inline in the viewer, and external weight files are not opened. The
-worker returns an owned model without retaining the file contents. Shape
-inference that needs skipped weight values may fail and is reported through the
-existing error handling.</p>
-<p>Virtual-file reads still require a complete byte buffer because VS Code’s
-filesystem API does not expose streaming reads. The byte-buffer loading path
-uses borrowed fields rather than copying tensor payloads. <code class="docutils literal notranslate"><span class="pre">StoredModel</span></code>
-therefore holds a persistent reference to the source <code class="docutils literal notranslate"><span class="pre">Uint8Array</span></code> alongside the
-parsed model. Callers must not modify those bytes while the handle is in use.</p>
-<p>Backend models instead retain their owning native <code class="docutils literal notranslate"><span class="pre">TestCase</span></code>. Expected-output
-generation is disabled; opening a case is not running a backend test.
-<code class="docutils literal notranslate"><span class="pre">ModelHandle</span></code> captures shared ownership in its <code class="docutils literal notranslate"><span class="pre">graph</span></code> and <code class="docutils literal notranslate"><span class="pre">metadata</span></code>
-method closures, so keeping just one method alive still keeps its backing
-storage alive.</p>
-<p>The display filename is only a label, separate from the local loader’s file path.
-Neither loading nor refreshing saves the model or opens external weight files.
-Initializer snapshots contain type, dimensions and storage locations, plus
-formatted values for available dense embedded tensors with fewer than 16
-elements. Raw and typed payloads are decoded without converting 64-bit integers
-to JavaScript numbers. Floating-point previews use float or double precision as
-appropriate. Sparse previews contain stored values and indices when both components fit the
-limit, independently of the logical dense shape. String previews retain at most
-128 bytes per element. Attribute previews are bounded separately.</p>
-</section>
-<section id="graph-projection-and-nested-scopes">
-<h3>Graph projection and nested scopes<a class="headerlink" href="#graph-projection-and-nested-scopes" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">ReadPath</span></code>, <code class="docutils literal notranslate"><span class="pre">ChildGraph</span></code> and <code class="docutils literal notranslate"><span class="pre">GraphScopes</span></code> resolve an absolute
-<code class="docutils literal notranslate"><span class="pre">GraphPath</span></code> from the root. Each step contains a node index, attribute index
-and graph index: zero for a <code class="docutils literal notranslate"><span class="pre">GRAPH</span></code> attribute, or an item index for <code class="docutils literal notranslate"><span class="pre">GRAPHS</span></code>.
-Alternatively, a function step contains a call-site node index and a model-local
-function index. Resolution verifies that domain, operator name and overload match
-the called definition. Paths use indices, not potentially duplicate graph or
-node names.</p>
-<p><code class="docutils literal notranslate"><span class="pre">GraphSelection</span></code> retains borrowed graph scopes and owns temporary graph views
-of the selected function bodies. Only navigated definitions are materialized,
-with shallow copies of their nodes and declared types. Entering a function resets
-the capture boundary: caller tensors, initializers and constants do not leak into
-its formal namespace. Nested graph attributes still inherit from that function.
-Full enclosing scopes remain available for breadcrumbs.</p>
-<p><code class="docutils literal notranslate"><span class="pre">ModelGraph</span></code> walks enclosing scopes to inherit tensor descriptions and
-initializer metadata. Local inputs, weights and node outputs shadow enclosing
-names. <code class="docutils literal notranslate"><span class="pre">CollectNodeInputs</span></code> identifies implicit dependencies, including
-captures in nested attributes. Captured values appear as input ports, whereas
-captured initializers remain parameters.</p>
-<p>Graph-valued attributes and local function calls expose lightweight
-<code class="docutils literal notranslate"><span class="pre">SubgraphLink</span></code> objects containing a name, path and node count. Breadcrumbs carry
-paths back to ancestors.
-<code class="docutils literal notranslate"><span class="pre">Schema</span></code> selects the newest matching onnx-light <code class="docutils literal notranslate"><span class="pre">LightOpSchema</span></code> not newer
-than the model’s or selected function’s imported opset, supplying documentation
-and attribute defaults. Local function calls do not use registered operator
-schemas. Defaults do not overwrite explicit attribute values.</p>
-</section>
-<section id="shape-inference-versus-metadata-analysis">
-<h3>Shape inference versus metadata analysis<a class="headerlink" href="#shape-inference-versus-metadata-analysis" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">InferShapes</span></code> registers onnx-light’s shape functions and computes a
-<code class="docutils literal notranslate"><span class="pre">ShapesContext</span></code> for the whole retained model. It applies root information to
-the model; <code class="docutils literal notranslate"><span class="pre">ApplySubgraphShapes</span></code> then applies retained child contexts to
-<code class="docutils literal notranslate"><span class="pre">GRAPH</span></code> attributes recursively. This persists inferred outputs and
-intermediate <code class="docutils literal notranslate"><span class="pre">value_info</span></code> inside the in-memory model, not just in labels.</p>
-<p>Both shape inference and metadata analysis first call the schema-free
-<code class="docutils literal notranslate"><span class="pre">VerifyModel</span></code> validator. Snapshot projection remains available for inspecting
-invalid connectivity without running analysis. Native algorithm boundaries add
-the failing algorithm’s name to exceptions, preserving its complete error text.</p>
-<p><code class="docutils literal notranslate"><span class="pre">ModelMetadata</span></code> analyzes only the selected graph using <code class="docutils literal notranslate"><span class="pre">InferConstants</span></code>,
-<code class="docutils literal notranslate"><span class="pre">InferValueAndNodeTags</span></code> and <code class="docutils literal notranslate"><span class="pre">ComputeResultLifetimeInfo(graph,</span> <span class="pre">false)</span></code>.
-Constant analysis is seeded from enclosing scopes. Results distinguish
-releasable intermediates, caller-owned values reaching their last read and
-unused non-output results. Metadata analysis is read-only: it does not infer
-shapes or execute operators.</p>
-</section>
-</section>
-<section id="host-and-webview-protocol">
-<h2>Host and webview protocol<a class="headerlink" href="#host-and-webview-protocol" title="Link to this heading">#</a></h2>
-<p>The viewer sends requests with <code class="docutils literal notranslate"><span class="pre">acquireVsCodeApi().postMessage</span></code>; the host
-replies with <code class="docutils literal notranslate"><span class="pre">panel.webview.postMessage</span></code>.</p>
+<section id="what-does-an-action-change">
+<h2>What does an action change?<a class="headerlink" href="#what-does-an-action-change" title="Link to this heading">#</a></h2>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="_images/viewer-actions.svg"><img alt="Moving and zooming only change the browser view. Shape refresh changes the in-memory model and patches tensors; metadata is read-only. Opening or navigating replaces the graph view." src="_images/viewer-actions.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Shape and metadata replies preserve the camera, positions and selection.
+A new graph snapshot rebuilds the view.</span><a class="headerlink" href="#id2" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>The protocol uses <code class="docutils literal notranslate"><span class="pre">postMessage</span></code> in both directions:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <colgroup>
-<col style="width: 22.0%" />
-<col style="width: 35.0%" />
-<col style="width: 43.0%" />
+<col style="width: 32.0%" />
+<col style="width: 36.0%" />
+<col style="width: 32.0%" />
 </colgroup>
 <thead>
 <tr class="row-odd"><th class="head"><p>Request</p></th>
-<th class="head"><p>Host action</p></th>
-<th class="head"><p>Response</p></th>
+<th class="head"><p>Reply</p></th>
+<th class="head"><p>Meaning</p></th>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ready</span></code></p></td>
-<td><p>Resend current snapshots.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">log-history</span></code>, <code class="docutils literal notranslate"><span class="pre">application-status</span></code> and <code class="docutils literal notranslate"><span class="pre">graph</span></code> with optional
-cached metadata, or <code class="docutils literal notranslate"><span class="pre">load-state</span></code> before a model is available.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">open</span></code> / <code class="docutils literal notranslate"><span class="pre">navigate</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">graph</span></code></p></td>
+<td><p>Replace the displayed graph.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">interaction</span></code> with <code class="docutils literal notranslate"><span class="pre">entry</span></code></p></td>
-<td><p>Retain a timestamped explicit operation or viewer error.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">log-entry</span></code>.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">browse-files</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">file-list</span></code> or <code class="docutils literal notranslate"><span class="pre">file-list-error</span></code></p></td>
+<td><p>List folders, model files or backend cases inside the sidebar.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">open</span></code></p></td>
-<td><p>Choose a local file, a public Hugging Face model or a backend test;
-load the file, download/reuse the persistent cache or search the native
-catalog.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">graph</span></code> or <code class="docutils literal notranslate"><span class="pre">load-error</span></code>; cancellation leaves the view unchanged.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">save</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">save-info</span></code> or <code class="docutils literal notranslate"><span class="pre">save-error</span></code></p></td>
+<td><p>Write a plain or encrypted model copy, optionally with external weights.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">open-backend-test</span></code></p></td>
-<td><p>Search the released native catalog and load a case.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">graph</span></code> on success; cancellation leaves the view unchanged.</p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">fusion-patterns</span></code> / <code class="docutils literal notranslate"><span class="pre">preview-fusion</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">fusion-patterns</span></code> / <code class="docutils literal notranslate"><span class="pre">fusion-preview</span></code></p></td>
+<td><p>List native patterns and preview their candidates without editing.</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">navigate</span></code> with <code class="docutils literal notranslate"><span class="pre">path</span></code></p></td>
-<td><p>Project the selected graph and discard cached metadata.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">graph</span></code> or <code class="docutils literal notranslate"><span class="pre">navigation-error</span></code>.</p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">apply-fusion</span></code> / <code class="docutils literal notranslate"><span class="pre">cancel-fusion</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">graph</span></code> and <code class="docutils literal notranslate"><span class="pre">fusion-info</span></code> / no reply</p></td>
+<td><p>Apply selected disjoint candidates or discard the preview.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">refresh-shapes</span></code></p></td>
-<td><p>Infer the retained model and update the current graph snapshot.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">shape-info</span></code> containing tensors, or <code class="docutils literal notranslate"><span class="pre">shape-error</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">shape-info</span></code></p></td>
+<td><p>Patch tensor descriptions.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">metadata</span></code></p></td>
-<td><p>Recompute analysis for the current graph and cache the snapshot.</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">metadata-info</span></code> or <code class="docutils literal notranslate"><span class="pre">metadata-error</span></code>.</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">metadata-info</span></code></p></td>
+<td><p>Update separate static analysis.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">ready</span></code></p></td>
+<td><p>Snapshots, history and status</p></td>
+<td><p>Restore the webview without reloading the model.</p></td>
 </tr>
 </tbody>
 </table>
 </div>
-<p>Opening failures produce <code class="docutils literal notranslate"><span class="pre">load-error</span></code> and VS Code notifications without
-replacing the displayed graph. Refresh/navigation errors clear their busy state
-and show a toolbar error without replacing the previous display.</p>
-<p>The <code class="docutils literal notranslate"><span class="pre">graph</span></code> response rebuilds the display and resets its layout/selection.
-<code class="docutils literal notranslate"><span class="pre">shape-info</span></code> updates tensor labels and the inspector in place, preserving
-positions and the camera. <code class="docutils literal notranslate"><span class="pre">metadata-info</span></code> updates the separate analysis
-view. The metadata toggle requests analysis only if none is available;
-<strong>Refresh metadata</strong> always requests a fresh snapshot, even with the panel closed.</p>
-<p>Both refresh actions show per-refresh update counts in the main toolbar, including
-zero when nothing changed. Shape/type updates count each added, removed or changed
-tensor once. Metadata updates count each added, removed or changed model metadata
-entry, graph metadata entry, node analysis or value analysis once. The first
-metadata analysis counts all newly available records; subsequent refreshes compare
-with the previous successful snapshot. Loading or navigating to a graph resets
-these comparisons. Labels, graph markers and the current inspector are updated
-in place without resetting positions or selection.</p>
+<p>Failures have dedicated error replies and action-log entries. Shape and metadata
+analysis first run <code class="docutils literal notranslate"><span class="pre">VerifyModel</span></code>; invalid connectivity can still be displayed
+without running either analysis. Update counts compare successful snapshots,
+not runtime measurements.</p>
 </section>
-<section id="action-history-and-recovery">
-<h2>Action history and recovery<a class="headerlink" href="#action-history-and-recovery" title="Link to this heading">#</a></h2>
-<p>Each panel owns an <code class="docutils literal notranslate"><span class="pre">ActionLog</span></code> (<code class="docutils literal notranslate"><span class="pre">src/log.ts</span></code>). Entries have an ID, UTC
-timestamp, action, status and optional error details. <code class="docutils literal notranslate"><span class="pre">ActionLog.run</span></code> publishes
-<code class="docutils literal notranslate"><span class="pre">RUNNING</span></code> then <code class="docutils literal notranslate"><span class="pre">SUCCEEDED</span></code> or <code class="docutils literal notranslate"><span class="pre">FAILED</span></code>; cancelled pickers use
-<code class="docutils literal notranslate"><span class="pre">CANCELLED</span></code>. Failures retain their full error stack and are rethrown to the UI
-error handlers. The panel exists before initial loading so even loading
-failures are inspectable.</p>
-<p>Explicit model operations immediately display an entry and send
-<code class="docutils literal notranslate"><span class="pre">interaction</span></code>. Native requests carry the same <code class="docutils literal notranslate"><span class="pre">actionId</span></code>:
-host <code class="docutils literal notranslate"><span class="pre">log-entry</span></code> updates replace that row rather than adding duplicate
-start/completion rows. Refresh positions finishes in the webview. Tabs, node
-selection, zoom and arbitrary clicks are not logged. <code class="docutils literal notranslate"><span class="pre">ready</span></code> replays
-the history after webview recreation. Model replacement does not clear it.</p>
-<p>The <strong>Model</strong>, <strong>Logs</strong> and <strong>Status</strong> tab panels hide/show existing DOM;
-switching tabs does not render the graph again or reset browser-side state.
-The <strong>Show Logs</strong> command reveals the viewer and sends <code class="docutils literal notranslate"><span class="pre">show-logs</span></code> to select
-its Logs tab.</p>
-<p>A failed shape or metadata refresh invalidates the native handle, not the
-last displayed snapshots. Before the next native action, <code class="docutils literal notranslate"><span class="pre">nativeModel</span></code>
-logs and recreates that handle by streaming the local file again, using retained
-virtual-file bytes, or rebuilding the backend case. Local files, including cache
-entries, must still exist; source files are never modified. This discards
-potentially partial native inference state; previously inferred information may need refreshing
-after recovery. Reload failures are logged and surfaced like other failures.</p>
-<p><code class="docutils literal notranslate"><span class="pre">application-status</span></code> is sent on action updates, model replacement, native
-handle recreation and <code class="docutils literal notranslate"><span class="pre">ready</span></code>. It reports the imported library/version,
-native handle state (<code class="docutils literal notranslate"><span class="pre">none</span></code>, <code class="docutils literal notranslate"><span class="pre">ready</span></code> or <code class="docutils literal notranslate"><span class="pre">invalidated</span></code>), running operations
-and last failure. A caught C++ exception becomes a JavaScript error; it does
-not unload the native addon. Status distinguishes the still-loaded library
-from a discarded model handle and retains the last failure after recovery.
-An addon import failure prevents activation, and native process crashes are
-not covered by this exception-recovery mechanism.</p>
+<section id="what-happens-after-an-error">
+<h2>What happens after an error?<a class="headerlink" href="#what-happens-after-an-error" title="Link to this heading">#</a></h2>
+<figure class="align-default" id="id3">
+<a class="reference internal image-reference" href="_images/native-recovery.svg"><img alt="Failed shape or metadata analysis invalidates the handle but keeps the display. The next native action reloads the source. A completion is applied only if its panel, model and graph request are still current." src="_images/native-recovery.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">The addon stays loaded; only the model handle is replaced.</span><a class="headerlink" href="#id3" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>Concurrent actions can share one recovery promise. Handlers discard stale
+results <strong>and errors</strong> after disposal, model replacement or superseding
+navigation. A reload can lose prior in-memory inference; local sources must
+remain available. Logs retain failures across model changes and webview
+recreation. This recovers caught exceptions, not native process crashes.
+After fusion, recovery clones the retained edited model instead of reloading
+the original source, preserving applied rewrites.</p>
 </section>
-<section id="browser-side-state-and-layout">
-<h2>Browser-side state and layout<a class="headerlink" href="#browser-side-state-and-layout" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">media/viewer.js</span></code> owns selection, node positions, zoom/pan, gestures, tensor
-labels and metadata display state. Moving nodes, selecting, zooming and
-<strong>Refresh positions</strong> are local operations; they do not call native methods or
-change the model. <code class="docutils literal notranslate"><span class="pre">media/viewer.css</span></code> supplies the layout and SVG styles.</p>
-<p>The initial layout places inputs above node-index rows and outputs below them,
-with randomized operator horizontal positions. Operator dimensions account for
-full labels and clickable subgraph rows. Connections attach using those
-dimensions. Subgraph entries and inspector buttons send the same navigation
-request; breadcrumbs navigate with the same path contract.</p>
-<p>Positions are stable objects indexed to their incident connections.
-<code class="docutils literal notranslate"><span class="pre">moveNodes</span></code> updates only moved groups and affected edges, rather than
-rebuilding the graph on every pointer move. Selection rendering also tracks
-changed nodes. A gesture caches its viewport mapping; changes that resize the
-canvas invalidate that mapping. Zoom and pan change the SVG <code class="docutils literal notranslate"><span class="pre">viewBox</span></code>, not
-model coordinates.</p>
-<p>Above 1,000 nodes, view records retain lightweight SVG factories instead of
-creating the full SVG tree. The initial camera uses readable size; camera
-updates attach only intersecting detail groups and detach offscreen groups.
-Tensor labels and metadata markers are initialized from current snapshots when
-a group is first created. <strong>Fit</strong> draws the whole graph as two batched paths;
-long edges whose labels are offscreen also use batched paths in detail view.
-Node search uses the complete view index, so it can select and center nodes
-which have never had a DOM element. These operations preserve model coordinates
-and the current inspection state.</p>
+<section id="how-do-the-panel-modules-cooperate">
+<h2>How do the panel modules cooperate?<a class="headerlink" href="#how-do-the-panel-modules-cooperate" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">src/webview.ts</span></code> loads the local Markdown renderer, the five panel factories,
+then <code class="docutils literal notranslate"><span class="pre">media/viewer.js</span></code>, under the same CSP. The viewer creates the controllers
+with explicit callbacks; no framework or bundler is needed for these modules.</p>
+<figure class="align-default" id="id4">
+<a class="reference internal image-reference" href="_images/webview-controllers.svg"><img alt="The viewer coordinates five private controllers: sidebar, file panels, inspector, metadata panel and fusion panel. Data and explicit callbacks connect them; graph state remains in the viewer." src="_images/webview-controllers.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Extracting a panel does not transfer ownership of the graph or camera.</span><a class="headerlink" href="#id4" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>The viewer routes file and fusion replies to their controllers, which reject
+superseded request IDs. A replacement graph resets inspector/metadata displays,
+clears operator documentation, and invalidates file listings and fusion previews.
+Metadata presentation belongs to its panel; tensor highlighting and selection
+remain in the viewer.
+See <a class="reference internal" href="features/inspection.html"><span class="doc">Operator and tensor inspection</span></a> and <a class="reference internal" href="features/navigation.html"><span class="doc">Zoom, navigation and moving nodes</span></a> for the user-facing
+behavior.</p>
 </section>
-<section id="build-and-verification-boundaries">
-<h2>Build and verification boundaries<a class="headerlink" href="#build-and-verification-boundaries" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> downloads a pinned, checksum-verified onnx-light C++ release
-for the target platform and links its operator, shape and backend-test
-libraries. Only the C++20 addon is compiled locally. <code class="docutils literal notranslate"><span class="pre">scripts/build-native.cjs</span></code>
-drives CMake through <code class="docutils literal notranslate"><span class="pre">cmake-js</span></code>; TypeScript compilation and the native output
-are placed in <code class="docutils literal notranslate"><span class="pre">dist/</span></code>. The native binary must match the extension host’s OS
-and architecture, including Remote WSL.</p>
-<p>The same pinned <code class="docutils literal notranslate"><span class="pre">ONNX_LIGHT_VERSION</span></code> is embedded in the addon and exposed as
-<code class="docutils literal notranslate"><span class="pre">onnxLightVersion</span></code> through <code class="docutils literal notranslate"><span class="pre">src/graph.ts</span></code>. The host passes this build
-information to the HTML shell, which displays it in the toolbar independently
-of the loaded model. There is no separate hard-coded UI version.</p>
-<p>Tests follow the same boundaries: <code class="docutils literal notranslate"><span class="pre">test/graph.test.cjs</span></code> exercises the real
-addon and retained models; <code class="docutils literal notranslate"><span class="pre">test/extension.test.cjs</span></code> exercises host message
-routing; <code class="docutils literal notranslate"><span class="pre">test/viewer.test.cjs</span></code> exercises DOM/SVG interactions in jsdom.
-<code class="docutils literal notranslate"><span class="pre">test/start.test.cjs</span></code> checks the launcher. The Sphinx build checks this
-documentation with warnings treated as errors.</p>
+<section id="how-does-the-native-split-preserve-ownership">
+<h2>How does the native split preserve ownership?<a class="headerlink" href="#how-does-the-native-split-preserve-ownership" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">native/addon.cc</span></code> only registers exports. <code class="docutils literal notranslate"><span class="pre">model.cc</span></code> assembles the retained
+handle from graph methods and the serialization/fusion method factories.
+The focused translation units share narrow declarations, not global model state;
+workers and implementation helpers remain private to their source file.</p>
+<figure class="align-default" id="id5">
+<a class="reference internal image-reference" href="_images/native-ownership.svg"><img alt="Native method closures and asynchronous workers retain a shared StoredModel. It owns the parsed model and the relevant backing owners. Workers also own a working snapshot for serialization or fusion." src="_images/native-ownership.svg" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Splitting source files does not shorten the lifetime of borrowed storage.</span><a class="headerlink" href="#id5" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>Each method closure captures the shared <code class="docutils literal notranslate"><span class="pre">StoredModel</span></code>, so even a detached
+method keeps its source alive. Clones and fusion results retain the previous
+<code class="docutils literal notranslate"><span class="pre">StoredModel</span></code> as backing; virtual-file models retain their byte array and
+backend models retain their test case. Member declaration order ensures that
+the parsed model is destroyed before these backing owners.</p>
+<p>Save and fusion workers retain their source and operate on a <code class="docutils literal notranslate"><span class="pre">SharedCopy</span></code>
+snapshot, restoring omitted payloads before use. This is not a promise of
+bounded-memory saving or fusion: those operations can materialize weights.
+Graph projection and analysis remain synchronous; splitting translation units
+does not move them onto workers. See <a class="reference internal" href="features/opening_models.html"><span class="doc">Opening models</span></a> and
+<a class="reference internal" href="features/fusion_patterns.html"><span class="doc">Fusion patterns</span></a> for the action semantics.</p>
+</section>
+<section id="contracts-worth-keeping">
+<h2>Contracts worth keeping<a class="headerlink" href="#contracts-worth-keeping" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">NativeModel.graph(inferShapes?,</span> <span class="pre">path?)</span></code> projects one graph; requesting
+inference updates the enclosing model first. <code class="docutils literal notranslate"><span class="pre">metadata(path?)</span></code> returns a
+separate, read-only analysis snapshot. <code class="docutils literal notranslate"><span class="pre">serialize</span></code> and <code class="docutils literal notranslate"><span class="pre">serializeFiles</span></code>
+save the retained model as a new plain, encrypted or external-weight copy.</p></li>
+<li><p>Fusion materializes weights in an independent native snapshot. Selected
+patterns apply together against original node indices; overlapping candidates
+are rejected. Graph replacement or cancellation invalidates previews.
+Replacement previews share one trial builder per pattern without rewriting
+the matched graph. External-weight reuse indexes candidates by name, element
+type and dimensions before comparing their payloads and checking backing files.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">GraphPath</span></code> uses validated indices, not potentially duplicate names.
+Functions use their own imports and formal names, not the caller’s weights;
+nested graph attributes can capture enclosing values.</p></li>
+<li><p>Tensor dimensions remain strings. <code class="docutils literal notranslate"><span class="pre">[]</span></code> means scalar, <code class="docutils literal notranslate"><span class="pre">null</span></code> means unknown
+rank; non-tensor types can omit the shape.</p></li>
+<li><p>Model text arrives through messages, not HTML interpolation. Operator docs
+use bundled Markdown rendering with raw HTML disabled, HTTP(S)-only links and
+no remote image fetching.</p></li>
+<li><p>Large graphs attach only visible SVG details. <strong>Fit</strong> uses batched paths;
+search indexes all nodes, including those without a current DOM element.
+Moving nodes updates only their groups and incident edges.</p></li>
+</ul>
+</section>
+<section id="where-to-change-things">
+<h2>Where to change things<a class="headerlink" href="#where-to-change-things" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<colgroup>
+<col style="width: 38.0%" />
+<col style="width: 62.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Source</p></th>
+<th class="head"><p>Responsibility</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/832dd557dbcc6c7b53592db80314c594/extension.ts"><code class="xref download docutils literal notranslate"><span class="pre">src/extension.ts</span></code></a></p></td>
+<td><p>Commands, sources, panel state, routing and recovery.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/38def7758c0e262abcfb45e632702e0a/graph.ts"><code class="xref download docutils literal notranslate"><span class="pre">src/graph.ts</span></code></a></p></td>
+<td><p>Typed snapshots, native model API and addon loading.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/ee110ef2656e258c2b974b028230dcc1/huggingface.ts"><code class="xref download docutils literal notranslate"><span class="pre">src/huggingface.ts</span></code></a></p></td>
+<td><p>URL normalization, downloads and persistent cache.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/9868638dd4e68f6afb75b51f982a7472/log.ts"><code class="xref download docutils literal notranslate"><span class="pre">src/log.ts</span></code></a></p></td>
+<td><p>Correlated action history and status.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/d8dd325ca6ab581afe93ae185ce9b193/addon.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/addon.cc</span></code></a></p></td>
+<td><p>Node-API export registration.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/e24cc862b772a712cd48239978d0b7da/model.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/model.cc</span></code></a> /
+<a class="reference download internal" download="" href="_downloads/cac1a7610257f504b671f7a9fbee641f/model.h"><code class="xref download docutils literal notranslate"><span class="pre">model.h</span></code></a></p></td>
+<td><p>Retained handles and backing-buffer ownership.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/8d3d325b31860182f62f727147b5be82/model_io.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/model_io.cc</span></code></a></p></td>
+<td><p>Loading, bounded protobuf parsing, decryption and payload recovery.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/bbab49dca4e3234a83cca66fe768c148/model_storage.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/model_storage.cc</span></code></a></p></td>
+<td><p>Shared tensor traversal and external payload loading.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/614991e932c70a0d26fa37060a23b0ba/model_serialization.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/model_serialization.cc</span></code></a></p></td>
+<td><p>Save workers, external-weight reuse and serialization methods.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/57232aea8d66b4ad01de613cebd51056/fusion.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/fusion.cc</span></code></a></p></td>
+<td><p>Pattern enumeration, preview and fusion workers.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/ea7cec07db4832ded00a65c96ae4ba36/graph_analysis.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/graph_analysis.cc</span></code></a></p></td>
+<td><p>Graph-path scopes, metadata analysis and shape inference.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/44e66fff79113a5f24625d3a9fe94617/graph_snapshot.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/graph_snapshot.cc</span></code></a></p></td>
+<td><p>Graph snapshots, initializer descriptions and operator schemas.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/d8462a64b99f643fc3e3bc9f2e1cfb48/tensor_preview.cc"><code class="xref download docutils literal notranslate"><span class="pre">native/tensor_preview.cc</span></code></a></p></td>
+<td><p>Bounded attribute previews and small inline tensor values.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/4d9366917cdd411e032ed95f54cf49c1/webview.ts"><code class="xref download docutils literal notranslate"><span class="pre">src/webview.ts</span></code></a></p></td>
+<td><p>HTML shell, local resources and content security policy.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/6514f58f73829528b8a50ffe5c658bd1/viewer.js"><code class="xref download docutils literal notranslate"><span class="pre">media/viewer.js</span></code></a> /
+<a class="reference download internal" download="" href="_downloads/dd934f454b3db5f85ac604fde2139e72/viewer.css"><code class="xref download docutils literal notranslate"><span class="pre">viewer.css</span></code></a></p></td>
+<td><p>Graph snapshots, selection, camera, SVG layout, gestures and search.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/85cee51e6d74c5da38b94e8f7c446991/sidebar.js"><code class="xref download docutils literal notranslate"><span class="pre">media/sidebar.js</span></code></a></p></td>
+<td><p>Panel visibility, scrolling and resizing.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/4880518e8257a7f9ebb8056e4cff06da/file-panels.js"><code class="xref download docutils literal notranslate"><span class="pre">media/file-panels.js</span></code></a></p></td>
+<td><p>Open/Save forms, file browsing and stale listing guards.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/bbe570550d3d47328506978e272a52ed/inspector.js"><code class="xref download docutils literal notranslate"><span class="pre">media/inspector.js</span></code></a></p></td>
+<td><p>Node/tensor details and safe operator documentation rendering.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="_downloads/d0693c7e6b2164ef2e5119f7cdc249b0/metadata-panel.js"><code class="xref download docutils literal notranslate"><span class="pre">media/metadata-panel.js</span></code></a></p></td>
+<td><p>Metadata presentation; graph highlighting stays in the viewer.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="_downloads/ef06b87e9b918ea365f2690e22be207e/fusion-panel.js"><code class="xref download docutils literal notranslate"><span class="pre">media/fusion-panel.js</span></code></a></p></td>
+<td><p>Pattern/candidate controls and stale preview guards.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CMakeLists.txt</span></code> pins and checksum-verifies the published onnx-light libraries;
+only the addon is compiled locally. Its platform must match the extension host.
+Tests mirror the boundaries: native graph tests, host routing tests and webview
+DOM/SVG tests. Build commands and validation details are in <a class="reference internal" href="development.html"><span class="doc">Development</span></a>.</p>
 </section>
 </section>
 
@@ -833,25 +728,13 @@ documentation with warnings treated as errors.</p>
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#architecture">Architecture</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#typescript-source-guide">TypeScript source guide</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#src-extension-ts"><code class="docutils literal notranslate"><span class="pre">src/extension.ts</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#src-log-ts"><code class="docutils literal notranslate"><span class="pre">src/log.ts</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#src-huggingface-ts"><code class="docutils literal notranslate"><span class="pre">src/huggingface.ts</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#src-graph-ts"><code class="docutils literal notranslate"><span class="pre">src/graph.ts</span></code></a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#src-webview-ts"><code class="docutils literal notranslate"><span class="pre">src/webview.ts</span></code></a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#native-c-source-guide">Native C++ source guide</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parsing-and-ownership">Parsing and ownership</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#graph-projection-and-nested-scopes">Graph projection and nested scopes</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#shape-inference-versus-metadata-analysis">Shape inference versus metadata analysis</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#host-and-webview-protocol">Host and webview protocol</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#action-history-and-recovery">Action history and recovery</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#browser-side-state-and-layout">Browser-side state and layout</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#build-and-verification-boundaries">Build and verification boundaries</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#who-owns-what">Who owns what?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-does-an-action-change">What does an action change?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-happens-after-an-error">What happens after an error?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-do-the-panel-modules-cooperate">How do the panel modules cooperate?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-does-the-native-split-preserve-ownership">How does the native split preserve ownership?</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#contracts-worth-keeping">Contracts worth keeping</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#where-to-change-things">Where to change things</a></li>
 </ul>
   </nav></div>
 

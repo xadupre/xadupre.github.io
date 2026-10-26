@@ -3,6 +3,7 @@
  * These describe the view, not the model's tensor payloads.
  * Native calls are synchronous and report parsing/analysis failures as errors.
  */
+import { PipelineModel, PipelineData } from "./pipeline";
 
 /** Display-ready attribute preview, rather than an editable ONNX value. */
 export interface GraphParameter {
@@ -28,18 +29,24 @@ export interface SubgraphStep {
   graph: number;
 }
 
-/** Call-site node index and the index of its model-local function definition. */
+/** Model-local function index, optionally tied to a call-site node. */
 export interface FunctionStep {
-  node: number;
+  node?: number;
   function: number;
 }
 
-export type GraphStep = SubgraphStep | FunctionStep;
+export type PipelineRole = "embedding" | "prefill" | "decode";
+
+export interface PipelineStep {
+  pipeline: PipelineRole;
+}
+
+export type GraphStep = SubgraphStep | FunctionStep | PipelineStep;
 
 /**
  * Absolute path from the model's root graph; an empty path selects the root.
- * Steps enter graph attributes or the local function called by a node.
- * Indices, rather than names, distinguish potentially duplicate nodes/graphs.
+ * Steps enter a pipeline stage, graph attribute or model-local function.
+ * Stage roles identify contained models; indices distinguish duplicate nodes/graphs.
  */
 export type GraphPath = GraphStep[];
 
@@ -54,18 +61,33 @@ export interface SubgraphLink extends GraphBreadcrumb {
   nodeCount: number;
 }
 
-/** Storage description only; the viewer does not open external weight files. */
+/** Storage description; inspection does not open external weight files. */
 export interface InitializerStorage {
   external: boolean;
   /** External-data location when present, otherwise null. */
   location: string | null;
 }
 
-/** Dense or sparse weight metadata with bounded previews of tiny inline tensors. */
+/** Bounded, display-ready rows for a logical type or physical encoding layout. */
+export interface GraphTypeDetails {
+  kind: string;
+  /** Parent indices precede their children; data previews never dequantize weights. */
+  entries: (MetadataEntry & {
+    parent?: number;
+    shape?: string;
+    data?: string;
+  })[];
+}
+
+/** Dense, sparse or encoded weight metadata with bounded previews. */
 export interface GraphInitializer {
   name: string;
   type: string;
-  shape: string[];
+  shape?: string[] | null;
+  /** EncodedValueProto layout description, resolving model-scoped struct references. */
+  encoding?: string;
+  typeDetails?: GraphTypeDetails;
+  encodingDetails?: GraphTypeDetails;
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
@@ -99,6 +121,8 @@ export interface GraphNode {
   schema: OperatorSchema | null;
   /** Local function called by this node, matched by domain, name and overload. */
   function?: SubgraphLink;
+  /** Summary of a contained model represented by a pipeline overview box, not an operator. */
+  pipelineModel?: GraphSummary;
 }
 
 /** Tensor labels for ports and intermediate values, without tensor data. */
@@ -115,19 +139,221 @@ export interface TensorInformation {
 /** Display snapshot of one graph, not a recursive serialization of the model. */
 export interface Graph {
   name: string;
+  /** Declared imports, including unused domains; functions have their own imports. */
+  opsets: { domain: string; version: string }[];
+  /** Pipeline container or one of its stage graphs. */
+  pipeline?: boolean;
+  /** Persistent links to every model present in a pipeline. */
+  pipelineStages?: GraphBreadcrumb[];
+  /** Overrides root-only fusion availability for pipeline stage roots. */
+  canFuse?: boolean;
   breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
+  /** Definitions listed at the model root, including functions with no call sites. */
+  localFunctions: SubgraphLink[];
   inputs: string[];
   outputs: string[];
   initializerCount: number;
+  /** Initializers declared in this graph, including unused ones, excluding outer captures. */
+  initializers: GraphInitializer[];
+  sparseInitializers: GraphInitializer[];
+  encodedInitializers: GraphInitializer[];
   tensors: TensorInformation[];
 }
 
+/** Root ports and counts without projecting individual operators, attributes or schemas. */
+export type GraphSummary = Pick<
+  Graph,
+  "name" | "inputs" | "outputs" | "initializerCount" | "tensors" | "opsets"
+> & {
+  nodeCount: number;
+  functionCount?: number;
+  denseInitializerCount?: number;
+  sparseInitializerCount?: number;
+  encodedInitializerCount?: number;
+  operatorTypes?: { domain: string; opType: string; count: number }[];
+  statisticsAvailable?: boolean;
+};
+
+export interface FusionMatch {
+  /** Global passes transform the entire scope and cannot be combined with other candidates. */
+  global?: boolean;
+  anchor: number;
+  nodes: number[];
+  replacement: {
+    opType: string;
+    domain: string;
+    name: string;
+    inputs: string[];
+    outputs: string[];
+    attributes: { name: string; value: string }[];
+  }[];
+}
+
+export interface FusionOperation {
+  matches: { pattern: string; nodes: number[] }[];
+  stage?: PipelineRole;
+}
+
+export interface OptimizationPattern {
+  name: string;
+  priority: number;
+  device: string;
+}
+
+export interface FusionDiagnostic {
+  pattern: string;
+  anchor: number;
+  candidate?: number;
+  status: "matched" | "rejected" | "unavailable" | "op-type-mismatch";
+  reason: string;
+  source?: { file: string; line: number };
+}
+
+export interface OptimizationReport {
+  iterations: number;
+  rewrites: number;
+  totalTimeNs: number;
+  wallTimeNs: number;
+  matchingTimeNs: number;
+  rewritingTimeNs: number;
+  cleanupTimeNs: number;
+  constantFoldingTimeNs: number;
+  subgraphOptimizationTimeNs: number;
+  patterns: {
+    name: string;
+    attempts: number;
+    matches: number;
+    matchTimeNs: number;
+    applyTimeNs: number;
+    noMatches: {
+      reason: string;
+      sourceFile: string;
+      sourceLine: number;
+      occurrences: number;
+    }[];
+  }[];
+  subgraphs: {
+    path: string[];
+    iterations: number;
+    rewrites: number;
+    elapsedTimeNs: number;
+  }[];
+}
+
+export type OptimizationOperation =
+  "Optimize" | "IdentityRemoval" | "ConstantFolding" | "RemoveUnusedNodes";
+
+export interface MemoryDimension {
+  key: string;
+  label: string;
+  defaultValue: number;
+}
+
+export interface MemoryProfile {
+  name: string;
+  device: string;
+  peakBytes: number | null;
+  events: {
+    index: number;
+    node: string;
+    opType: string;
+    existingBytes: number;
+    outputBytes: number;
+    scratchBytes: number;
+    deviceBytes: number;
+  }[];
+}
+
+export interface RewritingScenario {
+  name: string;
+  steps: { pattern: string; path: string[]; nodes: number[] }[];
+  applied: number;
+  available: boolean;
+}
+
 /**
- * Retained native model whose inferred information survives graph projections.
- * Methods neither save the model nor execute its operators.
+ * Retained model or pipeline whose inferred information survives graph projections.
+ * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  memoryProfileInputs(path?: GraphPath): MemoryDimension[];
+  /** Estimates CPU memory on an independent snapshot, without executing kernels. */
+  memoryProfile(
+    dimensions: Record<string, number>,
+    path?: GraphPath,
+  ): Promise<MemoryProfile>;
+  clone(): NativeModel;
+  /** Number of applied Fuse operations available for session-local undo. */
+  fusionCount(): number;
+  /** Applied matches and their surviving descendants in the current root graph. */
+  fusionHistory(): FusionOperation[];
+  /** Returns an independent snapshot before the last Fuse operation. */
+  undoFusion(): NativeModel;
+  rewritingScenarios(path?: GraphPath): RewritingScenario[];
+  applyRewritingScenario(
+    name: string,
+    all: boolean,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<NativeModel>;
+  summary(inferShapes?: boolean): GraphSummary;
+  /** Pipeline fusions require the path of a stage root; ordinary models use []. */
+  fusionPatterns(path?: GraphPath): string[];
+  optimizationPatterns(path?: GraphPath): OptimizationPattern[];
+  /** Native report for the last optimization of this snapshot, including no-op runs. */
+  optimizationReport(path?: GraphPath): OptimizationReport | null;
+  /** Inspects one native pattern/node without applying it or collecting other failures. */
+  explainFusion(
+    pattern: string,
+    anchor: number,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<FusionDiagnostic>;
+  /** Runs a global pass or the native iterative optimizer on an independent snapshot. */
+  optimize(
+    patterns: string[],
+    operation: OptimizationOperation,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<NativeModel>;
+  previewFusion(
+    pattern: string,
+    sourceFilePath?: string,
+    path?: GraphPath,
+  ): Promise<{ model: NativeModel; matches: FusionMatch[] }>;
+  /** A pattern array assigns one pattern to each corresponding anchor. */
+  applyFusion(
+    pattern: string | string[],
+    anchors: number[],
+    path?: GraphPath,
+  ): Promise<NativeModel>;
+  /** Whole-model external-data references, excluding omitted inline payload placeholders. */
+  externalDataLocations(): string[];
+  /**
+   * Serializes the whole model or pipeline, including inferred information and weights.
+   * A password produces authenticated ONNXCRY3 (AES-256-GCM), otherwise plain ONNX.
+   * External weights are read relative to the source model and embedded before saving.
+   * sourceFilePath supplies the new location after a source file is moved into a cache.
+   * includeRewritings saves the canonical pre-fusion model and a concatenated plan.
+   * Otherwise the materialized current graph is saved without rewriting variants.
+   */
+  serialize(
+    password?: string,
+    sourceFilePath?: string,
+    includeRewritings?: boolean,
+  ): Promise<Uint8Array>;
+  /** Partitions a plain copy; optionally retains unchanged source external references. */
+  serializeFiles(
+    maxFileSize: number,
+    prefix: string,
+    sourceFilePath?: string,
+    reuseExternalWeights?: boolean,
+    includeRewritings?: boolean,
+  ): Promise<{
+    model: Uint8Array;
+    weights: { name: string; bytes: Uint8Array }[];
+  }>;
   /**
    * Projects one graph. When requested, inference first updates the entire
    * retained model in memory, including nested graph value_info.
@@ -142,6 +368,8 @@ export interface NativeModel {
    * @param path Absolute graph path; omitted or empty selects the root.
    */
   metadata(path?: GraphPath): GraphMetadata;
+  /** Checks the entire retained model, or every pipeline stage, without editing it. */
+  verify(): void;
 }
 
 /** Stored ONNX metadata property, preserved as a key/value pair. */
@@ -198,8 +426,18 @@ const native: {
     domain: string,
     opset: number,
   ): OperatorSchema | null;
-  loadModel(bytes: Uint8Array, fileName: string): NativeModel;
-  loadModelFile(filePath: string, fileName: string): Promise<NativeModel>;
+  loadModel(
+    bytes: Uint8Array,
+    fileName: string,
+    password?: string,
+  ): NativeModel;
+  loadModelFile(
+    filePath: string,
+    fileName: string,
+    password?: string,
+  ): Promise<NativeModel>;
+  loadPipeline(bytes: Uint8Array, fileName: string): PipelineData;
+  loadPipelineFile(filePath: string, fileName: string): Promise<PipelineData>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
@@ -210,6 +448,7 @@ export const onnxLightVersion = native.onnxLightVersion;
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {
   name: "A first ONNX graph",
+  opsets: [{ domain: "ai.onnx", version: "13" }],
   breadcrumbs: [{ name: "A first ONNX graph", path: [] }],
   nodes: [
     {
@@ -229,6 +468,10 @@ export const demoGraph: Graph = {
   inputs: ["input"],
   outputs: ["output"],
   initializerCount: 0,
+  localFunctions: [],
+  initializers: [],
+  sparseInitializers: [],
+  encodedInitializers: [],
   tensors: [
     { name: "input", type: "FLOAT", shape: ["1", "3"] },
     { name: "output", type: "FLOAT", shape: ["1", "3"] },
@@ -238,8 +481,8 @@ export const demoGraph: Graph = {
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.
  * Use loadModel instead when inferred value_info must survive subsequent calls.
- * @param bytes Serialized ONNX ModelProto bytes.
- * @param fileName Display label only; no file is opened or saved.
+ * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto.
  * @param inferShapes Whether to infer shapes before projecting the root graph.
  * @returns Root graph snapshot without a retained native handle.
  */
@@ -248,27 +491,57 @@ export function decodeGraph(
   fileName: string,
   inferShapes = false,
 ): Graph {
+  if (/\.pipe-onnx$/i.test(fileName))
+    return loadModel(bytes, fileName).graph(inferShapes);
   return native.decodeGraph(bytes, fileName, inferShapes);
 }
 
 /**
- * Retains bytes in the native handle without copying their tensor payloads.
- * Do not mutate the buffer while the handle is in use. fileName is a display
- * label, not a path to read or save.
- * @param bytes Serialized ONNX ModelProto bytes kept alive by the native handle.
- * @param fileName Display label used for the model.
+ * ModelProto borrows tensor payloads; PipelineProto currently owns parsed copies.
+ * Do not mutate borrowed buffers while the handle is in use.
+ * @param bytes Serialized ONNX ModelProto or PipelineProto bytes.
+ * @param fileName Display label; a .pipe-onnx suffix selects PipelineProto, not a file to open.
  * @returns A handle for repeated graph projection and analysis.
  */
-export function loadModel(bytes: Uint8Array, fileName: string): NativeModel {
-  return native.loadModel(bytes, fileName);
+export function loadModel(
+  bytes: Uint8Array,
+  fileName: string,
+  password?: string,
+): NativeModel {
+  if (/\.pipe-onnx$/i.test(fileName)) {
+    if (password !== undefined)
+      throw new Error(
+        "PipelineProto encryption is not supported by onnx-light.",
+      );
+    return new PipelineModel(native.loadPipeline(bytes, fileName), fileName);
+  }
+  return native.loadModel(bytes, fileName, password);
 }
 
-/** Streams a local file off the host thread, skipping large tensor payloads. */
+/** Streams plain files with bounded payloads, or decrypts a complete encrypted file off-thread. */
 export function loadModelFile(
   filePath: string,
   fileName: string,
+  password?: string,
 ): Promise<NativeModel> {
-  return native.loadModelFile(filePath, fileName);
+  if (/\.pipe-onnx$/i.test(fileName)) {
+    if (password !== undefined)
+      return Promise.reject(
+        new Error("PipelineProto encryption is not supported by onnx-light."),
+      );
+    return native
+      .loadPipelineFile(filePath, fileName)
+      .then((pipeline) => new PipelineModel(pipeline, fileName));
+  }
+  return native.loadModelFile(filePath, fileName, password);
+}
+
+/** Recognizes onnx-light's three encrypted ModelProto envelopes from an eight-byte header. */
+export function isEncryptedModel(bytes: Uint8Array): boolean {
+  return (
+    bytes.length >= 8 &&
+    /^ONNXCRY[123]$/.test(String.fromCharCode(...bytes.subarray(0, 8)))
+  );
 }
 
 /** Lists cases sorted by name, preserving native IDs even for duplicate names. */

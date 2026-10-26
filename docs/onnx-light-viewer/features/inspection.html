@@ -360,10 +360,13 @@
   <p class="bd-links__title" role="heading" aria-level="1">Section Navigation</p>
   <div class="bd-toc-item navbar-nav"><ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="opening_models.html">Opening models</a></li>
+<li class="toctree-l1"><a class="reference internal" href="exporting_models.html">Converting models</a></li>
 <li class="toctree-l1"><a class="reference internal" href="navigation.html">Zoom, navigation and moving nodes</a></li>
 <li class="toctree-l1 current active"><a aria-current="page" class="current reference internal" href="#">Operator and tensor inspection</a></li>
 <li class="toctree-l1"><a class="reference internal" href="subgraphs.html">Subgraphs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="metadata.html">Metadata and lifetimes</a></li>
+<li class="toctree-l1"><a class="reference internal" href="memory_profiling.html">Memory profiling without execution</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fusion_patterns.html">Fusion patterns</a></li>
 <li class="toctree-l1"><a class="reference internal" href="backend_tests.html">Backend tests</a></li>
 <li class="toctree-l1"><a class="reference internal" href="action_logs.html">Action logs and application status</a></li>
 </ul>
@@ -428,23 +431,99 @@
                   
   <section id="operator-and-tensor-inspection">
 <h1>Operator and tensor inspection<a class="headerlink" href="#operator-and-tensor-inspection" title="Link to this heading">#</a></h1>
+<p>The buttons <strong>Op</strong>, <strong>Data</strong>, <strong>Find</strong> and <strong>Fuse</strong> at the top of the right sidebar
+show or hide their panels independently. Visible panels stack vertically,
+with <strong>Find</strong> above <strong>Op</strong>, each in a separate bordered box. <strong>Op</strong> contains
+operator and tensor details, <strong>Data</strong> contains metadata and lifetime analysis, <strong>Find</strong> searches nodes,
+and <strong>Fuse</strong> manages fusion patterns. <strong>Op</strong> and <strong>Find</strong> are initially visible.
+The sidebar includes <strong>Open</strong>, <strong>Save</strong> and <strong>Convert</strong> alongside the inspection
+and optimization controls. <strong>Convert</strong> runs a separate installed Python exporter;
+see <a class="reference internal" href="exporting_models.html"><span class="doc">Converting models</span></a>.
+<strong>Open</strong> and <strong>Save</strong> toggle their own sidebar panels for file selection and
+save options; opening either hides the other. Neither opens a popup file picker.
+All sidebar panels have an inverted-color title bar using the compact uppercase
+<strong>INSPECTOR</strong> typography.</p>
+<p>The right sidebar starts at 300 pixels wide and can be resized by dragging its
+divider. Its width and the visibility of <strong>Op</strong>, <strong>Find</strong> and <strong>Data</strong> are saved
+automatically in VS Code’s user-directory extension storage and restored on
+reopening, including after closing the application. Passwords and model data are
+not included in these preferences.</p>
 <a class="reference internal image-reference" href="../_images/inspection.png"><img alt="Reshape inspector showing input and output tensor dimensions and an initializer." src="../_images/inspection.png" style="width: 240px;" />
 </a>
 <p>Select a node to see its name, domain, imported opset, inputs, outputs and typed
 attributes. Scalar and list values appear below the name/type heading without
 repeating the attribute name. Schema defaults are marked <code class="docutils literal notranslate"><span class="pre">[default]</span></code>; long
 attribute arrays show a bounded preview.</p>
+<p>Click the background to inspect the current <strong>Model</strong>, <strong>Graph</strong>, <strong>Function</strong> or
+<strong>Pipeline</strong> instead of an operator. The inspector shows its name and ports.
+It also lists every imported domain and opset version, including unused imports.
+Model and graph scopes also list their <strong>Initializers</strong>, <strong>Sparse initializers</strong>
+and <strong>Encoded initializers</strong> separately, with counts, types, shapes and storage
+details. These lists include unused initializers declared in the current graph,
+not weights captured from a parent graph. For pipelines, open a model’s graph
+to inspect its initializers.
+Functions show their own imports; a pipeline overview combines the imports of
+its models, preserving different versions of the same domain.</p>
+<p>Use <strong>Verify</strong>, next to the refresh buttons, to run onnx-light’s <code class="docutils literal notranslate"><span class="pre">VerifyModel</span></code>
+on the entire model, including when viewing a subgraph or function. For pipelines,
+every contained model is checked. The toolbar displays success or the verification
+error, also recorded in <strong>Logs</strong>. Verification does not infer shapes, execute
+operators or change the model.</p>
+<p>Operator names sit at the top right of each box. Attributes and connected
+initializer previews are centered below the type in a contrasting color when there are
+at most two and each fits on one line of up to 38 characters. Otherwise, a
+parameter count points to the inspector. Subgraph attributes keep their navigation
+links instead of appearing in this count. Schema defaults remain in the inspector.</p>
 <p>Graph labels and the inspector show declared tensor types and dimensions,
 including symbolic dimensions, scalars and unknown shapes. Dense and sparse
 initializers show type, shape and embedded/external storage information,
 including external filenames. Dense embedded initializers with fewer than 16
-elements also show their available values in the inspector and graph-label
-tooltip. Scalars count as one element; 64-bit integers retain their exact precision.
+elements also show their available values in the inspector and, when short enough,
+inside the operator box. Scalars count as one element; 64-bit integers retain their exact precision.
 Sparse previews label stored values and indices separately when each component
 has fewer than 16 elements, regardless of the logical dense shape. Individual
 strings are limited to 128 bytes, with an ellipsis for truncation. External files
 and payloads omitted during loading are never read for a preview. The initializer
 list scrolls without limiting the number of connected parameters.</p>
+<section id="opaque-and-encoded-values">
+<h2>Opaque and encoded values<a class="headerlink" href="#opaque-and-encoded-values" title="Link to this heading">#</a></h2>
+<p>Opaque ports show their domain/name; structured ports show their declared layout,
+including model-scoped type references. These are <code class="docutils literal notranslate"><span class="pre">TypeProto.Opaque</span></code> and
+<code class="docutils literal notranslate"><span class="pre">StructTypeProto</span></code> in onnx-light, rather than ordinary tensor types.
+<code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> initializers appear in the connected parameter list with
+their logical type/shape when present, an <strong>Encoding</strong> layout preview and
+embedded/external storage. Affine and structured layouts are supported.
+Logical types and encoding layouts are shown as <strong>Field</strong>, <strong>Type / description</strong>
+and <strong>Value</strong> tables rather than serialized objects. Each field occupies one row,
+with its shape next to its type instead of on a separate row.
+Zero-sized shapes such as <code class="docutils literal notranslate"><span class="pre">[0]</span></code> are valid and have no values; scalars <code class="docutils literal notranslate"><span class="pre">[]</span></code>
+still have one value.
+Tables and nested structures start folded. Unfold each table with its heading,
+and nested structures with their <strong>+</strong> / <strong>-</strong> buttons.
+Nested field paths identify array elements,
+bit widths and layout constants; model-scoped type references are resolved.
+Small constants use the same bounded previews as ordinary initializers.
+For inline payloads, <strong>Value</strong> also previews the actual stored fields: scales,
+zero points, offsets, codebooks, packed codes and bit-packing components.
+Inspection shows the first record, up to eight elements of each structured array,
+and up to fifteen values per numeric field. Larger previews are marked explicitly.
+External files are not opened; unavailable or malformed payloads show a reason.
+Recursive references, missing declarations and display limits are identified
+explicitly instead of expanding indefinitely.
+This reads the physical layout only: it does not run decoder functions or
+dequantize packed bytes into logical model weights.</p>
+<p>Open <code class="docutils literal notranslate"><span class="pre">examples/quantized-2bit.onnx</span></code> or <code class="docutils literal notranslate"><span class="pre">examples/quantized-3bit.onnx</span></code> and select
+<strong>Dequantize</strong> to inspect portable Q2_K/Q3_K weight layouts. The 2-bit example
+uses an inline declaration; the 3-bit example uses a model-scoped type reference.
+These are onnx-light extensions, not standard ONNX or GGUF storage formats.
+With onnx-light 0.2.0 Python bindings and their dependencies available, regenerate
+both examples from the repository root:</p>
+<div class="highlight-sh notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>examples/generate_quantized.py
+</pre></div>
+</div>
+</section>
+<section id="operator-documentation-and-inference">
+<h2>Operator documentation and inference<a class="headerlink" href="#operator-documentation-and-inference" title="Link to this heading">#</a></h2>
 <p><strong>Doc</strong> opens the selected operator’s available onnx-light schema documentation,
 with its schema version, formal inputs/outputs, attributes and type constraints.
 It is disabled when no documentation is available. <strong>Close</strong> or Escape dismisses it.
@@ -458,6 +537,7 @@ without fetching external resources. The renderer is bundled for offline use.</p
 labels and the inspector without resetting selection, positions or the camera.
 Unsupported operators or missing information can produce an error; the previous
 display remains available. Opening a model does not automatically infer shapes.</p>
+</section>
 </section>
 
 
@@ -498,6 +578,19 @@ display remains available. Opening a model does not automatically infer shapes.<
                 <dialog id="pst-secondary-sidebar-modal"></dialog>
                 <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
 
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#opaque-and-encoded-values">Opaque and encoded values</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#operator-documentation-and-inference">Operator documentation and inference</a></li>
+</ul>
+  </nav></div>
 
   <div class="sidebar-secondary-item">
 
