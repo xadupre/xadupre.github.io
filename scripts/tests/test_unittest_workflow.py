@@ -5,6 +5,18 @@ import yaml
 
 
 class TestUnittestWorkflow(unittest.TestCase):
+    def test_builder_checkout_uses_explicit_ref(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = yaml.safe_load(
+            (root / ".github/workflows/unittest.yml").read_text(encoding="utf-8")
+        )
+        steps = workflow["jobs"]["unittest"]["steps"]
+        checkout = next(
+            step for step in steps
+            if step.get("with", {}).get("repository") == "xadupre/yet-another-onnx-builder"
+        )
+        self.assertEqual(checkout["with"].get("ref"), "main")
+
     def test_onnx_light_wheel_precedes_builder_install(self):
         root = Path(__file__).resolve().parents[2]
         workflow = yaml.safe_load(
