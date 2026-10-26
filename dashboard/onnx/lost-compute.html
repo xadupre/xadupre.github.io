@@ -165,7 +165,7 @@ h2.chart-title { font-size: 1em; margin: 0 0 0.5em; text-align: center; }
 </div>
 <script>
 const BUILD_CSV_URL = "../../cache_data/onnx/build_durations.csv";
-const PR_CSV_URL = "../../cache_data/onnx/pr_stats.csv";
+const PR_CSV_URL = "../../cache_data/onnx/pr_activity.csv";
 const REPO = "onnx";
 
 function showMessage(text, kind) {
@@ -232,12 +232,19 @@ function parsePRCSV(text) {
   if (rows.length === 0) return [];
   const header = rows.shift();
   const idx = {
-    merged_at: header.indexOf("merged_at"),
+    date: header.indexOf("date"),
+    merged_prs_1d: header.indexOf("merged_prs_1d"),
   };
-  return rows.map(cols => ({
-    merged_at: cols[idx.merged_at] || "",
-    mergedDate: cols[idx.merged_at] ? new Date(cols[idx.merged_at]) : null,
-  })).filter(r => r.merged_at && r.mergedDate && !isNaN(r.mergedDate.getTime()));
+  return rows.map(cols => {
+    const date = cols[idx.date] || "";
+    const mergedCount = cols[idx.merged_prs_1d] || "";
+    return {
+      date,
+      mergedDate: date ? new Date(date) : null,
+      mergedCount: mergedCount === "" ? null : Number(mergedCount),
+    };
+  }).filter(r => r.date && r.mergedDate && !isNaN(r.mergedDate.getTime()) &&
+    Number.isFinite(r.mergedCount) && r.mergedCount >= 0);
 }
 
 // Floor a Date to the Monday of its ISO week (UTC).
@@ -281,7 +288,7 @@ function aggregatePRsWeekly(prRows) {
       bucket = { week: wk, count: 0 };
       map.set(key, bucket);
     }
-    bucket.count += 1;
+    bucket.count += r.mergedCount;
   }
   return Array.from(map.values()).sort((a, b) => a.week - b.week);
 }
@@ -375,7 +382,9 @@ loadChartJs()
     document.getElementById("sumFailed").textContent = String(failedCount);
     document.getElementById("sumCancelledHours").textContent = (cancelledSeconds / 3600).toFixed(1);
     document.getElementById("sumCancelled").textContent = String(cancelledCount);
-    document.getElementById("sumPRs").textContent = String(prRows.length);
+    document.getElementById("sumPRs").textContent = String(
+      prRows.reduce((total, row) => total + row.mergedCount, 0)
+    );
     document.getElementById("sumSuccessHours").textContent = (successSeconds / 3600).toFixed(1);
     // Ratios use all run attempts as denominator, consistent with the weekly aggregation.
     const totalRunCount = buildRows.length;
@@ -615,7 +624,7 @@ loadChartJs()
     showMessage("Failed to load data: " + (err && err.message ? err.message : err), "error");
   });
 </script>
-<footer class="data-updated" data-source="../../cache_data/onnx/build_durations.csv,../../cache_data/onnx/pr_stats.csv" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
+<footer class="data-updated" data-source="../../cache_data/onnx/build_durations.csv,../../cache_data/onnx/pr_activity.csv" style="margin:1.5em auto 0.5em;font-size:0.75em;color:#8b949e;text-align:center;display:none;"></footer>
 <script src="../../assets/last-updated.js"></script>
 </body>
 </html>
