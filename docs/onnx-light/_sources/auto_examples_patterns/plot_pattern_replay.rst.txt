@@ -28,7 +28,7 @@ Every successful pattern optimization produces a
 records can reconstruct the optimized graph from the original model without
 running pattern matching again.
 
-.. GENERATED FROM PYTHON SOURCE LINES 12-26
+.. GENERATED FROM PYTHON SOURCE LINES 12-35
 
 .. code-block:: Python
 
@@ -37,10 +37,19 @@ running pattern matching again.
 
     from __future__ import annotations
 
+    from pathlib import Path
+    from tempfile import TemporaryDirectory
+
+    import numpy
+
+    from onnx_light import onnx
+    from onnx_light.onnx.reference import ReferenceEvaluator
+    from onnx_light.onnx_core.graph_builder import OptimizationMode
     from onnx_light.onnx_lib import RewritingProto, parser
     from onnx_light.onnx_core.optimization import (
         GraphBuilder,
         GraphGraph,
+        TransposeTransposePattern,
         apply_rewritings,
         standard_patterns,
     )
@@ -53,7 +62,7 @@ running pattern matching again.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 27-32
+.. GENERATED FROM PYTHON SOURCE LINES 36-41
 
 Create and optimize the source model
 ++++++++++++++++++++++++++++++++++++
@@ -61,7 +70,7 @@ Create and optimize the source model
 The source graph contains two type-preserving ``Cast`` nodes. The optimizer
 rewrites them and returns the corresponding modification records.
 
-.. GENERATED FROM PYTHON SOURCE LINES 32-52
+.. GENERATED FROM PYTHON SOURCE LINES 41-61
 
 .. code-block:: Python
 
@@ -105,14 +114,15 @@ rewrites them and returns the corresponding modification records.
     opset: domain='ai.onnx' version=18
     graph: name='agraph'
     input: float[4] x
-    0: Neg(x) -> negated
-    1: Identity(negated) -> y
+    0: Identity(x) -> casted
+    1: Neg(casted) -> negated
+    2: Identity(negated) -> y
     output: float[4] y
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 53-58
+.. GENERATED FROM PYTHON SOURCE LINES 62-67
 
 Inspect the captured modifications
 ++++++++++++++++++++++++++++++++++
@@ -120,7 +130,7 @@ Inspect the captured modifications
 The collection stores sequential edits without pattern pointers or timings.
 Each record's positions refer to the graph immediately before/after that edit.
 
-.. GENERATED FROM PYTHON SOURCE LINES 58-62
+.. GENERATED FROM PYTHON SOURCE LINES 67-71
 
 .. code-block:: Python
 
@@ -138,12 +148,11 @@ Each record's positions refer to the graph immediately before/after that edit.
 
     { pattern_name: "Cast" matched_nodes: [0] added_nodes: [ { input: [ "x" ] output: [ "casted" ] name: "CastPattern--" op_type: "Identity" domain: "" } ] added_nodes_positions: [0] }
     { pattern_name: "Cast" matched_nodes: [2] added_nodes: [ { input: [ "negated" ] output: [ "y" ] name: "CastPattern--" op_type: "Identity" domain: "" } ] added_nodes_positions: [2] }
-    { pattern_name: "RemoveIdentityNodes" matched_nodes: [0, 1, 2] added_nodes: [ { input: [ "x" ] output: [ "negated" ] op_type: "Neg" domain: "" } { input: [ "negated" ] output: [ "y" ] name: "CastPattern--" op_type: "Identity" domain: "" } ] added_nodes_positions: [0, 1] value_renames: [ { key: "casted" value: "x" } ] }
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 63-69
+.. GENERATED FROM PYTHON SOURCE LINES 72-78
 
 ApplyRewriting without matching patterns
 ++++++++++++++++++++++++++++++++
@@ -152,7 +161,7 @@ ApplyRewriting without matching patterns
 records to a fresh copy of the source model. The reconstructed graph is
 byte-for-byte identical to the graph produced by the optimizer.
 
-.. GENERATED FROM PYTHON SOURCE LINES 69-78
+.. GENERATED FROM PYTHON SOURCE LINES 78-88
 
 .. code-block:: Python
 
@@ -169,6 +178,7 @@ byte-for-byte identical to the graph produced by the optimizer.
 
 
 
+
 .. rst-class:: sphx-glr-script-out
 
  .. code-block:: none
@@ -176,9 +186,102 @@ byte-for-byte identical to the graph produced by the optimizer.
     Replayed graph:
     graph: name='agraph'
     input: float[4] x
-    0: Neg(x) -> negated
-    1: Identity(negated) -> y
+    0: Identity(x) -> casted
+    1: Neg(casted) -> negated
+    2: Identity(negated) -> y
     output: float[4] y
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 89-99
+
+Export a materialized model or bundle its rewritings
+---------------------------------------------------
+
+The existing ``to_onnx`` method can optimize an independent copy. With
+``OptimizationMode.kOptimize`` it exports the optimized model without plans.
+With ``OptimizationMode.kRewritings`` it keeps the canonical graph and stores
+the captured plan under ``"optimized"``. The default ``OptimizationMode.kNone``
+preserves ordinary export. The source builder is not optimized in place.
+Composing two constant transposes illustrates why the bundle stores a recipe
+instead of another weight payload.
+
+.. GENERATED FROM PYTHON SOURCE LINES 99-120
+
+.. code-block:: Python
+
+
+    exporter = GraphBuilder("export_weights", opsets=18)
+    x = exporter.inp("x", onnx.TensorProto.FLOAT, [3, 2])
+    weight = exporter.init(numpy.arange(6, dtype=numpy.float32).reshape(2, 3), name="weight")
+    weight_identity = exporter.op.Transpose(weight, perm=[0, 1])
+    transposed = exporter.op.Transpose(weight_identity, perm=[1, 0])
+    y = exporter.op.Add(x, transposed, outputs="y")
+    exporter.out(y)
+    exporter.register_pattern(TransposeTransposePattern(priority=-1))
+    canonical = exporter.to_onnx()
+    materialized = exporter.to_onnx(optimize=OptimizationMode.kOptimize)
+    bundled = exporter.to_onnx(optimize=OptimizationMode.kRewritings)
+    assert bundled.graph.SerializeToString() == canonical.graph.SerializeToString()
+    assert not materialized.rewritings
+    assert any(edit.initializer_calls for edit in bundled.rewritings["optimized"].rewrites)
+    assert any(
+        node.op_type == "Transpose"
+        for function in bundled.rewritings["optimized"].added_functions
+        for node in function.node
+    )
+
+
+
+
+
+
+
+
+.. GENERATED FROM PYTHON SOURCE LINES 121-128
+
+Save, relocate weights, reload, and select a plan
+------------------------------------------------
+
+Both files use the existing external-data writer. Loading explicitly brings
+external weights into memory so replay can prepare its constant transpose.
+Loading alone leaves the canonical graph unchanged; selecting a named plan
+invokes replay without running any pattern matchers.
+
+.. GENERATED FROM PYTHON SOURCE LINES 128-146
+
+.. code-block:: Python
+
+
+    feeds = {"x": numpy.ones((3, 2), dtype=numpy.float32)}
+    expected = ReferenceEvaluator(canonical).run(None, feeds)[0]
+    with TemporaryDirectory() as directory:
+        path = Path(directory)
+        for name, exported in (("materialized", materialized), ("bundled", bundled)):
+            onnx.save(exported, path / f"{name}.onnx", save_as_external_data=True, size_threshold=0)
+        restored = onnx.load(path / "bundled.onnx", load_external_data=True)
+        selected = GraphBuilder(restored).apply_rewritings("optimized").to_standard_model()
+        plain = onnx.load(path / "materialized.onnx", load_external_data=True)
+        for exported in (restored, selected, plain):
+            numpy.testing.assert_array_equal(
+                ReferenceEvaluator(exported).run(None, feeds)[0], expected
+            )
+        assert selected.graph.SerializeToString() == materialized.graph.SerializeToString()
+        print(f"Canonical nodes: {len(restored.graph.node)}")
+        print(f"Materialized nodes: {len(plain.graph.node)}")
+        print("Both exports and replay produce identical outputs.")
+
+
+
+
+.. rst-class:: sphx-glr-script-out
+
+ .. code-block:: none
+
+    Canonical nodes: 3
+    Materialized nodes: 1
+    Both exports and replay produce identical outputs.
 
 
 
@@ -186,7 +289,7 @@ byte-for-byte identical to the graph produced by the optimizer.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.004 seconds)
+   **Total running time of the script:** (0 minutes 0.016 seconds)
 
 
 .. _sphx_glr_download_auto_examples_patterns_plot_pattern_replay.py:

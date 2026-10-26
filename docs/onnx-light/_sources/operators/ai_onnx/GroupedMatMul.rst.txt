@@ -1,0 +1,573 @@
+.. _op_ai_onnx_GroupedMatMul:
+
+GroupedMatMul
+=============
+
+- **Domain**: ``ai.onnx``
+- **Since version**: 29
+
+GroupedMatMul multiplies each row of ``input`` [M,K] by the expert matrices
+selected from ``weights`` [G,K,N] by ``group_indices`` [M,S]. The output has
+shape [M,S,N], with output[m,i] = input[m] @ weights[group_indices[m,i]].
+Optional ``bias`` [G,N] adds bias[group_indices[m,i]] to each result.
+Indices must be in [0,G); negative indices are invalid.
+The context-dependent function decomposes into Gather, Expand, and MatMul.
+Runtimes may fuse it to avoid expanded [M\*S,K,N] weights, or fuse upstream
+DequantizeLinear for weight-only quantized experts.
+
+**Inputs**
+
+- **input** (*T*): Token matrix with shape [M, K].
+- **weights** (*T*): Stack of G group weight matrices with shape [G, K, N].
+- **group_indices** (*Tind*): Group index for each token and selection, with shape [M, S]. Values outside [0, G) are invalid input.
+- **bias** (*T*): Optional per-group bias with shape [G, N].
+
+**Outputs**
+
+- **output** (*T*): Per-group matrix multiplication results with shape [M, S, N].
+
+**Type Constraints**
+
+- **T**: Constrain input, weights, bias, and output to floating-point tensors.
+  Allowed types: tensor(bfloat16), tensor(double), tensor(float), tensor(float16).
+- **Tind**: Constrain group indices to int32 or int64 tensors.
+  Allowed types: tensor(int32), tensor(int64).
+
+Examples
+--------
+
+**test_cc_groupedmatmul**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(4, 3), dtype=float32
+        [[ 1.,  0., -1.],
+         [ 0.,  1.,  2.],
+         [ 1.,  1.,  0.],
+         [ 0.,  0.,  1.]]
+      weights: shape=(2, 3, 2), dtype=float32
+        [[[ 1.,  0.],
+          [ 0.,  1.],
+          [-1.,  0.]],
+        
+         [[ 0.,  1.],
+          [ 1.,  0.],
+          [ 0.,  1.]]]
+      group_indices: shape=(4, 1), dtype=int64
+        [[0],
+         [1],
+         [0],
+         [1]]
+
+    Outputs:
+      output: shape=(4, 1, 2), dtype=float32
+        [[[2., 0.]],
+        
+         [[1., 2.]],
+        
+         [[1., 1.]],
+        
+         [[0., 1.]]]
+
+**test_cc_groupedmatmul_single_group**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(3, 2), dtype=float32
+        [[1., 2.],
+         [3., 4.],
+         [5., 6.]]
+      weights: shape=(1, 2, 3), dtype=float32
+        [[[1., 2., 3.],
+          [4., 5., 6.]]]
+      group_indices: shape=(3, 1), dtype=int64
+        [[0],
+         [0],
+         [0]]
+
+    Outputs:
+      output: shape=(3, 1, 3), dtype=float32
+        [[[ 9., 12., 15.]],
+        
+         [[19., 26., 33.]],
+        
+         [[29., 40., 51.]]]
+
+**test_cc_groupedmatmul_with_bias_10_int32**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float16
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float16
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int32
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float16
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float16
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_bias_10_int64**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float16
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float16
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int64
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float16
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float16
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_bias_11_int32**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float64
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float64
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int32
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float64
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float64
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_bias_11_int64**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float64
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float64
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int64
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float64
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float64
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_bias_16_int32**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=bfloat16
+        [[1, 2],
+         [3, 4]]
+      weights: shape=(2, 2, 2), dtype=bfloat16
+        [[[1, 0],
+          [0, 1]],
+        
+         [[0, 1],
+          [1, 0]]]
+      group_indices: shape=(2, 2), dtype=int32
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=bfloat16
+        [[0.5, 1],
+         [1.5, 2]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=bfloat16
+        [[[1.5, 3],
+          [3.5, 3]],
+        
+         [[5.5, 5],
+          [3.5, 5]]]
+
+**test_cc_groupedmatmul_with_bias_16_int64**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=bfloat16
+        [[1, 2],
+         [3, 4]]
+      weights: shape=(2, 2, 2), dtype=bfloat16
+        [[[1, 0],
+          [0, 1]],
+        
+         [[0, 1],
+          [1, 0]]]
+      group_indices: shape=(2, 2), dtype=int64
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=bfloat16
+        [[0.5, 1],
+         [1.5, 2]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=bfloat16
+        [[[1.5, 3],
+          [3.5, 3]],
+        
+         [[5.5, 5],
+          [3.5, 5]]]
+
+**test_cc_groupedmatmul_with_bias_1_int32**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float32
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float32
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int32
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float32
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float32
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_bias_1_int64**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 2), dtype=float32
+        [[1., 2.],
+         [3., 4.]]
+      weights: shape=(2, 2, 2), dtype=float32
+        [[[1., 0.],
+          [0., 1.]],
+        
+         [[0., 1.],
+          [1., 0.]]]
+      group_indices: shape=(2, 2), dtype=int64
+        [[0, 1],
+         [1, 0]]
+      bias: shape=(2, 2), dtype=float32
+        [[0.5, 1. ],
+         [1.5, 2. ]]
+
+    Outputs:
+      output: shape=(2, 2, 2), dtype=float32
+        [[[1.5, 3. ],
+          [3.5, 3. ]],
+        
+         [[5.5, 5. ],
+          [3.5, 5. ]]]
+
+**test_cc_groupedmatmul_with_unused_group**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(4, 2), dtype=float32
+        [[1., 2.],
+         [3., 4.],
+         [5., 6.],
+         [7., 8.]]
+      weights: shape=(3, 2, 2), dtype=float32
+        [[[ 0.,  1.],
+          [ 2.,  3.]],
+        
+         [[ 4.,  5.],
+          [ 6.,  7.]],
+        
+         [[ 8.,  9.],
+          [10., 11.]]]
+      group_indices: shape=(4, 1), dtype=int64
+        [[0],
+         [0],
+         [2],
+         [2]]
+
+    Outputs:
+      output: shape=(4, 1, 2), dtype=float32
+        [[[  4.,   7.]],
+        
+         [[  8.,  15.]],
+        
+         [[100., 111.]],
+        
+         [[136., 151.]]]
+
+**test_cc_groupedmatmul_without_bias_explicit_empty_input**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, "") -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(4, 3), dtype=float32
+        [[ 1.,  0., -1.],
+         [ 0.,  1.,  2.],
+         [ 1.,  1.,  0.],
+         [ 0.,  0.,  1.]]
+      weights: shape=(2, 3, 2), dtype=float32
+        [[[ 1.,  0.],
+          [ 0.,  1.],
+          [-1.,  0.]],
+        
+         [[ 0.,  1.],
+          [ 1.,  0.],
+          [ 0.,  1.]]]
+      group_indices: shape=(4, 1), dtype=int64
+        [[0],
+         [1],
+         [0],
+         [1]]
+
+    Outputs:
+      output: shape=(4, 1, 2), dtype=float32
+        [[[2., 0.]],
+        
+         [[1., 2.]],
+        
+         [[1., 1.]],
+        
+         [[0., 1.]]]
+
+**test_cc_groupedmatmul_zero_selections**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 3), dtype=float32
+        [[0., 0., 0.],
+         [0., 0., 0.]]
+      weights: shape=(2, 3, 4), dtype=float32
+        [[[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]],
+        
+         [[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]]]
+      group_indices: shape=(2, 0), dtype=int64
+        []
+
+    Outputs:
+      output: shape=(2, 0, 4), dtype=float32
+        []
+
+**test_cc_groupedmatmul_zero_selections_with_bias**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(2, 3), dtype=float32
+        [[0., 0., 0.],
+         [0., 0., 0.]]
+      weights: shape=(2, 3, 4), dtype=float32
+        [[[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]],
+        
+         [[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]]]
+      group_indices: shape=(2, 0), dtype=int64
+        []
+      bias: shape=(2, 4), dtype=float32
+        [[0., 0., 0., 0.],
+         [0., 0., 0., 0.]]
+
+    Outputs:
+      output: shape=(2, 0, 4), dtype=float32
+        []
+
+**test_cc_groupedmatmul_zero_tokens**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(0, 3), dtype=float32
+        []
+      weights: shape=(2, 3, 4), dtype=float32
+        [[[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]],
+        
+         [[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]]]
+      group_indices: shape=(0, 2), dtype=int64
+        []
+
+    Outputs:
+      output: shape=(0, 2, 4), dtype=float32
+        []
+
+**test_cc_groupedmatmul_zero_tokens_with_bias**
+
+.. code-block:: text
+
+    Node:
+      GroupedMatMul(input, weights, group_indices, bias) -> (output)
+
+.. code-block:: text
+
+    Inputs:
+      input: shape=(0, 3), dtype=float32
+        []
+      weights: shape=(2, 3, 4), dtype=float32
+        [[[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]],
+        
+         [[0., 0., 0., 0.],
+          [0., 0., 0., 0.],
+          [0., 0., 0., 0.]]]
+      group_indices: shape=(0, 2), dtype=int64
+        []
+      bias: shape=(2, 4), dtype=float32
+        [[0., 0., 0., 0.],
+         [0., 0., 0., 0.]]
+
+    Outputs:
+      output: shape=(0, 2, 4), dtype=float32
+        []

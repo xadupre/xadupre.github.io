@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Serialized graph rewrites and model variants &#8212; onnx-light 0.2.0 documentation</title>
+    <title>Serialized graph rewrites and model variants &#8212; onnx-light 0.2.1 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="../../_static/documentation_options.js?v=938c9ccc"></script>
+    <script src="../../_static/documentation_options.js?v=37f418d5"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.0 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.0 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.1 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.1 documentation - Home"/>
   
   
 </a></div>
@@ -506,12 +506,15 @@
 <dd class="field-odd"><p>2026-10-20</p>
 </dd>
 </dl>
-<p><strong>Steps 1 and 2 implemented: proto records and extended replay.</strong> The optimizer
+<p><strong>Steps 1 through 4 implemented: proto records, replay, model envelope and Python export.</strong>
+The optimizer
 captures initializer recipes and shared function definitions in
 <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> / <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code>. <code class="docutils literal notranslate"><span class="pre">GraphBuilder::ApplyRewritings</span></code>
 (Python: <code class="docutils literal notranslate"><span class="pre">builder.apply_rewritings</span></code>) returns a new builder, prepares constants
-once and preserves model-level additions.
-The model envelope and export operations below remain proposals.</p>
+once and preserves model-level additions. <code class="docutils literal notranslate"><span class="pre">GraphBuilder.to_onnx</span></code> exports
+the canonical model by default (<code class="docutils literal notranslate"><span class="pre">OptimizationMode.kNone</span></code>), the optimized
+result with <code class="docutils literal notranslate"><span class="pre">optimize=OptimizationMode.kOptimize</span></code>, or the canonical model
+with its captured plan with <code class="docutils literal notranslate"><span class="pre">optimize=OptimizationMode.kRewritings</span></code>.</p>
 <section id="existing-building-blocks">
 <h2>Existing building blocks<a class="headerlink" href="#existing-building-blocks" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">PatternOptimization</span></code> implements recognition (<code class="docutils literal notranslate"><span class="pre">Match</span></code>) and replacement
@@ -519,7 +522,8 @@ construction (<code class="docutils literal notranslate"><span class="pre">Apply
 match. <code class="docutils literal notranslate"><span class="pre">GraphGraph::Optimize</span></code> returns a <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> containing ordered
 <code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> edits:
 matched node positions, added nodes and their positions, added/removed
-initializers, value renames and subgraph path.</p>
+initializers and subgraph path. Reversible capture starts from the cleaned
+canonical graph, after all cleanups that redirect value references.</p>
 <p><code class="docutils literal notranslate"><span class="pre">builder.ApplyRewritings(rewrites)</span></code> reconstructs a <code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code> without
 running the matcher. Matched and removed positions refer to the graph
 immediately before each edit; added positions describe its result. Internal
@@ -540,14 +544,21 @@ not topologically sort the graph, and export only uses that fallback if a
 dependency-order violation is actually detected.</p>
 <p>The two rewrite messages support binary serialization and Python bindings.
 Records contain a diagnostic pattern name, not a live pattern pointer or
-timings. Timing remains in <code class="docutils literal notranslate"><span class="pre">OptimizationReport</span></code>. There is not yet a rewrite
-map in <code class="docutils literal notranslate"><span class="pre">ModelProto</span></code>.</p>
+timings. Timing remains in <code class="docutils literal notranslate"><span class="pre">OptimizationReport</span></code>. <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> stores
+independently named plans against the canonical graph.</p>
 <p>Constant folding retains the computation as shared functions and ordered
 <code class="docutils literal notranslate"><span class="pre">initializer_calls</span></code>, not materialized results in <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>.
-Literal constants still use <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>. Cleanup records only
-removed initializer positions and renames, without re-embedding retained
-weights. Serializing a transposed-weight recipe therefore stores no second
-transposed payload.</p>
+Literal constants still use <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>. Removed definitions and
+payloads needed to undo reversible edits are retained only in the optimizing
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder</span></code>, separately from the serialized removal positions. Neither
+rewriting proto nor exported models contain undo history. The forward recipe
+avoids embedding a transposed payload in <code class="docutils literal notranslate"><span class="pre">added_initializers</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">TransposeToInitializerPattern</span></code> is no longer needed: it only re-emitted an
+unchanged <code class="docutils literal notranslate"><span class="pre">Transpose</span></code> to trigger folding. The optimizer captures preparation
+nodes produced by actual rewrites (for example, <code class="docutils literal notranslate"><span class="pre">TransposeTransposePattern</span></code>)
+as shared <code class="docutils literal notranslate"><span class="pre">FunctionProto</span></code> recipes. An untouched constant <code class="docutils literal notranslate"><span class="pre">Transpose</span></code> remains
+in the canonical graph; explicit <code class="docutils literal notranslate"><span class="pre">GraphBuilder::ConstantFold</span></code> still folds it
+when materialization is desired.</p>
 <p>The messages are defined in <code class="docutils literal notranslate"><span class="pre">onnx_proto/include/onnx_proto/onnx.h</span></code> using
 the existing protobuf-free message layer. The schema below includes fields
 used by constant preparation. The returned builder exposes <code class="docutils literal notranslate"><span class="pre">BuildGraph()</span></code>
@@ -560,7 +571,9 @@ functions and opset imports.</p>
 by the optimizer and existing replay engine.</strong> <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> holds the
 ordered records and their shared function definitions/imports. Do not maintain
 parallel C++/proto records or introduce a second replay engine and conversion
-layer.</p>
+layer.
+Undo-only information is private, non-serialized builder state; it does not
+extend these forward proto records.</p>
 <p>Migrate <code class="docutils literal notranslate"><span class="pre">Optimize</span></code> results, replay arguments, cleanup recording, C++/Python
 bindings, diagnostics, tests and examples to the new messages. Keep matching
 and <code class="docutils literal notranslate"><span class="pre">MatchResult</span></code> separate: the live pattern pointer belongs to matching,
@@ -588,8 +601,8 @@ ranks incrementally; it does not rescan or sort the full live order per edit.</p
 <h2>New and modified proto messages<a class="headerlink" href="#new-and-modified-proto-messages" title="Link to this heading">#</a></h2>
 <p>The wire schema is below. The first two messages use onnx-light’s existing
 <code class="docutils literal notranslate"><span class="pre">BEGIN_PROTO</span></code> / <code class="docutils literal notranslate"><span class="pre">FIELD_*</span></code> layer, parser and serializer, without adding a
-protobuf compiler or <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>. The <code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> field
-remains deferred to step 3.</p>
+protobuf compiler or <code class="docutils literal notranslate"><span class="pre">libprotobuf</span></code>. Step 3 added the
+<code class="docutils literal notranslate"><span class="pre">ModelProto.rewritings</span></code> field.</p>
 <div class="highlight-protobuf notranslate"><div class="highlight"><pre><span></span><span class="c1">// New messages; NodeProto/TensorProto and the other ONNX messages exist.</span>
 <span class="kd">message</span><span class="w"> </span><span class="nc">LocalRewritingProto</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="kt">string</span><span class="w"> </span><span class="na">pattern_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
@@ -600,7 +613,8 @@ remains deferred to step 3.</p>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="na">added_nodes_positions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">6</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">TensorProto</span><span class="w"> </span><span class="na">added_initializers</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">7</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="na">added_initializer_positions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">8</span><span class="p">;</span>
-<span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">StringStringEntryProto</span><span class="w"> </span><span class="na">value_renames</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span>
+<span class="w">  </span><span class="k">reserved</span><span class="w"> </span><span class="mi">9</span><span class="p">;</span>
+<span class="w">  </span><span class="k">reserved</span><span class="w"> </span><span class="s">"value_renames"</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">StringStringEntryProto</span><span class="w"> </span><span class="na">metadata_props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">10</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="na">initializer_calls</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">11</span><span class="p">;</span>
 <span class="w">  </span><span class="k">repeated</span><span class="w"> </span><span class="kt">uint64</span><span class="w"> </span><span class="na">computed_initializer_positions</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">12</span><span class="p">;</span>
@@ -621,6 +635,11 @@ each edit: <code class="docutils literal notranslate"><span class="pre">removed_
 <code class="docutils literal notranslate"><span class="pre">GraphProto.extended_initializer</span></code> list of encoded constants and paged caches.
 Both payload alternatives share this index space and retain their declaration
 order across builder import/export and replay.</p>
+<p>The optimizing builder retains removed definitions in the same order as their
+removal positions. Its in-memory undo history also preserves graph declarations,
+counts and expected replacements needed for strict restoration. This history is
+not part of either proto: a serialized plan contains only forward edits, and a
+removal position alone cannot restore a definition.</p>
 <p><strong>Modify only onnx-light’s ``ModelProto``</strong> to add
 <code class="docutils literal notranslate"><span class="pre">map&lt;string,</span> <span class="pre">RewritingProto&gt;</span> <span class="pre">rewritings</span></code>, keyed by variant name, without
 introducing another named proto message in this plan. Reserve and document
@@ -685,15 +704,133 @@ functions as initializer recipes.</p>
 necessarily allocating a second buffer during preparation. Reuse a view only
 when supported by the tensor representation and consumer. Materialized plain
 ONNX export may intentionally store computed weights instead.</p>
-<p><code class="docutils literal notranslate"><span class="pre">LocalRewritingProto.value_renames</span></code> reuses <code class="docutils literal notranslate"><span class="pre">StringStringEntryProto</span></code>:
-<code class="docutils literal notranslate"><span class="pre">key</span></code> is the old reference and <code class="docutils literal notranslate"><span class="pre">value</span></code> its replacement. It mirrors the
-former <code class="docutils literal notranslate"><span class="pre">LocalRewriting.value_renames</span></code> and redirects references to an
-eliminated value, rather than renaming a
-surviving producer. For example, removing <code class="docutils literal notranslate"><span class="pre">b</span> <span class="pre">=</span> <span class="pre">Identity(a)</span></code> redirects
-consumers of <code class="docutils literal notranslate"><span class="pre">b</span></code> to <code class="docutils literal notranslate"><span class="pre">a</span></code>. Existing identity/duplicate-node cleanup and
-initializer deduplication record these substitutions, including nested
-captures. Ordinary replacements can create fresh internal names and preserve
-boundary outputs without this field; retain it to replay cleanup too.</p>
+<p><code class="docutils literal notranslate"><span class="pre">LocalRewritingProto</span></code> has no value-renaming field. Field number 9 and the
+former name <code class="docutils literal notranslate"><span class="pre">value_renames</span></code> are reserved and must not be reused. Binary plans
+containing that field and text plans using that name are explicitly rejected;
+regenerate these plans instead of silently dropping their renaming effects.
+Removing <code class="docutils literal notranslate"><span class="pre">b</span> <span class="pre">=</span> <span class="pre">Identity(a)</span></code> redirects consumers of <code class="docutils literal notranslate"><span class="pre">b</span></code>
+to <code class="docutils literal notranslate"><span class="pre">a</span></code> but does not identify which consumers already used <code class="docutils literal notranslate"><span class="pre">a</span></code>. Inverting
+that substitution is deliberately outside the reversible-plan contract.</p>
+<p>Identity removal, duplicate-node elimination and initializer deduplication
+therefore run before capture, including in nested graphs. They establish the
+canonical graph and are not themselves recorded as reversible edits. Do not
+repeat these renaming cleanups between recorded rewrites; replacements may use
+fresh internal names but must preserve names at their boundaries.</p>
+<p>Inverse replay processes recorded edits in reverse application order. It
+restores only definitions removed by these edits, never Identity nodes or
+duplicate constants removed before capture. It validates positions, expected
+replacement definitions and subgraph paths, and explicitly
+rejects builders lacking the in-memory information needed for exact restoration. A
+failure must not leave the caller’s builder partially restored.</p>
+<p><code class="docutils literal notranslate"><span class="pre">GraphGraph::Optimize</span></code> automatically canonicalizes before capture; no Python
+canonicalization method is needed. Export obtains the cleaned reference from
+the optimizing builder’s in-memory undo history.
+Ancestor substitutions are applied before cleaning descendant scopes, so
+canonicalization is idempotent even when captured values become equivalent.
+Annotations for values removed by these cleanups are pruned before capturing
+the reference, including when no reversible edits follow.
+Shape/Size nodes are moved next to their producers before capturing edit
+positions, so subsequent canonical-model export does not invalidate those
+positions. This reordering preserves incremental tags and updates affected
+lifetime and memory metadata without rebuilding graph analysis.
+Identity nodes and duplicate constants introduced by recorded replacements
+remain in place: cleaning them up would redirect references after capture and
+is outside the reversible-plan contract. Consequently, later patterns may not
+match across newly introduced Identity boundaries.
+<code class="docutils literal notranslate"><span class="pre">GraphBuilder::UndoRewritings</span></code> (Python: <code class="docutils literal notranslate"><span class="pre">builder.undo_rewritings(plan)</span></code>)
+returns a new builder at the cleaned canonical state. It requires the builder
+that performed optimization and its matching plan. Exporting and reloading an
+optimized model does not retain this history; applying a serialized forward
+plan to a fresh builder does not recreate it either.
+Structural and declaration mutations invalidate both named plans and the private
+undo capture, including when a nested builder invalidates its ancestors.
+A stale plan is rejected without changing the mutated builder. Moving an
+unchanged optimizing builder preserves its capture.</p>
+<p>Unit tests verify complete canonical/optimized graph roundtrips. Production
+capture and undo do not retain an optimized-graph validation snapshot, compare
+whole graphs, or execute forward replay merely to check their own correctness.
+The supplied plan is compared directly with the captured plan, without
+serialization, and local edit bounds and payload checks remain.
+Independent node edits share indexed live-order tracking during both inverse
+capture and undo; their node lists are materialized once per batch, and
+unchanged initializer lists are retained. Undo uses the optimized graph directly
+rather than requiring its incrementally preserved tags to match fresh shape
+inference. Forward replay retains its strict tag validation.
+Device targets for the canonical root, subgraphs and local functions are
+captured privately and restored by undo, including scopes removed during
+optimization. Canonical value/node tags and custom node-tag override flags
+are also restored exactly, including after repeated optimization captures;
+affected shape-tagged release lists and memory profiles are refreshed.
+Function definitions are collected from every scope, including functions
+owned by branches that are hoisted into the restored model.
+None of this metadata or inverse history is serialized.
+The initial Python model is released as soon as the working builder has imported
+it, before optimization and inverse capture. Existing named plans are retained
+in private undo history when cleanup
+reports that the canonical reference is unchanged. Cleanup changes in nested
+graphs and functions invalidate those plans without another whole-model export
+or equality scan.</p>
+<p>Builder import/export and private undo definitions use explicit tensor-storage
+snapshots: message structure remains independent, while unchanged owned raw
+buffers and typed tensor arrays share storage until a mutable container access
+detaches it. Nested graph attributes, local functions, recipes and removed
+initializer definitions use the same mechanism. Ordinary proto copies retain
+their existing semantics; sharing is requested with
+<code class="docutils literal notranslate"><span class="pre">utils::CopyWithSharedTensorStorage</span></code> rather than enabled globally.
+Here, tensor storage means the allocation containing raw bytes or typed tensor
+elements, not the tensor’s name, dimensions, element type or other metadata.
+The named copy operation explicitly walks each message field and propagates to
+nested containers and messages. It uses no mutable global or <code class="docutils literal notranslate"><span class="pre">thread_local</span></code>
+copy mode; ordinary constructors and <code class="docutils literal notranslate"><span class="pre">CopyFrom</span></code> never depend on an ambient
+copy context. Comparison and copying share the same native field catalogue.
+Shared copies also preserve private oneof discriminators, including in nested
+messages, so entering an already-active alternative does not clear its value.
+Borrowed buffers with an owner retain that owner and remain read-only through
+the proto API. Ownerless borrowed buffers are copied into safe owned storage.
+As with the existing zero-copy import APIs, callers must not modify borrowed
+storage externally while it is in use.
+Mutable C++ pointers, iterators and references obtained before a snapshot
+boundary must be reacquired afterward. Active exported raw-data views use a
+copy fallback. Genuinely transformed weights receive new allocations; undo
+retains the original definitions needed for exact restoration, not additional
+copies of their unchanged bytes.
+Node deduplication hashes native attribute contents without serializing large
+<code class="docutils literal notranslate"><span class="pre">Constant</span></code> tensors into strings. Hash hits are checked with native equality,
+including resolved inputs and attribute multiplicity; local-function weights
+use the same bounded-memory path.
+Local-function shape inference also explicitly shares tensor payloads when
+copying body nodes and binding call-site attributes.</p>
+<p>Integer, FLOAT and DOUBLE value bounds are scanned directly from typed fields or
+little-endian raw payloads without a decoded tensor-sized temporary. Payload
+counts must still match the tensor dimensions before bounds are recorded.
+Python indexing, iteration, representation and list comparison of numeric fields
+use const storage access and leave shared payload allocations intact.
+Neutral arithmetic vectors are checked directly against their payloads as well,
+including all-zero weights and weights whose first value alone is neutral.
+Typed fields take precedence over raw bytes, and vector rewrites still require
+an exact payload count and matching last-dimension broadcasting.
+Owned storage with active NumPy/DLPack views rejects mutable access, byte
+assignment, resizing and appending with an exception. Release all consumers
+before modifying that storage; clearing the tensor retains the old allocation
+for existing views.
+Failed owned-buffer resizing preserves the original bytes, logical size and
+alignment, including when detaching a shared allocation within its capacity.
+Successful aligned resizing copies the logical prefix to the new aligned address,
+not the old backing allocation’s padding; conversion to plain storage preserves
+that prefix as well.
+Tensor and encoded-value raw-data setters retain aliased source storage until
+copying finishes, including aligned self-assignment and self-slices.
+Appending to a full shared buffer allocates only the grown buffer, without first
+allocating a same-sized detached copy.</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Initial graph
+  -&gt; renaming cleanups
+  -&gt; cleaned canonical graph
+  -&gt; capture and apply reversible rewrites
+  -&gt; optimized graph
+  -&gt; inverse replay
+  -&gt; cleaned canonical graph
+</pre></div>
+</div>
 <p>Every variant starts from the canonical model containing it, not another
 variant. Standalone distribution of rewrite plans is outside this proposal.
 Any modification to the source model must clear or regenerate its variants.
@@ -736,9 +873,9 @@ invalid positions rejected.</p></td>
 <td><p>Capture initializer recipes and shared function definitions directly
 in the protos. Extend existing replay for one-time constant preparation
 and model-level function/import additions; preserve payload ownership.</p></td>
-<td><p>Serialized and in-memory replay agree; cover nested graphs, cleanup,
-initializers, renames, multi-batch edits and invalid plans. A transposed-weight
-recipe stores no duplicate payload; verify results, source removal
+<td><p>Serialized and in-memory replay agree; cover nested graphs, canonical
+cleanup, initializers, multi-batch edits and invalid plans. A
+transposed-weight recipe stores no duplicate payload; verify results, source removal
 ordering and function conflicts. Retained initializer payloads are reused,
 not deep-copied for every edit, including node-only edits.</p></td>
 </tr>
@@ -753,13 +890,24 @@ unchanged; mutations invalidate variants; duplicate keys and missing
 kernels are diagnosed.</p></td>
 </tr>
 <tr class="row-odd"><td><ol class="arabic simple" start="4">
-<li><p>Export workflow</p></li>
+<li><p>Export workflow (implemented)</p></li>
 </ol>
 </td>
 <td><p>Add explicit canonical, bundled and materialized export modes, with a
 small end-to-end example and external-data handling.</p></td>
 <td><p>Save/reload/replay matches direct optimization; compare inference
 outputs and states; plain exports use only standard ONNX fields.</p></td>
+</tr>
+<tr class="row-even"><td><ol class="arabic simple" start="5">
+<li><p>Reversible capture</p></li>
+</ol>
+</td>
+<td><p>Move reference-renaming cleanups before canonical capture. Retain
+removed definitions only in the optimizing builder and validate undo
+in reverse edit order, without adding proto fields.</p></td>
+<td><p>Optimization then in-memory undo restores the cleaned canonical graph,
+including nested graphs and prepared constants, without resurrecting
+pre-capture identities. Missing history or incompatible plans fail atomically.</p></td>
 </tr>
 </tbody>
 </table>
@@ -780,15 +928,34 @@ builders and finalization that changes node order. Finalize before attaching
 plans. Callers editing proto fields directly must explicitly clear or
 regenerate the map; no source fingerprint or hidden repair is performed.
 ORT and standard-model export reject attached variants rather than dropping
-them. The export modes and packaging below remain step 4.</p>
+them. Python <code class="docutils literal notranslate"><span class="pre">to_onnx(optimize=OptimizationMode.kOptimize)</span></code> optimizes an
+independent builder and exports the materialized result without attached
+variants; model export rejects nonstandard fields through <code class="docutils literal notranslate"><span class="pre">to_standard_model</span></code>.
+<code class="docutils literal notranslate"><span class="pre">to_onnx(optimize=OptimizationMode.kRewritings)</span></code> instead returns the finalized
+canonical model with the captured plan named <code class="docutils literal notranslate"><span class="pre">&quot;optimized&quot;</span></code>. It rejects a
+duplicate name and requires model export. Other plans can only be retained
+when their canonical reference remains unchanged; renaming cleanups invalidate
+plans against the earlier graph. The default
+<code class="docutils literal notranslate"><span class="pre">OptimizationMode.kNone</span></code> continues to export the current builder without
+running optimization. Only members of <code class="docutils literal notranslate"><span class="pre">OptimizationMode</span></code> are accepted.
+Both modes use the existing global and builder-local pattern registrations.
+The source remains at its finalized state; the independent working copy is
+automatically cleaned before capture. Bundled export recovers its canonical
+reference using the working builder’s in-memory undo history. Load external
+weights before optimization and use the existing
+external-data save options to relocate the payloads with either export.
+See <a class="reference internal" href="../../auto_examples_patterns/plot_pattern_replay.html#l-example-plot-pattern-replay"><span class="std std-ref">Replaying graph-rewriting patterns</span></a>.</p>
 <ol class="arabic simple">
 <li><p>Finalize the canonical model first, including cleanup, ordering, names,
 imports and external-data layout.</p></li>
-<li><p>Optimize an independent copy for each selected target, recording all edits.
+<li><p>Optimize an independent copy for each selected target, recording only
+reversible edits after the renaming cleanups.
 Capture constant computations as functions/calls instead of embedding
 computed weight payloads. The optimizer returns <code class="docutils literal notranslate"><span class="pre">RewritingProto</span></code> directly;
 optionally attach descriptive metadata. Verify replay against direct
-optimization before publishing the variant.</p></li>
+optimization before publishing the variant.
+Inverse replay reconstructs the cleaned reference without retaining the
+original Python canonical model or undoing pre-capture cleanups.</p></li>
 <li><p>Export either the untouched canonical model, a bundled onnx-light model
 containing the canonical graph and rewrite map, or a standard ONNX model
 with one selected variant materialized and the extension map removed.</p></li>
