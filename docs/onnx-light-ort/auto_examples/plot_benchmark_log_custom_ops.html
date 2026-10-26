@@ -436,7 +436,9 @@ to download the full example code.</p>
 <span id="sphx-glr-auto-examples-plot-benchmark-log-custom-ops-py"></span><h1>Benchmark Log custom ops: onnx-light and ORT callers<a class="headerlink" href="#benchmark-log-custom-ops-onnx-light-and-ort-callers" title="Link to this heading">#</a></h1>
 <p>Compare ORT’s built-in <code class="docutils literal notranslate"><span class="pre">Log</span></code> with onnx-light-cpu’s <code class="docutils literal notranslate"><span class="pre">Log</span></code> custom operator
 called by ORT, and the same ORT-ABI custom operator called by onnx-light’s
-standalone host. These are custom operators, not execution providers.
+standalone host. Also measure standard-domain <code class="docutils literal notranslate"><span class="pre">Log</span></code> through onnx-light’s
+<code class="docutils literal notranslate"><span class="pre">ReferenceEvaluator</span></code> with onnx-light-cpu kernels, without ONNX Runtime or the
+ORT-ABI bridge. These are custom operators, not execution providers.
 Two graph topologies are used: <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">-&gt;</span> <span class="pre">Log</span> <span class="pre">-&gt;</span> <span class="pre">Y</span></code> and
 <code class="docutils literal notranslate"><span class="pre">X</span> <span class="pre">-&gt;</span> <span class="pre">Log</span> <span class="pre">-&gt;</span> <span class="pre">...</span> <span class="pre">-&gt;</span> <span class="pre">Log</span> <span class="pre">-&gt;</span> <span class="pre">Y</span></code> with ten consecutive nodes. Both use float32,
 dynamic one-dimensional inputs and models built with <code class="docutils literal notranslate"><span class="pre">onnx_light.onnx</span></code>.</p>
@@ -444,7 +446,8 @@ dynamic one-dimensional inputs and models built with <code class="docutils liter
 using only <code class="docutils literal notranslate"><span class="pre">run_with_iobinding</span></code> with preallocated input and output buffers.
 The standalone onnx-light custom-op host exposes only <code class="docutils literal notranslate"><span class="pre">run</span></code> and accepts only
 one node. Its ten-node result is therefore unavailable, not ten Python calls
-misrepresented as a graph. ORT’s built-in Log with I/O binding is the baseline:
+misrepresented as a graph. The native CPU evaluator supports both topologies.
+ORT’s built-in Log with I/O binding is the baseline:
 speedup is its median latency divided by the measured path’s median latency.
 NumPy is used only for input preparation and correctness checks, not timed.</p>
 <p>Repeated real-valued logarithms inevitably leave the positive domain in float32.
@@ -471,6 +474,7 @@ including matching NaNs, before and after timing.</p>
 </span>    <span class="s2">&quot;</span><span class="s2">ort</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">ONNX Runtime built-in Log (I/O binding)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span>    <span class="s2">&quot;</span><span class="s2">custom</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span>    <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">ORT-ABI CPU Log custom op called by onnx-light (run)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>    <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span><span class="p">}</span><span class="w">
 </span></pre></div></div>
 <p>Construct both graph topologies here, so the downloaded gallery example
@@ -514,8 +518,17 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 </span>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">Unsupported backend: </span><span class="si">{</span><span class="n">args</span><span class="o">.</span><span class="n">backend</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span> <span class="ow">and</span> <span class="n">args</span><span class="o">.</span><span class="n">nodes</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span><span class="w">
 </span>        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">The standalone host supports only one node</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
-</span>    <span class="n">custom</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">!=</span> <span class="s2">&quot;</span><span class="s2">ort</span><span class="s2">&quot;</span><span class="w">
-</span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
+</span>    <span class="n">custom</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">custom</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
+</span>        <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light</span><span class="nn">.</span><span class="nn">onnx</span><span class="nn">.</span><span class="nn">reference</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReferenceEvaluator</span><span class="w">
+</span>        <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_cpu</span><span class="w"> </span><span class="kn">import</span> <span class="n">register_kernels</span><span class="w">
+</span><span class="w">
+</span>        <span class="n">register_kernels</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>        <span class="n">session</span> <span class="o">=</span> <span class="n">ReferenceEvaluator</span><span class="p">(</span><span class="w">
+</span>            <span class="n">make_model</span><span class="p">(</span><span class="n">custom</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">nodes</span><span class="p">)</span><span class="p">,</span> <span class="n">cpu_execution</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;</span><span class="s2">num_threads</span><span class="s2">&quot;</span><span class="p">:</span> <span class="mi">1</span><span class="p">}</span><span class="w">
+</span>        <span class="p">)</span><span class="w">
+</span>        <span class="n">version</span> <span class="o">=</span> <span class="kc">None</span><span class="w">
+</span>    <span class="k">elif</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
 </span>        <span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light_ort</span><span class="w"> </span><span class="kn">import</span> <span class="n">CustomOpSessionOrtCalledByLight</span><span class="w">
 </span><span class="w">
 </span>        <span class="n">session</span> <span class="o">=</span> <span class="n">CustomOpSessionOrtCalledByLight</span><span class="p">(</span><span class="w">
@@ -541,7 +554,7 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 </span>    <span class="k">for</span> <span class="n">size</span> <span class="ow">in</span> <span class="n">args</span><span class="o">.</span><span class="n">sizes</span><span class="p">:</span><span class="w">
 </span>        <span class="n">values</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mf">0.01</span><span class="p">,</span> <span class="mi">10</span><span class="p">,</span> <span class="n">size</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span><span class="w">
 </span>        <span class="n">feeds</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;</span><span class="s2">X</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">values</span><span class="p">}</span><span class="w">
-</span>        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
+</span>        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">:</span><span class="w">
 </span>            <span class="n">run</span><span class="p">,</span> <span class="n">get_output</span> <span class="o">=</span> <span class="n">partial</span><span class="p">(</span><span class="n">session</span><span class="o">.</span><span class="n">run</span><span class="p">,</span> <span class="kc">None</span><span class="p">,</span> <span class="n">feeds</span><span class="p">)</span><span class="p">,</span> <span class="k">lambda</span> <span class="n">result</span><span class="p">:</span> <span class="n">result</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w">
 </span>        <span class="k">else</span><span class="p">:</span><span class="w">
 </span>            <span class="n">run</span><span class="p">,</span> <span class="n">get_output</span> <span class="o">=</span> <span class="n">ort_runner</span><span class="p">(</span><span class="n">session</span><span class="p">,</span> <span class="n">values</span><span class="p">)</span><span class="w">
@@ -568,11 +581,12 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 </span><span class="w">
 </span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
 </span>        <span class="n">session</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">:</span><span class="w">
 </span>        <span class="k">assert</span> <span class="s2">&quot;</span><span class="s2">onnxruntime</span><span class="s2">&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="w">
 </span>    <span class="k">assert</span> <span class="s2">&quot;</span><span class="s2">onnx</span><span class="s2">&quot;</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">sys</span><span class="o">.</span><span class="n">modules</span><span class="w">
 </span>    <span class="k">return</span> <span class="p">{</span><span class="w">
 </span>        <span class="s2">&quot;</span><span class="s2">backend</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span><span class="p">,</span><span class="w">
-</span>        <span class="s2">&quot;</span><span class="s2">api</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">run</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">==</span> <span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span> <span class="k">else</span> <span class="s2">&quot;</span><span class="s2">iobinding</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">api</span><span class="s2">&quot;</span><span class="p">:</span> <span class="s2">&quot;</span><span class="s2">run</span><span class="s2">&quot;</span> <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">)</span> <span class="k">else</span> <span class="s2">&quot;</span><span class="s2">iobinding</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span>        <span class="s2">&quot;</span><span class="s2">nodes</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">args</span><span class="o">.</span><span class="n">nodes</span><span class="p">,</span><span class="w">
 </span>        <span class="s2">&quot;</span><span class="s2">ort_version</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">version</span><span class="p">,</span><span class="w">
 </span>        <span class="s2">&quot;</span><span class="s2">rows</span><span class="s2">&quot;</span><span class="p">:</span> <span class="n">rows</span><span class="p">,</span><span class="w">
@@ -581,8 +595,13 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 <p>The command-line entry point also serves isolated measurement workers.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">def</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
 </span>    <span class="n">parser</span> <span class="o">=</span> <span class="n">argparse</span><span class="o">.</span><span class="n">ArgumentParser</span><span class="p">(</span><span class="n">description</span><span class="o">=</span><span class="vm">__doc__</span><span class="p">)</span><span class="w">
-</span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--library</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">Path</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
-</span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--host</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">Path</span><span class="p">,</span> <span class="n">required</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
+</span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">--gallery-smoke-test</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="n">action</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">store_true</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="n">help</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">Runs all gallery paths on small inputs.</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>    <span class="p">)</span><span class="w">
+</span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--library</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">Path</span><span class="p">)</span><span class="w">
+</span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--host</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">Path</span><span class="p">)</span><span class="w">
 </span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--sizes</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">nargs</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">+</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="n">SIZES</span><span class="p">)</span><span class="w">
 </span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--warmup</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span><span class="w">
 </span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--repeat</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="nb">int</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="mi">31</span><span class="p">)</span><span class="w">
@@ -592,17 +611,23 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 </span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--output</span><span class="s2">&quot;</span><span class="p">,</span> <span class="nb">type</span><span class="o">=</span><span class="n">Path</span><span class="p">)</span><span class="w">
 </span>    <span class="n">parser</span><span class="o">.</span><span class="n">add_argument</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--backend</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">choices</span><span class="o">=</span><span class="nb">list</span><span class="p">(</span><span class="n">LABELS</span><span class="p">)</span><span class="p">,</span> <span class="n">help</span><span class="o">=</span><span class="n">argparse</span><span class="o">.</span><span class="n">SUPPRESS</span><span class="p">)</span><span class="w">
 </span>    <span class="n">args</span> <span class="o">=</span> <span class="n">parser</span><span class="o">.</span><span class="n">parse_args</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">gallery_smoke_test</span><span class="p">:</span><span class="w">
+</span>        <span class="n">plot_results</span><span class="p">(</span><span class="n">run_gallery</span><span class="p">(</span><span class="n">sizes</span><span class="o">=</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">33</span><span class="p">]</span><span class="p">)</span><span class="p">)</span><span class="o">.</span><span class="n">canvas</span><span class="o">.</span><span class="n">draw</span><span class="p">(</span><span class="p">)</span><span class="w">
+</span>        <span class="k">return</span><span class="w">
 </span>    <span class="k">if</span> <span class="nb">min</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">sizes</span><span class="p">)</span> <span class="o">&lt;</span><span class="o">=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="nb">max</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">sizes</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">16</span> <span class="o">*</span> <span class="mi">1024</span> <span class="o">*</span> <span class="mi">1024</span><span class="p">:</span><span class="w">
 </span>        <span class="n">parser</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">sizes must be positive and fit the host</span><span class="s2">'</span><span class="s2">s 64 MiB tensor limit</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span>    <span class="k">if</span> <span class="nb">min</span><span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">repeat</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">number</span><span class="p">,</span> <span class="n">args</span><span class="o">.</span><span class="n">trials</span><span class="p">)</span> <span class="o">&lt;</span><span class="o">=</span> <span class="mi">0</span> <span class="ow">or</span> <span class="n">args</span><span class="o">.</span><span class="n">warmup</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span><span class="w">
 </span>        <span class="n">parser</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">repeat, number and trials must be positive; warmup must be nonnegative</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
-</span>    <span class="n">args</span><span class="o">.</span><span class="n">library</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">library</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
-</span>    <span class="n">args</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">host</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
+</span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span> <span class="o">!=</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">:</span><span class="w">
+</span>        <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">library</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">args</span><span class="o">.</span><span class="n">host</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span><span class="w">
+</span>            <span class="n">parser</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">--library and --host are required except for --backend native</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
+</span>        <span class="n">args</span><span class="o">.</span><span class="n">library</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">library</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
+</span>        <span class="n">args</span><span class="o">.</span><span class="n">host</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">host</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
 </span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">backend</span><span class="p">:</span><span class="w">
 </span>        <span class="nb">print</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span><span class="n">measure</span><span class="p">(</span><span class="n">args</span><span class="p">)</span><span class="p">)</span><span class="p">)</span><span class="w">
 </span>        <span class="k">return</span><span class="w">
 </span><span class="w">
-</span>    <span class="n">backends</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;</span><span class="s2">ort</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">custom</span><span class="s2">&quot;</span><span class="p">]</span><span class="w">
+</span>    <span class="n">backends</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;</span><span class="s2">ort</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">custom</span><span class="s2">&quot;</span><span class="p">,</span> <span class="s2">&quot;</span><span class="s2">native</span><span class="s2">&quot;</span><span class="p">]</span><span class="w">
 </span>    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">nodes</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span><span class="w">
 </span>        <span class="n">backends</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;</span><span class="s2">standalone</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span>    <span class="n">results</span> <span class="o">=</span> <span class="p">[</span><span class="p">]</span><span class="w">
@@ -667,7 +692,8 @@ Import ORT only inside these functions: standalone workers must not load it.</p>
 </span>        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">LABELS</span><span class="p">[</span><span class="s1">'</span><span class="s1">standalone</span><span class="s1">'</span><span class="p">]</span><span class="si">}</span><span class="s2">: unavailable (single-node host).</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span>    <span class="nb">print</span><span class="p">(</span><span class="w">
 </span>        <span class="s2">&quot;</span><span class="s2">Raw samples, when --output is supplied, include all trials; </span><span class="s2">&quot;</span><span class="w">
-</span>        <span class="s2">&quot;</span><span class="s2">standalone timings include protective input and output copies.</span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">standalone timings include protective input and output copies; </span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">native evaluator timings include its run interface overhead.</span><span class="s2">&quot;</span><span class="w">
 </span>    <span class="p">)</span><span class="w">
 </span></pre></div></div>
 <p>Each measurement runs in a fresh process so the standalone host never imports
@@ -680,7 +706,7 @@ to NumPy are excluded from timing.</p>
 <p>ORT I/O binding reuses preallocated output buffers. The standalone wrapper
 includes protective input and output copies. These are end-to-end
 Python interface timings, not isolated kernel timings or universal speedups.</p>
-<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">def</span><span class="w"> </span><span class="nf">run_gallery</span><span class="p">(</span><span class="p">)</span><span class="p">:</span><span class="w">
+<div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">def</span><span class="w"> </span><span class="nf">run_gallery</span><span class="p">(</span><span class="n">sizes</span><span class="o">=</span><span class="n">SIZES</span><span class="p">)</span><span class="p">:</span><span class="w">
 </span>    <span class="n">benchmark</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">inspect</span><span class="o">.</span><span class="n">getsourcefile</span><span class="p">(</span><span class="n">run_gallery</span><span class="p">)</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="p">)</span><span class="w">
 </span>    <span class="n">root</span> <span class="o">=</span> <span class="n">benchmark</span><span class="o">.</span><span class="n">parents</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="w">
 </span>    <span class="n">environment</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="p">)</span><span class="w">
@@ -690,7 +716,6 @@ Python interface timings, not isolated kernel timings or universal speedups.</p>
 </span>        <span class="n">launcher</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">root</span> <span class="o">/</span> <span class="s2">&quot;</span><span class="s2">cmake/run_python_with_dll_paths.py</span><span class="s2">&quot;</span><span class="p">)</span><span class="p">)</span><span class="w">
 </span>    <span class="n">library</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">ONNX_LIGHT_ORT_PLUGIN_LIBRARY</span><span class="s2">&quot;</span><span class="p">]</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
 </span>    <span class="n">host</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">[</span><span class="s2">&quot;</span><span class="s2">ONNX_LIGHT_ORT_HOST_LIBRARY</span><span class="s2">&quot;</span><span class="p">]</span><span class="p">)</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="w">
-</span>    <span class="n">sizes</span> <span class="o">=</span> <span class="n">SIZES</span><span class="w">
 </span>    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">Python </span><span class="si">{</span><span class="n">platform</span><span class="o">.</span><span class="n">python_version</span><span class="p">(</span><span class="p">)</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">platform</span><span class="o">.</span><span class="n">platform</span><span class="p">(</span><span class="p">)</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span>    <span class="n">results</span> <span class="o">=</span> <span class="p">[</span><span class="p">]</span><span class="w">
 </span>    <span class="k">for</span> <span class="n">nodes</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">10</span><span class="p">)</span><span class="p">:</span><span class="w">
@@ -795,12 +820,12 @@ Python interface timings, not isolated kernel timings or universal speedups.</p>
 </span>    <span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">text</span><span class="p">(</span><span class="w">
 </span>        <span class="mf">0.03</span><span class="p">,</span><span class="w">
 </span>        <span class="mf">0.97</span><span class="p">,</span><span class="w">
-</span>        <span class="s2">&quot;</span><span class="s2">NaN outputs; onnx-light host unavailable</span><span class="se">\n</span><span class="s2">(single-node host only)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">NaN outputs; ORT-ABI host unavailable</span><span class="se">\n</span><span class="s2">(single-node host only)</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span>        <span class="n">transform</span><span class="o">=</span><span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">transAxes</span><span class="p">,</span><span class="w">
 </span>        <span class="n">va</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">top</span><span class="s2">&quot;</span><span class="p">,</span><span class="w">
 </span>    <span class="p">)</span><span class="w">
 </span>    <span class="n">fig</span><span class="o">.</span><span class="n">suptitle</span><span class="p">(</span><span class="w">
-</span>        <span class="s2">&quot;</span><span class="s2">Log custom ops: onnx-light-cpu called by ORT,</span><span class="se">\n</span><span class="s2">ORT-ABI custom op called by onnx-light</span><span class="s2">&quot;</span><span class="w">
+</span>        <span class="s2">&quot;</span><span class="s2">Log custom ops and native onnx-light + onnx-light-cpu</span><span class="se">\n</span><span class="s2">compared with ONNX Runtime</span><span class="s2">&quot;</span><span class="w">
 </span>    <span class="p">)</span><span class="w">
 </span>    <span class="n">fig</span><span class="o">.</span><span class="n">legend</span><span class="p">(</span><span class="o">*</span><span class="n">axes</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">get_legend_handles_labels</span><span class="p">(</span><span class="p">)</span><span class="p">,</span> <span class="n">loc</span><span class="o">=</span><span class="s2">&quot;</span><span class="s2">lower center</span><span class="s2">&quot;</span><span class="p">,</span> <span class="n">fontsize</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span><span class="w">
 </span>    <span class="n">fig</span><span class="o">.</span><span class="n">tight_layout</span><span class="p">(</span><span class="n">rect</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mf">0.17</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mf">0.94</span><span class="p">)</span><span class="p">)</span><span class="w">
@@ -821,75 +846,97 @@ are asserted: CPU, SIMD dispatch and ORT version affect these measurements.</p>
 </span>        <span class="n">fig</span> <span class="o">=</span> <span class="n">plot_results</span><span class="p">(</span><span class="n">results</span><span class="p">)</span><span class="w">
 </span>        <span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">(</span><span class="p">)</span><span class="w">
 </span></pre></div></div>
-<img src="../_images/sphx_glr_plot_benchmark_log_custom_ops_001.png" srcset="../_images/sphx_glr_plot_benchmark_log_custom_ops_001.png" alt="Log custom ops: onnx-light-cpu called by ORT, ORT-ABI custom op called by onnx-light, 1 Log node(s), 10 Log node(s)" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Python 3.12.15, Linux-6.17.0-1022-azure-x86_64-with-glibc2.39
+<img src="../_images/sphx_glr_plot_benchmark_log_custom_ops_001.png" srcset="../_images/sphx_glr_plot_benchmark_log_custom_ops_001.png" alt="Log custom ops and native onnx-light + onnx-light-cpu compared with ONNX Runtime, 1 Log node(s), 10 Log node(s)" class = "sphx-glr-single-img"/><div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Python 3.12.15, Linux-6.17.0-1022-azure-x86_64-with-glibc2.39
 
 1 Log node(s), median microseconds per graph
   Elements   Median (us)  Speedup vs ORT  Path
-         1         1.505           1.00x  ONNX Runtime built-in Log (I/O binding)
-         4         1.477           1.00x  ONNX Runtime built-in Log (I/O binding)
-        16         1.522           1.00x  ONNX Runtime built-in Log (I/O binding)
-        64         1.493           1.00x  ONNX Runtime built-in Log (I/O binding)
-       256         1.745           1.00x  ONNX Runtime built-in Log (I/O binding)
-     1,024         2.771           1.00x  ONNX Runtime built-in Log (I/O binding)
-     4,096         6.839           1.00x  ONNX Runtime built-in Log (I/O binding)
-    16,384        23.004           1.00x  ONNX Runtime built-in Log (I/O binding)
-    65,536        89.858           1.00x  ONNX Runtime built-in Log (I/O binding)
-   262,144       359.568           1.00x  ONNX Runtime built-in Log (I/O binding)
- 1,048,576      1421.890           1.00x  ONNX Runtime built-in Log (I/O binding)
-         1         1.757           0.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         4         1.722           0.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        16         1.698           0.90x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        64         1.710           0.87x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-       256         1.759           0.99x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     1,024         2.042           1.36x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     4,096         3.035           2.25x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-    16,384         6.984           3.29x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-    65,536        22.758           3.95x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-   262,144        86.978           4.13x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
- 1,048,576       345.470           4.12x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         1        10.427           0.14x  ORT-ABI CPU Log custom op called by onnx-light (run)
-         4        10.235           0.14x  ORT-ABI CPU Log custom op called by onnx-light (run)
-        16        10.176           0.15x  ORT-ABI CPU Log custom op called by onnx-light (run)
-        64        10.188           0.15x  ORT-ABI CPU Log custom op called by onnx-light (run)
-       256        10.587           0.16x  ORT-ABI CPU Log custom op called by onnx-light (run)
-     1,024        11.419           0.24x  ORT-ABI CPU Log custom op called by onnx-light (run)
-     4,096        13.084           0.52x  ORT-ABI CPU Log custom op called by onnx-light (run)
-    16,384        21.253           1.08x  ORT-ABI CPU Log custom op called by onnx-light (run)
-    65,536        45.502           1.97x  ORT-ABI CPU Log custom op called by onnx-light (run)
-   262,144       174.320           2.06x  ORT-ABI CPU Log custom op called by onnx-light (run)
- 1,048,576       678.709           2.09x  ORT-ABI CPU Log custom op called by onnx-light (run)
+         1         2.219           1.00x  ONNX Runtime built-in Log (I/O binding)
+         4         2.072           1.00x  ONNX Runtime built-in Log (I/O binding)
+        16         2.136           1.00x  ONNX Runtime built-in Log (I/O binding)
+        64         2.145           1.00x  ONNX Runtime built-in Log (I/O binding)
+       256         2.521           1.00x  ONNX Runtime built-in Log (I/O binding)
+     1,024         4.015           1.00x  ONNX Runtime built-in Log (I/O binding)
+     4,096         9.891           1.00x  ONNX Runtime built-in Log (I/O binding)
+    16,384        32.988           1.00x  ONNX Runtime built-in Log (I/O binding)
+    65,536       134.661           1.00x  ONNX Runtime built-in Log (I/O binding)
+   262,144       504.059           1.00x  ONNX Runtime built-in Log (I/O binding)
+ 1,048,576      2000.229           1.00x  ONNX Runtime built-in Log (I/O binding)
+         1         3.427           0.65x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         4         2.428           0.85x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        16         2.421           0.88x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        64         2.759           0.78x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+       256         2.678           0.94x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     1,024         2.979           1.35x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     4,096         4.488           2.20x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+    16,384        10.373           3.18x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+    65,536        37.813           3.56x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+   262,144       141.219           3.57x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+ 1,048,576       538.476           3.71x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         1        11.045           0.20x  ORT-ABI CPU Log custom op called by onnx-light (run)
+         4        11.000           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+        16        11.066           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+        64        11.057           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+       256        11.218           0.22x  ORT-ABI CPU Log custom op called by onnx-light (run)
+     1,024        12.020           0.33x  ORT-ABI CPU Log custom op called by onnx-light (run)
+     4,096        15.260           0.65x  ORT-ABI CPU Log custom op called by onnx-light (run)
+    16,384        26.403           1.25x  ORT-ABI CPU Log custom op called by onnx-light (run)
+    65,536        82.566           1.63x  ORT-ABI CPU Log custom op called by onnx-light (run)
+   262,144       433.782           1.16x  ORT-ABI CPU Log custom op called by onnx-light (run)
+ 1,048,576      1841.498           1.09x  ORT-ABI CPU Log custom op called by onnx-light (run)
+         1         2.311           0.96x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         4         2.291           0.90x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        16         2.343           0.91x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        64         2.259           0.95x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+       256         2.358           1.07x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     1,024         2.783           1.44x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     4,096         4.287           2.31x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+    16,384        10.426           3.16x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+    65,536        38.463           3.50x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+   262,144       141.435           3.56x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+ 1,048,576       545.581           3.67x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
 
 10 Log node(s), median microseconds per graph
 ORT-ABI CPU Log custom op called by onnx-light (run): unavailable (single-node host)
   Elements   Median (us)  Speedup vs ORT  Path
-         1         3.155           1.00x  ONNX Runtime built-in Log (I/O binding)
-         4         3.149           1.00x  ONNX Runtime built-in Log (I/O binding)
-        16         3.189           1.00x  ONNX Runtime built-in Log (I/O binding)
-        64         3.820           1.00x  ONNX Runtime built-in Log (I/O binding)
-       256         6.440           1.00x  ONNX Runtime built-in Log (I/O binding)
-     1,024        17.135           1.00x  ONNX Runtime built-in Log (I/O binding)
-     4,096        59.551           1.00x  ONNX Runtime built-in Log (I/O binding)
-    16,384       227.836           1.00x  ONNX Runtime built-in Log (I/O binding)
-    65,536       901.744           1.00x  ONNX Runtime built-in Log (I/O binding)
-   262,144      3582.806           1.00x  ONNX Runtime built-in Log (I/O binding)
- 1,048,576     14279.011           1.00x  ONNX Runtime built-in Log (I/O binding)
-         1         4.608           0.68x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         4         4.528           0.70x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        16         4.640           0.69x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        64         4.816           0.79x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-       256         5.394           1.19x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     1,024         7.885           2.17x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     4,096        17.838           3.34x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-    16,384        58.519           3.89x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-    65,536       236.149           3.82x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-   262,144       864.213           4.15x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
- 1,048,576      3433.590           4.16x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         1         5.139           1.00x  ONNX Runtime built-in Log (I/O binding)
+         4         4.802           1.00x  ONNX Runtime built-in Log (I/O binding)
+        16         4.991           1.00x  ONNX Runtime built-in Log (I/O binding)
+        64         5.883           1.00x  ONNX Runtime built-in Log (I/O binding)
+       256         9.531           1.00x  ONNX Runtime built-in Log (I/O binding)
+     1,024        24.171           1.00x  ONNX Runtime built-in Log (I/O binding)
+     4,096        83.378           1.00x  ONNX Runtime built-in Log (I/O binding)
+    16,384       315.301           1.00x  ONNX Runtime built-in Log (I/O binding)
+    65,536      1242.473           1.00x  ONNX Runtime built-in Log (I/O binding)
+   262,144      4985.146           1.00x  ONNX Runtime built-in Log (I/O binding)
+ 1,048,576     19896.060           1.00x  ONNX Runtime built-in Log (I/O binding)
+         1         7.710           0.67x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         4         7.701           0.62x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        16         7.480           0.67x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        64         7.681           0.77x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+       256         8.386           1.14x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     1,024        11.938           2.02x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     4,096        26.617           3.13x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+    16,384        87.954           3.58x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+    65,536       325.941           3.81x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+   262,144      1303.384           3.82x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+ 1,048,576      5149.566           3.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         1         9.059           0.57x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         4         8.911           0.54x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        16         8.955           0.56x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        64         9.144           0.64x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+       256        10.318           0.92x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     1,024        14.131           1.71x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     4,096        30.802           2.71x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+    16,384        93.066           3.39x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+    65,536       345.265           3.60x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+   262,144      1390.528           3.59x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+ 1,048,576     10332.104           1.93x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
 
 ONNX Runtime 1.31.0; onnx-light model bindings; float32 CPU
 Speedup baseline: ONNX Runtime built-in Log (I/O binding); values above 1 mean faster than ORT.
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 3.364 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 6.434 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-plot-benchmark-log-custom-ops-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/63c7998d8b0ca8897c70b37fe5b93eec/plot_benchmark_log_custom_ops.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_benchmark_log_custom_ops.ipynb</span></code></a></p>

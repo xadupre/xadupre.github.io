@@ -81,6 +81,81 @@ arrays whose dtype differs from the model instead of converting them.
 the plugin. A finalizer also releases abandoned sessions. Registration and
 compute errors propagate as Python exceptions; there is no ORT fallback.
 
+C ABI contract
+--------------
+
+There are two C ABI boundaries: the ORT-compatible interface implemented for
+plugins, and the small session interface exported to C++ and Python callers.
+Neither requires an ORT runtime.
+
+The host loads the plugin's exported ``RegisterCustomOps`` with this signature:
+
+.. code-block:: cpp
+
+   extern "C" OrtStatus *ORT_API_CALL
+   RegisterCustomOps(OrtSessionOptions *options, const OrtApiBase *api_base);
+
+.. list-table:: ORT-compatible plugin interface
+   :header-rows: 1
+   :widths: 35 65
+
+   * - API / descriptor
+     - Standalone host behavior
+   * - ``OrtApiBase``
+     - Supplies its own table. ``GetApi`` accepts only version 18;
+       ``GetVersionString`` identifies the standalone host.
+   * - ``CreateCustomOpDomain``, ``CustomOpDomain_Add``, ``AddCustomOpDomain``
+     - Record plugin domains and descriptors. Ownership stays with the plugin;
+       they must outlive every referencing session.
+   * - ``OrtCustomOp``
+     - Validate against the audited profile above; select by domain, name,
+       opset and tensor type.
+   * - ``CreateKernelV2``
+     - Call once on first execution. Supply ``KernelInfoGetAttribute_float``
+       for construction attributes.
+   * - ``KernelComputeV2``
+     - Call on each run with an adapted ``OrtKernelContext``. Map input,
+       output, type/shape and data access to onnx-light CPU tensors.
+   * - Tensor metadata
+     - Release with ``ReleaseTensorTypeAndShapeInfo``.
+   * - Values and tensor buffers
+     - Borrowed; the plugin must not free them.
+   * - ``KernelDestroy``
+     - Release retained state before unloading the plugin library.
+   * - Callback results
+     - ``nullptr`` means success; otherwise return an owned ``OrtStatus *``.
+       Never let C++ exceptions cross the ABI. The host reads errors with
+       ``GetErrorMessage`` and frees statuses with ``ReleaseStatus``.
+   * - Unsupported API slots
+     - Null, not fallback implementations. See
+       `Shared support for hosting ORT-compatible plugins`_ for supported entries.
+
+For application callers, ``host.h`` declares the separate exported interface:
+
+.. list-table:: Application session interface
+   :header-rows: 1
+   :widths: 35 65
+
+   * - Export / result
+     - Caller contract
+   * - ``LightOrtCreateSession``
+     - Pass a trusted library path and serialized ONNX bytes. Load the plugin,
+       parse the model and return an opaque session.
+   * - ``LightOrtRunTyped``
+     - Borrow element-aligned input storage for the call. Return session-owned
+       output data and shape pointers; copy before the next run or release.
+   * - ``LightOrtRun``
+     - Float32-only convenience entry point.
+   * - ``LightOrtReleaseSession``
+     - Destroy the session, its kernels and then the library.
+       Serialize runs and release operations on each session; never race them.
+   * - Creation / execution result
+     - ``nullptr`` means success; a non-null status means failure.
+   * - ``LightOrtGetErrorMessage``
+     - Read a borrowed message from a failure status.
+   * - ``LightOrtReleaseStatus``
+     - Free the failure status after reading its message.
+
 Tests and example
 -----------------
 
@@ -118,5 +193,31 @@ This excerpt constructs a model and runs the trusted custom operator without ORT
    :language: python
    :start-at: import os
    :end-at: print("ORT custom op called by onnx-light:", result)
+
+C++ example
+-----------
+
+The C++ custom operator below is the independent plugin consumed by the Python
+snippet. It implements registration, an API-18 ``OrtCustomOp`` descriptor and
+the retained LeakyRelu kernel using only ORT headers, with no ORT or onnx-light
+link dependency. Its two extra counter exports are used only by tests.
+
+Build the plugin and host, then execute the native C++ host tests:
+
+.. code-block:: bash
+
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+     -DONNX_LIGHT_ORT_BUILD_HOST=ON -DONNX_LIGHT_ORT_BUILD_EXAMPLES=ON
+   cmake --build build --parallel "$(nproc)"
+   ctest --test-dir build -L bridge_ops_ort_called_by_light --output-on-failure
+
+The native test constructs the same custom-domain model, creates a session
+through ``LightOrtCreateSession`` and executes it with ``LightOrtRun``.
+For application integration, link
+``onnx_light_ort::bridge_ops_ort_called_by_light`` and include its ``host.h``,
+not the private compatibility-table implementation.
+
+.. literalinclude:: ../../examples/custom_ops/ort_custom_ops.cc
+   :language: cpp
 
 .. include:: common_ort_to_light.inc

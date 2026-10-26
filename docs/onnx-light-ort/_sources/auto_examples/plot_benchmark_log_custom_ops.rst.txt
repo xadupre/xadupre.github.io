@@ -23,7 +23,9 @@ Benchmark Log custom ops: onnx-light and ORT callers
 
 Compare ORT's built-in ``Log`` with onnx-light-cpu's ``Log`` custom operator
 called by ORT, and the same ORT-ABI custom operator called by onnx-light's
-standalone host. These are custom operators, not execution providers.
+standalone host. Also measure standard-domain ``Log`` through onnx-light's
+``ReferenceEvaluator`` with onnx-light-cpu kernels, without ONNX Runtime or the
+ORT-ABI bridge. These are custom operators, not execution providers.
 Two graph topologies are used: ``X -> Log -> Y`` and
 ``X -> Log -> ... -> Log -> Y`` with ten consecutive nodes. Both use float32,
 dynamic one-dimensional inputs and models built with ``onnx_light.onnx``.
@@ -32,7 +34,8 @@ ORT executes each topology with either standard-domain or custom-domain nodes,
 using only ``run_with_iobinding`` with preallocated input and output buffers.
 The standalone onnx-light custom-op host exposes only ``run`` and accepts only
 one node. Its ten-node result is therefore unavailable, not ten Python calls
-misrepresented as a graph. ORT's built-in Log with I/O binding is the baseline:
+misrepresented as a graph. The native CPU evaluator supports both topologies.
+ORT's built-in Log with I/O binding is the baseline:
 speedup is its median latency divided by the measured path's median latency.
 NumPy is used only for input preparation and correctness checks, not timed.
 
@@ -41,7 +44,7 @@ The ten-node graph produces NaNs: this is a literal Log chain, not a benchmark
 of ten finite-input logarithms. Every path is checked against a NumPy reference,
 including matching NaNs, before and after timing.
 
-.. GENERATED FROM PYTHON SOURCE LINES 25-48
+.. GENERATED FROM PYTHON SOURCE LINES 28-52
 
 .. code-block:: Python
 
@@ -66,6 +69,7 @@ including matching NaNs, before and after timing.
         "ort": "ONNX Runtime built-in Log (I/O binding)",
         "custom": "onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)",
         "standalone": "ORT-ABI CPU Log custom op called by onnx-light (run)",
+        "native": "onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)",
     }
 
 
@@ -75,12 +79,12 @@ including matching NaNs, before and after timing.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 49-51
+.. GENERATED FROM PYTHON SOURCE LINES 53-55
 
 Construct both graph topologies here, so the downloaded gallery example
 contains the complete benchmark, including its isolated worker.
 
-.. GENERATED FROM PYTHON SOURCE LINES 51-73
+.. GENERATED FROM PYTHON SOURCE LINES 55-77
 
 .. code-block:: Python
 
@@ -113,12 +117,12 @@ contains the complete benchmark, including its isolated worker.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 74-76
+.. GENERATED FROM PYTHON SOURCE LINES 78-80
 
 Prepare reusable inputs and outputs before timing ORT's I/O binding interface.
 Import ORT only inside these functions: standalone workers must not load it.
 
-.. GENERATED FROM PYTHON SOURCE LINES 76-91
+.. GENERATED FROM PYTHON SOURCE LINES 80-95
 
 .. code-block:: Python
 
@@ -144,11 +148,11 @@ Import ORT only inside these functions: standalone workers must not load it.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 92-93
+.. GENERATED FROM PYTHON SOURCE LINES 96-97
 
 Check each path against NumPy before and after collecting its timing samples.
 
-.. GENERATED FROM PYTHON SOURCE LINES 93-165
+.. GENERATED FROM PYTHON SOURCE LINES 97-179
 
 .. code-block:: Python
 
@@ -159,8 +163,17 @@ Check each path against NumPy before and after collecting its timing samples.
             raise ValueError(f"Unsupported backend: {args.backend}")
         if args.backend == "standalone" and args.nodes != 1:
             raise ValueError("The standalone host supports only one node")
-        custom = args.backend != "ort"
-        if args.backend == "standalone":
+        custom = args.backend in ("custom", "standalone")
+        if args.backend == "native":
+            from onnx_light.onnx.reference import ReferenceEvaluator
+            from onnx_light_cpu import register_kernels
+
+            register_kernels()
+            session = ReferenceEvaluator(
+                make_model(custom, args.nodes), cpu_execution={"num_threads": 1}
+            )
+            version = None
+        elif args.backend == "standalone":
             from onnx_light_ort import CustomOpSessionOrtCalledByLight
 
             session = CustomOpSessionOrtCalledByLight(
@@ -186,7 +199,7 @@ Check each path against NumPy before and after collecting its timing samples.
         for size in args.sizes:
             values = rng.uniform(0.01, 10, size).astype(numpy.float32)
             feeds = {"X": values}
-            if args.backend == "standalone":
+            if args.backend in ("standalone", "native"):
                 run, get_output = partial(session.run, None, feeds), lambda result: result[0]
             else:
                 run, get_output = ort_runner(session, values)
@@ -213,11 +226,12 @@ Check each path against NumPy before and after collecting its timing samples.
 
         if args.backend == "standalone":
             session.close()
+        if args.backend in ("standalone", "native"):
             assert "onnxruntime" not in sys.modules
         assert "onnx" not in sys.modules
         return {
             "backend": args.backend,
-            "api": "run" if args.backend == "standalone" else "iobinding",
+            "api": "run" if args.backend in ("standalone", "native") else "iobinding",
             "nodes": args.nodes,
             "ort_version": version,
             "rows": rows,
@@ -231,11 +245,11 @@ Check each path against NumPy before and after collecting its timing samples.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 166-167
+.. GENERATED FROM PYTHON SOURCE LINES 180-181
 
 The command-line entry point also serves isolated measurement workers.
 
-.. GENERATED FROM PYTHON SOURCE LINES 167-261
+.. GENERATED FROM PYTHON SOURCE LINES 181-287
 
 .. code-block:: Python
 
@@ -243,8 +257,13 @@ The command-line entry point also serves isolated measurement workers.
 
     def main():
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument("--library", type=Path, required=True)
-        parser.add_argument("--host", type=Path, required=True)
+        parser.add_argument(
+            "--gallery-smoke-test",
+            action="store_true",
+            help="Runs all gallery paths on small inputs.",
+        )
+        parser.add_argument("--library", type=Path)
+        parser.add_argument("--host", type=Path)
         parser.add_argument("--sizes", type=int, nargs="+", default=SIZES)
         parser.add_argument("--warmup", type=int, default=10)
         parser.add_argument("--repeat", type=int, default=31)
@@ -254,17 +273,23 @@ The command-line entry point also serves isolated measurement workers.
         parser.add_argument("--output", type=Path)
         parser.add_argument("--backend", choices=list(LABELS), help=argparse.SUPPRESS)
         args = parser.parse_args()
+        if args.gallery_smoke_test:
+            plot_results(run_gallery(sizes=[1, 7, 33])).canvas.draw()
+            return
         if min(args.sizes) <= 0 or max(args.sizes) > 16 * 1024 * 1024:
             parser.error("sizes must be positive and fit the host's 64 MiB tensor limit")
         if min(args.repeat, args.number, args.trials) <= 0 or args.warmup < 0:
             parser.error("repeat, number and trials must be positive; warmup must be nonnegative")
-        args.library = args.library.resolve(strict=True)
-        args.host = args.host.resolve(strict=True)
+        if args.backend != "native":
+            if args.library is None or args.host is None:
+                parser.error("--library and --host are required except for --backend native")
+            args.library = args.library.resolve(strict=True)
+            args.host = args.host.resolve(strict=True)
         if args.backend:
             print(json.dumps(measure(args)))
             return
 
-        backends = ["ort", "custom"]
+        backends = ["ort", "custom", "native"]
         if args.nodes == 1:
             backends.append("standalone")
         results = []
@@ -329,7 +354,8 @@ The command-line entry point also serves isolated measurement workers.
             print(f"{LABELS['standalone']}: unavailable (single-node host).")
         print(
             "Raw samples, when --output is supplied, include all trials; "
-            "standalone timings include protective input and output copies."
+            "standalone timings include protective input and output copies; "
+            "native evaluator timings include its run interface overhead."
         )
 
 
@@ -340,7 +366,7 @@ The command-line entry point also serves isolated measurement workers.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 262-273
+.. GENERATED FROM PYTHON SOURCE LINES 288-299
 
 Each measurement runs in a fresh process so the standalone host never imports
 or loads ORT. Library paths are explicit, just like the other gallery examples.
@@ -354,13 +380,13 @@ ORT I/O binding reuses preallocated output buffers. The standalone wrapper
 includes protective input and output copies. These are end-to-end
 Python interface timings, not isolated kernel timings or universal speedups.
 
-.. GENERATED FROM PYTHON SOURCE LINES 273-402
+.. GENERATED FROM PYTHON SOURCE LINES 299-427
 
 .. code-block:: Python
 
 
 
-    def run_gallery():
+    def run_gallery(sizes=SIZES):
         benchmark = Path(inspect.getsourcefile(run_gallery)).resolve()
         root = benchmark.parents[2]
         environment = os.environ.copy()
@@ -370,7 +396,6 @@ Python interface timings, not isolated kernel timings or universal speedups.
             launcher.append(str(root / "cmake/run_python_with_dll_paths.py"))
         library = Path(os.environ["ONNX_LIGHT_ORT_PLUGIN_LIBRARY"]).resolve(strict=True)
         host = Path(os.environ["ONNX_LIGHT_ORT_HOST_LIBRARY"]).resolve(strict=True)
-        sizes = SIZES
         print(f"Python {platform.python_version()}, {platform.platform()}")
         results = []
         for nodes in (1, 10):
@@ -475,12 +500,12 @@ Python interface timings, not isolated kernel timings or universal speedups.
         axes[0, 1].text(
             0.03,
             0.97,
-            "NaN outputs; onnx-light host unavailable\n(single-node host only)",
+            "NaN outputs; ORT-ABI host unavailable\n(single-node host only)",
             transform=axes[0, 1].transAxes,
             va="top",
         )
         fig.suptitle(
-            "Log custom ops: onnx-light-cpu called by ORT,\nORT-ABI custom op called by onnx-light"
+            "Log custom ops and native onnx-light + onnx-light-cpu\ncompared with ONNX Runtime"
         )
         fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", fontsize=10)
         fig.tight_layout(rect=(0, 0.17, 1, 0.94))
@@ -494,12 +519,12 @@ Python interface timings, not isolated kernel timings or universal speedups.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 403-405
+.. GENERATED FROM PYTHON SOURCE LINES 428-430
 
 The full samples remain available in ``results``. No performance thresholds
 are asserted: CPU, SIMD dispatch and ORT version affect these measurements.
 
-.. GENERATED FROM PYTHON SOURCE LINES 405-417
+.. GENERATED FROM PYTHON SOURCE LINES 430-442
 
 .. code-block:: Python
 
@@ -519,7 +544,7 @@ are asserted: CPU, SIMD dispatch and ORT version affect these measurements.
 
 
 .. image-sg:: /auto_examples/images/sphx_glr_plot_benchmark_log_custom_ops_001.png
-   :alt: Log custom ops: onnx-light-cpu called by ORT, ORT-ABI custom op called by onnx-light, 1 Log node(s), 10 Log node(s)
+   :alt: Log custom ops and native onnx-light + onnx-light-cpu compared with ONNX Runtime, 1 Log node(s), 10 Log node(s)
    :srcset: /auto_examples/images/sphx_glr_plot_benchmark_log_custom_ops_001.png
    :class: sphx-glr-single-img
 
@@ -532,65 +557,87 @@ are asserted: CPU, SIMD dispatch and ORT version affect these measurements.
 
     1 Log node(s), median microseconds per graph
       Elements   Median (us)  Speedup vs ORT  Path
-             1         1.505           1.00x  ONNX Runtime built-in Log (I/O binding)
-             4         1.477           1.00x  ONNX Runtime built-in Log (I/O binding)
-            16         1.522           1.00x  ONNX Runtime built-in Log (I/O binding)
-            64         1.493           1.00x  ONNX Runtime built-in Log (I/O binding)
-           256         1.745           1.00x  ONNX Runtime built-in Log (I/O binding)
-         1,024         2.771           1.00x  ONNX Runtime built-in Log (I/O binding)
-         4,096         6.839           1.00x  ONNX Runtime built-in Log (I/O binding)
-        16,384        23.004           1.00x  ONNX Runtime built-in Log (I/O binding)
-        65,536        89.858           1.00x  ONNX Runtime built-in Log (I/O binding)
-       262,144       359.568           1.00x  ONNX Runtime built-in Log (I/O binding)
-     1,048,576      1421.890           1.00x  ONNX Runtime built-in Log (I/O binding)
-             1         1.757           0.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-             4         1.722           0.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-            16         1.698           0.90x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-            64         1.710           0.87x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-           256         1.759           0.99x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         1,024         2.042           1.36x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         4,096         3.035           2.25x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        16,384         6.984           3.29x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        65,536        22.758           3.95x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-       262,144        86.978           4.13x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     1,048,576       345.470           4.12x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-             1        10.427           0.14x  ORT-ABI CPU Log custom op called by onnx-light (run)
-             4        10.235           0.14x  ORT-ABI CPU Log custom op called by onnx-light (run)
-            16        10.176           0.15x  ORT-ABI CPU Log custom op called by onnx-light (run)
-            64        10.188           0.15x  ORT-ABI CPU Log custom op called by onnx-light (run)
-           256        10.587           0.16x  ORT-ABI CPU Log custom op called by onnx-light (run)
-         1,024        11.419           0.24x  ORT-ABI CPU Log custom op called by onnx-light (run)
-         4,096        13.084           0.52x  ORT-ABI CPU Log custom op called by onnx-light (run)
-        16,384        21.253           1.08x  ORT-ABI CPU Log custom op called by onnx-light (run)
-        65,536        45.502           1.97x  ORT-ABI CPU Log custom op called by onnx-light (run)
-       262,144       174.320           2.06x  ORT-ABI CPU Log custom op called by onnx-light (run)
-     1,048,576       678.709           2.09x  ORT-ABI CPU Log custom op called by onnx-light (run)
+             1         2.219           1.00x  ONNX Runtime built-in Log (I/O binding)
+             4         2.072           1.00x  ONNX Runtime built-in Log (I/O binding)
+            16         2.136           1.00x  ONNX Runtime built-in Log (I/O binding)
+            64         2.145           1.00x  ONNX Runtime built-in Log (I/O binding)
+           256         2.521           1.00x  ONNX Runtime built-in Log (I/O binding)
+         1,024         4.015           1.00x  ONNX Runtime built-in Log (I/O binding)
+         4,096         9.891           1.00x  ONNX Runtime built-in Log (I/O binding)
+        16,384        32.988           1.00x  ONNX Runtime built-in Log (I/O binding)
+        65,536       134.661           1.00x  ONNX Runtime built-in Log (I/O binding)
+       262,144       504.059           1.00x  ONNX Runtime built-in Log (I/O binding)
+     1,048,576      2000.229           1.00x  ONNX Runtime built-in Log (I/O binding)
+             1         3.427           0.65x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+             4         2.428           0.85x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+            16         2.421           0.88x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+            64         2.759           0.78x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+           256         2.678           0.94x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         1,024         2.979           1.35x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         4,096         4.488           2.20x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        16,384        10.373           3.18x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        65,536        37.813           3.56x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+       262,144       141.219           3.57x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     1,048,576       538.476           3.71x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+             1        11.045           0.20x  ORT-ABI CPU Log custom op called by onnx-light (run)
+             4        11.000           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+            16        11.066           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+            64        11.057           0.19x  ORT-ABI CPU Log custom op called by onnx-light (run)
+           256        11.218           0.22x  ORT-ABI CPU Log custom op called by onnx-light (run)
+         1,024        12.020           0.33x  ORT-ABI CPU Log custom op called by onnx-light (run)
+         4,096        15.260           0.65x  ORT-ABI CPU Log custom op called by onnx-light (run)
+        16,384        26.403           1.25x  ORT-ABI CPU Log custom op called by onnx-light (run)
+        65,536        82.566           1.63x  ORT-ABI CPU Log custom op called by onnx-light (run)
+       262,144       433.782           1.16x  ORT-ABI CPU Log custom op called by onnx-light (run)
+     1,048,576      1841.498           1.09x  ORT-ABI CPU Log custom op called by onnx-light (run)
+             1         2.311           0.96x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+             4         2.291           0.90x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+            16         2.343           0.91x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+            64         2.259           0.95x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+           256         2.358           1.07x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         1,024         2.783           1.44x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         4,096         4.287           2.31x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        16,384        10.426           3.16x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        65,536        38.463           3.50x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+       262,144       141.435           3.56x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     1,048,576       545.581           3.67x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
 
     10 Log node(s), median microseconds per graph
     ORT-ABI CPU Log custom op called by onnx-light (run): unavailable (single-node host)
       Elements   Median (us)  Speedup vs ORT  Path
-             1         3.155           1.00x  ONNX Runtime built-in Log (I/O binding)
-             4         3.149           1.00x  ONNX Runtime built-in Log (I/O binding)
-            16         3.189           1.00x  ONNX Runtime built-in Log (I/O binding)
-            64         3.820           1.00x  ONNX Runtime built-in Log (I/O binding)
-           256         6.440           1.00x  ONNX Runtime built-in Log (I/O binding)
-         1,024        17.135           1.00x  ONNX Runtime built-in Log (I/O binding)
-         4,096        59.551           1.00x  ONNX Runtime built-in Log (I/O binding)
-        16,384       227.836           1.00x  ONNX Runtime built-in Log (I/O binding)
-        65,536       901.744           1.00x  ONNX Runtime built-in Log (I/O binding)
-       262,144      3582.806           1.00x  ONNX Runtime built-in Log (I/O binding)
-     1,048,576     14279.011           1.00x  ONNX Runtime built-in Log (I/O binding)
-             1         4.608           0.68x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-             4         4.528           0.70x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-            16         4.640           0.69x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-            64         4.816           0.79x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-           256         5.394           1.19x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         1,024         7.885           2.17x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-         4,096        17.838           3.34x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        16,384        58.519           3.89x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-        65,536       236.149           3.82x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-       262,144       864.213           4.15x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
-     1,048,576      3433.590           4.16x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+             1         5.139           1.00x  ONNX Runtime built-in Log (I/O binding)
+             4         4.802           1.00x  ONNX Runtime built-in Log (I/O binding)
+            16         4.991           1.00x  ONNX Runtime built-in Log (I/O binding)
+            64         5.883           1.00x  ONNX Runtime built-in Log (I/O binding)
+           256         9.531           1.00x  ONNX Runtime built-in Log (I/O binding)
+         1,024        24.171           1.00x  ONNX Runtime built-in Log (I/O binding)
+         4,096        83.378           1.00x  ONNX Runtime built-in Log (I/O binding)
+        16,384       315.301           1.00x  ONNX Runtime built-in Log (I/O binding)
+        65,536      1242.473           1.00x  ONNX Runtime built-in Log (I/O binding)
+       262,144      4985.146           1.00x  ONNX Runtime built-in Log (I/O binding)
+     1,048,576     19896.060           1.00x  ONNX Runtime built-in Log (I/O binding)
+             1         7.710           0.67x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+             4         7.701           0.62x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+            16         7.480           0.67x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+            64         7.681           0.77x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+           256         8.386           1.14x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         1,024        11.938           2.02x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+         4,096        26.617           3.13x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        16,384        87.954           3.58x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+        65,536       325.941           3.81x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+       262,144      1303.384           3.82x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+     1,048,576      5149.566           3.86x  onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)
+             1         9.059           0.57x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+             4         8.911           0.54x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+            16         8.955           0.56x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+            64         9.144           0.64x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+           256        10.318           0.92x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         1,024        14.131           1.71x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+         4,096        30.802           2.71x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        16,384        93.066           3.39x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+        65,536       345.265           3.60x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+       262,144      1390.528           3.59x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
+     1,048,576     10332.104           1.93x  onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)
 
     ONNX Runtime 1.31.0; onnx-light model bindings; float32 CPU
     Speedup baseline: ONNX Runtime built-in Log (I/O binding); values above 1 mean faster than ORT.
@@ -601,7 +648,7 @@ are asserted: CPU, SIMD dispatch and ORT version affect these measurements.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 3.364 seconds)
+   **Total running time of the script:** (0 minutes 6.434 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_benchmark_log_custom_ops.py:

@@ -7,13 +7,17 @@ Build against onnx-light main
 The default CMake configuration fetches onnx-light's ``main`` branch.
 Python bindings are disabled for native-only builds; Python test options
 automatically enable the matching onnx-light model bindings. Upstream tests,
-benchmarks and built-in operator kernels remain disabled.
+benchmarks remain disabled. Built-in operator kernels and the onnx-light-cpu
+Python bindings are enabled for the Python gallery and real-ORT tests so the
+benchmark can also run native onnx-light + onnx-light-cpu graphs.
 The outgoing common library compiles only
 the existing LeakyRelu kernel source alongside the core; unused targets are
 excluded from the default build.
 Plugin builds additionally fetch onnx-light-cpu at
 ``054cdd984d9f85a7692dc4f678b2f13275e8ede1`` and configure only its standalone
-``ml_cpu_compute`` subproject. No onnx-light-cpu Python package or additional
+``ml_cpu_compute`` subproject. Gallery and real-ORT test builds additionally
+compile its Python bindings and kernel registration sources against the same
+onnx-light runtime, placing the Python package in ``build/python``. No additional
 onnx-light build is needed. Its runtime SIMD dispatch remains enabled; do not
 add target-wide native/AVX compiler flags. To supply that same source checkout,
 set ``FETCHCONTENT_SOURCE_DIR_ONNX_LIGHT_CPU=/path/to/onnx-light-cpu``.
@@ -141,6 +145,13 @@ native tests load an independent ORT ``LeakyRelu`` custom-op library into the re
 host; the dependency-contract smoke test is retained. EP bridges and the EP
 entry-point library have no executable tests.
 See :doc:`components/index` for each component's page and precise coverage.
+
+The ``gallery_benchmark_log_custom_ops`` CTest exercises every supported
+backend and both graph topologies with 1, 7 and 33 elements, including plotting
+and all correctness checks. It is a smoke test, not a performance measurement:
+the full million-element gallery benchmark is too costly in an unoptimized
+coverage build. Direct gallery execution and documentation builds retain the
+full input-size range.
 
 The C++ custom-op example is built by default when plugins are enabled,
 without linking ORT. ``ONNX_LIGHT_ORT_BUILD_EXAMPLES=OFF`` disables it.
@@ -280,15 +291,20 @@ tests execute the same gallery scripts in separate Python processes.
 The incoming example never imports ORT; the outgoing example uses a real
 ORT session. No EP is involved, and failures are not skipped or hidden.
 
-Sphinx builds only the model bindings and the three gallery libraries, not
-the native tests. Existing CMake dependency-source overrides are preserved,
+Sphinx builds the model/runtime bindings, native CPU bindings and the three
+gallery libraries, not the native tests. Existing CMake dependency-source
+overrides are preserved,
 and explicitly supplied gallery library environment variables take precedence.
 
 The ``gallery_benchmark_log_custom_ops`` test executes the Log benchmark gallery.
 It compares ORT's built-in Log and the onnx-light-cpu custom op called by ORT,
 both using I/O binding with preallocated buffers, with the ORT-ABI CPU custom op
-called by the standalone onnx-light single-node host. NumPy is used only for
-input preparation and correctness checks, not as a timed backend. It uses one
+called by the standalone onnx-light single-node host. A fourth path uses
+onnx-light's ``ReferenceEvaluator`` with ``onnx_light_cpu.register_kernels()``
+and standard-domain Log nodes, without ONNX Runtime or an ORT-ABI bridge.
+This native path supports both graph topologies and uses one CPU thread.
+NumPy is used only for input preparation and correctness checks, not as a
+timed backend. It uses one
 Log or ten consecutive Logs, checks results before and after timing, and
 reports median microseconds per graph and speedup relative to ORT's built-in
 Log over eleven input sizes from 1 to 1,048,576 elements. Latency and speedup
@@ -296,11 +312,17 @@ are plotted separately for each topology. Ten Logs
 produce NaNs in float32; this measures the literal chain, including special
 values. The standalone host cannot execute that topology and is marked
 unavailable. Measurements run in separate processes to keep ORT out of the
-standalone host. Use the same library environment variables shown above.
+standalone host and native CPU evaluator. Use the same library environment
+variables shown above.
 All benchmark code lives in ``docs/examples/plot_benchmark_log_custom_ops.py``,
 including model construction, timing, isolated workers and the CLI entry point.
 The command-line benchmark also accepts ``--nodes 1|10`` and ``--sizes``.
-ORT always uses I/O binding; the standalone host uses ``run``.
+ORT always uses I/O binding; the standalone host and native CPU evaluator use ``run``.
+To run only the native CPU worker, without ORT or either bridge library:
+
+.. code-block:: bash
+
+   python docs/examples/plot_benchmark_log_custom_ops.py --backend native --nodes 10
 
 CI and documentation publishing
 -------------------------------

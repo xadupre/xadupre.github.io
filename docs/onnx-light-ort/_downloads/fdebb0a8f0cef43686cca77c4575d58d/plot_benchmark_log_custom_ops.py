@@ -4,7 +4,9 @@ Benchmark Log custom ops: onnx-light and ORT callers
 
 Compare ORT's built-in ``Log`` with onnx-light-cpu's ``Log`` custom operator
 called by ORT, and the same ORT-ABI custom operator called by onnx-light's
-standalone host. These are custom operators, not execution providers.
+standalone host. Also measure standard-domain ``Log`` through onnx-light's
+``ReferenceEvaluator`` with onnx-light-cpu kernels, without ONNX Runtime or the
+ORT-ABI bridge. These are custom operators, not execution providers.
 Two graph topologies are used: ``X -> Log -> Y`` and
 ``X -> Log -> ... -> Log -> Y`` with ten consecutive nodes. Both use float32,
 dynamic one-dimensional inputs and models built with ``onnx_light.onnx``.
@@ -13,7 +15,8 @@ ORT executes each topology with either standard-domain or custom-domain nodes,
 using only ``run_with_iobinding`` with preallocated input and output buffers.
 The standalone onnx-light custom-op host exposes only ``run`` and accepts only
 one node. Its ten-node result is therefore unavailable, not ten Python calls
-misrepresented as a graph. ORT's built-in Log with I/O binding is the baseline:
+misrepresented as a graph. The native CPU evaluator supports both topologies.
+ORT's built-in Log with I/O binding is the baseline:
 speedup is its median latency divided by the measured path's median latency.
 NumPy is used only for input preparation and correctness checks, not timed.
 
@@ -43,6 +46,7 @@ LABELS = {
     "ort": "ONNX Runtime built-in Log (I/O binding)",
     "custom": "onnx-light-cpu Log custom op called by ONNX Runtime (I/O binding)",
     "standalone": "ORT-ABI CPU Log custom op called by onnx-light (run)",
+    "native": "onnx-light + onnx-light-cpu Log, without ONNX Runtime (run)",
 }
 
 # %%
@@ -97,8 +101,17 @@ def measure(args):
         raise ValueError(f"Unsupported backend: {args.backend}")
     if args.backend == "standalone" and args.nodes != 1:
         raise ValueError("The standalone host supports only one node")
-    custom = args.backend != "ort"
-    if args.backend == "standalone":
+    custom = args.backend in ("custom", "standalone")
+    if args.backend == "native":
+        from onnx_light.onnx.reference import ReferenceEvaluator
+        from onnx_light_cpu import register_kernels
+
+        register_kernels()
+        session = ReferenceEvaluator(
+            make_model(custom, args.nodes), cpu_execution={"num_threads": 1}
+        )
+        version = None
+    elif args.backend == "standalone":
         from onnx_light_ort import CustomOpSessionOrtCalledByLight
 
         session = CustomOpSessionOrtCalledByLight(
@@ -124,7 +137,7 @@ def measure(args):
     for size in args.sizes:
         values = rng.uniform(0.01, 10, size).astype(numpy.float32)
         feeds = {"X": values}
-        if args.backend == "standalone":
+        if args.backend in ("standalone", "native"):
             run, get_output = partial(session.run, None, feeds), lambda result: result[0]
         else:
             run, get_output = ort_runner(session, values)
@@ -151,11 +164,12 @@ def measure(args):
 
     if args.backend == "standalone":
         session.close()
+    if args.backend in ("standalone", "native"):
         assert "onnxruntime" not in sys.modules
     assert "onnx" not in sys.modules
     return {
         "backend": args.backend,
-        "api": "run" if args.backend == "standalone" else "iobinding",
+        "api": "run" if args.backend in ("standalone", "native") else "iobinding",
         "nodes": args.nodes,
         "ort_version": version,
         "rows": rows,
@@ -168,8 +182,13 @@ def measure(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--library", type=Path, required=True)
-    parser.add_argument("--host", type=Path, required=True)
+    parser.add_argument(
+        "--gallery-smoke-test",
+        action="store_true",
+        help="Runs all gallery paths on small inputs.",
+    )
+    parser.add_argument("--library", type=Path)
+    parser.add_argument("--host", type=Path)
     parser.add_argument("--sizes", type=int, nargs="+", default=SIZES)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repeat", type=int, default=31)
@@ -179,17 +198,23 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--backend", choices=list(LABELS), help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.gallery_smoke_test:
+        plot_results(run_gallery(sizes=[1, 7, 33])).canvas.draw()
+        return
     if min(args.sizes) <= 0 or max(args.sizes) > 16 * 1024 * 1024:
         parser.error("sizes must be positive and fit the host's 64 MiB tensor limit")
     if min(args.repeat, args.number, args.trials) <= 0 or args.warmup < 0:
         parser.error("repeat, number and trials must be positive; warmup must be nonnegative")
-    args.library = args.library.resolve(strict=True)
-    args.host = args.host.resolve(strict=True)
+    if args.backend != "native":
+        if args.library is None or args.host is None:
+            parser.error("--library and --host are required except for --backend native")
+        args.library = args.library.resolve(strict=True)
+        args.host = args.host.resolve(strict=True)
     if args.backend:
         print(json.dumps(measure(args)))
         return
 
-    backends = ["ort", "custom"]
+    backends = ["ort", "custom", "native"]
     if args.nodes == 1:
         backends.append("standalone")
     results = []
@@ -254,7 +279,8 @@ def main():
         print(f"{LABELS['standalone']}: unavailable (single-node host).")
     print(
         "Raw samples, when --output is supplied, include all trials; "
-        "standalone timings include protective input and output copies."
+        "standalone timings include protective input and output copies; "
+        "native evaluator timings include its run interface overhead."
     )
 
 
@@ -272,7 +298,7 @@ def main():
 # Python interface timings, not isolated kernel timings or universal speedups.
 
 
-def run_gallery():
+def run_gallery(sizes=SIZES):
     benchmark = Path(inspect.getsourcefile(run_gallery)).resolve()
     root = benchmark.parents[2]
     environment = os.environ.copy()
@@ -282,7 +308,6 @@ def run_gallery():
         launcher.append(str(root / "cmake/run_python_with_dll_paths.py"))
     library = Path(os.environ["ONNX_LIGHT_ORT_PLUGIN_LIBRARY"]).resolve(strict=True)
     host = Path(os.environ["ONNX_LIGHT_ORT_HOST_LIBRARY"]).resolve(strict=True)
-    sizes = SIZES
     print(f"Python {platform.python_version()}, {platform.platform()}")
     results = []
     for nodes in (1, 10):
@@ -387,12 +412,12 @@ def plot_results(results):
     axes[0, 1].text(
         0.03,
         0.97,
-        "NaN outputs; onnx-light host unavailable\n(single-node host only)",
+        "NaN outputs; ORT-ABI host unavailable\n(single-node host only)",
         transform=axes[0, 1].transAxes,
         va="top",
     )
     fig.suptitle(
-        "Log custom ops: onnx-light-cpu called by ORT,\nORT-ABI custom op called by onnx-light"
+        "Log custom ops and native onnx-light + onnx-light-cpu\ncompared with ONNX Runtime"
     )
     fig.legend(*axes[0, 0].get_legend_handles_labels(), loc="lower center", fontsize=10)
     fig.tight_layout(rect=(0, 0.17, 1, 0.94))

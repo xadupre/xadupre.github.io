@@ -500,6 +500,110 @@ arrays whose dtype differs from the model instead of converting them.</p>
 the plugin. A finalizer also releases abandoned sessions. Registration and
 compute errors propagate as Python exceptions; there is no ORT fallback.</p>
 </section>
+<section id="c-abi-contract">
+<h2>C ABI contract<a class="headerlink" href="#c-abi-contract" title="Link to this heading">#</a></h2>
+<p>There are two C ABI boundaries: the ORT-compatible interface implemented for
+plugins, and the small session interface exported to C++ and Python callers.
+Neither requires an ORT runtime.</p>
+<p>The host loads the plugin’s exported <code class="docutils literal notranslate"><span class="pre">RegisterCustomOps</span></code> with this signature:</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">ORT_API_CALL</span>
+<span class="n">RegisterCustomOps</span><span class="p">(</span><span class="n">OrtSessionOptions</span><span class="w"> </span><span class="o">*</span><span class="n">options</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApiBase</span><span class="w"> </span><span class="o">*</span><span class="n">api_base</span><span class="p">);</span>
+</pre></div>
+</div>
+<div class="pst-scrollable-table-container"><table class="table" id="id1">
+<caption><span class="caption-text">ORT-compatible plugin interface</span><a class="headerlink" href="#id1" title="Link to this table">#</a></caption>
+<colgroup>
+<col style="width: 35.0%" />
+<col style="width: 65.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>API / descriptor</p></th>
+<th class="head"><p>Standalone host behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">OrtApiBase</span></code></p></td>
+<td><p>Supplies its own table. <code class="docutils literal notranslate"><span class="pre">GetApi</span></code> accepts only version 18;
+<code class="docutils literal notranslate"><span class="pre">GetVersionString</span></code> identifies the standalone host.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CreateCustomOpDomain</span></code>, <code class="docutils literal notranslate"><span class="pre">CustomOpDomain_Add</span></code>, <code class="docutils literal notranslate"><span class="pre">AddCustomOpDomain</span></code></p></td>
+<td><p>Record plugin domains and descriptors. Ownership stays with the plugin;
+they must outlive every referencing session.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">OrtCustomOp</span></code></p></td>
+<td><p>Validate against the audited profile above; select by domain, name,
+opset and tensor type.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">CreateKernelV2</span></code></p></td>
+<td><p>Call once on first execution. Supply <code class="docutils literal notranslate"><span class="pre">KernelInfoGetAttribute_float</span></code>
+for construction attributes.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">KernelComputeV2</span></code></p></td>
+<td><p>Call on each run with an adapted <code class="docutils literal notranslate"><span class="pre">OrtKernelContext</span></code>. Map input,
+output, type/shape and data access to onnx-light CPU tensors.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Tensor metadata</p></td>
+<td><p>Release with <code class="docutils literal notranslate"><span class="pre">ReleaseTensorTypeAndShapeInfo</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p>Values and tensor buffers</p></td>
+<td><p>Borrowed; the plugin must not free them.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">KernelDestroy</span></code></p></td>
+<td><p>Release retained state before unloading the plugin library.</p></td>
+</tr>
+<tr class="row-even"><td><p>Callback results</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nullptr</span></code> means success; otherwise return an owned <code class="docutils literal notranslate"><span class="pre">OrtStatus</span> <span class="pre">*</span></code>.
+Never let C++ exceptions cross the ABI. The host reads errors with
+<code class="docutils literal notranslate"><span class="pre">GetErrorMessage</span></code> and frees statuses with <code class="docutils literal notranslate"><span class="pre">ReleaseStatus</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Unsupported API slots</p></td>
+<td><p>Null, not fallback implementations. See
+<a class="reference internal" href="#shared-support-for-hosting-ort-compatible-plugins">Shared support for hosting ORT-compatible plugins</a> for supported entries.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For application callers, <code class="docutils literal notranslate"><span class="pre">host.h</span></code> declares the separate exported interface:</p>
+<div class="pst-scrollable-table-container"><table class="table" id="id2">
+<caption><span class="caption-text">Application session interface</span><a class="headerlink" href="#id2" title="Link to this table">#</a></caption>
+<colgroup>
+<col style="width: 35.0%" />
+<col style="width: 65.0%" />
+</colgroup>
+<thead>
+<tr class="row-odd"><th class="head"><p>Export / result</p></th>
+<th class="head"><p>Caller contract</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtCreateSession</span></code></p></td>
+<td><p>Pass a trusted library path and serialized ONNX bytes. Load the plugin,
+parse the model and return an opaque session.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtRunTyped</span></code></p></td>
+<td><p>Borrow element-aligned input storage for the call. Return session-owned
+output data and shape pointers; copy before the next run or release.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtRun</span></code></p></td>
+<td><p>Float32-only convenience entry point.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtReleaseSession</span></code></p></td>
+<td><p>Destroy the session, its kernels and then the library.
+Serialize runs and release operations on each session; never race them.</p></td>
+</tr>
+<tr class="row-even"><td><p>Creation / execution result</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">nullptr</span></code> means success; a non-null status means failure.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtGetErrorMessage</span></code></p></td>
+<td><p>Read a borrowed message from a failure status.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">LightOrtReleaseStatus</span></code></p></td>
+<td><p>Free the failure status after reading its message.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 <section id="tests-and-example">
 <h2>Tests and example<a class="headerlink" href="#tests-and-example" title="Link to this heading">#</a></h2>
 <p>The independent <code class="docutils literal notranslate"><span class="pre">examples/custom_ops/ort_custom_ops.cc</span></code> implements
@@ -569,6 +673,174 @@ This excerpt constructs a model and runs the trusted custom operator without ORT
 </pre></div>
 </div>
 </section>
+<section id="c-example">
+<h2>C++ example<a class="headerlink" href="#c-example" title="Link to this heading">#</a></h2>
+<p>The C++ custom operator below is the independent plugin consumed by the Python
+snippet. It implements registration, an API-18 <code class="docutils literal notranslate"><span class="pre">OrtCustomOp</span></code> descriptor and
+the retained LeakyRelu kernel using only ORT headers, with no ORT or onnx-light
+link dependency. Its two extra counter exports are used only by tests.</p>
+<p>Build the plugin and host, then execute the native C++ host tests:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Release<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-DONNX_LIGHT_ORT_BUILD_HOST<span class="o">=</span>ON<span class="w"> </span>-DONNX_LIGHT_ORT_BUILD_EXAMPLES<span class="o">=</span>ON
+cmake<span class="w"> </span>--build<span class="w"> </span>build<span class="w"> </span>--parallel<span class="w"> </span><span class="s2">"</span><span class="k">$(</span>nproc<span class="k">)</span><span class="s2">"</span>
+ctest<span class="w"> </span>--test-dir<span class="w"> </span>build<span class="w"> </span>-L<span class="w"> </span>bridge_ops_ort_called_by_light<span class="w"> </span>--output-on-failure
+</pre></div>
+</div>
+<p>The native test constructs the same custom-domain model, creates a session
+through <code class="docutils literal notranslate"><span class="pre">LightOrtCreateSession</span></code> and executes it with <code class="docutils literal notranslate"><span class="pre">LightOrtRun</span></code>.
+For application integration, link
+<code class="docutils literal notranslate"><span class="pre">onnx_light_ort::bridge_ops_ort_called_by_light</span></code> and include its <code class="docutils literal notranslate"><span class="pre">host.h</span></code>,
+not the private compatibility-table implementation.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">"onnxruntime_c_api.h"</span>
+
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;array&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;atomic&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;exception&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;memory&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;mutex&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;new&gt;</span>
+<span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;vector&gt;</span>
+
+<span class="cp">#ifdef _WIN32</span>
+<span class="cp">#define CUSTOM_OP_EXPORT __declspec(dllexport)</span>
+<span class="cp">#else</span>
+<span class="cp">#define CUSTOM_OP_EXPORT __attribute__((visibility("default")))</span>
+<span class="cp">#endif</span>
+
+<span class="k">namespace</span><span class="w"> </span><span class="p">{</span>
+
+<span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w"> </span><span class="n">live</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+<span class="n">std</span><span class="o">::</span><span class="n">atomic</span><span class="o">&lt;</span><span class="kt">int</span><span class="o">&gt;</span><span class="w"> </span><span class="n">created</span><span class="p">{</span><span class="mi">0</span><span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">Kernel</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApi</span><span class="w"> </span><span class="o">*</span><span class="n">api</span><span class="p">;</span>
+<span class="w">  </span><span class="kt">float</span><span class="w"> </span><span class="n">alpha</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">LeakyRelu</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="n">LeakyRelu</span><span class="p">()</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="p">{}</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">version</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">18</span><span class="p">;</span>
+<span class="w">    </span><span class="n">GetName</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="s">"LeakyRelu"</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetExecutionProviderType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetInputTypeCount</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetOutputTypeCount</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="kt">size_t</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetInputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetOutputType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT</span><span class="p">;</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetInputCharacteristic</span><span class="w"> </span><span class="o">=</span>
+<span class="w">        </span><span class="n">GetOutputCharacteristic</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">INPUT_OUTPUT_REQUIRED</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetInputMemoryType</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="kt">size_t</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">OrtMemTypeDefault</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">GetStartVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetEndVersion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">)</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span><span class="w"> </span><span class="p">};</span>
+<span class="w">    </span><span class="n">CreateKernelV2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="k">const</span><span class="w"> </span><span class="n">OrtCustomOp</span><span class="w"> </span><span class="o">*</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApi</span><span class="w"> </span><span class="o">*</span><span class="n">api</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">OrtKernelInfo</span><span class="w"> </span><span class="o">*</span><span class="n">info</span><span class="p">,</span>
+<span class="w">                        </span><span class="kt">void</span><span class="w"> </span><span class="o">**</span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="kt">float</span><span class="w"> </span><span class="n">alpha</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">KernelInfoGetAttribute_float</span><span class="p">(</span><span class="n">info</span><span class="p">,</span><span class="w"> </span><span class="s">"alpha"</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">alpha</span><span class="p">))</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="k">auto</span><span class="w"> </span><span class="o">*</span><span class="n">kernel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">nothrow</span><span class="p">)</span><span class="w"> </span><span class="n">Kernel</span><span class="p">{</span><span class="n">api</span><span class="p">,</span><span class="w"> </span><span class="n">alpha</span><span class="p">};</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">kernel</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">CreateStatus</span><span class="p">(</span><span class="n">ORT_FAIL</span><span class="p">,</span><span class="w"> </span><span class="s">"Cannot allocate LeakyRelu kernel."</span><span class="p">);</span>
+<span class="w">      </span><span class="o">*</span><span class="n">out</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">kernel</span><span class="p">;</span>
+<span class="w">      </span><span class="o">++</span><span class="n">live</span><span class="p">;</span>
+<span class="w">      </span><span class="o">++</span><span class="n">created</span><span class="p">;</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="n">KernelDestroy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">state</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">delete</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="n">Kernel</span><span class="w"> </span><span class="o">*&gt;</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
+<span class="w">      </span><span class="o">--</span><span class="n">live</span><span class="p">;</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">    </span><span class="n">KernelComputeV2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[](</span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">state</span><span class="p">,</span><span class="w"> </span><span class="n">OrtKernelContext</span><span class="w"> </span><span class="o">*</span><span class="n">context</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">kernel</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="k">static_cast</span><span class="o">&lt;</span><span class="n">Kernel</span><span class="w"> </span><span class="o">*&gt;</span><span class="p">(</span><span class="n">state</span><span class="p">);</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApi</span><span class="w"> </span><span class="o">&amp;</span><span class="n">api</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="o">*</span><span class="n">kernel</span><span class="p">.</span><span class="n">api</span><span class="p">;</span>
+<span class="w">      </span><span class="k">const</span><span class="w"> </span><span class="n">OrtValue</span><span class="w"> </span><span class="o">*</span><span class="n">input</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">      </span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">KernelContext_GetInput</span><span class="p">(</span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="n">OrtTensorTypeAndShapeInfo</span><span class="w"> </span><span class="o">*</span><span class="n">info</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">      </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetTensorTypeAndShape</span><span class="p">(</span><span class="n">input</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">info</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="kt">size_t</span><span class="w"> </span><span class="n">rank</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">      </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetDimensionsCount</span><span class="p">(</span><span class="n">info</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">rank</span><span class="p">);</span>
+<span class="w">      </span><span class="n">std</span><span class="o">::</span><span class="n">array</span><span class="o">&lt;</span><span class="kt">int64_t</span><span class="p">,</span><span class="w"> </span><span class="mi">16</span><span class="o">&gt;</span><span class="w"> </span><span class="n">dimensions</span><span class="p">{};</span>
+<span class="w">      </span><span class="kt">size_t</span><span class="w"> </span><span class="n">count</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">status</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="n">rank</span><span class="w"> </span><span class="o">&gt;</span><span class="w"> </span><span class="n">dimensions</span><span class="p">.</span><span class="n">size</span><span class="p">())</span>
+<span class="w">        </span><span class="n">status</span><span class="w"> </span><span class="o">=</span>
+<span class="w">            </span><span class="n">api</span><span class="p">.</span><span class="n">CreateStatus</span><span class="p">(</span><span class="n">ORT_INVALID_ARGUMENT</span><span class="p">,</span><span class="w"> </span><span class="s">"LeakyRelu supports at most 16 dimensions."</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetDimensions</span><span class="p">(</span><span class="n">info</span><span class="p">,</span><span class="w"> </span><span class="n">dimensions</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span><span class="w"> </span><span class="n">rank</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetTensorShapeElementCount</span><span class="p">(</span><span class="n">info</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">count</span><span class="p">);</span>
+<span class="w">      </span><span class="n">api</span><span class="p">.</span><span class="n">ReleaseTensorTypeAndShapeInfo</span><span class="p">(</span><span class="n">info</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="n">OrtValue</span><span class="w"> </span><span class="o">*</span><span class="n">output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">      </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">KernelContext_GetOutput</span><span class="p">(</span><span class="n">context</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">dimensions</span><span class="p">.</span><span class="n">data</span><span class="p">(),</span><span class="w"> </span><span class="n">rank</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">input_data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">      </span><span class="kt">void</span><span class="w"> </span><span class="o">*</span><span class="n">output_data</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">      </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetTensorMutableData</span><span class="p">(</span><span class="k">const_cast</span><span class="o">&lt;</span><span class="n">OrtValue</span><span class="w"> </span><span class="o">*&gt;</span><span class="p">(</span><span class="n">input</span><span class="p">),</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_data</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">.</span><span class="n">GetTensorMutableData</span><span class="p">(</span><span class="n">output</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output_data</span><span class="p">);</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">status</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">      </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">size_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">count</span><span class="p">;</span><span class="w"> </span><span class="o">++</span><span class="n">i</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="kt">float</span><span class="w"> </span><span class="o">*&gt;</span><span class="p">(</span><span class="n">input_data</span><span class="p">)[</span><span class="n">i</span><span class="p">];</span>
+<span class="w">        </span><span class="k">static_cast</span><span class="o">&lt;</span><span class="kt">float</span><span class="w"> </span><span class="o">*&gt;</span><span class="p">(</span><span class="n">output_data</span><span class="p">)[</span><span class="n">i</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="n">kernel</span><span class="p">.</span><span class="n">alpha</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">value</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">value</span><span class="p">;</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">    </span><span class="p">};</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">};</span>
+
+<span class="k">struct</span><span class="w"> </span><span class="nc">Domain</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApi</span><span class="w"> </span><span class="o">*</span><span class="n">api</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">  </span><span class="n">LeakyRelu</span><span class="w"> </span><span class="n">op</span><span class="p">;</span>
+<span class="w">  </span><span class="n">OrtCustomOpDomain</span><span class="w"> </span><span class="o">*</span><span class="n">handle</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">;</span>
+<span class="w">  </span><span class="o">~</span><span class="n">Domain</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">handle</span><span class="p">)</span>
+<span class="w">      </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">ReleaseCustomOpDomain</span><span class="p">(</span><span class="n">handle</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">};</span>
+
+<span class="p">}</span><span class="w"> </span><span class="c1">// namespace</span>
+
+<span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="n">CUSTOM_OP_EXPORT</span><span class="w"> </span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">ORT_API_CALL</span><span class="w"> </span><span class="n">RegisterCustomOps</span><span class="p">(</span><span class="n">OrtSessionOptions</span><span class="w"> </span><span class="o">*</span><span class="n">options</span><span class="p">,</span>
+<span class="w">                                                                      </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApiBase</span><span class="w"> </span><span class="o">*</span><span class="n">base</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">  </span><span class="k">const</span><span class="w"> </span><span class="n">OrtApi</span><span class="w"> </span><span class="o">*</span><span class="n">api</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">GetApi</span><span class="p">(</span><span class="mi">18</span><span class="p">);</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">api</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">base</span><span class="o">-&gt;</span><span class="n">GetApi</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span><span class="o">-&gt;</span><span class="n">CreateStatus</span><span class="p">(</span><span class="n">ORT_NOT_IMPLEMENTED</span><span class="p">,</span><span class="w"> </span><span class="s">"LeakyRelu requires API 18."</span><span class="p">);</span>
+<span class="cp">#ifdef CUSTOM_OP_UNSUPPORTED_API</span>
+<span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">base</span><span class="o">-&gt;</span><span class="n">GetApi</span><span class="p">(</span><span class="mi">19</span><span class="p">)</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="nb">nullptr</span><span class="p">)</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">CreateStatus</span><span class="p">(</span><span class="n">ORT_NOT_IMPLEMENTED</span><span class="p">,</span><span class="w"> </span><span class="s">"Custom op requires unavailable API 19."</span><span class="p">);</span>
+<span class="cp">#endif</span>
+<span class="w">  </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="w"> </span><span class="n">mutex</span><span class="p">;</span>
+<span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">unique_ptr</span><span class="o">&lt;</span><span class="n">Domain</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">domains</span><span class="p">;</span>
+<span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">lock_guard</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">mutex</span><span class="o">&gt;</span><span class="w"> </span><span class="n">lock</span><span class="p">(</span><span class="n">mutex</span><span class="p">);</span>
+<span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">domain</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="n">domains</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">api</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="n">api</span><span class="p">)</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">AddCustomOpDomain</span><span class="p">(</span><span class="n">options</span><span class="p">,</span><span class="w"> </span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">handle</span><span class="p">);</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">domain</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">Domain</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="w">    </span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">api</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="p">;</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">CreateCustomOpDomain</span><span class="p">(</span><span class="s">"ort_custom_ops"</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">handle</span><span class="p">))</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">OrtStatus</span><span class="w"> </span><span class="o">*</span><span class="n">status</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">CustomOpDomain_Add</span><span class="p">(</span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">handle</span><span class="p">,</span><span class="w"> </span><span class="o">&amp;</span><span class="n">domain</span><span class="o">-&gt;</span><span class="n">op</span><span class="p">))</span>
+<span class="w">      </span><span class="k">return</span><span class="w"> </span><span class="n">status</span><span class="p">;</span>
+<span class="w">    </span><span class="n">domains</span><span class="p">.</span><span class="n">push_back</span><span class="p">(</span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">domain</span><span class="p">));</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">AddCustomOpDomain</span><span class="p">(</span><span class="n">options</span><span class="p">,</span><span class="w"> </span><span class="n">domains</span><span class="p">.</span><span class="n">back</span><span class="p">()</span><span class="o">-&gt;</span><span class="n">handle</span><span class="p">);</span>
+<span class="w">  </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">exception</span><span class="w"> </span><span class="o">&amp;</span><span class="n">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">api</span><span class="o">-&gt;</span><span class="n">CreateStatus</span><span class="p">(</span><span class="n">ORT_FAIL</span><span class="p">,</span><span class="w"> </span><span class="n">error</span><span class="p">.</span><span class="n">what</span><span class="p">());</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+
+<span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="n">CUSTOM_OP_EXPORT</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">CustomOpLiveKernels</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">live</span><span class="p">.</span><span class="n">load</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+<span class="k">extern</span><span class="w"> </span><span class="s">"C"</span><span class="w"> </span><span class="n">CUSTOM_OP_EXPORT</span><span class="w"> </span><span class="kt">int</span><span class="w"> </span><span class="n">CustomOpCreatedKernels</span><span class="p">()</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="k">return</span><span class="w"> </span><span class="n">created</span><span class="p">.</span><span class="n">load</span><span class="p">();</span><span class="w"> </span><span class="p">}</span>
+</pre></div>
+</div>
+</section>
 <section id="shared-support-for-hosting-ort-compatible-plugins">
 <h2>Shared support for hosting ORT-compatible plugins<a class="headerlink" href="#shared-support-for-hosting-ort-compatible-plugins" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">onnx_light_ort::common_ort_to_light</span></code> is a static library exposing the
@@ -628,8 +900,10 @@ fixture tests. Select both using the <code class="docutils literal notranslate">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#design">Design</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#requirements">Requirements</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#initial-audited-profile">Initial audited profile</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#c-abi-contract">C ABI contract</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests-and-example">Tests and example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-snippet">Python snippet</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#c-example">C++ example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shared-support-for-hosting-ort-compatible-plugins">Shared support for hosting ORT-compatible plugins</a></li>
 </ul>
   </nav></div>
