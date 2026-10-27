@@ -13,9 +13,9 @@ class TestBuildOnnxLightKernelImagesDocsWorkflow(unittest.TestCase):
         with open(WORKFLOW, encoding="utf-8") as fh:
             content = fh.read()
         step = content.split(
-            "- name: Install onnx-light from the latest full release wheel", 1
+            "- name: Install onnx-light from the matching full release wheel", 1
         )[1].split("\n      - name:", 1)[0]
-        self.assertIn("gh release download", step)
+        self.assertIn("gh release download 0.2.0", step)
         self.assertIn("! -name '*reduced*'", step)
         self.assertNotIn("gh run download", step)
 
