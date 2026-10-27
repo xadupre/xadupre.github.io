@@ -97,7 +97,8 @@ class TestOnnxLightCpuBackendEndCoverageDashboard(unittest.TestCase):
             if step["name"] == "Build and install onnx-light from source"
         )
         self.assertIn(
-            "pip install ./onnx-light -C cmake.define.ONNX_LIGHT_INSTALL=ON", build
+            "pip install ./onnx-light -C cmake.define.ONNX_LIGHT_INSTALL=ON",
+            " ".join(build.replace("\\\n", "").split()),
         )
         self.assertIn("CMAKE_PREFIX_PATH=${onnx_light_prefix}", build)
         self.assertIn(
