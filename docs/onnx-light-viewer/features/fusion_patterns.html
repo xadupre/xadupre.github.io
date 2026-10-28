@@ -443,6 +443,22 @@ Every click reruns matching from scratch for the selected
 patterns and clears the previous candidates and selection.
 Click a pattern again to uncheck it. <strong>Select all</strong> checks every pattern;
 <strong>Clear selection</strong> unchecks them all. No modifier key is needed.</p>
+<p><strong>Select pattern groups</strong> shows clickable rectangular tiles: click to select
+or deselect a group. Selected tiles have a highlighted border and bold text.
+It combines the selected groups without duplicating
+overlapping members. <strong>Default</strong> contains the SDK-default patterns, excluding
+<code class="docutils literal notranslate"><span class="pre">RepeatedLayer</span></code>; <strong>All</strong> includes opt-in patterns too.
+The other sets, <code class="docutils literal notranslate"><span class="pre">L1</span></code>, <code class="docutils literal notranslate"><span class="pre">L2</span></code> and <code class="docutils literal notranslate"><span class="pre">Layer</span></code>, come from onnx-light.
+The <code class="docutils literal notranslate"><span class="pre">onnx-light-cpu</span></code> group gathers the bundled CPU library’s patterns.
+Select its tile in <strong>Fuse</strong> or <strong>Optimize</strong> to enable them.
+CPU shape inference and memory metadata functions are registered at startup,
+independently of pattern selection, so memory profiling needs no group enabled.
+In <strong>Fuse</strong>, only members with compatible anchors in the current graph are
+selected; global passes are not part of these sets.
+Unchecking a group keeps members covered by another checked group.
+Individual checkboxes remain editable; a manual selection is shown as a single
+group only if it exactly matches that group. Choosing groups does not run
+matching or change the model.</p>
 <div class="highlight-text notranslate"><div class="highlight"><pre><span></span>Fuse -&gt; Choose patterns -&gt; Run Matching
                                      |
                       +--------------+--------------+
@@ -480,6 +496,13 @@ After <strong>Fuse selected</strong>, the panel stays open with the native patte
 refreshed against the new operators. Select patterns and run matching again to
 find further fusions; obsolete candidates are discarded.
 Graph replacement or navigation invalidates the preview.</p>
+<figure class="align-default" id="id1">
+<a class="reference internal image-reference" href="../_images/feature-fusion-patterns.png"><img alt="Fuse panel showing two checked TransposeTranspose candidates, before and after operators, and Fuse selected." src="../_images/feature-fusion-patterns.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Run matching, inspect candidates, then fuse the selected matches.</span><a class="headerlink" href="#id1" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
 <section id="why-does-a-pattern-not-match">
 <h2>Why does a pattern not match?<a class="headerlink" href="#why-does-a-pattern-not-match" title="Link to this heading">#</a></h2>
 <p>If <strong>Run Matching</strong> finds no candidates, its message points to
@@ -502,11 +525,50 @@ whole-graph preview instead.</p>
 <section id="iterative-optimization-and-global-passes">
 <h2>Iterative optimization and global passes<a class="headerlink" href="#iterative-optimization-and-global-passes" title="Link to this heading">#</a></h2>
 <p><strong>Optimize</strong> has its own sidebar panel, separate from <strong>Fuse</strong>.
-It opens the full native catalog, including patterns whose operators
+Choose <strong>onnx-light</strong> (the default) or <strong>onnxscript</strong> with the two backend buttons.
+The native backend opens the full catalog, including patterns whose operators
 are not present yet. Select individual patterns, whole <strong>Priority</strong> groups,
 or <strong>Select all</strong>, then click <strong>Run global optimization</strong>.
-Groups use onnx-light’s native priority metadata, not inferred categories.
-This runs onnx-light’s complete native optimizer, not a single pattern batch:
+The group tiles combine named sets across priorities.
+Set membership and priorities come directly from onnx-light, not inferred categories.
+Initially, only SDK-default patterns are checked: <code class="docutils literal notranslate"><span class="pre">RepeatedLayer</span></code> is opt-in.
+Choose <code class="docutils literal notranslate"><span class="pre">Layer</span></code>, <strong>All</strong>, <strong>Select all</strong> or its individual checkbox to enable it.</p>
+<p><strong>onnxscript</strong> runs ONNX Script’s optimization and default fusion rewrites on
+the current in-memory model, including unsaved edits. Install <code class="docutils literal notranslate"><span class="pre">onnx</span></code> and
+<code class="docutils literal notranslate"><span class="pre">onnxscript</span></code> in the Python environment configured in <strong>Settings</strong>, trust the
+workspace, then click <strong>Run global optimization</strong>. This backend accepts a single
+standard ONNX model, not a <code class="docutils literal notranslate"><span class="pre">PipelineProto</span></code>. Native pattern selections
+are preserved when switching backends, but do not configure ONNX Script.
+Python errors leave the displayed model unchanged. Save a copy to keep the result.
+After completion, Python output appears directly below <strong>Run global optimization</strong>
+and in <strong>Logs</strong>. It includes main-graph node and <code class="docutils literal notranslate"><span class="pre">Identity</span></code> counts at input,
+after optimization and after fusion. A new run or model replacement clears the
+inline output; switching backends hides it without discarding it.
+Native matching diagnostics and timing reports apply only to <strong>onnx-light</strong>.
+Changed Python results clear earlier native undo history and cannot be undone
+with <strong>Unfuse</strong>. Later native edits can still be undone, back to the Python result.
+Python transformations cannot be exported as native
+rewriting scenarios; saving with rewritings includes only native edits made
+after the Python result.</p>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="../_images/feature-optimizer-backends.png"><img alt="Optimize panel with Python output reporting three nodes and two Identity nodes below Run, and Unfuse disabled." src="../_images/feature-optimizer-backends.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Read ONNX Script output below Run; no undo checkpoint is created.</span><a class="headerlink" href="#id2" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>On <a class="reference download internal" download="" href="../_downloads/08d1d53a27249033b252b3a0545b826a/fusion.onnx"><code class="xref download docutils literal notranslate"><span class="pre">fusion.onnx</span></code></a>, ONNX Script replaces
+four <code class="docutils literal notranslate"><span class="pre">Transpose</span></code> nodes with two <code class="docutils literal notranslate"><span class="pre">Identity</span></code> nodes: five operators become three.
+These identities preserve the distinct graph outputs <code class="docutils literal notranslate"><span class="pre">a</span></code> and <code class="docutils literal notranslate"><span class="pre">b</span></code>; their
+presence does not mean optimization failed.</p>
+<figure class="align-default" id="id3">
+<a class="reference internal image-reference" href="../_images/feature-pattern-groups.png"><img alt="Optimize panel showing Default, Layer and onnx-light-cpu tiles selected together." src="../_images/feature-pattern-groups.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Combine named sets, then refine individual patterns before running optimization.</span><a class="headerlink" href="#id3" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>This runs onnx-light’s complete native optimizer, not a single pattern batch:
 native canonicalization, repeated priority-ordered matching, evaluation of
 constant replacements and unused-code cleanup.
 A replacement can enable another pattern in a later iteration.
@@ -529,11 +591,11 @@ Neither includes graph transfer or rendering; these are not end-to-end UI timing
 Reports belong to the current in-memory snapshot or pipeline stage.
 Unfuse restores the preceding snapshot’s report; applying another rewrite
 clears it. Reports are not saved into ONNX files.</p>
-<figure class="align-default" id="id1">
+<figure class="align-default" id="id4">
 <a class="reference internal image-reference" href="../_images/optimization-passes.svg"><img alt="The separate Optimize panel runs the full native optimizer. In Fuse, Run Matching previews a global pass and Fuse selected applies it. Unfuse reverses either action in one operation." src="../_images/optimization-passes.svg" style="width: 800px;" />
 </a>
 <figcaption>
-<p><span class="caption-text">Global optimization is separate; individual passes use the pattern workflow.</span><a class="headerlink" href="#id1" title="Link to this image">#</a></p>
+<p><span class="caption-text">Global optimization is separate; individual passes use the pattern workflow.</span><a class="headerlink" href="#id4" title="Link to this image">#</a></p>
 </figcaption>
 </figure>
 <p>In <strong>Fuse → Native patterns</strong>, <code class="docutils literal notranslate"><span class="pre">IdentityRemoval</span></code>, <code class="docutils literal notranslate"><span class="pre">ConstantFolding</span></code> and
@@ -546,11 +608,26 @@ An initializer-only change can have no root operators to highlight.
 Each global pass is a whole-scope candidate and must be applied individually;
 no-op passes produce no candidates.
 Closing Fuse, navigating or replacing the graph discards previews.</p>
-<p>Each optimization or applied pass is one <strong>Unfuse</strong> operation.
+<p>Each native optimization or applied pass is one <strong>Unfuse</strong> operation.
+With <strong>onnx-light</strong> selected, Optimize also offers <strong>Unfuse last</strong> and
+<strong>Back to original model</strong>. Undo one complete operation at a time, or restore
+the native baseline by undoing all available native operations, including other
+pipeline stages. After ONNX Script changes the model, this baseline is the Python
+result, not the model before Python optimization.
+Optimize stays open so you can select patterns and optimize again.
 Applied patterns are listed in the optimization results and in <strong>Unfuse</strong>;
 click an entry to highlight its surviving result nodes. Folding a node entirely
 into an initializer leaves no operator to select.
-<strong>Save → Include fusion rewritings</strong> works for these operations too:
+Optimize’s <strong>Matched patterns</strong> list follows the active history for the current
+model or pipeline stage, including after reopening Optimize or a no-change run.</p>
+<figure class="align-default" id="id5">
+<a class="reference internal image-reference" href="../_images/feature-optimizer-history.png"><img alt="Optimize showing native matched patterns, highlighted result nodes and controls to undo the last operation or restore the original model." src="../_images/feature-optimizer-history.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Inspect matches and unfuse without leaving Optimize.</span><a class="headerlink" href="#id5" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p><strong>Save → Include fusion rewritings</strong> works for these operations too:
 unchecked saves the optimized graph; checked saves the original and its
 replayable plan, including any initializer-preparation functions.
 Pipeline stages are optimized independently. Existing local function bodies
@@ -580,11 +657,11 @@ for a ready-to-use model containing the <code class="docutils literal notranslat
 with two successive <code class="docutils literal notranslate"><span class="pre">TransposeTranspose</span></code> steps. No manual fusion or save is
 needed before trying the scenario controls. To regenerate it after compiling
 the extension, run <code class="docutils literal notranslate"><span class="pre">node</span> <span class="pre">examples/generate_rewritings.cjs</span></code> with Node.js 22.</p>
-<figure class="align-default" id="id2">
+<figure class="align-default" id="id6">
 <a class="reference internal image-reference" href="../_images/rewriting-scenarios.svg"><img alt="Apply next advances one stored step; apply remaining completes the scenario in one operation. Unfuse last returns to the state before that click." src="../_images/rewriting-scenarios.svg" style="width: 800px;" />
 </a>
 <figcaption>
-<p><span class="caption-text">Next applies one stored edit; remaining applies a batch with one undo boundary.</span><a class="headerlink" href="#id2" title="Link to this image">#</a></p>
+<p><span class="caption-text">Next applies one stored edit; remaining applies a batch with one undo boundary.</span><a class="headerlink" href="#id6" title="Link to this image">#</a></p>
 </figcaption>
 </figure>
 <p>Scenarios are alternatives against the original graph, not successive variants.
@@ -615,11 +692,11 @@ remaining nodes cannot be selected.
 Undo returns to the current model’s root graph and clears cached metadata.
 Opening another file starts a new history; previewing and saving do not add steps.
 Native recovery preserves the history.</p>
-<figure class="align-default" id="id3">
+<figure class="align-default" id="id7">
 <a class="reference internal image-reference" href="../_images/fusion-undo.svg"><img alt="Successive Fuse operations can be undone in reverse order; saving chooses a fused graph or the original graph with a concatenated rewriting plan." src="../_images/fusion-undo.svg" style="width: 800px;" />
 </a>
 <figcaption>
-<p><span class="caption-text">Undo history is session-local. Rewriting plans are optional saved variants.</span><a class="headerlink" href="#id3" title="Link to this image">#</a></p>
+<p><span class="caption-text">Undo history is session-local. Rewriting plans are optional saved variants.</span><a class="headerlink" href="#id7" title="Link to this image">#</a></p>
 </figcaption>
 </figure>
 <p>In <strong>Save</strong>, <strong>Include fusion rewritings</strong> selects the saved representation:</p>

@@ -26,6 +26,8 @@ import { applicationSettings, inspectPythonPackages } from "./settings";
 import {
   defaultExportDirectory,
   ExportHistory,
+  downloadExportSource,
+  exportNeedsDownload,
   exportPlan,
   prepareExportPlan,
   runExport,
@@ -44,9 +46,21 @@ import {
   searchHuggingFaceModels,
   HuggingFaceSource,
 } from "./huggingface";
+import { OliveRecipes } from "./oliveRecipes";
+import { optimizeWithOnnxScript } from "./optimization";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
+
+function pickLocalModel() {
+  return vscode.window.showOpenDialog({
+    canSelectMany: false,
+    filters: {
+      "ONNX models and pipelines": ["onnx", "enc", "pipe-onnx"],
+    },
+    openLabel: "Open ONNX graph",
+  });
+}
 
 interface ViewerSettings {
   width?: number;
@@ -98,7 +112,11 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
+  /** Materialized Python edits remain modified after undoing later native edits. */
+  pythonOptimized?: boolean;
   source?: { uri: vscode.Uri };
+  /** Original source ownership survives materializing or removing external data. */
+  sourceWeightLocations?: readonly string[];
   fileName?: string;
 }
 
@@ -224,6 +242,11 @@ export function activate(context: vscode.ExtensionContext): void {
     );
   };
   context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "onnxLightViewer.openFile",
+      (uri: vscode.Uri) =>
+        vscode.commands.executeCommand("vscode.openWith", uri, viewType),
+    ),
     vscode.commands.registerCommand("onnxLightViewer.showLogs", () => {
       if (current) {
         current.panel.reveal();
@@ -323,7 +346,14 @@ async function readGraph(
       ? () => loadModel(retainedBytes, fileName, password)
       : () => loadModelFile(source.uri.fsPath, fileName, password);
     const native = await reload();
-    return { graph: native.graph(), native, reload, source, fileName };
+    return {
+      graph: native.graph(),
+      native,
+      reload,
+      source,
+      sourceWeightLocations: native.externalDataLocations(),
+      fileName,
+    };
   });
 }
 
@@ -465,6 +495,7 @@ async function configurePanel(
   let graphRevision = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
+  let tensorStatisticsRequest = 0;
   let memoryRequest = 0;
   let fusionRequest = 0;
   let diagnosticRequest = 0;
@@ -509,6 +540,9 @@ async function configurePanel(
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
+  const stopExportHistory = exportHistory.subscribe((history) => {
+    void postMessage({ type: "export-history", history });
+  });
   const updateHistory = async (
     target: HistoryTarget,
     change: Parameters<PathHistory["update"]>[1],
@@ -518,6 +552,7 @@ async function configurePanel(
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       log.record("FAILED", `Update path history: ${detail}`);
+      await postMessage({ type: "settings-error", error: detail });
       await vscode.window.showErrorMessage(
         `Could not update path history: ${detail}`,
       );
@@ -543,17 +578,25 @@ async function configurePanel(
       ? vscode.Uri.joinPath(model.source.uri, "..")
       : (vscode.workspace.workspaceFolders?.[0]?.uri ??
         vscode.Uri.file(homedir()));
+  const saveDirectoryUri = () => {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri;
+    return root
+      ? vscode.Uri.joinPath(root, ".cache", ".onnx-light-viewer")
+      : directoryUri();
+  };
+  const prepareSaveDirectory = async (directory: vscode.Uri) => {
+    if (
+      vscode.workspace.workspaceFolders?.length &&
+      directory.toString() === saveDirectoryUri().toString()
+    )
+      await vscode.workspace.fs.createDirectory(directory);
+  };
   const locationText = (uri: vscode.Uri) =>
     uri.scheme === "file" ? uri.fsPath : uri.toString();
   const getApplicationSettings = () =>
     applicationSettings(
       context.globalState.get<unknown>("applicationSettings") ?? {
-        downloadDirectory: join(
-          homedir(),
-          ".cache",
-          "onnx-light-viewer",
-          "downloads",
-        ),
+        downloadDirectory: join(homedir(), ".cache", "onnx-light-viewer"),
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
@@ -564,6 +607,8 @@ async function configurePanel(
       type: "settings-info",
       application,
       exportHistory: exportHistory.snapshot(),
+      pathHistory: pathHistory.snapshot(),
+      saveDirectory: locationText(saveDirectoryUri()),
       exportDirectory: defaultExportDirectory(application.downloadDirectory),
       viewer: viewerSettings(
         context.globalState.get<unknown>("viewerSettings") ?? {
@@ -576,6 +621,17 @@ async function configurePanel(
       trusted: vscode.workspace.isTrusted,
     });
   };
+  let recipeCache: { directory: string; recipes: OliveRecipes } | undefined;
+  const getOliveRecipes = () => {
+    const directory = join(
+      getApplicationSettings().downloadDirectory,
+      "olive-recipes",
+    );
+    if (recipeCache?.directory !== directory)
+      recipeCache = { directory, recipes: new OliveRecipes(directory) };
+    return recipeCache.recipes;
+  };
+  const recipeController = new AbortController();
   const getExportPlan = (value: unknown) => {
     const settings = getApplicationSettings();
     if (
@@ -588,7 +644,25 @@ async function configurePanel(
         ...value,
         directory: defaultExportDirectory(settings.downloadDirectory),
       };
-    return exportPlan(value, settings.pythonPath, settings.downloadDirectory);
+    let recipe;
+    if (
+      value &&
+      typeof value === "object" &&
+      "exporter" in value &&
+      value.exporter === "olive-recipes"
+    ) {
+      recipe = getOliveRecipes().resolve(
+        "recipeId" in value ? value.recipeId : undefined,
+        "recipeRevision" in value ? value.recipeRevision : undefined,
+      );
+      value = { ...value, model: recipe.name };
+    }
+    return exportPlan(
+      value,
+      settings.pythonPath,
+      settings.downloadDirectory,
+      recipe,
+    );
   };
   let inspectingPackages = false;
   let exporting: AbortController | undefined;
@@ -624,8 +698,9 @@ async function configurePanel(
         fusionHistory: current.fusionHistory ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
+        saveDirectory: locationText(saveDirectoryUri()),
         savePath: locationText(
-          vscode.Uri.joinPath(directoryUri(), copyFileName(current)),
+          vscode.Uri.joinPath(saveDirectoryUri(), copyFileName(current)),
         ),
       },
       ...(current.metadata ? { metadata: current.metadata } : {}),
@@ -671,6 +746,7 @@ async function configurePanel(
       message: {
         type?: string;
         path?: unknown;
+        nodeIndex?: unknown;
         actionId?: string;
         entry?: unknown;
         storage?: unknown;
@@ -678,6 +754,7 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        name?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
@@ -687,6 +764,7 @@ async function configurePanel(
         anchors?: unknown;
         candidates?: unknown;
         operation?: unknown;
+        backend?: unknown;
         match?: unknown;
         all?: unknown;
         location?: unknown;
@@ -710,9 +788,26 @@ async function configurePanel(
       } else if (
         message?.type === "get-settings" ||
         message?.type === "application-settings" ||
+        message?.type === "export-history-edit" ||
+        message?.type === "reset-viewer-settings" ||
         message?.type === "inspect-python"
       ) {
         try {
+          if (message.type === "reset-viewer-settings") {
+            await context.globalState.update("viewerSettings", undefined);
+          } else if (message.type === "export-history-edit") {
+            if (message.historyAction === "clear") await exportHistory.clear();
+            else if (
+              message.historyAction === "remove" &&
+              (message.target === "models" ||
+                message.target === "directories") &&
+              typeof message.historyEntry === "string" &&
+              message.historyEntry.trim() &&
+              !/[\0\r\n]/.test(message.historyEntry)
+            ) {
+              await exportHistory.remove(message.target, message.historyEntry);
+            } else throw new Error("Invalid conversion history edit.");
+          }
           if (message.type === "application-settings") {
             const settings = applicationSettings(message.settings);
             await mkdir(settings.downloadDirectory, { recursive: true });
@@ -747,7 +842,8 @@ async function configurePanel(
             } finally {
               inspectingPackages = false;
             }
-          } else await sendSettings();
+          } else if (message.type !== "export-history-edit")
+            await sendSettings();
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
@@ -839,6 +935,47 @@ async function configurePanel(
             `Could not estimate ONNX memory: ${detail}`,
           );
         }
+      } else if (message?.type === "tensor-statistics") {
+        const requestedModel = model;
+        const revision = graphRevision;
+        const generation = ++tensorStatisticsRequest;
+        const isCurrent = () =>
+          active &&
+          model === requestedModel &&
+          graphRevision === revision &&
+          tensorStatisticsRequest === generation;
+        try {
+          const statistics = await log.run("Inspect tensor data", async () => {
+            if (
+              typeof message.requestId !== "number" ||
+              !Number.isSafeInteger(message.requestId) ||
+              message.requestId <= 0 ||
+              typeof message.name !== "string" ||
+              !message.name.length ||
+              !isGraphPath(message.path)
+            )
+              throw new Error("Invalid tensor statistics request.");
+            const current = requireModel();
+            const native = await nativeModel(current, log, () => {
+              void sendStatus();
+            });
+            if (!isCurrent()) return;
+            return native.tensorStatistics(message.name, message.path, true);
+          });
+          if (isCurrent() && statistics)
+            await postMessage({
+              type: "tensor-statistics-info",
+              requestId: message.requestId,
+              statistics,
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "tensor-statistics-error",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "get-statistics") {
         const requestedModel = model;
         const revision = graphRevision;
@@ -884,6 +1021,29 @@ async function configurePanel(
             `Could not refresh ONNX statistics: ${detail}`,
           );
         }
+      } else if (message?.type === "olive-recipes") {
+        try {
+          if (!vscode.workspace.isTrusted)
+            throw new Error(
+              "Trust this workspace before downloading Olive recipes.",
+            );
+          const catalog = await getOliveRecipes().refresh(
+            recipeController.signal,
+          );
+          if (!active) return;
+          await postMessage({
+            type: "olive-recipes",
+            requestId: message.requestId,
+            ...catalog,
+          });
+        } catch (error) {
+          if (!active) return;
+          await postMessage({
+            type: "olive-recipes",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "export-preview") {
         try {
           const plan = getExportPlan(message.exportOptions);
@@ -923,6 +1083,28 @@ async function configurePanel(
               const originalModel = model;
               const revision = graphRevision;
               let cancellation: string | undefined;
+              let exportedFiles: string[] = [];
+              let selectedFile: string | undefined;
+              const needsDownload = exportNeedsDownload(plan);
+              const conversionStage = plan.recipe
+                ? "Running pinned Olive recipe (network may be required)"
+                : plan.exporter === "olive" && plan.oliveWorkflow === "optimize"
+                  ? "Exporting with Olive (calibration downloads may be required)"
+                  : "Converting local model (offline)";
+              const timings: {
+                downloadSkipped: boolean;
+                downloadDurationMs?: number;
+                durationMs?: number;
+              } = { downloadSkipped: !needsDownload };
+              let phase: "download" | "conversion" | undefined;
+              let phaseStarted = 0;
+              const finishPhase = () => {
+                if (phase)
+                  timings[
+                    phase === "download" ? "downloadDurationMs" : "durationMs"
+                  ] = performance.now() - phaseStarted;
+                phase = undefined;
+              };
               try {
                 plan = await prepareExportPlan(plan, controller.signal);
                 await postMessage({
@@ -935,18 +1117,57 @@ async function configurePanel(
                   directoryTemplate: plan.directoryTemplate,
                   output: "",
                 });
+                await exportHistory.remember(plan);
+                if (needsDownload) {
+                  const cacheDirectory = join(
+                    getApplicationSettings().downloadDirectory,
+                    "huggingface",
+                  );
+                  phase = "download";
+                  phaseStarted = performance.now();
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: "Downloading source model",
+                    phase,
+                    cacheDirectory,
+                    ...timings,
+                  });
+                  plan = await downloadExportSource(
+                    plan,
+                    cacheDirectory,
+                    controller.signal,
+                    (output) => {
+                      if (!active || controller.signal.aborted) return;
+                      void postMessage({
+                        type: "export-progress",
+                        actionId: message.actionId,
+                        stage: "Downloading source model",
+                        phase: "download",
+                        output,
+                      });
+                    },
+                  );
+                  finishPhase();
+                }
+                controller.signal.throwIfAborted();
+                phase = "conversion";
+                phaseStarted = performance.now();
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: conversionStage,
+                  phase,
+                  command: plan.command,
+                  output: "",
+                  ...timings,
+                });
                 log.record(
                   "SUCCEEDED",
                   "Conversion command",
                   undefined,
                   `${plan.command}\nScript: ${plan.script}`,
                 );
-                await exportHistory.remember(plan);
-                await postMessage({
-                  type: "export-history",
-                  history: exportHistory.snapshot(),
-                });
-                const conversionStarted = performance.now();
                 const files = await runExport(
                   plan,
                   controller.signal,
@@ -955,13 +1176,28 @@ async function configurePanel(
                     void postMessage({
                       type: "export-progress",
                       actionId: message.actionId,
-                      stage: "Converting ONNX model",
+                      stage: conversionStage,
+                      phase: "conversion",
                       output,
                     });
                   },
                 );
-                const durationMs = performance.now() - conversionStarted;
+                exportedFiles = files;
+                finishPhase();
                 if (!active) return;
+                await postMessage({
+                  type: "export-progress",
+                  actionId: message.actionId,
+                  stage: "Conversion completed",
+                  phase: "finished",
+                  ...timings,
+                });
+                log.record(
+                  "SUCCEEDED",
+                  "Download and conversion timings",
+                  undefined,
+                  JSON.stringify(timings),
+                );
                 controller.signal.throwIfAborted();
                 const selected =
                   files.length === 1
@@ -979,6 +1215,7 @@ async function configurePanel(
                           },
                         )
                       )?.path;
+                selectedFile = selected;
                 if (!selected) {
                   cancellation =
                     "Files saved; opening the exported model was cancelled.";
@@ -987,7 +1224,7 @@ async function configurePanel(
                     actionId: message.actionId,
                     script: plan.script,
                     loaded: false,
-                    durationMs,
+                    ...timings,
                   });
                   return;
                 }
@@ -1009,19 +1246,25 @@ async function configurePanel(
                 model = loaded;
                 panel.title = `ONNX: ${posix.basename(selected.replaceAll("\\", "/"))}`;
                 await sendGraph();
-                await updateHistory("open", {
-                  action: "remember",
-                  entries: historyEntries("local", selected, dirname(selected)),
-                });
                 await postMessage({
                   type: "export-info",
                   actionId: message.actionId,
                   path: selected,
                   script: plan.script,
                   loaded: true,
-                  durationMs,
+                  ...timings,
                 });
               } catch (error) {
+                const interrupted = phase;
+                finishPhase();
+                if (active)
+                  await postMessage({
+                    type: "export-progress",
+                    actionId: message.actionId,
+                    stage: `${interrupted === "download" ? "Download" : "Conversion"} ${controller.signal.aborted ? "cancelled" : "failed"}.`,
+                    phase: "finished",
+                    ...timings,
+                  });
                 if (
                   controller.signal.aborted &&
                   error instanceof Error &&
@@ -1034,6 +1277,31 @@ async function configurePanel(
               } finally {
                 // Release before ActionLog publishes a terminal status.
                 if (exporting === controller) exporting = undefined;
+                if (exportedFiles.length) {
+                  const files = selectedFile
+                    ? [
+                        selectedFile,
+                        ...exportedFiles.filter(
+                          (file) => file !== selectedFile,
+                        ),
+                      ]
+                    : exportedFiles;
+                  const entries = new Map(
+                    files.flatMap((file) =>
+                      historyEntries("local", file, dirname(file)).map(
+                        (entry) =>
+                          [
+                            JSON.stringify([entry.kind, entry.path]),
+                            entry,
+                          ] as const,
+                      ),
+                    ),
+                  );
+                  await updateHistory("open", {
+                    action: "remember",
+                    entries: [...entries.values()],
+                  });
+                }
                 if (cancellation !== undefined)
                   log.record(
                     "CANCELLED",
@@ -1203,6 +1471,21 @@ async function configurePanel(
         } finally {
           if (hubSearch === controller) hubSearch = undefined;
         }
+      } else if (message?.type === "select-model-path") {
+        try {
+          const selection = await pickLocalModel();
+          await postMessage({
+            type: "model-path-selected",
+            requestId: message.requestId,
+            location: selection?.[0] ? locationText(selection[0]) : null,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "model-path-selected",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       } else if (message?.type === "browse-files") {
         const target = message.target;
         try {
@@ -1240,7 +1523,10 @@ async function configurePanel(
           } else if (source === "local") {
             const uri = message.location
               ? locationUri(message.location)
-              : directoryUri();
+              : target === "save"
+                ? saveDirectoryUri()
+                : directoryUri();
+            if (target === "save") await prepareSaveDirectory(uri);
             location = locationText(uri);
             parent = locationText(vscode.Uri.joinPath(uri, ".."));
             entries = (await vscode.workspace.fs.readDirectory(uri))
@@ -1323,17 +1609,7 @@ async function configurePanel(
               if (location.id === "local") {
                 const selection = inline
                   ? [locationUri(message.location)]
-                  : await vscode.window.showOpenDialog({
-                      canSelectMany: false,
-                      filters: {
-                        "ONNX models and pipelines": [
-                          "onnx",
-                          "enc",
-                          "pipe-onnx",
-                        ],
-                      },
-                      openLabel: "Open ONNX graph",
-                    });
+                  : await pickLocalModel();
                 if (!selection?.[0]) {
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
@@ -1670,7 +1946,7 @@ async function configurePanel(
                     : message.type === "preview-fusion"
                       ? "Preview fusion pattern"
                       : "List fusion patterns",
-            async () => {
+            async (id) => {
               const current = requireModel();
               if (message.type === "undo-fusion") {
                 if (
@@ -1678,15 +1954,17 @@ async function configurePanel(
                   typeof message.all !== "boolean"
                 )
                   throw new Error("Expected a boolean unfuse-all option.");
-                const native = await nativeModel(
+                let edited = await nativeModel(
                   current,
                   log,
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
-                let edited = native.undoFusion();
-                while (message.all === true && edited.fusionCount())
+                if (message.all === true) {
+                  while (edited.fusionCount()) edited = edited.undoFusion();
+                } else {
                   edited = edited.undoFusion();
+                }
                 const currentPath =
                   current.graph.breadcrumbs.at(-1)?.path ?? [];
                 const path =
@@ -1707,8 +1985,8 @@ async function configurePanel(
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
-                await sendGraph();
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.fusionCount ? " (modified)" : ""}`;
+                await sendGraph(undefined, message.requestId);
                 return;
               }
               if (!(
@@ -1719,6 +1997,105 @@ async function configurePanel(
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
               if (message.type === "apply-optimization") {
+                if (
+                  message.backend !== undefined &&
+                  message.backend !== "onnx-light" &&
+                  message.backend !== "onnxscript"
+                )
+                  throw new Error("Choose a supported optimization backend.");
+                if (message.backend === "onnxscript") {
+                  if (
+                    message.operation !== "Optimize" ||
+                    !Array.isArray(message.patterns) ||
+                    message.patterns.length
+                  )
+                    throw new Error(
+                      "ONNX Script uses its default optimizer and rewrite rules.",
+                    );
+                  if (!vscode.workspace.isTrusted)
+                    throw new Error(
+                      "Trust this workspace before running ONNX Script.",
+                    );
+                  if (current.graph.pipeline)
+                    throw new Error(
+                      "ONNX Script requires a single ONNX model.",
+                    );
+                  const native = await nativeModel(
+                    current,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                  const bytes = await native.serialize(
+                    undefined,
+                    current.source?.uri.scheme === "file"
+                      ? current.source.uri.fsPath
+                      : undefined,
+                    false,
+                  );
+                  if (!isCurrent()) return;
+                  const result = await optimizeWithOnnxScript(
+                    bytes,
+                    getApplicationSettings().pythonPath,
+                    context.globalStorageUri.fsPath,
+                  );
+                  if (!isCurrent()) return;
+                  const edited = result.changed
+                    ? loadModel(result.bytes, current.graph.name)
+                    : native;
+                  edited.verify();
+                  let replacement = current;
+                  if (result.changed) {
+                    const retained = edited.clone();
+                    replacement = {
+                      ...current,
+                      native: edited,
+                      nativeReload: undefined,
+                      graph: edited.graph(false),
+                      metadata: undefined,
+                      fusionCount: edited.fusionCount(),
+                      fusionHistory: edited.fusionHistory(),
+                      pythonOptimized: true,
+                      reload: () => retained.clone(),
+                    };
+                  }
+                  fusionPreview = undefined;
+                  model = replacement;
+                  graphRevision++;
+                  navigationRequest++;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
+                  await sendGraph(undefined, message.requestId);
+                  if (
+                    !active ||
+                    model !== replacement ||
+                    fusionRequest !== generation + 1
+                  )
+                    return;
+                  log.record(
+                    "SUCCEEDED",
+                    "Optimize ONNX model",
+                    id,
+                    result.logs,
+                  );
+                  await postMessage({
+                    type: "optimization-info",
+                    requestId: message.requestId,
+                    backend: "onnxscript",
+                    operation: "Optimize",
+                    changed: result.changed,
+                    logs: result.logs,
+                    matches: [],
+                    optimizationReport: null,
+                    undoSupported: false,
+                    notice: result.changed
+                      ? undefined
+                      : "No changes. Existing native undo history is retained.",
+                    patterns: edited.fusionPatterns(),
+                    optimizationPatterns: edited.optimizationPatterns(),
+                    scenarios: edited.rewritingScenarios(),
+                  });
+                  return;
+                }
                 const native = await nativeModel(
                   current,
                   log,
@@ -1768,7 +2145,7 @@ async function configurePanel(
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${edited.fusionCount() ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -2101,6 +2478,18 @@ async function configurePanel(
               const fileName = copyFileName(current, format.encrypted);
               if (inline && typeof message.overwrite !== "boolean")
                 throw new Error("Invalid overwrite choice.");
+              if (!inline) {
+                try {
+                  await prepareSaveDirectory(saveDirectoryUri());
+                } catch (error) {
+                  log.record(
+                    "FAILED",
+                    "Prepare suggested save directory",
+                    undefined,
+                    error instanceof Error ? error.message : String(error),
+                  );
+                }
+              }
               const destination = inline
                 ? locationUri(message.location)
                 : await vscode.window.showSaveDialog({
@@ -2111,20 +2500,26 @@ async function configurePanel(
                       : current.graph.pipeline
                         ? { "ONNX pipelines": ["pipe-onnx"] }
                         : { "ONNX models": ["onnx"] },
-                    ...(current.source
-                      ? {
-                          defaultUri: vscode.Uri.joinPath(
-                            current.source.uri,
-                            "..",
-                            fileName,
-                          ),
-                        }
-                      : {}),
+                    defaultUri: vscode.Uri.joinPath(
+                      saveDirectoryUri(),
+                      fileName,
+                    ),
                   });
               if (!destination || !active || model !== current)
                 return cancelled();
               const source = current.source?.uri;
-              await assertSaveDestination(source ? [source] : [], destination);
+              const originalSources = source
+                ? [
+                    source,
+                    ...(current.sourceWeightLocations ?? []).map((location) =>
+                      vscode.Uri.joinPath(source, "..", location),
+                    ),
+                  ]
+                : [];
+              await assertSaveDestination(originalSources, destination);
+              await prepareSaveDirectory(
+                vscode.Uri.joinPath(destination, ".."),
+              );
               if (format.reuse) {
                 if (
                   !source ||
@@ -2176,7 +2571,7 @@ async function configurePanel(
               if (!active || model !== current) return cancelled();
               const sources = source
                 ? [
-                    source,
+                    ...originalSources,
                     ...native
                       .externalDataLocations()
                       .map((location) =>
@@ -2286,7 +2681,23 @@ async function configurePanel(
               const native = await nativeModel(current, log, () => {
                 void sendStatus();
               });
-              return native.graph(false, path);
+              const graph = native.graph(false, path);
+              if (
+                message.type === "navigate" &&
+                message.nodeIndex !== undefined
+              ) {
+                if (
+                  typeof message.nodeIndex !== "number" ||
+                  !Number.isSafeInteger(message.nodeIndex) ||
+                  message.nodeIndex < 0 ||
+                  !graph.nodes.some(
+                    (node) => node.id === `node-${message.nodeIndex}`,
+                  )
+                )
+                  throw new Error("Invalid navigation node index.");
+                selectedNodes = [message.nodeIndex];
+              }
+              return graph;
             },
             message.actionId,
           );
@@ -2441,8 +2852,10 @@ async function configurePanel(
     active = false;
     hubSearch?.abort();
     exporting?.abort();
+    recipeController.abort();
     model = undefined;
     stopHistory();
+    stopExportHistory();
     messages.dispose();
     viewState.dispose();
     disposal.dispose();

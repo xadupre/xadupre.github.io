@@ -79,6 +79,14 @@ export interface GraphTypeDetails {
   })[];
 }
 
+/** Metadata-only logical tensor size, serialized as exact decimal integers. */
+export interface TensorDistribution {
+  kind: "dense" | "sparse" | "encoded";
+  elementCount: string | null;
+  /** Dense-equivalent size; null for unknown shapes or variable-width types. */
+  logicalSizeBytes: string | null;
+}
+
 /** Dense, sparse or encoded weight metadata with bounded previews. */
 export interface GraphInitializer {
   name: string;
@@ -91,6 +99,7 @@ export interface GraphInitializer {
   storage: InitializerStorage;
   /** Present for sparse initializers, describing their indices tensor. */
   indicesStorage?: InitializerStorage;
+  distribution?: TensorDistribution;
   /** Inline values (<16 elements per dense tensor or sparse component), with exact integers. */
   value?: string;
 }
@@ -117,6 +126,8 @@ export interface GraphNode {
   opset: string | null;
   attributes: GraphAttribute[];
   parameters: GraphInitializer[];
+  /** Stored Constant outputs, without reading or decoding their payloads. */
+  storedOutputs?: (TensorInformation & { distribution: TensorDistribution })[];
   /** Null for local function calls or when no native operator schema is available. */
   schema: OperatorSchema | null;
   /** Local function called by this node, matched by domain, name and overload. */
@@ -199,6 +210,8 @@ export interface OptimizationPattern {
   name: string;
   priority: number;
   device: string;
+  enabledByDefault: boolean;
+  groups: string[];
 }
 
 export interface FusionDiagnostic {
@@ -262,6 +275,27 @@ export interface MemoryProfile {
     outputBytes: number;
     scratchBytes: number;
     deviceBytes: number;
+    /** Next pre-node snapshot; null for the final node until the SDK exposes it. */
+    afterBytes: number | null;
+    decisions: {
+      action: "inplace" | "release" | "release_shape_tag";
+      name: string;
+      input?: string;
+      output?: string;
+      kind?: "equal" | "greater";
+    }[];
+    inputs: {
+      name: string;
+      type: string | null;
+      shape: string | null;
+      tag: string | null;
+    }[];
+    outputs: {
+      name: string;
+      type: string | null;
+      shape: string | null;
+      tag: string | null;
+    }[];
   }[];
 }
 
@@ -272,11 +306,50 @@ export interface RewritingScenario {
   available: boolean;
 }
 
+export type StatisticsNumber = number | "NaN" | "Infinity" | "-Infinity";
+
+export interface TensorValues {
+  name: string;
+  dtype: string;
+  shape: string[];
+  count: string;
+  sizeBytes: string;
+  values: string;
+}
+
+export type TensorInspection = TensorStatistics | TensorValues;
+
+/** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
+export interface TensorStatistics {
+  name: string;
+  dtype: string;
+  shape: string[];
+  count: string;
+  sizeBytes: string;
+  min: StatisticsNumber;
+  max: StatisticsNumber;
+  mean: StatisticsNumber;
+  median: StatisticsNumber;
+  /** Quartiles at 0.25, 0.5 and 0.75, using linear interpolation. */
+  quantiles: StatisticsNumber[];
+  distinctCount?: string;
+  distribution: string[];
+  binEdges: StatisticsNumber[];
+  rectangleMap: StatisticsNumber[];
+  rectangleShape: number[];
+}
+
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
  * Methods do not execute the model or write files.
  */
 export interface NativeModel {
+  /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
+  tensorStatistics(
+    name: string,
+    path?: GraphPath,
+    valuesIfSmall?: boolean,
+  ): Promise<TensorInspection>;
   memoryProfileInputs(path?: GraphPath): MemoryDimension[];
   /** Estimates CPU memory on an independent snapshot, without executing kernels. */
   memoryProfile(

@@ -1,10 +1,39 @@
 /* global markdownit */
-function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
+function createInspector({
+  byId,
+  tensorDescription,
+  subgraphLabel,
+  navigate,
+  openTensorStatistics,
+  hasStoredTensor,
+  nodeInitializers,
+}) {
+  function statisticsButton(name) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "icon-button tensor-statistics-button";
+    button.append(byId("tensors-tab").querySelector("svg").cloneNode(true));
+    button.title = `Inspect values or statistics for ${name}`;
+    button.setAttribute("aria-label", button.title);
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-controls", "tensor-statistics-dialog");
+    button.addEventListener("click", () => openTensorStatistics(name));
+    button.disabled = !name;
+    return button;
+  }
+  function statisticsHeading(name, label) {
+    const heading = document.createElement("div");
+    heading.className = "tensor-statistics-heading";
+    heading.append(label);
+    if (hasStoredTensor(name)) heading.append(statisticsButton(name));
+    return heading;
+  }
   const documentationMarkdown = markdownit({ html: false });
   documentationMarkdown.validateLink = (url) => /^https?:\/\//i.test(url);
   documentationMarkdown.renderer.rules.image = (tokens, index) =>
     documentationMarkdown.utils.escapeHtml(tokens[index].content);
   let inspectedNode;
+  let initializerGraph;
   function resetDocumentation() {
     if (byId("operator-doc").open) byId("operator-doc").close();
     byId("doc-title").textContent = "";
@@ -82,7 +111,7 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
       [...attributes, ...defaults],
       "attribute-count",
     );
-    initializerList(node?.parameters ?? []);
+    initializerList(node ? nodeInitializers(node) : []);
     byId("node-parameters").hidden = !node;
     const inspectFunctions = !node && !port && scope?.kind === "Model";
     const functions = inspectFunctions ? (scope.localFunctions ?? []) : [];
@@ -100,20 +129,45 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         return item;
       }),
     );
-    const inspectInitializers =
-      !node && !port && scope && scope.kind !== "Pipeline";
+    const inspectInitializers = scope && scope.kind !== "Pipeline";
     byId("scope-initializers").hidden = !inspectInitializers;
-    for (const [field, id] of [
-      ["initializers", "dense"],
-      ["sparseInitializers", "sparse"],
-      ["encodedInitializers", "encoded"],
-    ]) {
-      initializerList(
-        inspectInitializers ? (scope[field] ?? []) : [],
-        `scope-${id}-initializers`,
-        `${id}-initializer-count`,
-      );
+    if (initializerGraph !== scope?.graph) {
+      initializerGraph = scope?.graph;
+      for (const [field, id] of [
+        ["initializers", "dense"],
+        ["sparseInitializers", "sparse"],
+        ["encodedInitializers", "encoded"],
+      ]) {
+        initializerList(
+          inspectInitializers ? (scope[field] ?? []) : [],
+          `scope-${id}-initializers`,
+          `${id}-initializer-count`,
+        );
+      }
     }
+    const constants = scope?.constants ?? [];
+    byId("node-constants").hidden = constants.length === 0;
+    byId("constant-count").textContent = constants.length;
+    byId("constant-nodes").replaceChildren(
+      ...constants.map((constant) => {
+        const item = document.createElement("li");
+        const details = document.createElement("details");
+        const summary = document.createElement("summary");
+        summary.textContent = constant.name || constant.outputs.join(", ");
+        const outputs = document.createElement("div");
+        outputs.className = "tensor-info";
+        for (const name of constant.outputs) {
+          const label = document.createElement("span");
+          label.textContent = `${name}: ${tensorDescription(name)}`;
+          outputs.append(statisticsHeading(name, label));
+        }
+        const attributes = document.createElement("ul");
+        attributes.append(...(constant.attributes ?? []).map(attributeItem));
+        details.append(summary, outputs, attributes);
+        item.append(details);
+        return item;
+      }),
+    );
     for (const direction of ["inputs", "outputs"]) {
       const names =
         node?.[direction] ??
@@ -143,7 +197,9 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
     byId("captured-inputs").replaceChildren(
       ...captures.map((name) => {
         const item = document.createElement("li");
-        item.textContent = `${name}: ${tensorDescription(name)}`;
+        const label = document.createElement("span");
+        label.textContent = `${name}: ${tensorDescription(name)}`;
+        item.append(statisticsHeading(name, label));
         return item;
       }),
     );
@@ -163,7 +219,7 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
         const shape = document.createElement("div");
         shape.className = "tensor-info";
         shape.textContent = `Shape: [${parameter.shape?.join(", ") ?? "?"}]`;
-        item.append(heading);
+        item.append(statisticsHeading(parameter.name, heading));
         if (parameter.shape !== undefined) item.append(shape);
         if (parameter.typeDetails) {
           item.append(typeTable("Logical type", parameter.typeDetails));
@@ -278,24 +334,24 @@ function createInspector({ byId, tensorDescription, subgraphLabel, navigate }) {
 
   function parameterList(id, parameters, countId) {
     byId(countId).textContent = parameters.length;
-    byId(`node-${id}`).replaceChildren(
-      ...parameters.map((parameter) => {
-        const item = document.createElement("li");
-        const heading = document.createElement("strong");
-        heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
-        const value = document.createElement("pre");
-        value.textContent = parameter.value;
-        item.append(heading, value);
-        for (const [index, graph] of (parameter.graphs ?? []).entries()) {
-          const button = document.createElement("button");
-          button.className = "icon-button";
-          button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
-          button.addEventListener("click", () => navigate(graph.path));
-          item.append(button);
-        }
-        return item;
-      }),
-    );
+    byId(`node-${id}`).replaceChildren(...parameters.map(attributeItem));
+  }
+
+  function attributeItem(parameter) {
+    const item = document.createElement("li");
+    const heading = document.createElement("strong");
+    heading.textContent = `${parameter.name} (${parameter.type})${parameter.default ? " [default]" : ""}`;
+    const value = document.createElement("pre");
+    value.textContent = parameter.value;
+    item.append(heading, value);
+    for (const [index, graph] of (parameter.graphs ?? []).entries()) {
+      const button = document.createElement("button");
+      button.className = "icon-button";
+      button.textContent = `Open ${subgraphLabel(parameter, index)}: ${graph.name} (${graph.nodeCount} nodes)`;
+      button.addEventListener("click", () => navigate(graph.path));
+      item.append(button);
+    }
+    return item;
   }
   byId("show-doc").addEventListener("click", () => {
     if (!inspectedNode?.schema?.doc) return;

@@ -40,6 +40,7 @@ export function webviewHtml(
       <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
       <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
       <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
+      <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
       <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
       <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
       <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
@@ -75,30 +76,152 @@ export function webviewHtml(
           </nav>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
-            <p>Run an installed exporter, save its files and open the exported model. No packages are installed automatically.</p>
-            <p id="export-python">Uses the Python executable configured in Settings.</p>
+            <table id="export-timings" aria-label="Download and conversion times" hidden>
+              <thead><tr><th scope="col">Step</th><th scope="col">Elapsed time</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">Download</th><td id="export-download-time">Not started</td></tr>
+                <tr><th scope="row">Conversion</th><td id="export-conversion-time">Not started</td></tr>
+              </tbody>
+            </table>
+            <p id="export-cache"></p>
             <p id="export-trust" hidden>Trust this workspace before running an exporter.</p>
             <form id="export-form">
               <fieldset id="export-fields">
-                <label for="export-tool">Exporter</label>
-                <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="mbext">mbext (fast export)</option></select>
-                <label for="export-source">Hugging Face model ID or absolute local model directory</label>
+                <div class="export-field">
+                  <label for="export-tool">Exporter</label>
+                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                </div>
+                <div id="export-olive-options" class="export-option" hidden>
+                  <div class="export-field">
+                    <label for="export-olive-workflow">Olive workflow</label>
+                    <select id="export-olive-workflow" disabled><option value="optimize">Export checkpoint / optimize ONNX</option><option value="quantize">Quantize existing ONNX (CPU, offline)</option></select>
+                  </div>
+                  <p>Export accepts a Hugging Face ID or local checkpoint and produces ONNX. Olive may download calibration data; install its dependencies in Settings' Python environment first.</p>
+                </div>
+                <div id="export-source-options" class="export-option">
+                <label id="export-source-label" for="export-source">Hugging Face model ID or absolute local model directory</label>
                 <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                </div>
+                <div id="export-olive-quantization" class="export-option" hidden>
+                  <div class="export-field">
+                    <label for="export-olive-precision">Quantization precision (CPU, RTN)</label>
+                    <select id="export-olive-precision" disabled><option value="int4">INT4 (Olive)</option><option value="int8">INT8 (ONNX Runtime dynamic)</option></select>
+                  </div>
+                </div>
+                <div id="export-recipe-options" hidden>
+                  <div class="export-field">
+                    <label for="export-recipe">Olive recipe</label>
+                    <select id="export-recipe" disabled required><option value="">Load the recipe list</option></select>
+                  </div>
+                  <button id="export-recipe-refresh" type="button">Refresh recipes</button>
+                  <p id="export-recipe-status" role="status"></p>
+                  <p id="export-recipe-details"></p>
+                  <p>Recipes keep their own model, precision and target. Install the recipe's requirements in the configured Python environment, including any pinned Olive version, before running.</p>
+                  <a id="export-recipe-link" href="https://github.com/microsoft/olive-recipes">Recipe source and requirements</a>
+                </div>
                 <label for="export-directory">Output directory or template</label>
                 <input id="export-directory" required placeholder="/path/to/new-export" autocomplete="off" list="export-directory-history"><datalist id="export-directory-history"></datalist>
-                <p>Defaults to a model-specific folder in the Settings download directory. Recent model IDs and output directories are saved as suggestions; existing files are never overwritten.</p>
-                <p>If the output directory is not empty, conversion creates a new subfolder automatically. The command shows the actual destination, where the model, weights and export_model.py reproduction script are kept together.</p>
-                <label for="export-precision">Precision</label>
-                <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
-                <p>All precisions are available for every exporter and device. Unsupported combinations are reported by the exporter.</p>
-                <label for="export-provider">Target device</label>
-                <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                <div id="export-target-options" class="export-option">
+                  <div class="export-field">
+                    <label for="export-precision">Precision</label>
+                    <select id="export-precision"><option value="fp32">FP32</option><option value="fp16">FP16</option><option value="bf16">BF16</option><option value="int4">INT4</option><option value="int8" hidden disabled>INT8</option><option value="int2">INT2</option><option value="fp4">FP4</option></select>
+                  </div>
+                  <div class="export-field">
+                    <label for="export-provider">Target device</label>
+                    <select id="export-provider"><option value="cpu">CPU</option><option value="cuda">CUDA</option></select>
+                  </div>
+                </div>
+                <details id="export-advanced" class="export-advanced">
+                  <summary>Advanced options</summary>
+                  <div id="export-layer-options" class="export-option" data-exporters="mbext modelbuilder" hidden>
+                    <div class="export-field">
+                      <label for="export-layer-count">Layer limit (test model)</label>
+                      <input id="export-layer-count" type="number" min="1" step="1" placeholder="All layers" disabled>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" hidden>
+                    <label><input id="export-exclude-embeds" type="checkbox" data-export-option="excludeEmbeds" disabled> Exclude embeddings</label>
+                    <label><input id="export-exclude-lm-head" type="checkbox" data-export-option="excludeLmHead" disabled> Exclude language modeling head</label>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" data-excludes="export-exclude-lm-head" hidden>
+                    <label><input id="export-include-hidden-states" type="checkbox" data-export-option="includeHiddenStates" disabled> Include hidden states</label>
+                    <label><input id="export-prune-lm-head" type="checkbox" data-export-option="pruneLmHead" disabled> Last-token logits only</label>
+                  </div>
+                  <div class="export-option" data-exporters="olive" data-olive-workflows="optimize" hidden>
+                    <div class="export-field">
+                      <label for="export-olive-exporter">ONNX exporter</label>
+                      <select id="export-olive-exporter" data-export-option="oliveExporter" disabled><option value="">Olive default (model builder)</option><option value="model_builder">Model builder</option><option value="dynamo_exporter">PyTorch Dynamo</option><option value="torchscript_exporter">PyTorch TorchScript</option></select>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-olive-task">Hugging Face task</label>
+                      <input id="export-olive-task" placeholder="Olive default" list="export-olive-tasks" data-export-option="task" disabled>
+                    </div>
+                    <datalist id="export-olive-tasks"><option value="text-generation-with-past"><option value="text-generation"><option value="text-classification"><option value="feature-extraction"></datalist>
+                    <label><input id="export-olive-trust-code" type="checkbox" data-export-option="trustRemoteCode" disabled> Trust model repository code (executes Python)</label>
+                    <div class="export-field">
+                      <label for="export-olive-splits">Model splits</label>
+                      <input id="export-olive-splits" type="number" min="1" step="1" placeholder="Olive default" data-export-option="numSplits" disabled>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-olive-memory">Device memory (MB)</label>
+                      <input id="export-olive-memory" type="number" min="1" step="1" placeholder="Olive default" data-export-option="memory" disabled>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder olive" data-precisions="int4 int8" hidden>
+                    <label><input id="export-use-qdq" type="checkbox" data-export-option="useQdq" disabled> Q/DQ quantization</label>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder olive" data-precisions="int4" data-olive-workflows="optimize" hidden>
+                    <div class="export-field">
+                      <label for="export-block-size">Quantization block size</label>
+                      <select id="export-block-size" data-export-option="blockSize" data-number disabled><option value="">Exporter default</option><option>16</option><option>32</option><option>64</option><option>128</option><option>256</option></select>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mbext modelbuilder" data-precisions="int4" hidden>
+                    <div class="export-field">
+                      <label for="export-quantization-algorithm">Quantization algorithm</label>
+                      <select id="export-quantization-algorithm" data-export-option="quantizationAlgorithm" disabled><option value="">Exporter default</option><option value="rtn">RTN</option><option value="rtn_last">RTN, INT8 last MatMul</option><option value="k_quant">K-quant</option><option value="k_quant_mixed">K-quant mixed</option><option value="k_quant_last">K-quant, INT8 last MatMul</option></select>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mbext" hidden>
+                    <div class="export-field">
+                      <label for="export-opset">ONNX opset</label>
+                      <input id="export-opset" type="number" min="1" step="1" placeholder="Exporter default" data-export-option="opset" disabled>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mbext mobius" hidden>
+                    <div class="export-field">
+                      <label for="export-max-shard-size">Maximum weight file size</label>
+                      <input id="export-max-shard-size" placeholder="2GB" pattern="[1-9][0-9]*([KkMmGg]?[Bb])" data-export-option="maxShardSize" disabled>
+                    </div>
+                  </div>
+                  <div class="export-option" data-exporters="mobius" hidden>
+                    <label><input id="export-no-weights" type="checkbox" data-export-option="noWeights" disabled> Graph without weights</label>
+                    <div class="export-field">
+                      <label for="export-optimize">Graph optimizations</label>
+                      <select id="export-optimize" data-export-option="optimize" disabled><option value="">Exporter default</option><option value="all">All</option><option value="group_query_attention">Group Query Attention</option><option value="packed_attention">Packed Attention</option><option value="skip_norm">Skip normalization</option></select>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-external-data">Weight file format</label>
+                      <select id="export-external-data" data-export-option="externalData" disabled><option value="">Exporter default</option><option value="onnx">ONNX external data</option><option value="safetensors">Safetensors</option></select>
+                    </div>
+                    <div class="export-field">
+                      <label for="export-runtime">Runtime configuration</label>
+                      <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                    </div>
+                    <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
+                  </div>
+                  <div class="export-option" data-exporters="mobius" data-requires="export-static-cache" hidden>
+                    <div class="export-field">
+                      <label for="export-max-sequence-length">Maximum sequence length</label>
+                      <input id="export-max-sequence-length" type="number" min="1" step="1" placeholder="Model default" data-export-option="maxSequenceLength" disabled>
+                    </div>
+                  </div>
+                </details>
               </fieldset>
               <p id="export-script"></p>
               <progress id="export-progress" aria-label="Converting ONNX model" hidden></progress>
               <p id="export-status" role="status"></p>
               <h3>Command and output</h3>
-              <p>Recent exporter output, including Hugging Face download progress (up to 65,536 characters); automatically follows the latest line.</p>
               <pre id="export-output" class="export-output" aria-label="Exporter command and output"><code id="export-command" aria-label="Exporter command"></code><span id="export-stdout"></span></pre>
               <p id="export-error" role="alert"></p>
               <footer><button id="cancel-export" type="button" disabled>Cancel conversion</button><button id="export-submit" class="primary" type="submit">Convert and open</button></footer>
@@ -120,21 +243,23 @@ export function webviewHtml(
             <div class="inspector-heading"><h2 id="node-title">No model loaded</h2><button id="show-doc" disabled aria-haspopup="dialog">Doc</button></div><p id="node-description">Open an ONNX model to explore its connections.</p>
             <button id="open-function" class="icon-button" hidden>Open function</button>
             <div id="node-details"><dl><dt id="node-name-label">NODE NAME</dt><dd id="node-name">—</dd><dt>DOMAIN</dt><dd id="node-domain">—</dd><dt>OPSET</dt><dd id="node-opset">—</dd></dl>
-            <h3>Inputs <span id="input-count">0</span></h3><ul id="node-inputs"></ul>
-            <h3>Outputs <span id="output-count">0</span></h3><ul id="node-outputs"></ul>
-            <section id="node-captures" hidden><h3>Captured inputs</h3><ul id="captured-inputs"></ul></section>
+            <details class="inspector-section" open><summary>Inputs <span id="input-count">0</span></summary><ul id="node-inputs"></ul></details>
+            <details class="inspector-section" open><summary>Outputs <span id="output-count">0</span></summary><ul id="node-outputs"></ul></details>
+            <details id="node-captures" class="inspector-section" open hidden><summary>Captured inputs</summary><ul id="captured-inputs"></ul></details>
             <section id="node-parameters" hidden>
-              <h3>Attributes <span id="attribute-count">0</span></h3><ul id="node-attributes"></ul>
-              <h3>Initializers <span id="parameter-count">0</span></h3><ul id="node-initializers"></ul>
+              <details class="inspector-section" open><summary>Attributes <span id="attribute-count">0</span></summary><ul id="node-attributes"></ul></details>
+              <details class="inspector-section" open><summary>Initializers <span id="parameter-count">0</span></summary><ul id="node-initializers"></ul></details>
             </section>
+            <details id="node-constants" class="inspector-section" open hidden><summary>Constants <span id="constant-count">0</span></summary><ul id="constant-nodes"></ul></details>
             <section id="scope-initializers" hidden>
-              <h3>Initializers <span id="dense-initializer-count">0</span></h3><ul id="scope-dense-initializers"></ul>
-              <h3>Sparse initializers <span id="sparse-initializer-count">0</span></h3><ul id="scope-sparse-initializers"></ul>
-              <h3>Encoded initializers <span id="encoded-initializer-count">0</span></h3><ul id="scope-encoded-initializers"></ul>
+              <h3 class="eyebrow">Graph initializers</h3>
+              <details class="inspector-section" open><summary>Initializers <span id="dense-initializer-count">0</span></summary><ul id="scope-dense-initializers"></ul></details>
+              <details class="inspector-section" open><summary>Sparse initializers <span id="sparse-initializer-count">0</span></summary><ul id="scope-sparse-initializers"></ul></details>
+              <details class="inspector-section" open><summary>Encoded initializers <span id="encoded-initializer-count">0</span></summary><ul id="scope-encoded-initializers"></ul></details>
             </section>
-            <section id="scope-functions" hidden>
-              <h3>Local functions <span id="function-count">0</span></h3><ul id="local-functions"></ul>
-            </section></div>
+            <details id="scope-functions" class="inspector-section" open hidden>
+              <summary>Local functions <span id="function-count">0</span></summary><ul id="local-functions"></ul>
+            </details></div>
           </section>
           <section id="metadata-panel" class="inspector-panel" aria-labelledby="metadata-title" hidden>
             <h2 id="metadata-title" class="eyebrow panel-title">Data</h2>
@@ -151,23 +276,35 @@ export function webviewHtml(
           </section>
           <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
             <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
-            <p>Run onnx-light's complete native optimization algorithm: canonicalization, repeated priority-ordered matching, constant evaluation and unused-code cleanup. Final native canonicalization rewires redundant identities without replacement operators. This is not a single matching pass.</p>
-            <details id="optimization-picker" class="fusion-picker" open>
-              <summary>Patterns and priority groups</summary>
+            <div class="fusion-selection-controls optimizer-backends" role="group" aria-label="Optimizer backend">
+              <button id="optimizer-onnx-light" aria-pressed="true">onnx-light</button>
+              <button id="optimizer-onnxscript" aria-pressed="false">onnxscript</button>
+            </div>
+            <p id="onnxscript-optimization-note" hidden>Runs ONNX Script with Python.</p>
+            <div id="optimization-picker" class="fusion-picker">
+              <div id="native-optimization-patterns">
+              <fieldset id="optimization-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-optimization-patterns" disabled>Select all</button><button id="clear-optimization-patterns" disabled>Clear selection</button></div>
               <fieldset id="optimization-patterns" disabled aria-label="Optimization patterns"></fieldset>
-              <button id="run-optimization" disabled>Run global optimization</button>
               <p id="optimization-feedback" role="status"></p>
+              </div>
+              <button id="run-optimization" disabled>Run global optimization</button>
+              <pre id="onnxscript-optimization-output" class="native-report" aria-label="ONNX Script output" hidden></pre>
               <p id="optimization-status" role="status"></p>
-              <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
-            </details>
+              <section id="native-optimization-history">
+                <div class="fusion-selection-controls"><button id="optimization-unfuse-last" disabled>Unfuse last</button><button id="optimization-restore-original" disabled>Back to original model</button></div>
+                <p>Unfuse last reverses one complete native operation. Back to original model undoes all available native operations, including other pipeline stages. ONNX Script changes cannot be undone.</p>
+                <h3>Matched patterns</h3>
+                <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+              </section>
+            </div>
             <div id="optimization-report-section" hidden>
               <button id="show-optimization-report" disabled aria-haspopup="dialog">Show optimization report</button>
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
             <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
-            <p>Select patterns or global passes, then click Run Matching. Check candidates and click Fuse selected. IdentityRemoval, ConstantFolding and RemoveUnusedNodes use this same workflow; each global pass applies to the whole graph and must be selected individually.</p>
+            <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
               <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
@@ -178,6 +315,7 @@ export function webviewHtml(
             </details>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
+              <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
               <div class="fusion-selection-controls"><button id="select-patterns" disabled>Select all</button><button id="clear-patterns" disabled>Clear selection</button></div>
               <fieldset id="fusion-pattern" disabled aria-label="Native patterns" aria-describedby="fusion-feedback"></fieldset>
               <button id="preview-fusion" disabled>Run Matching</button>
@@ -219,23 +357,14 @@ export function webviewHtml(
               <p id="hf-search-status" role="status"></p>
               <ul id="hf-search-results" class="file-list" aria-label="Hugging Face ONNX repositories"></ul>
             </section>
-            <details id="open-browser" open><summary id="open-browser-title">Browse folders</summary>
-            <form id="open-browse" class="file-browse">
-              <label for="open-location">Directory or Hugging Face repository / URL</label>
-              <input id="open-location" type="text" autocomplete="off" list="open-location-history"><datalist id="open-location-history"></datalist>
-              <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
-            </form>
-            </details>
-            <div id="open-file-list">
-            <h3 id="hf-files-title" tabindex="-1" hidden>2. Choose an ONNX file</h3>
-            <p id="hf-files-help" hidden>Double-click an ONNX file to download and open it. Sizes exclude external weights.</p>
-            <label for="open-filter">Filter models and folders</label>
-            <input id="open-filter" type="search" aria-controls="open-files">
-            <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
-            </div>
+            <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
               <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
+              <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
+                <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
+                <button id="open-native-picker" type="button">VS Code file picker...</button>
+              </div>
               <label for="open-password">Password (encrypted models only)</label>
               <input id="open-password" type="password" autocomplete="off">
               <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
@@ -244,6 +373,27 @@ export function webviewHtml(
             </form>
             ${historyControls("open")}
           </section>
+          <dialog id="open-path-dialog" class="file-panel" aria-labelledby="open-path-title" aria-describedby="open-path-help">
+            <h2 id="open-path-title">Choose a model path</h2>
+            <p id="open-path-help">Enter any accessible directory, including outside the VS Code workspace. Select a model to fill Model path without opening it.</p>
+            <div id="open-path-content">
+            <form id="open-browse" class="file-browse">
+              <label id="open-location-label" for="open-location">Directory</label>
+              <input id="open-location" type="text" autocomplete="off" list="open-location-history"><datalist id="open-location-history"></datalist>
+              <div><button type="submit">Browse</button><button id="open-parent" type="button" disabled>Parent folder</button></div>
+            </form>
+            <div id="open-file-list">
+            <h3 id="hf-files-title" tabindex="-1" hidden>2. Choose an ONNX file</h3>
+            <p id="hf-files-help" hidden>Double-click an ONNX file to download and open it. Sizes exclude external weights.</p>
+            <label for="open-filter">Filter models and folders</label>
+            <input id="open-filter" type="search" aria-controls="open-files">
+            <ul id="open-files" class="file-list" aria-label="Models and folders"></ul>
+            </div>
+            </div>
+            <p id="open-path-error" role="alert"></p>
+            <p id="open-path-selection" role="status"></p>
+            <footer><button id="cancel-open-path" type="button">Cancel</button><button id="choose-open-path" class="primary" type="button" disabled>Choose path</button></footer>
+          </dialog>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
             <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
             <form id="save-browse" class="file-browse">
@@ -326,18 +476,40 @@ export function webviewHtml(
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
-        <svg id="memory-chart" viewBox="0 0 1000 280" role="img" aria-labelledby="memory-chart-title memory-chart-description">
+        <svg id="memory-chart" viewBox="0 0 1000 330" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Each point shows the estimated CPU tensor and registered scratch memory while a node runs. Exact values are in the table below.</desc>
+          <desc id="memory-chart-description">Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Rectangles span each node's two-interval execution window, with a gap between nodes. Highlighted rectangles identify common compute-heavy operations, not measured timings. Exact values and SDK decisions are in the table below.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
-          <text x="60" y="265">Event 1</text><text id="memory-chart-last" x="980" y="265" text-anchor="end"></text>
+          <path id="memory-node-intervals" class="memory-node-interval"></path>
+          <path id="memory-operator-intervals" class="memory-operator-interval"></path>
+          <g id="memory-node-numbers"></g>
+          <g id="memory-operator-labels"></g>
           <path id="memory-curve"></path>
         </svg>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable in onnx-light. The curve stops before that unknown value.</p>
         <h3>Estimated execution events</h3>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">Device memory</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <p id="memory-peaks-count"></p>
+        <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Before allocation</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
+    </section>
+    <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
+      <h2>Tensors</h2>
+      <p>Dense, sparse and encoded initializers and constants in the displayed graph. Inputs and intermediate tensors without stored data are not listed. Highlighted rows belong to the selected operator or tensor. The model is not executed.</p>
+      <details id="tensor-distributions" open>
+        <summary>Stored tensor distributions</summary>
+        <p>All stored tensors in this graph, grouped by type and shape. Logical sizes are dense-equivalent data sizes, not file sizes or execution peaks. Sparse and encoded tensors are counted separately. Unknown sizes remain explicit. Filters below affect only the tensor list.</p>
+        <div id="tensor-distribution-groups"></div>
+      </details>
+      <label for="tensor-list-search">Filter by name, category or consumer</label>
+      <input id="tensor-list-search" type="search" autocomplete="off">
+      <label for="tensor-list-type">Filter by tensor type</label>
+      <select id="tensor-list-type"><option value="">All types</option></select>
+      <p id="tensor-list-status" role="status">Open a model to browse tensors.</p>
+      <div class="tensor-list-table"><table aria-label="Graph tensors"><thead><tr><th scope="col">Name</th><th scope="col">Category</th><th scope="col">Type</th><th scope="col">Shape</th><th scope="col">Consumers (operator and name)</th><th scope="col">Values / statistics</th></tr></thead><tbody id="tensor-list-rows"></tbody></table></div>
+      <nav aria-label="Tensor pages"><button id="tensor-list-previous" type="button" disabled>Previous</button><button id="tensor-list-next" type="button" disabled>Next</button></nav>
     </section>
     <section id="status-view" role="tabpanel" aria-labelledby="status-tab" tabindex="0" hidden>
       <h2>Application status</h2>
@@ -369,7 +541,28 @@ export function webviewHtml(
         <button type="submit">Save paths</button>
       </form>
       <p id="settings-feedback" role="status"></p>
+      <section id="settings-stored-data" aria-labelledby="settings-stored-title">
+        <h3 id="settings-stored-title">Stored data and histories</h3>
+        <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
+        <dl class="status-details">
+          <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
+          <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
+        </dl>
+        <h4>Open history (<span id="settings-open-count">0</span>)</h4>
+        <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
+        <ul id="settings-open-history" aria-label="Open history"></ul>
+        <h4>Save history (<span id="settings-save-count">0</span>)</h4>
+        <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
+        <ul id="settings-save-history" aria-label="Save history"></ul>
+        <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
+        <p>Last conversion tool: <span id="settings-exporter">None</span></p>
+        <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
+        <ul id="settings-export-history" aria-label="Conversion history"></ul>
+        <p id="settings-history-feedback" role="status"></p>
+      </section>
       <h3>Viewer preferences</h3>
+      <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
+      <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
       <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
       <input id="settings-width" type="number" min="200" step="1">
       <div id="settings-panels">
@@ -448,6 +641,24 @@ export function webviewHtml(
       <p>Explore ONNX projects and exporters, with the packages and ecosystems they specialize in.</p>
       <h3>Official projects</h3>
       <ul class="repository-list">
+        <li>
+          <div class="repository-heading">
+            <a href="https://github.com/microsoft/Olive"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M5 21 19 3M9 16C2 15 2 9 2 9s8-1 7 7ZM14 10c-1-7 7-7 7-7s1 6-7 7Z"/></svg>Olive</a>
+            ${documentationLink("Olive", "https://microsoft.github.io/Olive/")}
+          </div>
+          <img class="repository-logo" src="${resource("repositories/olive.svg")}" alt="" width="96" height="64">
+          <p>Export Hugging Face checkpoints to ONNX, optimize models or quantize local ONNX files with olive-ai in Convert.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> ONNX optimization and quantization with olive-ai.</p>
+        </li>
+        <li>
+          <div class="repository-heading">
+            <a href="https://github.com/microsoft/olive-recipes"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M4 3h16v18H4ZM8 7h8M8 12h8M8 17h5"/></svg>Olive recipes</a>
+            ${documentationLink("Olive recipes", "https://github.com/microsoft/olive-recipes#readme")}
+          </div>
+          <img class="repository-logo" src="${resource("repositories/olive.svg")}" alt="" width="96" height="64">
+          <p>Model-specific Olive export and optimization workflows. Convert caches the recipe list by Git commit and shows recipe-specific Olive requirements.</p>
+          <p class="repository-specialization"><strong>Specialized for:</strong> Model-specific export workflows with olive-ai.</p>
+        </li>
         <li>
           <div class="repository-heading">
           <a href="https://github.com/onnx/onnx"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><circle cx="5" cy="12" r="3"/><circle cx="18" cy="5" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8 11 7-5M8 13l7 5"/></svg>ONNX</a>
@@ -597,6 +808,18 @@ export function webviewHtml(
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>
   </dialog>
+  <dialog id="tensor-statistics-dialog" aria-labelledby="tensor-statistics-title">
+    <header class="inspector-heading"><h2 id="tensor-statistics-title">Tensor statistics</h2><button id="close-tensor-statistics" autofocus>Close</button></header>
+    <p>Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
+    <div id="tensor-statistics-picker">
+      <label for="tensor-statistics-name">Tensor name</label>
+      <input id="tensor-statistics-name" list="tensor-statistics-names" autocomplete="off"><datalist id="tensor-statistics-names"></datalist>
+      <div><button id="tensor-statistics-previous">Previous tensor</button><span id="tensor-statistics-position"></span><button id="tensor-statistics-next">Next tensor</button></div>
+    </div>
+    <p id="tensor-statistics-status" role="status"></p>
+    <progress id="tensor-statistics-progress" aria-label="Loading tensor data" aria-describedby="tensor-statistics-status" hidden></progress>
+    <div id="tensor-statistics-content"></div>
+  </dialog>
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
     <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>
     <p id="optimization-report-scope"></p>
@@ -613,6 +836,9 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>
 </body>

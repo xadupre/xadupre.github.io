@@ -16,7 +16,11 @@ function createFusionPanel({
   let fusionBusy = false;
   let optimizationSelection;
   let optimizationReport;
+  let optimizationBackend = "onnx-light";
   let selectedOptimizationResult = false;
+  let optimizationHistory = [];
+  let undoCount = 0;
+  let restoreRequest;
   let scenarios = [];
   let selectedStep;
   let diagnosticRequest = 0;
@@ -296,6 +300,26 @@ function createFusionPanel({
     fusionBusy = busy;
     diagnosticControls();
     byId("show-optimization-report").disabled = busy || !optimizationReport;
+    for (const backend of ["onnx-light", "onnxscript"]) {
+      byId(`optimizer-${backend}`).disabled = busy;
+      byId(`optimizer-${backend}`).setAttribute(
+        "aria-pressed",
+        String(optimizationBackend === backend),
+      );
+    }
+    byId("native-optimization-patterns").hidden =
+      optimizationBackend !== "onnx-light";
+    byId("onnxscript-optimization-note").hidden =
+      optimizationBackend !== "onnxscript";
+    const output = byId("onnxscript-optimization-output");
+    output.hidden = optimizationBackend !== "onnxscript" || !output.textContent;
+    byId("native-optimization-history").hidden =
+      optimizationBackend !== "onnx-light";
+    for (const id of [
+      "optimization-unfuse-last",
+      "optimization-restore-original",
+    ])
+      byId(id).disabled = busy || !canFuse() || !undoCount;
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
@@ -304,6 +328,8 @@ function createFusionPanel({
     byId("optimization-panel").setAttribute("aria-busy", String(busy));
     const patterns = byId("fusion-pattern");
     patterns.disabled = busy || !patterns.querySelector("input");
+    byId("fusion-pattern-group").disabled =
+      patterns.disabled || !byId("fusion-pattern-group").querySelector("input");
     byId("select-patterns").disabled = patterns.disabled;
     byId("clear-patterns").disabled =
       busy || !patterns.querySelector("input:checked");
@@ -317,16 +343,23 @@ function createFusionPanel({
     const optimization = byId("optimization-patterns");
     optimization.disabled =
       busy || !canFuse() || !optimization.querySelector("input");
+    byId("optimization-pattern-group").disabled =
+      optimization.disabled ||
+      !byId("optimization-pattern-group").querySelector("input");
     byId("select-optimization-patterns").disabled = optimization.disabled;
-    for (const id of ["clear-optimization-patterns", "run-optimization"])
-      byId(id).disabled =
-        busy ||
-        !canFuse() ||
-        !optimization.querySelector("input[data-pattern]:checked");
+    byId("clear-optimization-patterns").disabled =
+      busy ||
+      !canFuse() ||
+      !optimization.querySelector("input[data-pattern]:checked");
+    byId("run-optimization").disabled =
+      busy ||
+      !canFuse() ||
+      (optimizationBackend === "onnx-light" &&
+        !optimization.querySelector("input[data-pattern]:checked"));
     for (const button of byId("optimization-results").querySelectorAll(
       "button",
     ))
-      button.disabled = busy || button.dataset.empty === "true";
+      button.disabled = busy || !canFuse() || button.dataset.empty === "true";
     updateScenario();
     if (message) byId("fusion-feedback").textContent = message;
     else if (fusionPreview) updateFusionSelection();
@@ -410,7 +443,7 @@ function createFusionPanel({
         input.dataset.pattern = pattern.name;
         input.checked = optimizationSelection
           ? optimizationSelection.has(pattern.name)
-          : true;
+          : pattern.enabledByDefault !== false;
         label.title = `${pattern.device}; native priority ${pattern.priority}`;
         label.append(input, document.createTextNode(pattern.name));
         group.append(label);
@@ -422,6 +455,73 @@ function createFusionPanel({
       fieldset.append(group);
     }
     updateOptimizationSelection();
+  }
+
+  function showPatternGroups(id, fieldsetId, patterns, changed) {
+    const picker = byId(id);
+    const legend = document.createElement("legend");
+    legend.textContent = "Select pattern groups";
+    picker.replaceChildren(legend);
+    const fieldset = byId(fieldsetId);
+    const available = new Set(
+      [...fieldset.querySelectorAll("input")].map((input) => input.value),
+    );
+    const groups = new Map([["Default", new Set()]]);
+    for (const pattern of patterns ?? []) {
+      if (!available.has(pattern.name)) continue;
+      if (pattern.enabledByDefault) groups.get("Default").add(pattern.name);
+      for (const name of pattern.groups ?? []) {
+        if (!groups.has(name)) groups.set(name, new Set());
+        groups.get(name).add(pattern.name);
+      }
+    }
+    const names = [...groups.keys()]
+      .filter((name) => name !== "Default" && name !== "all")
+      .sort();
+    for (const name of ["Default", ...names, "all"]) {
+      const members = groups.get(name);
+      if (!members?.size) continue;
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = name;
+      label.append(
+        input,
+        document.createTextNode(
+          `${name === "all" ? "All" : name} (${members.size} patterns)`,
+        ),
+      );
+      picker.append(label);
+    }
+    const sync = () => {
+      const selected = new Set(
+        [...fieldset.querySelectorAll("input:checked")]
+          .filter((input) => !input.hasAttribute("data-priority"))
+          .map((input) => input.value),
+      );
+      let matched = false;
+      for (const input of picker.querySelectorAll("input")) {
+        const members = groups.get(input.value);
+        input.checked =
+          !matched &&
+          members.size === selected.size &&
+          [...members].every((name) => selected.has(name));
+        matched ||= input.checked;
+      }
+    };
+    fieldset.onchange = sync;
+    sync();
+    picker.onchange = () => {
+      const members = new Set(
+        [...picker.querySelectorAll("input:checked")].flatMap((input) => [
+          ...groups.get(input.value),
+        ]),
+      );
+      for (const input of fieldset.querySelectorAll("input"))
+        if (!input.hasAttribute("data-priority"))
+          input.checked = members.has(input.value);
+      changed();
+    };
   }
 
   function updateOptimizationSelection() {
@@ -444,9 +544,14 @@ function createFusionPanel({
     fusionControls(fusionBusy);
   }
 
-  function showOptimizationResults(data) {
+  function showOptimizationResults() {
     byId("optimization-results").replaceChildren();
-    for (const match of data.matches) {
+    const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
+    const stage = path.length === 1 ? path[0].pipeline : undefined;
+    const matches = optimizationHistory
+      .filter((operation) => operation.stage === stage)
+      .flatMap((operation) => operation.matches);
+    for (const match of matches) {
       const item = document.createElement("li");
       const button = document.createElement("button");
       button.textContent = `${match.pattern} (${match.nodes.length} nodes)`;
@@ -462,7 +567,11 @@ function createFusionPanel({
       item.append(button);
       byId("optimization-results").append(item);
     }
-    byId("optimization-picker").open = true;
+    if (!matches.length) {
+      const item = document.createElement("li");
+      item.textContent = "No applied pattern matches in this graph.";
+      byId("optimization-results").append(item);
+    }
   }
 
   function previewFusion() {
@@ -608,6 +717,7 @@ function createFusionPanel({
     byId("optimize-model").setAttribute("aria-expanded", String(!panel.hidden));
     clearFusionPreview();
     if (panel.hidden) {
+      restoreRequest = undefined;
       fusionRequest++;
       postMessage({ type: "cancel-fusion" });
     } else {
@@ -625,6 +735,27 @@ function createFusionPanel({
     "change",
     updateOptimizationSelection,
   );
+  for (const backend of ["onnx-light", "onnxscript"])
+    byId(`optimizer-${backend}`).addEventListener("click", () => {
+      optimizationBackend = backend;
+      showOptimizationReport(null);
+      byId("optimization-status").textContent = "";
+      showOptimizationResults();
+      fusionControls(fusionBusy);
+    });
+  for (const [id, all] of [
+    ["optimization-unfuse-last", false],
+    ["optimization-restore-original", true],
+  ])
+    byId(id).addEventListener("click", () => {
+      const requestId = ++fusionRequest;
+      requestAction("undo-fusion", "Undo optimization", { all, requestId });
+      restoreRequest = requestId;
+      fusionControls(true);
+      byId("optimization-status").textContent = all
+        ? "Restoring the original model…"
+        : "Unfusing the last operation…";
+    });
   for (const [id, checked] of [
     ["select-optimization-patterns", true],
     ["clear-optimization-patterns", false],
@@ -634,17 +765,24 @@ function createFusionPanel({
         "input[data-pattern]",
       ))
         input.checked = checked;
-      updateOptimizationSelection();
+      byId("optimization-patterns").dispatchEvent(new Event("change"));
     });
   byId("run-optimization").addEventListener("click", () => {
     clearFusionPreview();
-    fusionControls(true, "Running native iterative optimization…");
+    byId("onnxscript-optimization-output").textContent = "";
+    fusionControls(true);
     byId("optimization-status").textContent =
-      "Running the complete native optimizer…";
+      optimizationBackend === "onnxscript"
+        ? "Running ONNX Script optimization and fusion…"
+        : "Running the complete native optimizer…";
     requestAction("apply-optimization", "Optimize ONNX model", {
       requestId: ++fusionRequest,
       operation: "Optimize",
-      patterns: [...optimizationSelection],
+      ...(optimizationBackend === "onnxscript"
+        ? { backend: "onnxscript" }
+        : {}),
+      patterns:
+        optimizationBackend === "onnxscript" ? [] : [...optimizationSelection],
     });
   });
   byId("diagnostic-pattern").addEventListener("change", clearDiagnostic);
@@ -682,7 +820,7 @@ function createFusionPanel({
     byId(id).addEventListener("click", () => {
       for (const input of byId("fusion-pattern").querySelectorAll("input"))
         input.checked = checked;
-      changeFusionPatterns();
+      byId("fusion-pattern").dispatchEvent(new Event("change"));
     });
   byId("preview-fusion").addEventListener("click", previewFusion);
   byId("select-fusions").addEventListener("click", () => {
@@ -797,6 +935,9 @@ function createFusionPanel({
       showScenarios(data.scenarios, data.name);
       showOptimizationPatterns(data.optimizationPatterns);
       showOptimizationReport(data.optimizationReport);
+      if (data.type === "optimization-info")
+        byId("onnxscript-optimization-output").textContent =
+          data.backend === "onnxscript" ? (data.logs ?? "") : "";
       if (data.type === "fusion-patterns")
         byId("optimization-status").textContent = "";
       byId("fusion-pattern").replaceChildren();
@@ -808,6 +949,18 @@ function createFusionPanel({
         label.append(checkbox, document.createTextNode(pattern));
         byId("fusion-pattern").append(label);
       }
+      showPatternGroups(
+        "fusion-pattern-group",
+        "fusion-pattern",
+        data.optimizationPatterns,
+        changeFusionPatterns,
+      );
+      showPatternGroups(
+        "optimization-pattern-group",
+        "optimization-patterns",
+        data.optimizationPatterns,
+        updateOptimizationSelection,
+      );
       updateDiagnosticPatterns();
       fusionControls(
         false,
@@ -818,12 +971,17 @@ function createFusionPanel({
       if (data.type !== "fusion-patterns") {
         byId("fusion-status").textContent =
           data.type === "optimization-info"
-            ? data.changed
-              ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
-              : `${data.operation}: no changes.`
+            ? data.backend === "onnxscript"
+              ? data.changed
+                ? ""
+                : "ONNX Script: no changes."
+              : data.changed
+                ? `${data.operation}: applied ${data.matches.length} rewriting steps. Use Unfuse to undo, or Save with or without rewritings.`
+                : `${data.operation}: no changes.`
             : data.type === "rewriting-info"
               ? `Applied rewriting scenario ${data.name}. Use Unfuse to undo.`
               : `Applied ${data.count} fusion matches. Save a copy to keep changes.`;
+        if (data.notice) byId("fusion-status").textContent += ` ${data.notice}`;
         updateScenario();
         revealPanel(
           byId(
@@ -838,13 +996,18 @@ function createFusionPanel({
         if (data.type === "optimization-info") {
           byId("optimization-status").textContent =
             byId("fusion-status").textContent;
-          showOptimizationResults(data);
+          showOptimizationResults();
         }
       }
     } else if (data?.type === "fusion-preview") {
       if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
+      if (
+        optimizationBackend === "onnxscript" &&
+        !byId("optimization-panel").hidden
+      )
+        byId("onnxscript-optimization-output").textContent = data.error;
       fusionControls(false, data.error);
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
       if (!byId("optimization-panel").hidden)
@@ -855,8 +1018,13 @@ function createFusionPanel({
     }
     return true;
   }
-  function reset(graph, operationRequestId) {
+  function reset(graph, operationRequestId, file) {
+    const restoring =
+      restoreRequest !== undefined && restoreRequest === operationRequestId;
+    restoreRequest = undefined;
     fusionGraph = graph;
+    optimizationHistory = file?.fusionHistory ?? [];
+    undoCount = file?.fusionCount ?? 0;
     selectedStep = undefined;
     fusionCompletion =
       operationRequestId === fusionRequest ? operationRequestId : undefined;
@@ -872,16 +1040,31 @@ function createFusionPanel({
     byId("diagnostic-pattern").replaceChildren();
     diagnosticControls();
     showOptimizationReport(null);
+    byId("onnxscript-optimization-output").textContent = "";
+    byId("onnxscript-optimization-output").hidden = true;
     byId("fusion-status").textContent = "";
     showScenarios([]);
     byId("optimization-patterns").replaceChildren();
-    byId("optimization-results").replaceChildren();
+    showOptimizationResults();
     byId("optimization-feedback").textContent = "";
     byId("optimization-status").textContent = "";
+    if (restoring) {
+      byId("optimization-panel").hidden = false;
+      byId("optimize-model").setAttribute("aria-expanded", "true");
+      fusionControls(true);
+      requestAction("fusion-patterns", "List optimization patterns", {
+        requestId: ++fusionRequest,
+      });
+    }
   }
   function setEnabled(enabled) {
     byId("fuse-pattern").disabled = !enabled;
     byId("optimize-model").disabled = !enabled;
+    for (const id of [
+      "optimization-unfuse-last",
+      "optimization-restore-original",
+    ])
+      byId(id).disabled = !enabled || fusionBusy || !undoCount;
     diagnosticControls();
   }
 
@@ -890,13 +1073,22 @@ function createFusionPanel({
     reset,
     setEnabled,
     selectionChanged,
-    refresh: () => fusionControls(false),
+    refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      restoreRequest = undefined;
       fusionRequest++;
       fusionCompletion = undefined;
       clearFusionPreview();
       clearDiagnostic();
       showOptimizationReport(null);
+    },
+    undoFailed: (data) => {
+      if (restoreRequest === undefined || data.requestId !== restoreRequest)
+        return;
+      restoreRequest = undefined;
+      fusionControls(false);
+      byId("optimization-status").textContent =
+        `Could not undo optimization: ${data.error}`;
     },
   };
 }
