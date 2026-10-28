@@ -79,6 +79,7 @@ async function renderPage(repo, legacy) {
 }
 
 for (const repo of [
+  "arranged-agents",
   "onnx-light", "onnx-light-cpu", "onnx-light-kernel-images", "onnx-light-ort",
   "onnx-light-viewer", "yet-another-onnx-builder", "yet-another-onnxruntime-extensions",
 ]) {

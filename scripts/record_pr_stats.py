@@ -30,8 +30,7 @@ Usage::
     python scripts/record_pr_stats.py [--cache-dir DIR] [--months N]
         [--repo owner/name [--repo owner/name ...]]
 
-Default tracked repositories are the same as for
-``record_build_durations.py``.
+Default tracked repositories are listed in ``DEFAULT_REPOS`` below.
 """
 
 from __future__ import annotations
@@ -63,6 +62,7 @@ from record_build_durations import (  # noqa: E402
 )
 
 DEFAULT_REPOS = (
+    "xadupre/arranged-agents",
     "xadupre/onnx-light",
     "xadupre/onnx-light-cpu",
     "xadupre/onnx-light-kernel-images",
