@@ -1,5 +1,5 @@
-Three-panel workspace
-=====================
+Workspace
+=========
 
 Arranged Agents opens as a single editor tab with three resizable panels:
 

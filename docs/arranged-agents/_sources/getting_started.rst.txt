@@ -16,17 +16,26 @@ to CLI 1.0.104; older versions may need an update.
 Launch from source
 ------------------
 
-From a Bash terminal, pass the parent directory containing your repositories:
+From a Bash terminal in this checkout, run:
 
 .. code-block:: bash
 
-   ./start.sh /path/to/repositories
+   ./start.sh
 
 The launcher installs missing project dependencies, compiles the extension,
 and opens a new VS Code development window. Other installed extensions are
 disabled in that window. The **Arranged Agents** editor tab opens automatically.
 Without a directory argument, the source checkout's parent directory is used as
 the repository parent, regardless of the terminal's current directory.
+To choose a different parent directory containing your repositories:
+
+.. code-block:: bash
+
+   ./start.sh /path/to/repositories
+
+Run ``./start.sh --help`` for usage and examples; it does not install dependencies
+or launch VS Code. Additional VS Code options can follow the directory, for example
+``./start.sh /path/to/repositories --wait``.
 The source checkout is still used for compilation.
 No Copilot process is started by opening the tab.
 Close the development window and rerun the script after editing the code.

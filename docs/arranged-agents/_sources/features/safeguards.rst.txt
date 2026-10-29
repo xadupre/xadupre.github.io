@@ -1,5 +1,5 @@
-Safeguards and data boundaries
-==============================
+Safeguards
+==========
 
 Repository and model context
 ----------------------------

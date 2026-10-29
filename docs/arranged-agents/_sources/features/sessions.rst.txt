@@ -1,5 +1,5 @@
-Repository sessions
-===================
+Sessions
+========
 
 Every selected repository receives its own Copilot client, session, working
 directory, transcript and draft. Switching repositories never merges model

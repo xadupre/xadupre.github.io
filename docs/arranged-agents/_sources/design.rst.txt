@@ -1,5 +1,5 @@
-Design and source guide
-=======================
+Design
+======
 
 Request flow
 ------------

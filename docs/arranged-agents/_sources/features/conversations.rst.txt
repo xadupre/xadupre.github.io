@@ -1,5 +1,5 @@
-Copilot conversations
-=====================
+Conversations
+=============
 
 Select a repository, wait for **Session open - ready**, then enter a message in
 the center panel. Press **Enter** or select **Send** to submit it;

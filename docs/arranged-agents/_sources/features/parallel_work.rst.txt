@@ -1,5 +1,5 @@
-Parallel and queued work
-========================
+Parallel work
+=============
 
 The **Parallel ON/OFF** control beside **Send** determines how messages submitted
 while work is already running are handled. It defaults to **ON**.

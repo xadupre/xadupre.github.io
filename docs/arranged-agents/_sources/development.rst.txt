@@ -1,5 +1,8 @@
-Development and automation
-==========================
+Development
+===========
+
+For requirements and launching the extension from source, see
+:doc:`getting_started`.
 
 Local checks
 ------------
@@ -12,7 +15,7 @@ Local checks
    npm run package
 
 ``check`` runs Prettier, ESLint, TypeScript compilation and the unit tests.
-``coverage`` writes an HTML report and ``lcov.info`` under
+``coverage`` prints a text summary and writes ``lcov.info`` under
 ``build/coverage/typescript``. Coverage includes unexercised extension code;
 unit coverage is not evidence that the interactive VS Code UI has been tested.
 None of these commands sends a model request.
@@ -88,22 +91,14 @@ The Sphinx build uses the committed images and does not need a browser.
 GitHub Actions
 --------------
 
-The workflows follow the same split as
-`onnx-light-viewer <https://github.com/xadupre/onnx-light-viewer>`_, adapted to this
-TypeScript-only extension:
-
-* **Tests**: pushes to ``main``, pull requests and manual runs. Installs from the
-  lockfile, checks formatting/lint/tests, audits high-severity dependencies and
-  packages the VSIX on Linux and Windows.
-* **Nightly coverage**: daily at 03:00 UTC and manual runs. Collects TypeScript
-  coverage, retains a GitHub artifact and uploads it to Codecov. Configure the
-  repository in Codecov and provide the ``CODECOV_TOKEN`` repository secret;
-  upload failures are reported, not ignored.
-* **Weekly documentation**: Mondays at 03:00 UTC, manual runs and documentation
-  pull requests. Builds strict Sphinx HTML and retains an artifact. Scheduled
-  and manual failures open an issue; pull-request failures do not.
-* **Release**: ``v*`` tags or published GitHub releases. Tests and packages the
-  tagged source, retains the VSIX and attaches it to the GitHub release.
+* **Tests**: formatting, lint, unit tests, high-severity dependency audit and VSIX
+  packaging on Linux and Windows for pushes to ``main``, PRs and manual runs.
+* **Nightly coverage**: TypeScript coverage artifacts and Codecov uploads.
+  Configure Codecov with the ``CODECOV_TOKEN`` repository secret.
+* **Weekly documentation**: strict Sphinx builds and HTML artifacts; also runs
+  for documentation PRs. Scheduled and manual failures open an issue.
+* **Release**: tests and packages ``v*`` tags or published GitHub releases and
+  attaches the VSIX to the release.
 
 Actions are pinned to commits. Only release publication has write access to
 repository contents, and only the documentation-failure job can create issues.
@@ -113,10 +108,6 @@ For a release, first update ``package.json`` and ``package-lock.json`` to the
 intended version, commit the change, then tag that commit with the corresponding
 ``v``-prefixed version and push the tag. A published GitHub release rebuilds and
 replaces the asset for its tag. No workflow publishes to the Marketplace.
-
-Unlike the reference project's native ONNX addon, this project has no
-project-specific C++ binding to build. It produces a single untargeted VSIX;
-there are no C++ or Python coverage jobs.
 
 Dependency and packaging policy
 -------------------------------
@@ -131,10 +122,6 @@ The project has no selected license. ``npm run package`` uses ``--skip-license``
 while the package remains ``UNLICENSED``; this is a packaging policy, not a license
 grant.
 
-Keep the Zod and Azure Identity overrides until their upstream dependency chains
-are safe to update. The retained development-only Azure Identity/MSAL/UUID chain
-has moderate advisories; removing the Azure pin previously selected a high-severity
-MSAL dependency. Reassess with ``npm audit`` before changing it, and separately
-check production dependencies with ``npm audit --omit=dev``.
-The math plugin's transitive KaTeX is overridden to a patched 0.19 release.
-Its parser/rendering API is covered by equation and untrusted-command tests.
+The Zod, Azure Identity and KaTeX overrides in ``package.json`` address dependency
+advisories. Before changing them, run ``npm audit`` and
+``npm audit --omit=dev``, then rerun the tests.
