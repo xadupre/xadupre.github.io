@@ -11,6 +11,7 @@ import { huggingFaceTasks } from "./huggingFaceTasks";
  * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
+ * @param appVersion Viewer release from the extension's package metadata.
  * @returns Complete HTML document; graph and log data require the ready handshake.
  */
 export function webviewHtml(
@@ -19,6 +20,7 @@ export function webviewHtml(
   nonce: string,
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
+  appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
     `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Suggestions are history, not a guarantee that a path still exists or is writable. Selecting one only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
@@ -36,20 +38,30 @@ export function webviewHtml(
 <body>
   <main class="workspace" aria-label="ONNX graph explorer">
     <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
-      <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
-      <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
-      <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
-      <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
-      <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
-      <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
-      <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
-      <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
-      <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
+      <div class="feature-group" role="presentation">
+        <span class="feature-group-title" id="navigation-theme">Navigation</span>
+        <div class="feature-group-controls" role="presentation">
+          <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
+          <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
+          <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
+          <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
+        </div>
+      </div>
+      <div class="feature-group" role="presentation">
+        <span class="feature-group-title" id="application-theme">Application</span>
+        <div class="feature-group-controls" role="presentation">
+          <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
+          <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
+          <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
+          <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
+          <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
+        </div>
+      </div>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
         <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
@@ -64,15 +76,30 @@ export function webviewHtml(
         <div id="sidebar-resizer" role="separator" tabindex="0" aria-label="Resize side panel" aria-orientation="vertical" aria-controls="graph-panels" title="Drag to resize the side panel, or use Left and Right arrow keys"></div>
         <aside id="graph-panels" aria-label="Graph panels">
           <nav id="sidebar-controls" aria-label="Sidebar panels and model actions">
-            <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
-            <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
-            <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
-            <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
-            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
-            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
-            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
-            <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
-            <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+            <div class="feature-group" role="group" aria-labelledby="model-navigation-theme">
+              <span class="feature-group-title" id="model-navigation-theme">Navigation</span>
+              <div class="feature-group-controls">
+                <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
+                <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
+                <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
+                <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
+                <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+              </div>
+            </div>
+            <div class="feature-group" role="group" aria-labelledby="convert-theme">
+              <span class="feature-group-title" id="convert-theme">Convert</span>
+              <div class="feature-group-controls">
+                <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
+              </div>
+            </div>
+            <div class="feature-group" role="group" aria-labelledby="optimization-theme">
+              <span class="feature-group-title" id="optimization-theme">Optimization</span>
+              <div class="feature-group-controls">
+                <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
+                <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
+                <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
+              </div>
+            </div>
           </nav>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
@@ -476,9 +503,11 @@ export function webviewHtml(
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
-        <svg id="memory-chart" viewBox="0 0 1000 330" role="img" aria-labelledby="memory-chart-title memory-chart-description">
+        <nav aria-label="Memory chart zoom"><button id="memory-zoom-out" type="button" aria-label="Zoom out">−</button><button id="memory-zoom-in" type="button" aria-label="Zoom in">+</button><button id="memory-zoom-reset" type="button">Reset zoom</button><span id="memory-zoom-level">100%</span></nav>
+        <div id="memory-chart-scroll">
+        <svg id="memory-chart" viewBox="0 0 1000 330" tabindex="0" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Rectangles span each node's two-interval execution window, with a gap between nodes. Highlighted rectangles identify common compute-heavy operations, not measured timings. Exact values and SDK decisions are in the table below.</desc>
+          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
           <path id="memory-node-intervals" class="memory-node-interval"></path>
@@ -487,11 +516,13 @@ export function webviewHtml(
           <g id="memory-operator-labels"></g>
           <path id="memory-curve"></path>
         </svg>
-        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable in onnx-light. The curve stops before that unknown value.</p>
+        </div>
+        <pre id="memory-inspection" role="status" hidden></pre>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
         <h3>Estimated execution events</h3>
         <p id="memory-peaks-count"></p>
         <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Before allocation</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
         <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
       </div>
     </section>
@@ -594,7 +625,7 @@ export function webviewHtml(
           <tr><th scope="row">Click the background</th><td>Clear selection.</td></tr>
           <tr><th scope="row"><kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> + click</th><td>Toggle a node in the selection.</td></tr>
           <tr><th scope="row">Drag a node</th><td>Move it. Drag a selected node to move the whole selection.</td></tr>
-          <tr><th scope="row">Drag the background</th><td>Select nodes in a rectangle. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to add to the selection.</td></tr>
+          <tr><th scope="row">Drag the background</th><td>Move the model view without rearranging nodes. Hold <kbd>Ctrl/Cmd</kbd> or <kbd>Shift</kbd> to select nodes in a rectangle and add to the selection.</td></tr>
           <tr><th scope="row">Scroll</th><td>Pan vertically.</td></tr>
           <tr><th scope="row"><kbd>Shift</kbd> + scroll</th><td>Pan horizontally. Horizontal trackpad scrolling also pans horizontally.</td></tr>
           <tr><th scope="row"><kbd>Ctrl</kbd> + scroll</th><td>Zoom in or out around the pointer.</td></tr>
