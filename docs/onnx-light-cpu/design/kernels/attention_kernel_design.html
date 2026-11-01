@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Attention Kernel Design &#8212; onnx-light-cpu  documentation</title>
+    <title>Attention Kernel Design &#8212; onnx-light-cpu 0.2.3 documentation</title>
   
   
   
@@ -47,7 +47,7 @@
 
     <script src="../../_static/jquery.js?v=5d32c60e"></script>
     <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
-    <script src="../../_static/documentation_options.js?v=5929fcd5"></script>
+    <script src="../../_static/documentation_options.js?v=a47416a6"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Oct 26, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 01, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -139,8 +139,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light-cpu  documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light-cpu  documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light-cpu 0.2.3 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light-cpu 0.2.3 documentation - Home"/>
   
   
 </a></div>
@@ -1218,6 +1218,436 @@ checks NaN, both infinities, and extreme FP32 values, then changes V back to
 finite values to verify invocation-local selection. No AVX-512 or scalar
 performance claim is made.</p>
 </section>
+<section id="issue-1029-retained-avx2-dense-softmax-and-strided-output-optimization">
+<h2>Issue 1029: retained AVX2 dense-softmax and strided-output optimization<a class="headerlink" href="#issue-1029-retained-avx2-dense-softmax-and-strided-output-optimization" title="Link to this heading">#</a></h2>
+<p>The 2026-10-27 follow-up retains two computation changes, rather than only
+documenting attribution:</p>
+<ul class="simple">
+<li><p>For a finite, unmasked, noncausal single-KV-block tile, reuse the existing
+AVX2/FMA softmax polynomial and range selection, but fuse subtraction,
+exponentiation and denominator reduction. Leave probabilities
+<strong>unnormalized</strong>: the value product still accumulates in FP32 before final
+output normalization. Masks, nonpad lengths, windows, softcap, multiple KV
+blocks and nonfinite scores retain the existing online-softmax path.</p></li>
+<li><p>Let the existing direct AVX2 value microkernel write through the output
+sequence stride. Rank-three FP32 no longer needs a contiguous output
+temporary followed by a scatter for eligible single-block products.
+The value-kernel eligibility is unchanged and shared by dispatch and
+destination selection; general GEMM still receives contiguous output.</p></li>
+</ul>
+<p>There are no new scratch buffers, worker allocations, packing caches,
+threads, ISA flags or wider value-GEMM dispatch gates. Scalar and AVX-512
+dispatch remain unchanged. The shared normalized Softmax entry point uses
+the same implementation with normalization enabled.</p>
+<section id="measurements">
+<h3>Measurements<a class="headerlink" href="#measurements" title="Link to this heading">#</a></h3>
+<p>The baseline is remote main <code class="docutils literal notranslate"><span class="pre">233c60976a6e0de7a183abb48631106fdfd4a186</span></code>,
+refreshed with <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">fetch</span> <span class="pre">origin</span></code> before building. This is a different
+machine from the previous campaigns: Intel Xeon Platinum 8480C, GCC 13.2.0,
+CMake 4.1.1, Release <code class="docutils literal notranslate"><span class="pre">-O3</span> <span class="pre">-DNDEBUG</span></code>, and an <strong>AVX2 ceiling</strong>. The dependency
+is the onnx-light source checkout at
+<code class="docutils literal notranslate"><span class="pre">6d6364cc44bf060eafe913bfa6e6b03b68dc5778</span></code>, linked against the libraries
+reported by <code class="docutils literal notranslate"><span class="pre">get_cpp_build_info()</span></code>, with the Python stable ABI enabled.
+Python is 3.12.15, NumPy 2.5.3 and ml-dtypes 0.5.4. The imported ORT is a
+local 1.32.0 Release build at <code class="docutils literal notranslate"><span class="pre">782dc0c5b5562b52319d735ae31a4d6e8349e656</span></code>,
+on branch <code class="docutils literal notranslate"><span class="pre">moe-fp16-cpu-offload-and-adaptive-swap</span></code>. Installed distribution
+metadata reports 1.29.0, but does not describe the runtime imported through
+<code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>; the ORT version above comes from <code class="docutils literal notranslate"><span class="pre">onnxruntime.__version__</span></code>
+and <code class="docutils literal notranslate"><span class="pre">get_build_info()</span></code>.</p>
+<p>ORT is not capped at AVX2. A debugger trace of the rank-four FP16
+128/128/256 case confirms that its Attention FP32 GEMM fallback reaches
+<code class="docutils literal notranslate"><span class="pre">MlasGemmFloatKernelAvx512F</span></code>. These timings therefore compare our
+AVX2-ceiling build with unrestricted ORT, not ISA-matched implementations.</p>
+<p>Separate-process timings drifted substantially, including ORT controls.
+Consequently, the controlled A/B campaign used the <strong>same ReferenceEvaluator,
+registered models and feeds in one process</strong>, pinned to CPU 2, one runtime
+thread, 40 warmups and 400 measured samples per candidate. A temporary
+invocation-level boolean enabled/disabled both new decisions; it was set
+outside each session run. Disabling it restored online softmax and buffered
+rank-three output. The boolean and its checks are not retained in production.
+The repeat rotated old/new/ORT order every iteration, with ORT sequential,
+one intra/inter-op thread and both spinning options disabled. Compilation
+and other timed campaigns did not overlap. Correctness comparisons used the
+existing runner’s unchanged tolerances.</p>
+<p>Median milliseconds below are from that repeated three-candidate campaign.
+<code class="docutils literal notranslate"><span class="pre">Speedup</span></code> is before/after, not ORT/CPU. <code class="docutils literal notranslate"><span class="pre">First</span> <span class="pre">speedup</span></code> is the preceding
+400-sample alternating old/new campaign, included to expose repeatability.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Layout/type, Q/KV/D</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>ORT</p></th>
+<th class="head"><p>Speedup</p></th>
+<th class="head"><p>First speedup</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>rank3 FP32, 128/128/64</p></td>
+<td><p>0.83794</p></td>
+<td><p>0.75006</p></td>
+<td><p>0.46113</p></td>
+<td><p>1.117x</p></td>
+<td><p>1.092x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank3 FP32, 129/257/64</p></td>
+<td><p>1.76365</p></td>
+<td><p>1.63098</p></td>
+<td><p>0.99367</p></td>
+<td><p>1.081x</p></td>
+<td><p>1.072x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 128/128/64</p></td>
+<td><p>0.77298</p></td>
+<td><p>0.72870</p></td>
+<td><p>0.63915</p></td>
+<td><p>1.061x</p></td>
+<td><p>1.063x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 16/128/64</p></td>
+<td><p>0.14813</p></td>
+<td><p>0.14210</p></td>
+<td><p>0.13243</p></td>
+<td><p>1.042x</p></td>
+<td><p>1.038x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 16/257/63</p></td>
+<td><p>0.29808</p></td>
+<td><p>0.28766</p></td>
+<td><p>0.27288</p></td>
+<td><p>1.036x</p></td>
+<td><p>1.032x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 128/128/128</p></td>
+<td><p>1.74193</p></td>
+<td><p>1.69199</p></td>
+<td><p>1.27978</p></td>
+<td><p>1.030x</p></td>
+<td><p>1.029x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 128/128/256</p></td>
+<td><p>3.29573</p></td>
+<td><p>3.25455</p></td>
+<td><p>2.37042</p></td>
+<td><p>1.013x</p></td>
+<td><p>1.023x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 129/257/256</p></td>
+<td><p>7.50962</p></td>
+<td><p>7.42169</p></td>
+<td><p>4.96428</p></td>
+<td><p>1.012x</p></td>
+<td><p>1.015x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The rank-three reduction is repeatable (approximately 7–10% lower latency).
+FP16 benefits diminish as head dimension increases: the hd256 differences
+are small, and <strong>the wide-head bottleneck is not resolved</strong>. ORT remains
+faster on every row; issue 1029 must not be considered fully fixed.
+Direct multi-query dot products and alternative value microtiles were also
+tried, but their regressions or inconsistent benefits did not justify
+retaining them.</p>
+<p>Reproduce the production-path ORT comparison with the normal <code class="docutils literal notranslate"><span class="pre">AUTO</span></code>
+configuration and binaries installed only into the source checkout.
+The historical measurements above used an explicit AVX2 ceiling instead.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cmake<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-B<span class="w"> </span>build/temp<span class="w"> </span>-UONNX_LIGHT_CPU_MAX_SIMD_LEVEL<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-DML_CPU_COMPUTE_MAX_SIMD_LEVEL<span class="o">=</span>AUTO
+cmake<span class="w"> </span>--build<span class="w"> </span>build/temp<span class="w"> </span>--parallel<span class="w"> </span><span class="m">48</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--target<span class="w"> </span>test_attention_plan<span class="w"> </span>test_exp_log_kernel<span class="w"> </span>_cpuregister<span class="w"> </span>_cpukernels
+cmake<span class="w"> </span>--install<span class="w"> </span>build/temp<span class="w"> </span>--prefix<span class="w"> </span><span class="s2">"</span><span class="nv">$PWD</span><span class="s2">"</span>
+python<span class="w"> </span>tools/benchmark_attention_parity.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--cpus<span class="w"> </span><span class="m">2</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">40</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">400</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span><span class="s1">'^test_cpu_attention_opset23_rank3_mha_q(128|129)_kv(128|257)_hd64_none_stateless_float32_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span><span class="s1">'^test_cpu_attention_opset23_rank4_mha_q(16|128|129)_kv(128|257)_hd(63|64|128|256)_none_stateless_float16_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/tmp/attention-1029-auto.json
+</pre></div>
+</div>
+<p>Validation includes all 93 Attention tests, 36 shared math tests and 18
+Sigmoid/Softmax adapter tests under the AVX2 ceiling. An AVX-512-ceiling
+build passes 89 Attention tests (four AVX2-only tests skip) and all 39 shared
+math tests. New coverage compares the
+fused unnormalized primitive with online softmax across vector tails and
+normal/subnormal/extreme ranges, verifies nonfinite-score fallback followed
+by finite reuse, and extends materialized-oracle comparisons to wide heads,
+q128/q129, KV257/KV513, both layouts and precisions, masks and runtime-owned
+scheduling. All 48 default-corpus stateless/nonpad FP32/FP16 cases also
+pass the existing ORT correctness comparison in the final production build;
+that short correctness run is not performance evidence and does not pass
+the runner’s ORT performance-parity thresholds. No AVX-512 or scalar
+performance improvement is claimed.</p>
+</section>
+<section id="corrected-auto-avx-512-comparison">
+<h3>Corrected AUTO/AVX-512 comparison<a class="headerlink" href="#corrected-auto-avx-512-comparison" title="Link to this heading">#</a></h3>
+<p>The follow-up removes the installed editable distribution and its import
+hook. Normal Python imports now load both native CPU modules from the source
+checkout. <code class="docutils literal notranslate"><span class="pre">ML_CPU_COMPUTE_MAX_SIMD_LEVEL=AUTO</span></code> reports <code class="docutils literal notranslate"><span class="pre">AVX512</span></code> on this
+machine; no AVX2 ceiling is retained. The dependency checkout has meanwhile
+advanced to <code class="docutils literal notranslate"><span class="pre">34c79978604659f7910ed234b687e4402c68451e</span></code> (onnx-light 0.2.1).
+Its stale <code class="docutils literal notranslate"><span class="pre">_onnxpyprotoop</span></code> module required an incremental rebuild before
+the benchmark could import successfully.</p>
+<p>The runner now feeds backend tensors directly to onnx-light-cpu, as the
+shared backend benchmark does; only ORT receives NumPy feeds. It records
+imported module versions, native module paths, the detected CPU SIMD level
+and ORT’s build information instead of trusting stale installed-distribution
+versions. ORT remains the local 1.32.0 build identified above.</p>
+<p>Two independent campaigns use CPU 2, one thread per runtime, alternating
+CPU/ORT order, 40 warmups and exactly 400 samples per runtime and case.
+The table gives second-campaign medians in milliseconds and both campaigns’
+<code class="docutils literal notranslate"><span class="pre">ORT/CPU</span></code> ratios; a ratio above one favors onnx-light-cpu.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Layout/type, Q/KV/D</p></th>
+<th class="head"><p>CPU</p></th>
+<th class="head"><p>ORT</p></th>
+<th class="head"><p>First ORT/CPU</p></th>
+<th class="head"><p>Second ORT/CPU</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>rank3 FP32, 128/128/64</p></td>
+<td><p>0.65581</p></td>
+<td><p>0.55289</p></td>
+<td><p>0.887x</p></td>
+<td><p>0.843x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank3 FP32, 129/257/64</p></td>
+<td><p>1.93380</p></td>
+<td><p>1.17566</p></td>
+<td><p>0.611x</p></td>
+<td><p>0.608x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 128/128/64</p></td>
+<td><p>0.69998</p></td>
+<td><p>0.74784</p></td>
+<td><p>1.082x</p></td>
+<td><p>1.068x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 16/128/64</p></td>
+<td><p>0.36938</p></td>
+<td><p>0.18143</p></td>
+<td><p>0.501x</p></td>
+<td><p>0.491x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 16/257/63</p></td>
+<td><p>0.57118</p></td>
+<td><p>0.35217</p></td>
+<td><p>0.625x</p></td>
+<td><p>0.617x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 128/128/128</p></td>
+<td><p>1.27021</p></td>
+<td><p>1.29494</p></td>
+<td><p>1.051x</p></td>
+<td><p>1.019x</p></td>
+</tr>
+<tr class="row-even"><td><p>rank4 FP16, 128/128/256</p></td>
+<td><p>2.34545</p></td>
+<td><p>2.35102</p></td>
+<td><p>1.057x</p></td>
+<td><p>1.002x</p></td>
+</tr>
+<tr class="row-odd"><td><p>rank4 FP16, 129/257/256</p></td>
+<td><p>5.87519</p></td>
+<td><p>4.54726</p></td>
+<td><p>0.777x</p></td>
+<td><p>0.774x</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>A separate 100-sample, 20-warmup campaign checks all 48 original
+FP32/FP16 stateless/nonpad cases. Numerical comparisons all pass with
+unchanged tolerances. Median ORT/CPU ratios are 0.910 for FP32 and 1.071
+for FP16, but individual minima are 0.426 and 0.516 respectively.
+Performance parity is therefore <strong>not achieved</strong>. BF16 is not measured
+in these campaigns. Absolute timings drift: second-campaign interquartile
+ranges are approximately 3–11% of CPU medians and 4–13% of ORT medians,
+so near-parity cases do not establish a reliable small advantage.</p>
+<p>This changes the diagnosis:</p>
+<ul class="simple">
+<li><p>Square FP16 hd256 is approximately at parity, rather than a uniformly
+unresolved wide-head failure. The 129/257 tail case still trails ORT
+by approximately 29% in latency.</p></li>
+<li><p>Aligned FP16 Q16/KV128/D64 selects <code class="docutils literal notranslate"><span class="pre">Attention.streaming</span></code> and takes
+approximately twice ORT’s latency. The existing aligned-short gate
+excludes tiling on an AVX-512 host because its AVX2-only short-tile
+exception requires an exact AVX2 SIMD level.</p></li>
+<li><p>Rank-three FP32 129/257 remains approximately 65% slower than ORT.
+The existing AVX-512 dense-softmax shortcut only covers FP32 KV128
+with Q8/Q128, not this case. Its recorded path still packs tiles and
+writes tile output; recording alone does not quantify those costs.</p></li>
+<li><p>The retained optimization gates explicitly require an AVX2 ceiling.
+These new measurements therefore do <strong>not</strong> demonstrate a benefit
+from that optimization on the normal AVX-512 configuration.</p></li>
+</ul>
+<p>Changes in dependency revision, input adaptation and runtime binaries mean
+the old and new tables are not a controlled AVX2-versus-AVX-512 experiment.
+No ISA-only speedup or new hot-symbol attribution is claimed. Issue 1029
+remains open; default-configuration dispatch and tail handling still need
+optimization.</p>
+</section>
+</section>
+<section id="issue-1028-retained-intel-avx2-dense-fp32-improvement">
+<h2>Issue 1028: retained Intel AVX2 dense FP32 improvement<a class="headerlink" href="#issue-1028-retained-intel-avx2-dense-fp32-improvement" title="Link to this heading">#</a></h2>
+<p>The 2026-10-28 follow-up starts from refreshed remote main
+<code class="docutils literal notranslate"><span class="pre">cc34d0d8fe6d2372cf6472466e3438a8bfae25e6</span></code>. Unlike the closed profiling-only
+PR 1058, this change retains two production optimizations:</p>
+<ul class="simple">
+<li><p>QK uses the actual attention tile depth for GEMM blocking and six register
+rows. The general GEMM profile’s nominal KC otherwise selects unnecessarily
+narrow packed column panels for these short dot products.</p></li>
+<li><p>P*V with 128 value columns uses a three-row, 32-column register tile.
+Twelve accumulators, three broadcast probabilities and one loaded value
+vector fit in sixteen YMM registers, without packing or allocating scratch.
+Existing GEMM micro-tiles handle the remaining one or two query rows.</p></li>
+</ul>
+<p>Both require the Intel Core GEMM profile, AVX2 with FMA, rank-four FP32,
+at least 128 queries, no mask, causal/window bound, softcap or nonpad length.
+Individual tile bounds retain the existing fallback for small tiles and
+unsupported head sizes. Scheduling ownership, score-tile sizes, accumulation
+precision and tolerances do not change. AMD, generic profiles, rank-three,
+FP16/BF16 and the default AVX-512 path remain unchanged: the rejected AMD
+blocking experiments in PR 1058 do not justify enabling these gates there.</p>
+<section id="matched-repeated-a-b-measurements">
+<h3>Matched, repeated A/B measurements<a class="headerlink" href="#matched-repeated-a-b-measurements" title="Link to this heading">#</a></h3>
+<p>The host is an Intel Xeon Platinum 8480C, GCC 13.2 Release, Python 3.12.15,
+NumPy 2.5.3 and ml-dtypes 0.5.4. The onnx-light 0.2.2 source checkout is
+<code class="docutils literal notranslate"><span class="pre">06912a3676fa2c58a47ce51d5acd124d8e0bedd4</span></code> with stable ABI enabled.
+ORT 1.32.0 is the local Release build at <code class="docutils literal notranslate"><span class="pre">782dc0c5b5</span></code>.
+The CPU build reports AVX2 using <code class="docutils literal notranslate"><span class="pre">ML_CPU_COMPUTE_MAX_SIMD_LEVEL=AVX2</span></code>;
+ORT is unrestricted on this AVX-512-capable host. These are not ISA-parity
+measurements, nor a reproduction on the original AMD runner.</p>
+<p>Both independent campaigns use the original five registered models and
+inputs, CPU-0 affinity, one thread per backend, sequential ORT, one inter-op
+thread and disabled ORT spinning. Baseline, candidate and ORT calls rotate
+order in the same process, reusing the same sessions and feeds. A temporary
+invocation-level gate selects the original or optimized path outside timing;
+it is removed from the retained code. There are 20 warmups and up to 100
+samples per path, stopping once every path has accumulated two seconds.
+The long-KV case collects 63 and 60 samples per path; the other cases collect
+100. Model construction, data generation, correctness and compilation are
+outside timing. CPU feeds are backend tensors, not NumPy arrays.</p>
+<p>All values below are median milliseconds. Case names use the prefix
+<code class="docutils literal notranslate"><span class="pre">test_cpu_attention_opset23_rank4_mha_</span></code> and suffix
+<code class="docutils literal notranslate"><span class="pre">_none_stateless_float32_benchmark</span></code>.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Case</p></th>
+<th class="head"><p>Before</p></th>
+<th class="head"><p>After</p></th>
+<th class="head"><p>ORT</p></th>
+<th class="head"><p>Before repeat</p></th>
+<th class="head"><p>After repeat</p></th>
+<th class="head"><p>ORT repeat</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>q128_kv128_hd64</p></td>
+<td><p>0.641815</p></td>
+<td><p>0.586902</p></td>
+<td><p>0.413437</p></td>
+<td><p>0.647782</p></td>
+<td><p>0.597532</p></td>
+<td><p>0.427517</p></td>
+</tr>
+<tr class="row-odd"><td><p>q512_kv128_hd64</p></td>
+<td><p>2.484012</p></td>
+<td><p>2.294868</p></td>
+<td><p>1.499381</p></td>
+<td><p>2.731780</p></td>
+<td><p>2.532912</p></td>
+<td><p>1.656027</p></td>
+</tr>
+<tr class="row-even"><td><p>q128_kv8192_hd64</p></td>
+<td><p>43.550382</p></td>
+<td><p>42.091625</p></td>
+<td><p>30.219244</p></td>
+<td><p>45.617714</p></td>
+<td><p>45.018527</p></td>
+<td><p>31.222460</p></td>
+</tr>
+<tr class="row-odd"><td><p>q128_kv128_hd128</p></td>
+<td><p>1.315575</p></td>
+<td><p>1.201075</p></td>
+<td><p>0.838056</p></td>
+<td><p>1.212978</p></td>
+<td><p>1.108685</p></td>
+<td><p>0.758204</p></td>
+</tr>
+<tr class="row-even"><td><p>q128_kv128_hd256</p></td>
+<td><p>2.258434</p></td>
+<td><p>2.182405</p></td>
+<td><p>1.388872</p></td>
+<td><p>2.256909</p></td>
+<td><p>2.175080</p></td>
+<td><p>1.368227</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>The four shorter cases improve by 3.4–8.7% in both campaigns. The long-KV
+reduction is only 1.3–3.4%; its smaller, less stable gain should not be
+extrapolated. No selected case regresses in either matched comparison.
+Final production-only measurements, after removing the temporary gate,
+give the following additional CPU/ORT medians under the same settings:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Q/KV/D</p></th>
+<th class="head"><p>Retained CPU</p></th>
+<th class="head"><p>ORT</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>128/128/64</p></td>
+<td><p>0.675312</p></td>
+<td><p>0.446491</p></td>
+</tr>
+<tr class="row-odd"><td><p>512/128/64</p></td>
+<td><p>2.326355</p></td>
+<td><p>1.447188</p></td>
+</tr>
+<tr class="row-even"><td><p>128/8192/64</p></td>
+<td><p>41.828070</p></td>
+<td><p>27.840577</p></td>
+</tr>
+<tr class="row-odd"><td><p>128/128/128</p></td>
+<td><p>1.147282</p></td>
+<td><p>0.774157</p></td>
+</tr>
+<tr class="row-even"><td><p>128/128/256</p></td>
+<td><p>2.204210</p></td>
+<td><p>1.347139</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Separate-process drift remains visible, particularly in the first case;
+the gain claims use the matched A/B campaigns, not differences between
+separate runs. A separate native <code class="docutils literal notranslate"><span class="pre">perf</span> <span class="pre">record</span> <span class="pre">-e</span> <span class="pre">cpu-clock:u</span></code> run confirms
+both the six-row AVX2 GEMM and <code class="docutils literal notranslate"><span class="pre">AttentionValue128Float32_AVX2_FMA</span></code> execute.
+Its samples include startup and ORT, so no kernel phase-time share is claimed.
+Hardware cycles/instructions are unsupported on this VM.</p>
+<p>All 108 Attention C++ tests pass with the AVX2 ceiling. Coverage includes
+the five original shapes, eligibility boundaries, head/query/KV tails,
+multi-block accumulation, unaligned operands and padded output strides.
+The five registered cases also pass ORT comparisons with one and two runtime
+threads at the unchanged FP32 rtol/atol <code class="docutils literal notranslate"><span class="pre">2e-4/2e-5</span></code>.
+<strong>ORT remains faster on all five cases, and issue 1028 remains open.</strong>
+The original AMD gap and default-ISA parity are not resolved by these
+Intel AVX2-specific improvements.</p>
+<p>The retained path can be reproduced from a source-linked build with:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CMAKE_ARGS</span><span class="o">=</span><span class="s1">'-DML_CPU_COMPUTE_MAX_SIMD_LEVEL=AVX2'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>python<span class="w"> </span>setup.py<span class="w"> </span>build_ext<span class="w"> </span>--inplace<span class="w"> </span>--onnx-light-source<span class="w"> </span>--parallel<span class="w"> </span><span class="m">48</span>
+python<span class="w"> </span>tools/benchmark_attention_parity.py<span class="w"> </span>--large<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--threads<span class="w"> </span><span class="m">1</span><span class="w"> </span>--cpus<span class="w"> </span><span class="m">0</span><span class="w"> </span>--warmup<span class="w"> </span><span class="m">20</span><span class="w"> </span>--repeat<span class="w"> </span><span class="m">100</span><span class="w"> </span>--max-repeat-time<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--case<span class="w"> </span><span class="s1">'^test_cpu_attention_opset23_rank4_mha_(q128_kv128_hd(64|128|256)|q512_kv128_hd64|q128_kv8192_hd64)_none_stateless_float32_benchmark$'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output<span class="w"> </span>/tmp/attention-1028.json
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 
 
@@ -1277,6 +1707,15 @@ performance claim is made.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#avx2-measurements-and-remaining-gap">AVX2 measurements and remaining gap</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-982-avx2-tile-products-and-short-queries">Issue 982: AVX2 tile products and short queries</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-986-short-causal-groupqueryattention-on-avx2">Issue 986: short causal GroupQueryAttention on AVX2</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-1029-retained-avx2-dense-softmax-and-strided-output-optimization">Issue 1029: retained AVX2 dense-softmax and strided-output optimization</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#measurements">Measurements</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#corrected-auto-avx-512-comparison">Corrected AUTO/AVX-512 comparison</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#issue-1028-retained-intel-avx2-dense-fp32-improvement">Issue 1028: retained Intel AVX2 dense FP32 improvement</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#matched-repeated-a-b-measurements">Matched, repeated A/B measurements</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -1311,7 +1750,7 @@ performance claim is made.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Oct 26, 2026.
+  Last updated on Nov 01, 2026.
 </p></div>
       
     </div>
