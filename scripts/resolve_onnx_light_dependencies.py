@@ -279,12 +279,19 @@ def build_requirement_record(source, requirements) -> dict:
 def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> None:
     """Run pip while recording exact PEP 517 requirements by source URL."""
     try:
+        from pip._internal import build_env
         from pip._internal.build_env import BuildEnvironment
         from pip._internal.cli.main import main as pip_main
         from pip._internal.distributions.sdist import SourceDistribution
 
         original_prepare = SourceDistribution.prepare_distribution_metadata
-        original_install = BuildEnvironment.install_requirements
+        installer_class = getattr(
+            build_env, "SubprocessBuildEnvironmentInstaller", None
+        )
+        original_install = (
+            installer_class.install if installer_class is not None
+            else BuildEnvironment.install_requirements
+        )
     except (ImportError, AttributeError) as exc:
         raise RuntimeError(
             "The installed pip version is incompatible with build-requirement "
@@ -311,13 +318,31 @@ def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> Non
             environment, finder, requirements, prefix_as_string, kind=kind
         )
 
+    def install_with_source(environment, requirements, prefix, *, kind, for_req=None):
+        requirements = list(requirements)
+        link = getattr(for_req, "link", None)
+        source = getattr(link, "url", None)
+        if source is None and active:
+            source = active[-1].req.link.url
+        if source is not None:
+            captured.append(build_requirement_record(source, requirements))
+        return original_install(
+            environment, requirements, prefix, kind=kind, for_req=for_req
+        )
+
     SourceDistribution.prepare_distribution_metadata = prepare
-    BuildEnvironment.install_requirements = install
+    if installer_class is not None:
+        installer_class.install = install_with_source
+    else:
+        BuildEnvironment.install_requirements = install
     try:
         result = pip_main(args)
     finally:
         SourceDistribution.prepare_distribution_metadata = original_prepare
-        BuildEnvironment.install_requirements = original_install
+        if installer_class is not None:
+            installer_class.install = original_install
+        else:
+            BuildEnvironment.install_requirements = original_install
         report.write_text(json.dumps(captured), encoding="utf-8")
     if result:
         raise SystemExit(result)
