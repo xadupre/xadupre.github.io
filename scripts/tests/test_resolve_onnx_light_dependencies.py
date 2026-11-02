@@ -163,28 +163,19 @@ class TestRequirements(unittest.TestCase):
             "git+https://github.com/xadupre/project.git@abc123#subdirectory=packages/model",
         )
 
-    def test_isolated_build_requirements_preserve_direct_urls_without_pinning_versions(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            environment = Path(temporary) / "pip-build-env-fixture" / "overlay"
-            direct = environment / "onnx_light-1.0.dist-info"
-            direct.mkdir(parents=True)
-            (direct / "METADATA").write_text("Name: onnx-light\nVersion: 1.0\n")
-            (direct / "direct_url.json").write_text(json.dumps({
-                "url": "https://github.com/xadupre/project.git",
-                "vcs_info": {"vcs": "git", "commit_id": "abc123"},
-                "subdirectory": "packages/model",
-            }))
-            index = environment / "onnx_light_cpu-3.0.dist-info"
-            index.mkdir()
-            (index / "METADATA").write_text("Name: onnx-light-cpu\nVersion: 3.0\n")
-            self.assertEqual(
-                resolver.isolated_build_requirements(Path(temporary)),
-                [
-                    "onnx-light @ git+https://github.com/xadupre/project.git"
-                    "@abc123#subdirectory=packages/model",
-                    "onnx-light-cpu",
-                ],
-            )
+    def test_selected_build_requirements_preserve_bounds_and_ignore_rejected_sources(self):
+        selected = "https://example.org/source-1.tar.gz"
+        rejected = "https://example.org/source-2.tar.gz"
+        records = [
+            {"source": selected, "requirements": ["onnx-light-cpu>=2,<4"]},
+            {"source": rejected, "requirements": ["onnx-light-cpu==3"]},
+        ]
+        self.assertEqual(
+            resolver.selected_build_requirements(
+                records, {resolver.source_key(selected)}, set()
+            ),
+            [(f"{selected} [build requirements]", "onnx-light-cpu>=2,<4")],
+        )
 
     def test_ecosystem_self_extras_are_expanded_not_forced_as_release_requirements(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -288,6 +279,7 @@ class TestOfflineResolution(unittest.TestCase):
         self.prepare()
         constraints = (self.house / "constraints.txt").read_text()
         self.assertEqual(constraints.count("onnx-light<3"), 1)
+        self.assertIn("onnx-light==2.0", constraints.splitlines())
 
     def test_runtime_only_root_with_transitive_source_build_dependency(self):
         wheel(self.assets, "onnx-light", "2.0")
@@ -311,7 +303,7 @@ class TestOfflineResolution(unittest.TestCase):
             encoding="utf-8",
         )
         output = self.prepare()
-        self.assertIn("build-system.requires", output)
+        self.assertIn("build requirements", output)
         self.assertIn("onnx-light==2.0", (self.house / "constraints.txt").read_text())
         self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
         subprocess.run(
@@ -333,19 +325,26 @@ class TestOfflineResolution(unittest.TestCase):
         self.assertIn("onnx-light-cpu==2.0", (self.house / "constraints.txt").read_text())
         self.assertTrue(list(self.house.glob("onnx_light_cpu-2.0*.whl")))
 
-    def test_dynamic_hook_version_is_resolved_with_runtime_requirements(self):
+    def test_dynamic_hook_specifier_is_preserved_in_joint_resolution(self):
         wheel(self.assets, "onnx-light", "2.0")
         wheel(self.assets, "onnx-light", "3.0")
         wheel(self.assets, "onnx-light-cpu", "2.0", ["onnx-light==2.0"])
-        self.project_file(["onnx-light-cpu==2.0"])
+        wheel(self.assets, "onnx-light-cpu", "3.0")
+        self.project_file([])
         (self.project / "hook-requirements.txt").write_text(
-            "onnx-light>=1\n",
+            "onnx-light-cpu==2.0\n",
             encoding="utf-8",
         )
         self.prepare()
         constraints = (self.house / "constraints.txt").read_text()
         self.assertIn("onnx-light==2.0", constraints)
-        self.assertNotIn("onnx-light==3.0", constraints)
+        self.assertIn("onnx-light-cpu==2.0", constraints)
+        self.assertNotIn("onnx-light-cpu==3.0", constraints)
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
 
     def test_conflicting_runtime_and_build_requirements_fail_with_source(self):
         wheel(self.assets, "onnx-light", "1.0")

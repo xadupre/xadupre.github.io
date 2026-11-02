@@ -9,7 +9,6 @@ to the outer pip process: build-system.requires needs the same release access.
 from __future__ import annotations
 
 import argparse
-from email.parser import Parser
 import html
 import json
 import os
@@ -19,8 +18,8 @@ import sys
 import tempfile
 import tomllib
 from urllib.error import URLError
-from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
-from urllib.request import Request, url2pathname, urlopen
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
+from urllib.request import Request, urlopen
 
 from packaging.requirements import Requirement
 from packaging.tags import sys_tags
@@ -167,25 +166,89 @@ def resolved_download_url(download_info: dict) -> str:
     return f"{url}#{fragment}" if fragment else url
 
 
-def isolated_build_requirements(temporary: Path) -> list[str]:
-    """Find requirements installed for isolated build-backend hooks."""
+def source_key(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(
+        (parts.scheme.lower(), parts.netloc.lower(), parts.path, parts.query, "")
+    )
+
+
+def selected_build_requirements(
+    captured: list[dict], selected_sources: set[str], known: set[str]
+) -> list[tuple[str, str]]:
     requirements = []
-    for metadata_file in temporary.glob("pip-build-env-*/**/*.dist-info/METADATA"):
-        metadata = Parser().parsestr(metadata_file.read_text(encoding="utf-8"))
-        name = canonicalize_name(metadata.get("Name", ""))
-        if name in PACKAGES:
-            direct_url_file = metadata_file.parent / "direct_url.json"
-            if direct_url_file.is_file():
-                download_info = json.loads(direct_url_file.read_text(encoding="utf-8"))
-                url = resolved_download_url(download_info)
-                requirements.append(f"{name} @ {url}")
-            else:
-                requirements.append(name)
-    return sorted(set(requirements))
+    for record in captured:
+        if source_key(record["source"]) not in selected_sources:
+            continue
+        for text in record["requirements"]:
+            req = Requirement(text)
+            if (
+                canonicalize_name(req.name) in PACKAGES
+                and applicable(req, set())
+                and constraint(text) not in known
+            ):
+                label = f"{record['source']} [build requirements]"
+                print(f"{label}: {text}", flush=True)
+                requirements.append((label, text))
+                known.add(constraint(text))
+    return requirements
 
 
-def pip(*args: str, env: dict[str, str]) -> None:
-    subprocess.run([sys.executable, "-m", "pip", *args], env=env, check=True)
+def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> None:
+    """Run pip while recording exact PEP 517 requirements by source URL."""
+    from pip._internal.build_env import BuildEnvironment
+    from pip._internal.cli.main import main as pip_main
+    from pip._internal.distributions.sdist import SourceDistribution
+
+    captured = []
+    active = []
+    original_prepare = SourceDistribution.prepare_distribution_metadata
+    original_install = BuildEnvironment.install_requirements
+
+    def prepare(distribution, *prepare_args, **prepare_kwargs):
+        active.append(distribution)
+        try:
+            return original_prepare(distribution, *prepare_args, **prepare_kwargs)
+        finally:
+            active.pop()
+
+    def install(environment, finder, requirements, prefix_as_string, *, kind):
+        requirements = list(requirements)
+        if active:
+            captured.append({
+                "source": active[-1].req.link.url_without_fragment,
+                "requirements": requirements,
+            })
+        return original_install(
+            environment, finder, requirements, prefix_as_string, kind=kind
+        )
+
+    SourceDistribution.prepare_distribution_metadata = prepare
+    BuildEnvironment.install_requirements = install
+    try:
+        result = pip_main(args)
+    finally:
+        SourceDistribution.prepare_distribution_metadata = original_prepare
+        BuildEnvironment.install_requirements = original_install
+        report.write_text(json.dumps(captured), encoding="utf-8")
+    if result:
+        raise SystemExit(result)
+
+
+def pip(
+    *args: str, env: dict[str, str], build_requirements_report: Path | None = None
+) -> None:
+    if build_requirements_report is not None:
+        command = [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "--_run-pip",
+            str(build_requirements_report),
+            *args,
+        ]
+    else:
+        command = [sys.executable, "-m", "pip", *args]
+    subprocess.run(command, env=env, check=True)
 
 
 def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None) -> None:
@@ -204,10 +267,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
         encoding="utf-8",
     )
     constraints = wheelhouse / "constraints.txt"
-    constraints.write_text(
-        "\n".join(dict.fromkeys(constraint(text) for _, text in declarations)) + "\n",
-        encoding="utf-8",
-    )
+    inherited_constraints = []
     env = os.environ.copy()
     find_links = " ".join(
         value for value in (env.get("PIP_FIND_LINKS", ""), str(index), str(wheelhouse))
@@ -218,9 +278,10 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
     for key in ("PIP_CONSTRAINT", "PIP_BUILD_CONSTRAINT"):
         previous = env.get(key)
         if previous and Path(previous).resolve() not in {constraints, *merged}:
-            with constraints.open("a", encoding="utf-8") as stream:
-                stream.write(Path(previous).read_text(encoding="utf-8"))
-                stream.write("\n")
+            inherited = Path(previous).read_text(encoding="utf-8")
+            inherited_constraints.append(
+                inherited if inherited.endswith("\n") else inherited + "\n"
+            )
             merged.add(Path(previous).resolve())
         env[key] = str(constraints)
     env["PIP_FIND_LINKS"] = find_links
@@ -231,61 +292,51 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
     ]
     # Pass build requirements alongside runtime requirements so incompatible
     # runtime/build pins fail jointly rather than selecting two native ABIs.
+    root_declarations = declarations
     try:
         with tempfile.TemporaryDirectory(prefix="onnx-light-metadata-") as temporary:
-            env["TMPDIR"] = temporary
-            for _ in range(10):
+            for iteration in range(10):
+                iteration_dir = Path(temporary) / str(iteration)
+                iteration_dir.mkdir()
+                env["TMPDIR"] = str(iteration_dir)
+                constraint_lines = list(dict.fromkeys(
+                    constraint(text) for _, text in declarations
+                ))
+                constraints.write_text(
+                    "\n".join(constraint_lines) + "\n" + "\n".join(inherited_constraints),
+                    encoding="utf-8",
+                )
                 requirements = []
                 for _, text in declarations:
                     req = Requirement(text)
                     req.marker = None
                     requirements.append(str(req))
+                build_requirements_report = iteration_dir / "build-requirements.json"
                 pip(
                     "install", "--dry-run", "--ignore-installed", "--no-clean",
                     "--report", str(report), *roots, *requirements, env=env,
+                    build_requirements_report=build_requirements_report,
                 )
-                # pip's report omits isolated build inputs. Inspect both unpacked
-                # source declarations and packages installed for backend hooks, then
-                # resolve those jointly with runtime requirements as well.
-                sources = [
-                    *Path(temporary).glob("pip-install-*/*/pyproject.toml"),
-                    *Path(temporary).glob("pip-req-build-*/pyproject.toml"),
-                ]
                 current = json.loads(report.read_text(encoding="utf-8"))["install"]
-                known = {constraint(text) for _, text in declarations}
-                additional = []
-                for text in isolated_build_requirements(Path(temporary)):
-                    if constraint(text) not in known:
-                        additional.append((f"{temporary} [isolated build environment]", text))
-                        known.add(constraint(text))
-                for item in current:
-                    info = item["download_info"]
-                    if "dir_info" in info and urlparse(info["url"]).scheme == "file":
-                        path = Path(url2pathname(unquote(urlparse(info["url"]).path)))
-                        source = path / "pyproject.toml"
-                        if source.is_file():
-                            sources.append(source)
-                for source in sources:
-                    with source.open("rb") as stream:
-                        data = tomllib.load(stream)
-                    for text in data.get("build-system", {}).get("requires", []):
-                        req = Requirement(text)
-                        if (
-                            canonicalize_name(req.name) in PACKAGES
-                            and applicable(req, set())
-                        ):
-                            label = f"{source} [build-system.requires]"
-                            print(f"{label}: {text}", flush=True)
-                            if constraint(text) not in known:
-                                additional.append((label, text))
-                                known.add(constraint(text))
-                if not additional:
+                selected_sources = {
+                    source_key(item["download_info"]["url"]) for item in current
+                }
+                selected_sources.update(
+                    source_key(path.as_uri()) for path, _, _ in projects
+                )
+                known = {constraint(text) for _, text in root_declarations}
+                captured = json.loads(build_requirements_report.read_text(encoding="utf-8"))
+                additional = selected_build_requirements(
+                    captured, selected_sources, known
+                )
+                next_declarations = [*root_declarations, *additional]
+                if {
+                    constraint(text) for _, text in next_declarations
+                } == {
+                    constraint(text) for _, text in declarations
+                }:
                     break
-                declarations.extend(additional)
-                with constraints.open("a", encoding="utf-8") as stream:
-                    stream.write(
-                        "\n".join(constraint(text) for _, text in additional) + "\n"
-                    )
+                declarations = next_declarations
             else:
                 raise RuntimeError("ONNX Light source build requirements did not converge")
     except subprocess.CalledProcessError as exc:
@@ -345,6 +396,9 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
 
 
 def main() -> None:
+    if len(sys.argv) > 2 and sys.argv[1] == "--_run-pip":
+        run_pip_with_build_requirement_capture(Path(sys.argv[2]), sys.argv[3:])
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", action="append", required=True)
     parser.add_argument("--wheelhouse", type=Path, required=True)
