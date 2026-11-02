@@ -65,6 +65,11 @@ class TestBenchmarkDashboard(unittest.TestCase):
 
     def test_mixed_evaluator_columns_and_summary(self):
         text = _read(PAGE)
+        self.assertIn("and registered", text)
+        self.assertIn(
+            "<code>onnx-light-cpu</code> SIMD kernels for other supported operators",
+            text,
+        )
         self.assertIn('data-key="onnx_light_mixed_avg_ms"', text)
         self.assertIn('data-key="speedup_mixed"', text)
         self.assertIn("r.onnx_light_mixed_error", text)
