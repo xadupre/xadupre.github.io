@@ -144,9 +144,10 @@ def release_wheels(package: str, read_page=github_release_page) -> list[str]:
 def constraint(text: str) -> str:
     """Constraints cannot contain extras; markers have already been evaluated."""
     req = Requirement(text)
+    name = canonicalize_name(req.name)
     if req.url:
-        return f"{req.name} @ {req.url}"
-    return f"{req.name}{req.specifier}"
+        return f"{name} @ {req.url}"
+    return f"{name}{req.specifier}"
 
 
 def resolved_download_url(download_info: dict) -> str:
@@ -268,16 +269,30 @@ def selected_build_requirements(
     return requirements
 
 
+def build_requirement_record(source, requirements) -> dict:
+    return {
+        "source": str(source),
+        "requirements": [str(requirement) for requirement in requirements],
+    }
+
+
 def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> None:
     """Run pip while recording exact PEP 517 requirements by source URL."""
-    from pip._internal.build_env import BuildEnvironment
-    from pip._internal.cli.main import main as pip_main
-    from pip._internal.distributions.sdist import SourceDistribution
+    try:
+        from pip._internal.build_env import BuildEnvironment
+        from pip._internal.cli.main import main as pip_main
+        from pip._internal.distributions.sdist import SourceDistribution
+
+        original_prepare = SourceDistribution.prepare_distribution_metadata
+        original_install = BuildEnvironment.install_requirements
+    except (ImportError, AttributeError) as exc:
+        raise RuntimeError(
+            "The installed pip version is incompatible with build-requirement "
+            "capture; install a supported pip version."
+        ) from exc
 
     captured = []
     active = []
-    original_prepare = SourceDistribution.prepare_distribution_metadata
-    original_install = BuildEnvironment.install_requirements
 
     def prepare(distribution, *prepare_args, **prepare_kwargs):
         active.append(distribution)
@@ -289,10 +304,9 @@ def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> Non
     def install(environment, finder, requirements, prefix_as_string, *, kind):
         requirements = list(requirements)
         if active:
-            captured.append({
-                "source": active[-1].req.link.url,
-                "requirements": requirements,
-            })
+            captured.append(build_requirement_record(
+                active[-1].req.link.url, requirements
+            ))
         return original_install(
             environment, finder, requirements, prefix_as_string, kind=kind
         )
@@ -482,8 +496,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", action="append", required=True)
     parser.add_argument("--wheelhouse", type=Path, required=True)
+    parser.add_argument(
+        "--links-file", type=Path,
+        help="Read cached release asset URLs from this newline-delimited file.",
+    )
     args = parser.parse_args()
-    prepare(args.project, args.wheelhouse)
+    links = (
+        [line.strip() for line in args.links_file.read_text(encoding="utf-8").splitlines()
+         if line.strip()]
+        if args.links_file else None
+    )
+    prepare(args.project, args.wheelhouse, links=links)
 
 
 if __name__ == "__main__":

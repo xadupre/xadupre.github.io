@@ -152,6 +152,25 @@ class TestRequirements(unittest.TestCase):
             "onnx-light @ https://example.org/a.whl",
         )
         self.assertEqual(resolver.constraint("onnx-light>=1,<3"), "onnx-light<3,>=1")
+        self.assertEqual(
+            resolver.constraint("ONNX_light[foo] @ https://example.org/a.whl"),
+            "onnx-light @ https://example.org/a.whl",
+        )
+        self.assertEqual(
+            resolver.constraint("ONNX_light>=1,<3"), "onnx-light<3,>=1"
+        )
+
+    def test_build_requirement_records_are_json_serializable(self):
+        record = resolver.build_requirement_record(
+            Path("source"), [Requirement("onnx-light-cpu>=2,<4")]
+        )
+        self.assertEqual(
+            json.loads(json.dumps(record)),
+            {
+                "source": "source",
+                "requirements": ["onnx-light-cpu<4,>=2"],
+            },
+        )
 
     def test_vcs_download_url_uses_resolved_commit_and_subdirectory(self):
         self.assertEqual(
@@ -299,6 +318,22 @@ class TestOfflineResolution(unittest.TestCase):
             [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
              str(self.project)], env=env, check=True, capture_output=True, text=True,
         )
+
+    def test_cli_uses_cached_release_links_file(self):
+        release = wheel(self.assets, "onnx-light", "2.0")
+        self.project_file(["onnx-light==2.0"])
+        links_file = self.root / "release-links.txt"
+        links_file.write_text(release.as_uri() + "\n", encoding="utf-8")
+        subprocess.run(
+            [
+                sys.executable, str(Path(resolver.__file__)),
+                "--project", str(self.project),
+                "--wheelhouse", str(self.house),
+                "--links-file", str(links_file),
+            ],
+            env=os.environ.copy(), check=True, capture_output=True, text=True,
+        )
+        self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
 
     def test_direct_wheel_url_and_inactive_runtime_marker(self):
         release = wheel(self.assets, "onnx-light", "2.0")
