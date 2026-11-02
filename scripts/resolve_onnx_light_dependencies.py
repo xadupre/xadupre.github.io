@@ -18,7 +18,7 @@ import sys
 import tempfile
 import tomllib
 from urllib.error import URLError
-from urllib.parse import quote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from packaging.requirements import Requirement
@@ -173,24 +173,98 @@ def source_key(url: str) -> str:
     )
 
 
+def source_keys(source: str | dict) -> set[str]:
+    """Return matching identities for a source URL or pip download report."""
+    vcs_info = {}
+    subdirectory = None
+    if isinstance(source, dict):
+        url = source["url"]
+        vcs_info = source.get("vcs_info") or {}
+        subdirectory = source.get("subdirectory")
+    else:
+        url = source
+
+    parts = urlsplit(url)
+    if "+" not in parts.scheme and not vcs_info:
+        return {source_key(url)}
+
+    vcs, separator, transport = parts.scheme.partition("+")
+    if not separator:
+        vcs = vcs_info["vcs"]
+        transport = parts.scheme
+    path = parts.path
+    requested_revision = vcs_info.get("requested_revision")
+    if separator:
+        repository_path, revision_separator, url_revision = path.rpartition("@")
+        if revision_separator:
+            path = repository_path
+            requested_revision = requested_revision or url_revision
+    resolved_revision = vcs_info.get("commit_id")
+    subdirectory = subdirectory or parse_qs(parts.fragment).get("subdirectory", [None])[0]
+    repository = urlunsplit(
+        (transport.lower(), parts.netloc.lower(), path, parts.query, "")
+    )
+    revisions = {revision for revision in (requested_revision, resolved_revision) if revision}
+    if not revisions:
+        revisions.add("")
+    suffix = f"#subdirectory={quote(subdirectory, safe='/')}" if subdirectory else ""
+    return {
+        f"{vcs.lower()}+{repository}@{revision}{suffix}" if revision else
+        f"{vcs.lower()}+{repository}{suffix}"
+        for revision in revisions
+    }
+
+
+def selected_build_records(captured: list[dict], selected_sources: set[str]) -> list[dict]:
+    return [
+        record for record in captured
+        if source_keys(record["source"]) & selected_sources
+    ]
+
+
 def selected_build_requirements(
-    captured: list[dict], selected_sources: set[str], known: set[str]
+    captured: list[dict], selected_sources: set[str], known: set[str],
+    resolved: list[dict] | None = None,
 ) -> list[tuple[str, str]]:
     requirements = []
-    for record in captured:
-        if source_key(record["source"]) not in selected_sources:
-            continue
+    packages = {
+        canonicalize_name(item["metadata"]["name"]): item
+        for item in resolved or []
+    }
+    visited = set()
+
+    def include(text: str, extras: set[str], label: str) -> None:
+        req = Requirement(text)
+        if (
+            canonicalize_name(req.name) in PACKAGES
+            and applicable(req, extras)
+            and constraint(text) not in known
+        ):
+            print(f"{label}: {text}", flush=True)
+            requirements.append((label, text))
+            known.add(constraint(text))
+
+    def visit(text: str, extras: set[str], label: str) -> None:
+        req = Requirement(text)
+        if not applicable(req, extras):
+            return
+        name = canonicalize_name(req.name)
+        item = packages.get(name)
+        if item is None:
+            return
+        include(text, extras, label)
+        key = (name, frozenset(req.extras))
+        if key in visited:
+            return
+        visited.add(key)
+        for dependency in item["metadata"].get("requires_dist", []):
+            visit(dependency, set(req.extras), label)
+
+    for record in selected_build_records(captured, selected_sources):
         for text in record["requirements"]:
-            req = Requirement(text)
-            if (
-                canonicalize_name(req.name) in PACKAGES
-                and applicable(req, set())
-                and constraint(text) not in known
-            ):
-                label = f"{record['source']} [build requirements]"
-                print(f"{label}: {text}", flush=True)
-                requirements.append((label, text))
-                known.add(constraint(text))
+            label = f"{record['source']} [build requirements]"
+            include(text, set(), label)
+            visit(text, set(), label)
     return requirements
 
 
@@ -216,7 +290,7 @@ def run_pip_with_build_requirement_capture(report: Path, args: list[str]) -> Non
         requirements = list(requirements)
         if active:
             captured.append({
-                "source": active[-1].req.link.url_without_fragment,
+                "source": active[-1].req.link.url,
                 "requirements": requirements,
             })
         return original_install(
@@ -293,6 +367,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
     # Pass build requirements alongside runtime requirements so incompatible
     # runtime/build pins fail jointly rather than selecting two native ABIs.
     root_declarations = declarations
+    build_inputs = []
     try:
         with tempfile.TemporaryDirectory(prefix="onnx-light-metadata-") as temporary:
             for iteration in range(10):
@@ -314,29 +389,34 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 build_requirements_report = iteration_dir / "build-requirements.json"
                 pip(
                     "install", "--dry-run", "--ignore-installed", "--no-clean",
-                    "--report", str(report), *roots, *requirements, env=env,
+                    "--report", str(report), *roots, *requirements, *build_inputs, env=env,
                     build_requirements_report=build_requirements_report,
                 )
                 current = json.loads(report.read_text(encoding="utf-8"))["install"]
-                selected_sources = {
-                    source_key(item["download_info"]["url"]) for item in current
-                }
+                selected_sources = set()
+                for item in current:
+                    selected_sources.update(source_keys(item["download_info"]))
                 selected_sources.update(
-                    source_key(path.as_uri()) for path, _, _ in projects
+                    key for path, _, _ in projects for key in source_keys(path.as_uri())
                 )
                 known = {constraint(text) for _, text in root_declarations}
                 captured = json.loads(build_requirements_report.read_text(encoding="utf-8"))
+                build_records = selected_build_records(captured, selected_sources)
+                next_build_inputs = list(dict.fromkeys(
+                    text for record in build_records for text in record["requirements"]
+                ))
                 additional = selected_build_requirements(
-                    captured, selected_sources, known
+                    build_records, selected_sources, known, current
                 )
                 next_declarations = [*root_declarations, *additional]
                 if {
                     constraint(text) for _, text in next_declarations
                 } == {
                     constraint(text) for _, text in declarations
-                }:
+                } and next_build_inputs == build_inputs:
                     break
                 declarations = next_declarations
+                build_inputs = next_build_inputs
             else:
                 raise RuntimeError("ONNX Light source build requirements did not converge")
     except subprocess.CalledProcessError as exc:

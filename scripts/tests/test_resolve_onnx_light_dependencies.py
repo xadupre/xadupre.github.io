@@ -177,6 +177,44 @@ class TestRequirements(unittest.TestCase):
             [(f"{selected} [build requirements]", "onnx-light-cpu>=2,<4")],
         )
 
+    def test_vcs_source_identity_matches_requested_and_resolved_revisions(self):
+        source = (
+            "git+https://github.com/xadupre/model.git@refs/heads/main"
+            "#subdirectory=packages/model"
+        )
+        report_source = {
+            "url": "https://github.com/xadupre/model.git",
+            "vcs_info": {
+                "vcs": "git",
+                "requested_revision": "refs/heads/main",
+                "commit_id": "abc123",
+            },
+            "subdirectory": "packages/model",
+        }
+        selected_sources = resolver.source_keys(report_source)
+        self.assertTrue(resolver.source_keys(source) & selected_sources)
+        self.assertTrue(
+            resolver.source_keys(source.replace("refs/heads/main", "abc123"))
+            & selected_sources
+        )
+        self.assertFalse(
+            resolver.source_keys(source.replace("packages/model", "packages/other"))
+            & selected_sources
+        )
+        self.assertFalse(
+            resolver.source_keys(source.replace("refs/heads/main", "refs/tags/v1"))
+            & selected_sources
+        )
+        self.assertEqual(
+            resolver.source_keys("git+https://github.com/xadupre/model.git"),
+            {"git+https://github.com/xadupre/model.git"},
+        )
+        record = {"source": source, "requirements": ["onnx-light-cpu>=2,<4"]}
+        self.assertEqual(
+            resolver.selected_build_requirements([record], selected_sources, set()),
+            [(f"{source} [build requirements]", "onnx-light-cpu>=2,<4")],
+        )
+
     def test_ecosystem_self_extras_are_expanded_not_forced_as_release_requirements(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)
@@ -324,6 +362,27 @@ class TestOfflineResolution(unittest.TestCase):
         self.assertIn("onnx-light-cpu==2.0", output)
         self.assertIn("onnx-light-cpu==2.0", (self.house / "constraints.txt").read_text())
         self.assertTrue(list(self.house.glob("onnx_light_cpu-2.0*.whl")))
+
+    def test_transitive_backend_wheel_dependency_is_included_in_resolution(self):
+        onnx_light = wheel(self.assets, "onnx-light", "2.0")
+        onnx_light_url = f"onnx-light @ {onnx_light.as_uri()}"
+        wheel(self.assets, "builder-backend", "1.0", ["onnx-light-cpu>=2,<4"])
+        wheel(self.assets, "onnx-light-cpu", "2.0", [onnx_light_url])
+        wheel(self.assets, "onnx-light-cpu", "3.0", [onnx_light_url])
+        self.project_file([], "builder-backend>=1")
+        os.environ["PIP_FIND_LINKS"] = str(self.assets)
+        self.prepare()
+        constraints = (self.house / "constraints.txt").read_text()
+        self.assertIn(resolver.constraint("onnx-light-cpu>=2,<4"), constraints)
+        self.assertIn(resolver.constraint(onnx_light_url), constraints)
+        self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+        self.assertIn("onnx-light-cpu==3.0", constraints)
+        self.assertTrue(list(self.house.glob("onnx_light_cpu-3.0*.whl")))
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             "--no-cache-dir", str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
 
     def test_dynamic_hook_specifier_is_preserved_in_joint_resolution(self):
         wheel(self.assets, "onnx-light", "2.0")
