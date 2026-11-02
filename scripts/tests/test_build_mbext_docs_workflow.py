@@ -1,5 +1,6 @@
 import os
 import unittest
+import yaml
 
 HERE = os.path.dirname(__file__)
 
@@ -25,6 +26,20 @@ class TestBuildMbextDocsWorkflow(unittest.TestCase):
         # The gallery example imports torch/transformers/onnxruntime which live
         # in the ``dev`` extra, and Sphinx/furo which live in the ``doc`` extra.
         self.assertIn('pip install -e ".[dev,doc]"', content)
+
+    def test_dependency_resolution_uses_cpu_torch_index(self):
+        workflow = yaml.safe_load(self._read_workflow())
+        steps = workflow["jobs"]["build-and-publish"]["steps"]
+        resolve = next(
+            step for step in steps
+            if step["name"] == "Resolve onnx-light release dependencies"
+        )
+        self.assertEqual(
+            resolve["env"]["PIP_EXTRA_INDEX_URL"],
+            "https://download.pytorch.org/whl/cpu",
+        )
+        self.assertNotIn("PIP_INDEX_URL", resolve["env"])
+        self.assertNotIn("--pre", resolve["run"])
 
     def test_workflow_builds_and_publishes_docs(self):
         content = self._read_workflow()

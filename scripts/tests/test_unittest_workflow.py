@@ -17,22 +17,30 @@ class TestUnittestWorkflow(unittest.TestCase):
         )
         self.assertEqual(checkout["with"].get("ref"), "main")
 
-    def test_onnx_light_wheel_precedes_builder_install(self):
+    def test_release_resolution_precedes_builder_install(self):
         root = Path(__file__).resolve().parents[2]
         workflow = yaml.safe_load(
             (root / ".github/workflows/unittest.yml").read_text(encoding="utf-8")
         )
         steps = workflow["jobs"]["unittest"]["steps"]
+        resolve_index = next(
+            i for i, step in enumerate(steps)
+            if step["name"] == "Resolve onnx-light release dependencies"
+        )
+        install_index = next(
+            i for i, step in enumerate(steps)
+            if step["name"] == "Install test dependencies"
+        )
+        self.assertLess(resolve_index, install_index)
+        self.assertIn(
+            '--project "$GITHUB_WORKSPACE/yet-another-onnx-builder[torch,transformers,onnxscript]"',
+            steps[resolve_index]["run"],
+        )
         step = next(step for step in steps if step["name"] == "Install test dependencies")
         commands = step["run"].splitlines()
-        wheel = (
-            'pip install "https://github.com/xadupre/onnx-light/releases/download/'
-            "0.2.3/onnx_light-0.2.3-cp312-cp312-manylinux_2_27_x86_64."
-            'manylinux_2_28_x86_64.whl"'
-        )
-        self.assertIn(wheel, commands)
         builder = 'pip install -e "./yet-another-onnx-builder[torch,transformers,onnxscript]"'
-        self.assertLess(commands.index(wheel), commands.index(builder))
+        self.assertIn(builder, commands)
+        self.assertNotIn("releases/download", step["run"])
 
 
 if __name__ == "__main__":
