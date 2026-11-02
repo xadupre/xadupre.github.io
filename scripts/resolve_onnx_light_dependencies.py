@@ -1,6 +1,7 @@
 """Prepare requirement-selected ONNX Light wheels for pip and isolated builds.
 
-Run with the same Python/platform and project extras as the subsequent install.
+Run with the same Python/platform, package indexes and project extras as the
+subsequent install (use pip's PIP_INDEX_URL/PIP_EXTRA_INDEX_URL environment).
 The wheelhouse and constraints are exported through GITHUB_ENV, not just passed
 to the outer pip process: build-system.requires needs the same release access.
 """
@@ -16,8 +17,9 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.error import URLError
+from urllib.parse import unquote, urlparse
+from urllib.request import Request, url2pathname, urlopen
 
 from packaging.requirements import Requirement
 from packaging.tags import sys_tags
@@ -41,12 +43,18 @@ def applicable(requirement: Requirement, extras: set[str]) -> bool:
 def project_requirements(target: str) -> tuple[Path, set[str], list[tuple[str, str]]]:
     """Read runtime, selected extras (including self references), and build inputs."""
     path_text, separator, extra_text = target.partition("[")
-    extras = set(extra_text.rstrip("]").split(",")) if separator else set()
+    extras = (
+        {canonicalize_name(extra) for extra in extra_text.rstrip("]").split(",")}
+        if separator else set()
+    )
     path = Path(path_text).resolve()
     with (path / "pyproject.toml").open("rb") as stream:
         data = tomllib.load(stream)
     project = data["project"]
-    optional = project.get("optional-dependencies", {})
+    optional = {
+        canonicalize_name(extra): values
+        for extra, values in project.get("optional-dependencies", {}).items()
+    }
     pending = list(extras)
     while pending:
         extra = pending.pop()
@@ -58,7 +66,7 @@ def project_requirements(target: str) -> tuple[Path, set[str], list[tuple[str, s
                 canonicalize_name(req.name) == canonicalize_name(project["name"])
                 and applicable(req, extras)
             ):
-                for nested in req.extras - extras:
+                for nested in {canonicalize_name(value) for value in req.extras} - extras:
                     extras.add(nested)
                     pending.append(nested)
     groups = {
@@ -73,14 +81,37 @@ def project_requirements(target: str) -> tuple[Path, set[str], list[tuple[str, s
     for group, values in groups.items():
         for text in values:
             req = Requirement(text)
-            if canonicalize_name(req.name) in PACKAGES and applicable(req, extras):
+            name = canonicalize_name(req.name)
+            if (
+                name in PACKAGES
+                and (
+                    name != canonicalize_name(project["name"])
+                    or group == "build-system.requires"
+                )
+                and applicable(req, extras)
+            ):
                 source = f"{path / 'pyproject.toml'} [{group}]"
                 print(f"{source}: {text}", flush=True)
                 requirements.append((source, text))
     return path, extras, requirements
 
 
-def release_wheels(package: str) -> list[str]:
+def github_release_page(url: str) -> list[dict]:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        with urlopen(Request(url, headers=headers), timeout=60) as response:
+            return json.load(response)
+    except URLError as exc:
+        raise RuntimeError(
+            f"Cannot discover release wheels at {url}: {exc}. "
+            "Check GitHub availability and GH_TOKEN access; no latest-release fallback."
+        ) from exc
+
+
+def release_wheels(package: str, read_page=github_release_page) -> list[str]:
     """Discover every compatible full release wheel, not just the latest tag."""
     tags = set(sys_tags())
     links = []
@@ -90,12 +121,7 @@ def release_wheels(package: str) -> list[str]:
             f"https://api.github.com/repos/xadupre/{package}/releases"
             f"?per_page=100&page={page}"
         )
-        headers = {"Accept": "application/vnd.github+json"}
-        token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
-        if token:
-            headers["Authorization"] = "Bearer " + token
-        with urlopen(Request(url, headers=headers), timeout=60) as response:
-            releases = json.load(response)
+        releases = read_page(url)
         for release in releases:
             if release["draft"]:
                 continue
@@ -152,11 +178,14 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
         if value
     )
     # A previous invocation must not silently override this project's inputs.
+    merged = set()
     for key in ("PIP_CONSTRAINT", "PIP_BUILD_CONSTRAINT"):
         previous = env.get(key)
-        if previous and Path(previous).resolve() != constraints:
+        if previous and Path(previous).resolve() not in {constraints, *merged}:
             with constraints.open("a", encoding="utf-8") as stream:
                 stream.write(Path(previous).read_text(encoding="utf-8"))
+                stream.write("\n")
+            merged.add(Path(previous).resolve())
         env[key] = str(constraints)
     env["PIP_FIND_LINKS"] = find_links
     report = wheelhouse / "resolution.json"
@@ -186,6 +215,14 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                     *Path(temporary).glob("pip-install-*/*/pyproject.toml"),
                     *Path(temporary).glob("pip-req-build-*/pyproject.toml"),
                 ]
+                current = json.loads(report.read_text(encoding="utf-8"))["install"]
+                for item in current:
+                    info = item["download_info"]
+                    if "dir_info" in info and urlparse(info["url"]).scheme == "file":
+                        path = Path(url2pathname(unquote(urlparse(info["url"]).path)))
+                        source = path / "pyproject.toml"
+                        if source.is_file():
+                            sources.append(source)
                 known = {constraint(text) for _, text in declarations}
                 additional = []
                 for source in sources:

@@ -73,6 +73,39 @@ def wheel(directory, name, version, requirements=()):
 
 
 class TestRequirements(unittest.TestCase):
+    def test_release_discovery_paginates_and_filters_platform_and_reduced_wheels(self):
+        requests = []
+
+        def release(names, draft=False):
+            return {
+                "draft": draft,
+                "assets": [
+                    {"name": name, "browser_download_url": f"https://github.com/wheels/{name}"}
+                    for name in names
+                ],
+            }
+
+        def pages(url):
+            requests.append(url)
+            if url.endswith("&page=1"):
+                return [
+                    release([
+                        "onnx_light-2.0-py3-none-any.whl",
+                        "onnx_light-2.0-0reduced-py3-none-any.whl",
+                        "onnx_light-2.0-cp399-cp399-win_amd64.whl",
+                        "onnx_light_cpu-2.0-py3-none-any.whl",
+                    ]),
+                    *[release([], draft=True) for _ in range(99)],
+                ]
+            return [release(["onnx_light-1.0-py3-none-any.whl"])]
+
+        links = resolver.release_wheels("onnx-light", read_page=pages)
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(
+            [link.rsplit("/", 1)[-1] for link in links],
+            ["onnx_light-2.0-py3-none-any.whl", "onnx_light-1.0-py3-none-any.whl"],
+        )
+
     def test_markers_use_target_interpreter_and_selected_extras(self):
         self.assertTrue(resolver.applicable(Requirement('onnx-light; python_version >= "3"'), set()))
         self.assertFalse(resolver.applicable(Requirement('onnx-light; sys_platform == "no-such-os"'), {"docs"}))
@@ -106,6 +139,20 @@ class TestRequirements(unittest.TestCase):
             "onnx-light @ https://example.org/a.whl",
         )
         self.assertEqual(resolver.constraint("onnx-light>=1,<3"), "onnx-light<3,>=1")
+
+    def test_ecosystem_self_extras_are_expanded_not_forced_as_release_requirements(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "pyproject.toml").write_text(
+                '[project]\nname="onnx-light-kernel-images"\nversion="1.0"\n'
+                '[project.optional-dependencies]\n'
+                'docs=["onnx-light-kernel-images[native_support]"]\n'
+                'native_support=["onnx-light==2.0"]\n',
+                encoding="utf-8",
+            )
+            _, extras, requirements = resolver.project_requirements(f"{path}[docs]")
+            self.assertEqual(extras, {"docs", "native-support"})
+            self.assertEqual([text for _, text in requirements], ["onnx-light==2.0"])
 
 
 class TestOfflineResolution(unittest.TestCase):
@@ -184,6 +231,17 @@ class TestOfflineResolution(unittest.TestCase):
         self.project_file([requirement, 'onnx-light==99; python_version < "2"'], requirement)
         self.prepare()
         self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+
+    def test_previous_runtime_and_build_constraints_are_merged_once(self):
+        wheel(self.assets, "onnx-light", "2.0")
+        self.project_file(["onnx-light>=1"])
+        previous = self.root / "previous-constraints.txt"
+        previous.write_text("onnx-light<3", encoding="utf-8")
+        os.environ["PIP_CONSTRAINT"] = str(previous)
+        os.environ["PIP_BUILD_CONSTRAINT"] = str(previous)
+        self.prepare()
+        constraints = (self.house / "constraints.txt").read_text()
+        self.assertEqual(constraints.count("onnx-light<3"), 1)
 
     def test_runtime_only_root_with_transitive_source_build_dependency(self):
         wheel(self.assets, "onnx-light", "2.0")
