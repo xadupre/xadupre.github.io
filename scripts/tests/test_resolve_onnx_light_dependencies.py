@@ -1,0 +1,221 @@
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+
+from packaging.requirements import Requirement
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import resolve_onnx_light_dependencies as resolver
+
+
+BACKEND = '''
+import pathlib
+import subprocess
+import sysconfig
+import zipfile
+
+def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
+    name = "fixture"
+    native = pathlib.Path("native.c")
+    files = {"fixture.py": "VALUE = 1"}
+    if native.exists():
+        extension = "_fixture" + sysconfig.get_config_var("EXT_SUFFIX")
+        subprocess.run(["cc", "-shared", "-fPIC",
+                        "-I" + sysconfig.get_path("include"),
+                        str(native), "-o", extension], check=True)
+        files[extension] = pathlib.Path(extension).read_bytes()
+    filename = name + "-1.0-py3-none-any.whl"
+    dist = name + "-1.0.dist-info/"
+    files[dist + "METADATA"] = "Metadata-Version: 2.1\\nName: fixture\\nVersion: 1.0\\n"
+    files[dist + "WHEEL"] = "Wheel-Version: 1.0\\nGenerator: fixture\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n"
+    files[dist + "RECORD"] = "".join(key + ",,\\n" for key in files)
+    with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, "w") as archive:
+        for key, value in files.items():
+            archive.writestr(key, value)
+    return filename
+'''
+
+
+def wheel(directory, name, version, requirements=()):
+    normalized = name.replace("-", "_")
+    path = directory / f"{normalized}-{version}-py3-none-any.whl"
+    dist = f"{normalized}-{version}.dist-info/"
+    files = {
+        dist + "METADATA": (
+            f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n"
+            + "".join(f"Requires-Dist: {req}\n" for req in requirements)
+        ),
+        dist + "WHEEL": (
+            "Wheel-Version: 1.0\nGenerator: fixture\nRoot-Is-Purelib: true\n"
+            "Tag: py3-none-any\n"
+        ),
+        "release_backend.py": BACKEND,
+    }
+    files[dist + "RECORD"] = "".join(f"{key},,\n" for key in files)
+    with zipfile.ZipFile(path, "w") as archive:
+        for key, value in files.items():
+            archive.writestr(key, value)
+    return path
+
+
+class TestRequirements(unittest.TestCase):
+    def test_markers_use_target_interpreter_and_selected_extras(self):
+        self.assertTrue(resolver.applicable(Requirement('onnx-light; python_version >= "3"'), set()))
+        self.assertFalse(resolver.applicable(Requirement('onnx-light; sys_platform == "no-such-os"'), {"docs"}))
+        self.assertTrue(resolver.applicable(Requirement('onnx-light; extra == "docs"'), {"docs"}))
+        self.assertFalse(resolver.applicable(Requirement('onnx-light; extra == "unused"'), {"docs"}))
+
+    def test_collects_runtime_build_and_recursive_selected_extras(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "pyproject.toml").write_text(
+                '[project]\nname="fixture"\nversion="1.0"\n'
+                'dependencies=["onnx-light>=1,<3"]\n'
+                '[project.optional-dependencies]\n'
+                'docs=["fixture[native]", "onnx-light-viewer==2"]\n'
+                'native=["onnx-light-cpu==1; python_version >= \'3\'"]\n'
+                'unused=["onnx-light-ort==99"]\n'
+                '[build-system]\nrequires=["onnx-light==2"]\n',
+                encoding="utf-8",
+            )
+            _, extras, requirements = resolver.project_requirements(f"{path}[docs]")
+            self.assertEqual(extras, {"docs", "native"})
+            self.assertEqual(len(requirements), 4)
+            self.assertTrue(any("build-system.requires" in source for source, _ in requirements))
+            self.assertFalse(any("ort" in text for _, text in requirements))
+            with self.assertRaisesRegex(ValueError, "unknown optional dependency"):
+                resolver.project_requirements(f"{path}[absent]")
+
+    def test_constraints_preserve_direct_url_but_remove_evaluated_markers(self):
+        self.assertEqual(
+            resolver.constraint('onnx-light[foo] @ https://example.org/a.whl ; python_version >= "3"'),
+            "onnx-light @ https://example.org/a.whl",
+        )
+        self.assertEqual(resolver.constraint("onnx-light>=1,<3"), "onnx-light<3,>=1")
+
+
+class TestOfflineResolution(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.assets = self.root / "assets"
+        self.assets.mkdir()
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.house = self.root / "wheelhouse"
+        self.environment = self.root / "github-env"
+        # A real offline pip subprocess is used, not a mocked resolver.
+        self.saved = os.environ.copy()
+        self.addCleanup(self.restore_environment)
+        for key in ("PIP_CONSTRAINT", "PIP_BUILD_CONSTRAINT", "PIP_FIND_LINKS"):
+            os.environ.pop(key, None)
+        os.environ["PIP_NO_INDEX"] = "1"
+        os.environ["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+        os.environ["GITHUB_ENV"] = str(self.environment)
+
+    def restore_environment(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+
+    def project_file(self, runtime, build="onnx-light==2.0"):
+        (self.project / "pyproject.toml").write_text(
+            '[project]\nname="fixture"\nversion="1.0"\n'
+            f"dependencies={json.dumps(runtime)}\n"
+            '[build-system]\n'
+            f"requires={json.dumps([build])}\n"
+            'build-backend="release_backend"\n',
+            encoding="utf-8",
+        )
+
+    def prepare(self):
+        links = [path.as_uri() for path in self.assets.glob("*.whl")]
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            resolver.prepare([str(self.project)], self.house, links=links)
+        return output.getvalue()
+
+    def exported_env(self):
+        env = os.environ.copy()
+        env.update(line.split("=", 1) for line in self.environment.read_text().splitlines())
+        return env
+
+    def test_range_selects_matching_release_and_transitive_package(self):
+        wheel(self.assets, "onnx-light", "1.0")
+        wheel(self.assets, "onnx-light", "2.0", ["onnx-light-cpu>=1,<2"])
+        wheel(self.assets, "onnx-light", "3.0")
+        wheel(self.assets, "onnx-light-cpu", "1.5")
+        wheel(self.assets, "onnx-light-cpu", "2.0")
+        self.project_file(["onnx-light>=1,<3"])
+        output = self.prepare()
+        constraints = (self.house / "constraints.txt").read_text()
+        self.assertIn("onnx-light==2.0", constraints)
+        self.assertIn("onnx-light-cpu==1.5", constraints)
+        self.assertIn("build-system.requires", output)
+        self.assertIn("Requires-Dist: onnx-light-cpu", output)
+        self.assertIn("Selected onnx-light==2.0", output)
+        self.assertFalse(list(self.house.glob("*3.0*.whl")))
+        env = self.exported_env()
+        self.assertEqual(env["PIP_CONSTRAINT"], env["PIP_BUILD_CONSTRAINT"])
+        # The discovery HTML must not expose unselected releases afterwards.
+        self.assertNotIn("releases.html", env["PIP_FIND_LINKS"])
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             str(self.project)], env=env, check=True, capture_output=True, text=True,
+        )
+
+    def test_direct_wheel_url_and_inactive_runtime_marker(self):
+        release = wheel(self.assets, "onnx-light", "2.0")
+        requirement = f"onnx-light @ {release.as_uri()}"
+        self.project_file([requirement, 'onnx-light==99; python_version < "2"'], requirement)
+        self.prepare()
+        self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+
+    def test_conflicting_runtime_and_build_requirements_fail_with_source(self):
+        wheel(self.assets, "onnx-light", "1.0")
+        wheel(self.assets, "onnx-light", "2.0")
+        self.project_file(["onnx-light==1.0"])
+        with self.assertRaisesRegex(RuntimeError, r"Cannot resolve.*Python") as caught:
+            self.prepare()
+        self.assertIn("build-system.requires", str(caught.exception))
+        self.assertIn("project.dependencies", str(caught.exception))
+        self.assertFalse(self.environment.exists())
+
+    def test_unavailable_release_fails_instead_of_using_latest(self):
+        wheel(self.assets, "onnx-light", "3.0")
+        self.project_file(["onnx-light==2.0"])
+        with self.assertRaisesRegex(RuntimeError, "onnx-light==2.0"):
+            self.prepare()
+
+    @unittest.skipUnless(shutil.which("cc"), "C compiler required")
+    def test_isolated_native_build_uses_prepared_release_without_preinstall(self):
+        wheel(self.assets, "onnx-light", "2.0")
+        self.project_file(["onnx-light==2.0"])
+        (self.project / "native.c").write_text(
+            '#include <Python.h>\n'
+            'static struct PyModuleDef module = {PyModuleDef_HEAD_INIT, "_fixture", NULL, -1, NULL};\n'
+            'PyMODINIT_FUNC PyInit__fixture(void) { return PyModule_Create(&module); }\n',
+            encoding="utf-8",
+        )
+        self.prepare()
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "wheel", "--no-deps", "--wheel-dir",
+             str(self.root / "built"), str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
+        self.assertIn("Successfully built fixture", result.stdout)
+        built = next((self.root / "built").glob("fixture*.whl"))
+        with zipfile.ZipFile(built) as archive:
+            self.assertTrue(any(name.endswith(".so") for name in archive.namelist()))
+
+
+if __name__ == "__main__":
+    unittest.main()
