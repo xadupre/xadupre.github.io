@@ -434,6 +434,48 @@ class TestOfflineResolution(unittest.TestCase):
             env=self.exported_env(), check=True, capture_output=True, text=True,
         )
 
+    def test_constrained_backend_graph_captures_source_backend_build_requirements(self):
+        os.environ["PIP_NO_CACHE_DIR"] = "1"
+        wheel(self.assets, "onnx-light", "2.0")
+        wheel(self.assets, "onnx-light-cpu", "2.0")
+        wheel(self.assets, "onnx-light-cpu", "3.0")
+
+        source_backend = self.root / "source_backend"
+        source_backend.mkdir()
+        (source_backend / "pyproject.toml").write_text(
+            '[project]\nname="sourcebackend"\nversion="1.0"\n'
+            '[build-system]\nrequires=["onnx-light>=2.0"]\n'
+            'build-backend="release_backend"\n',
+            encoding="utf-8",
+        )
+        archive = self.root / "sourcebackend-1.0.tar.gz"
+        with tarfile.open(archive, "w:gz") as stream:
+            stream.add(source_backend, arcname="source-backend-1.0")
+
+        source_backend_requirement = f"sourcebackend @ {archive.as_uri()}"
+        wheel(
+            self.assets, "builder-backend", "1.0",
+            ["onnx-light-cpu==2.0", source_backend_requirement],
+        )
+        wheel(
+            self.assets, "builder-backend", "2.0",
+            ["onnx-light-cpu==3.0", source_backend_requirement],
+        )
+        self.project_file(["onnx-light-cpu==2.0"], "builder-backend>=1")
+
+        output = self.prepare()
+        constraints = (self.house / "constraints.txt").read_text()
+        self.assertIn("onnx-light>=2.0", constraints)
+        self.assertIn("onnx-light-cpu==2.0", constraints)
+        self.assertNotIn("onnx-light-cpu==3.0", constraints)
+        self.assertIn("sourcebackend", output)
+        self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             "--no-cache-dir", str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
+
     def test_conflicting_build_graphs_are_resolved_separately(self):
         wheel(self.assets, "onnx-light", "2.0")
         wheel(self.assets, "numpy", "1.0")

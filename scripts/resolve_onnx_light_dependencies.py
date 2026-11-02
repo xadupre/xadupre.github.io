@@ -440,21 +440,44 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 build_records = selected_build_records(captured, selected_sources)
                 build_env = env.copy()
                 additional = []
-                for index, record in enumerate(build_records):
+                pending = list(build_records)
+                processed = set()
+                index = 0
+                while pending:
+                    record = pending.pop()
+                    identity = (
+                        frozenset(source_keys(record["source"])),
+                        tuple(record["requirements"]),
+                    )
+                    if identity in processed:
+                        continue
+                    processed.add(identity)
                     if not record["requirements"]:
                         continue
                     build_report = iteration_dir / f"build-{index}.json"
+                    nested_report = iteration_dir / f"build-requirements-{index}.json"
                     pip(
                         "install", "--dry-run", "--ignore-installed",
+                        "--constraint", str(constraints),
                         "--report", str(build_report), *record["requirements"],
-                        env=build_env,
+                        env=build_env, build_requirements_report=nested_report,
                     )
                     build_graph = json.loads(
                         build_report.read_text(encoding="utf-8")
                     )["install"]
                     additional.extend(selected_build_requirements(
-                        [record], selected_sources, known, build_graph
+                        [record], source_keys(record["source"]), known, build_graph
                     ))
+                    graph_sources = set()
+                    for item in build_graph:
+                        graph_sources.update(source_keys(item["download_info"]))
+                    nested_captured = json.loads(
+                        nested_report.read_text(encoding="utf-8")
+                    )
+                    pending.extend(
+                        selected_build_records(nested_captured, graph_sources)
+                    )
+                    index += 1
                 next_declarations = [*root_declarations, *additional]
                 if {
                     constraint(text) for _, text in next_declarations
