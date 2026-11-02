@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 import zipfile
@@ -20,10 +21,12 @@ BACKEND = '''
 import pathlib
 import subprocess
 import sysconfig
+import tomllib
 import zipfile
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-    name = "fixture"
+    project = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]
+    name = project["name"]
     native = pathlib.Path("native.c")
     files = {"fixture.py": "VALUE = 1"}
     if native.exists():
@@ -34,7 +37,10 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         files[extension] = pathlib.Path(extension).read_bytes()
     filename = name + "-1.0-py3-none-any.whl"
     dist = name + "-1.0.dist-info/"
-    files[dist + "METADATA"] = "Metadata-Version: 2.1\\nName: fixture\\nVersion: 1.0\\n"
+    files[dist + "METADATA"] = (
+        "Metadata-Version: 2.1\\nName: " + name + "\\nVersion: 1.0\\n"
+        + "".join("Requires-Dist: " + req + "\\n" for req in project.get("dependencies", []))
+    )
     files[dist + "WHEEL"] = "Wheel-Version: 1.0\\nGenerator: fixture\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n"
     files[dist + "RECORD"] = "".join(key + ",,\\n" for key in files)
     with zipfile.ZipFile(pathlib.Path(wheel_directory) / filename, "w") as archive:
@@ -178,6 +184,37 @@ class TestOfflineResolution(unittest.TestCase):
         self.project_file([requirement, 'onnx-light==99; python_version < "2"'], requirement)
         self.prepare()
         self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+
+    def test_runtime_only_root_with_transitive_source_build_dependency(self):
+        wheel(self.assets, "onnx-light", "2.0")
+        dependency = self.root / "source_dependency"
+        dependency.mkdir()
+        (dependency / "pyproject.toml").write_text(
+            '[project]\nname="source_dependency"\nversion="1.0"\n'
+            '[build-system]\nrequires=["onnx-light==2.0"]\n'
+            'build-backend="release_backend"\n',
+            encoding="utf-8",
+        )
+        archive = self.root / "source_dependency-1.0.tar.gz"
+        with tarfile.open(archive, "w:gz") as stream:
+            stream.add(dependency, arcname="source_dependency-1.0")
+        (self.project / "release_backend.py").write_text(BACKEND, encoding="utf-8")
+        (self.project / "pyproject.toml").write_text(
+            '[project]\nname="fixture"\nversion="1.0"\n'
+            f'dependencies=["source_dependency @ {archive.as_uri()}"]\n'
+            '[build-system]\nrequires=[]\nbuild-backend="release_backend"\n'
+            'backend-path=["."]\n',
+            encoding="utf-8",
+        )
+        output = self.prepare()
+        self.assertIn("build-system.requires", output)
+        self.assertIn("onnx-light==2.0", (self.house / "constraints.txt").read_text())
+        self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             "--no-cache-dir", str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
 
     def test_conflicting_runtime_and_build_requirements_fail_with_source(self):
         wheel(self.assets, "onnx-light", "1.0")

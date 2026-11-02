@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import tomllib
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -165,12 +166,51 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
     ]
     # Pass build requirements alongside runtime requirements so incompatible
     # runtime/build pins fail jointly rather than selecting two native ABIs.
-    requirements = [text for _, text in declarations]
     try:
-        pip(
-            "install", "--dry-run", "--ignore-installed", "--report", str(report),
-            *roots, *requirements, env=env,
-        )
+        with tempfile.TemporaryDirectory(prefix="onnx-light-metadata-") as temporary:
+            env["TMPDIR"] = temporary
+            for _ in range(10):
+                requirements = []
+                for _, text in declarations:
+                    req = Requirement(text)
+                    req.marker = None
+                    requirements.append(str(req))
+                pip(
+                    "install", "--dry-run", "--ignore-installed", "--no-clean",
+                    "--report", str(report), *roots, *requirements, env=env,
+                )
+                # pip's report omits isolated build inputs. Preserve unpacked
+                # source dependencies long enough to read their build declarations,
+                # then resolve those jointly with runtime requirements as well.
+                sources = [
+                    *Path(temporary).glob("pip-install-*/*/pyproject.toml"),
+                    *Path(temporary).glob("pip-req-build-*/pyproject.toml"),
+                ]
+                known = {constraint(text) for _, text in declarations}
+                additional = []
+                for source in sources:
+                    with source.open("rb") as stream:
+                        data = tomllib.load(stream)
+                    for text in data.get("build-system", {}).get("requires", []):
+                        req = Requirement(text)
+                        if (
+                            canonicalize_name(req.name) in PACKAGES
+                            and applicable(req, set())
+                            and constraint(text) not in known
+                        ):
+                            label = f"{source} [build-system.requires]"
+                            print(f"{label}: {text}", flush=True)
+                            additional.append((label, text))
+                            known.add(constraint(text))
+                if not additional:
+                    break
+                declarations.extend(additional)
+                with constraints.open("a", encoding="utf-8") as stream:
+                    stream.write(
+                        "\n".join(constraint(text) for _, text in additional) + "\n"
+                    )
+            else:
+                raise RuntimeError("ONNX Light source build requirements did not converge")
     except subprocess.CalledProcessError as exc:
         sources = "\n".join(f"  {source}: {text}" for source, text in declarations)
         raise RuntimeError(
@@ -178,6 +218,9 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
             f"{', '.join(targets)} on Python {sys.version.split()[0]} / {sys.platform}."
             f"\nDeclared ecosystem requirements:\n{sources}\nSee pip's diagnostic above."
         ) from exc
+    env.pop("TMPDIR", None)
+    if "TMPDIR" in os.environ:
+        env["TMPDIR"] = os.environ["TMPDIR"]
     resolved = json.loads(report.read_text(encoding="utf-8"))["install"]
     selected = []
     for item in resolved:
