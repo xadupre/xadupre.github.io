@@ -153,28 +153,35 @@ def constraint(text: str) -> str:
 def resolved_download_url(download_info: dict) -> str:
     """Return a pip-downloadable URL, pinning VCS sources at the resolved commit."""
     vcs_info = download_info.get("vcs_info")
-    if not vcs_info:
-        return download_info["url"]
     parts = urlsplit(download_info["url"])
-    url = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
-    url = f"{vcs_info['vcs']}+{url}@{vcs_info['commit_id']}"
+    if vcs_info:
+        url = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+        url = f"{vcs_info['vcs']}+{url}@{vcs_info['commit_id']}"
+    else:
+        url = download_info["url"]
     fragment = parts.fragment
-    subdirectory = download_info.get("subdirectory_info", {}).get("subdirectory")
+    subdirectory = download_info.get("subdirectory")
     if subdirectory:
         encoded = quote(subdirectory, safe="/")
         fragment = f"{fragment}&subdirectory={encoded}" if fragment else f"subdirectory={encoded}"
     return f"{url}#{fragment}" if fragment else url
 
 
-def isolated_build_packages(temporary: Path) -> list[tuple[str, str]]:
-    """Find ecosystem packages installed for isolated build-backend hooks."""
-    packages = []
+def isolated_build_requirements(temporary: Path) -> list[str]:
+    """Find requirements installed for isolated build-backend hooks."""
+    requirements = []
     for metadata_file in temporary.glob("pip-build-env-*/**/*.dist-info/METADATA"):
         metadata = Parser().parsestr(metadata_file.read_text(encoding="utf-8"))
         name = canonicalize_name(metadata.get("Name", ""))
         if name in PACKAGES:
-            packages.append((name, metadata["Version"]))
-    return packages
+            direct_url_file = metadata_file.parent / "direct_url.json"
+            if direct_url_file.is_file():
+                download_info = json.loads(direct_url_file.read_text(encoding="utf-8"))
+                url = resolved_download_url(download_info)
+                requirements.append(f"{name} @ {url}")
+            else:
+                requirements.append(name)
+    return sorted(set(requirements))
 
 
 def pip(*args: str, env: dict[str, str]) -> None:
@@ -247,8 +254,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 current = json.loads(report.read_text(encoding="utf-8"))["install"]
                 known = {constraint(text) for _, text in declarations}
                 additional = []
-                for name, version in isolated_build_packages(Path(temporary)):
-                    text = f"{name}=={version}"
+                for text in isolated_build_requirements(Path(temporary)):
                     if constraint(text) not in known:
                         additional.append((f"{temporary} [isolated build environment]", text))
                         known.add(constraint(text))
