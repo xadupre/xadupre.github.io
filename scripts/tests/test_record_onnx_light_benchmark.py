@@ -858,7 +858,16 @@ class TestBuildPayload(unittest.TestCase):
             self.assertEqual(max_repeat_time_s, 0.5)
         self.assertEqual(
             [backend for backend, _, _, _ in call_log],
-            [backend for backend in rlb.BENCHMARK_EXECUTION_ORDER for _ in range(2)],
+            [
+                backend
+                for backend in (
+                    "onnx_light",
+                    "onnx_light_mixed",
+                    "onnx_light_cpu",
+                    "onnxruntime",
+                )
+                for _ in range(2)
+            ],
         )
 
         # test_abs and test_relu both succeeded on both backends → speedup set.
@@ -1028,10 +1037,18 @@ class TestMixedReferenceRunner(unittest.TestCase):
 
         calls = []
         created = []
+        events = []
         reference = types.ModuleType("onnx_light.onnx.reference")
+        cpu = types.ModuleType("onnx_light_cpu")
+
+        def register_kernels():
+            events.append("register")
+
+        cpu.register_kernels = register_kernels
 
         class MixedReferenceEvaluator:
             def __init__(self, model_bytes):
+                events.append("evaluator")
                 created.append(model_bytes)
                 self.input_names = ["x", "y"]
 
@@ -1044,12 +1061,18 @@ class TestMixedReferenceRunner(unittest.TestCase):
                 return b"model"
 
         reference.MixedReferenceEvaluator = MixedReferenceEvaluator
-        names = ("onnx_light", "onnx_light.onnx", "onnx_light.onnx.reference")
+        names = (
+            "onnx_light",
+            "onnx_light.onnx",
+            "onnx_light.onnx.reference",
+            "onnx_light_cpu",
+        )
         saved = {name: sys.modules.get(name) for name in names}
         try:
             sys.modules["onnx_light"] = types.ModuleType("onnx_light")
             sys.modules["onnx_light.onnx"] = types.ModuleType("onnx_light.onnx")
             sys.modules["onnx_light.onnx.reference"] = reference
+            sys.modules["onnx_light_cpu"] = cpu
             runner = rlb._make_onnx_light_mixed_runner(Model())
             x = np.array([1.0], dtype=np.float32)
             y = np.array([2.0], dtype=np.float32)
@@ -1062,10 +1085,31 @@ class TestMixedReferenceRunner(unittest.TestCase):
                 else:
                     sys.modules[name] = module
         self.assertEqual(created, [b"model"])
+        self.assertEqual(events, ["register", "evaluator"])
         self.assertEqual(len(calls), 2)
         self.assertIsNone(calls[0][0])
         self.assertIs(calls[0][1]["x"], x)
         self.assertIs(calls[0][1]["y"], y)
+
+    def test_missing_cpu_package_is_a_load_error(self):
+        saved = sys.modules.get("onnx_light_cpu")
+        try:
+            sys.modules["onnx_light_cpu"] = None
+            result = rlb.run_benchmark(
+                object(),
+                [([np.array([1.0])], [])],
+                "onnx_light_mixed",
+                n_warmup=1,
+                n_measure=1,
+            )
+        finally:
+            if saved is None:
+                sys.modules.pop("onnx_light_cpu", None)
+            else:
+                sys.modules["onnx_light_cpu"] = saved
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_step"], "load")
+        self.assertIn("onnx_light_cpu", result["error"])
 
 
 class TestOnnxLightReferenceRunner(unittest.TestCase):

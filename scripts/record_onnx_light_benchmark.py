@@ -4,7 +4,8 @@ The script discovers every benchmark-sized backend node test bundled with
 the installed ``onnx-light`` package and measures the processing time of
 ``onnxruntime``, the ``onnx-light`` reference implementation backed by its
 C++ ``KernelDispatchTable``, its ``MixedReferenceEvaluator`` (NumPy kernels
-for selected operators), and ``onnx-light`` running with the
+for selected operators and ``onnx-light-cpu`` kernels for other supported
+operators), and ``onnx-light`` running with the
 ``onnx-light-cpu`` SIMD kernels registered on top. The ``onnx-light-cpu``
 backend runs the model through the exact same ``onnx-light``
 ``ReferenceEvaluator`` API as the plain ``onnx-light`` backend, but
@@ -14,7 +15,7 @@ SIMD-accelerated ``Abs``/``Exp``/``Log``/``Gemm``/``Not`` kernels into
 entries for the default ONNX domain), so every matching node dispatches to the
 SIMD-accelerated kernel. That registration is global and irreversible, so the
 built-in ``onnx-light`` pass over every test runs before the
-``onnx-light-cpu`` pass registers the kernels.
+mixed pass registers the kernels.
 
 ``onnx-light`` runs each model through its public NumPy-based
 ``ReferenceEvaluator`` API. The evaluator owns a reusable native C++ runner,
@@ -92,7 +93,8 @@ from backend_test_metadata import kind_name, tag_name
 # ---------------------------------------------------------------------------
 
 #: Backends exercised by the benchmark. ``onnx_light_mixed`` uses the mixed
-#: evaluator's NumPy kernels for selected operators. ``onnx_light_cpu`` runs
+#: evaluator's NumPy kernels for selected operators and onnx-light-cpu kernels
+#: for other supported operators. ``onnx_light_cpu`` runs
 #: the model through the *same*
 #: ``onnx-light`` ``ReferenceEvaluator`` API as ``onnx_light``, but with
 #: the SIMD-accelerated kernels shipped by ``onnx-light-cpu`` installed into
@@ -637,9 +639,11 @@ def _make_onnx_light_runner(model) -> Callable[[List[Any]], List[Any]]:
 
 
 def _make_onnx_light_mixed_runner(model) -> Callable[[List[Any]], List[Any]]:
-    """Build a reusable onnx-light mixed evaluator for ``model``."""
+    """Build a mixed evaluator with onnx-light-cpu kernels registered."""
+    import onnx_light_cpu
     from onnx_light.onnx.reference import MixedReferenceEvaluator
 
+    onnx_light_cpu.register_kernels()
     evaluator = MixedReferenceEvaluator(model.SerializeToString())
     input_names = evaluator.input_names
 
@@ -1294,9 +1298,9 @@ def build_payload(
             }
         )
 
-    # The plain and mixed onnx-light phases must precede onnx-light-cpu because registering
-    # the accelerated kernels is process-wide and irreversible. ONNX Runtime is
-    # measured last, after all onnx-light sessions have been released.
+    # The plain onnx-light phase must precede mixed and onnx-light-cpu because
+    # registering the accelerated kernels is process-wide and irreversible.
+    # ONNX Runtime is measured last, after all onnx-light sessions have been released.
     for backend in BENCHMARK_EXECUTION_ORDER:
         for idx, (test, entry) in enumerate(zip(tests, per_test)):
             entry["results"][backend] = _benchmark(
