@@ -51,8 +51,10 @@ The running example collapses two consecutive ``Neg`` nodes into an
             return {"Neg"}
 
         def match(self, graph, node):
+            if node.domain not in ("", "ai.onnx"):
+                return self.no_match(node, "the candidate is not in the default ONNX domain")
             previous = graph.node_before(node.input[0])
-            if previous is None or previous.op_type != "Neg":
+            if previous is None or previous.op_type != "Neg" or previous.domain not in ("", "ai.onnx"):
                 return self.no_match(node, "the input is not produced by Neg")
             return self.result([previous, node], insert_at=node)
 
@@ -69,6 +71,135 @@ the statistics shown in :ref:`l-example-plot-pattern-optimization`.
 A ``None``/``nullptr`` entry may reserve an optional positional role;
 the optimizer passes it to ``apply`` but ignores it for positioning,
 marking, removal, and replay.
+
+Primitive patterns check the domain and operator type of the candidate and
+secondary nodes. Model verification and builder registration reject functions
+that reuse a registered operator's domain and name, regardless of ``overload``.
+Patterns intentionally matching functions check their expected identities and
+semantics before returning the usual ``self.result(...)``.
+
+Define a pattern with two ONNX functions
+---------------------------------------
+
+:class:`~onnx_light.onnx_core.optimization.FunctionPattern` builds the matcher
+and replacement automatically from two ``FunctionProto`` bodies:
+
+.. code-block:: python
+
+    import onnx_light.onnx.helper as oh
+    from onnx_light.onnx_core.optimization import FunctionPattern
+
+    opsets = [oh.make_opsetid("", 18)]
+    template = oh.make_function(
+        "patterns", "DoubleNeg", ["x"], ["y"],
+        [oh.make_node("Neg", ["x"], ["middle"]),
+         oh.make_node("Neg", ["middle"], ["y"])],
+        opsets,
+    )
+    replacement = oh.make_function(
+        "patterns", "Identity", ["input"], ["output"],
+        [oh.make_node("Identity", ["input"], ["output"])],
+        opsets,
+    )
+    pattern = FunctionPattern(template, replacement, name="DoubleNeg", anchor=0)
+
+To emit a call instead of inlining the replacement body, use
+``as_function=True``:
+
+.. code-block:: python
+
+    pattern = FunctionPattern(
+        template, replacement, name="DoubleNeg", anchor=0, as_function=True
+    )
+    # Encapsulates the original matched body without changing its computation:
+    encapsulate = FunctionPattern(template, template, as_function=True)
+
+All occurrences share one model-local replacement function, including matches
+in nested subgraphs. Calls retain the replacement's domain, name and overload,
+and preserve the matched input/output order and externally visible output names.
+An existing compatible definition is reused; conflicting definitions are rejected,
+not overwritten. The calling scope imports the function domain at its existing
+model version, or version 1 when no version has been selected.
+Replacement output names must be distinct in function-call mode; forwarding a
+function input directly as an output remains supported.
+
+Captured function attributes are attached to each call, so differing attribute
+values do not create specialized copies of the definition. Function attribute
+defaults are retained. The local body supplies shape inference at its own opsets;
+its operator imports need not equal the caller's imports in this mode. The matcher
+does not rewrite any local-function body or its nested subgraphs in this mode,
+so existing functions cannot acquire a recursive dependency on the replacement.
+Matching remains enabled in the model graph and its nested subgraphs.
+The default ``as_function=False`` preserves the existing inline behavior.
+
+Function inputs and outputs correspond **by position** and must have equal,
+fixed counts. Every node also matches an exact input/output count (including
+empty optional slots), domain, overload, literal attributes and opset version.
+Input order is significant; commutative permutations are not inferred.
+
+Reference attributes created with ``oh.make_attribute_ref`` capture attributes
+instead of comparing a literal value. Declare their ``ref_attr_name`` in the
+function's ``attributes`` list. A replacement reference uses the same capture
+name and type, but may have a different node-attribute name. Repeated template
+references must match equal values. Replacement references must be captured
+by the template, except for function-call attributes with function defaults.
+Missing candidate attributes are not filled from schema defaults.
+
+For example, these nodes capture and reuse a transpose permutation::
+
+    from onnx_light.onnx import AttributeProto
+
+    node = oh.make_node("Transpose", ["x"], ["y"])
+    node.attribute.append(
+        oh.make_attribute_ref("perm", AttributeProto.INTS, ref_attr_name="permutation")
+    )
+    # Use attributes=["permutation"] in both function definitions.
+
+Bodies must be topologically sorted, use SSA names, and contain no graph-valued
+attributes. Template inputs must be used; its outputs must be distinct node
+results. The replacement may return inputs directly; in inline mode, it may also
+return a value more than once. Output names are preserved and inlined replacement
+intermediates get fresh names.
+Template nodes must be connected through nonempty values, including shared
+function inputs. Multi-output branches are matched by following local producers
+and consumers from the selected anchor; unrelated graph nodes are never scanned.
+``anchor`` is a zero-based template-node index; its default, ``-1``, selects the
+last node. ``FastOpType`` returns that anchor's operator type. Choosing an uncommon
+operator as the anchor reduces the candidates inspected by the optimizer.
+Templates with completely disconnected components are rejected.
+Target nodes with device configurations are rejected rather than losing their
+sharding or pipeline-stage assignments.
+Removed intermediates cannot be graph outputs, subgraph captures or inputs to
+unmatched nodes. Captured node outputs and matches requiring interleaved external
+consumers are conservatively rejected, even when the captured value is a template
+output.
+The target graph must already import the template's operator opsets. Inline mode
+also requires the replacement's operator opsets and does not install local
+function definitions. Forwarding an input or an aliased output in inline mode
+requires a default ONNX opset for ``Identity``.
+As with handwritten patterns, the author is responsible for semantic equivalence,
+including supported types, shapes and broadcasting.
+
+This class requires function arguments, so it has no built-in registry factory.
+Pass the instance to ``GraphGraph`` or register it with ``register_pattern``.
+
+For each frozen matching iteration, the optimizer indexes eligible nodes once by
+operator type. Single-type patterns use their bucket directly; unrestricted
+patterns use all eligible nodes. Patterns accepting multiple types merge sorted
+buckets in graph order, without duplicates, in ``O(C log(K + 1))`` time for ``C``
+compatible nodes across ``K`` nonempty buckets. Index construction takes
+``O(N)`` time and storage (plus recursive unresolved-attribute checks), instead of
+scanning all ``N`` nodes separately for every pattern. Each iteration and recursive
+scope gets a fresh index, so rewritten or removed nodes cannot leave stale entries.
+Selection also performs one index lookup per declared operator type.
+
+The native ``bench_pattern_candidates`` target measures the matching phase,
+including index construction and candidate selection, on a heterogeneous graph
+with many selective patterns. For example, run
+``./build/temp/bench_pattern_candidates 20000 512 7`` for 20,000 nodes, 512
+patterns and seven measured iterations after a warm-up. It reports median
+matching time, not just ``Match`` call counts; graph construction and the other
+optimizer phases are excluded. This is not a model-runtime benchmark.
 
 Select the pattern for one optimizer
 ------------------------------------
