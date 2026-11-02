@@ -234,6 +234,21 @@ class TestRequirements(unittest.TestCase):
             [(f"{source} [build requirements]", "onnx-light-cpu>=2,<4")],
         )
 
+    def test_unpinned_vcs_source_matches_resolved_report(self):
+        source = "git+https://github.com/xadupre/model.git"
+        report_source = {
+            "url": "https://github.com/xadupre/model.git",
+            "vcs_info": {"vcs": "git", "commit_id": "abc123"},
+        }
+        selected_sources = resolver.source_keys(report_source)
+        self.assertIn(source, selected_sources)
+        self.assertTrue(resolver.source_keys(source) & selected_sources)
+        record = {"source": source, "requirements": ["onnx-light-cpu>=2,<4"]}
+        self.assertEqual(
+            resolver.selected_build_requirements([record], selected_sources, set()),
+            [(f"{source} [build requirements]", "onnx-light-cpu>=2,<4")],
+        )
+
     def test_ecosystem_self_extras_are_expanded_not_forced_as_release_requirements(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary)
@@ -413,6 +428,53 @@ class TestOfflineResolution(unittest.TestCase):
         self.assertTrue(list(self.house.glob("onnx_light-2.0*.whl")))
         self.assertIn("onnx-light-cpu==3.0", constraints)
         self.assertTrue(list(self.house.glob("onnx_light_cpu-3.0*.whl")))
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             "--no-cache-dir", str(self.project)],
+            env=self.exported_env(), check=True, capture_output=True, text=True,
+        )
+
+    def test_conflicting_build_graphs_are_resolved_separately(self):
+        wheel(self.assets, "onnx-light", "2.0")
+        wheel(self.assets, "numpy", "1.0")
+        wheel(self.assets, "numpy", "2.0")
+        wheel(self.assets, "setuptools", "50.0")
+        wheel(self.assets, "setuptools", "70.0")
+        os.environ["PIP_FIND_LINKS"] = str(self.assets)
+
+        dependencies = []
+        for name, requirements in (
+            ("source_a", ["onnx-light==2.0", "numpy>=2", "setuptools<60"]),
+            ("source_b", ["onnx-light==2.0", "setuptools>=60"]),
+        ):
+            source = self.root / name
+            source.mkdir()
+            (source / "pyproject.toml").write_text(
+                '[project]\nname="' + name + '"\nversion="1.0"\n'
+                "[build-system]\nrequires=" + json.dumps(requirements) + "\n"
+                'build-backend="release_backend"\n',
+                encoding="utf-8",
+            )
+            archive = self.root / f"{name}-1.0.tar.gz"
+            with tarfile.open(archive, "w:gz") as stream:
+                stream.add(source, arcname=f"{name}-1.0")
+            dependencies.append(f"{name} @ {archive.as_uri()}")
+        dependencies.append("numpy<2")
+
+        (self.project / "release_backend.py").write_text(BACKEND, encoding="utf-8")
+        (self.project / "pyproject.toml").write_text(
+            '[project]\nname="fixture"\nversion="1.0"\n'
+            f"dependencies={json.dumps(dependencies)}\n"
+            '[build-system]\nrequires=[]\nbuild-backend="release_backend"\n'
+            'backend-path=["."]\n',
+            encoding="utf-8",
+        )
+
+        self.prepare()
+        constraints = (self.house / "constraints.txt").read_text()
+        self.assertIn("onnx-light==2.0", constraints)
+        self.assertNotIn("numpy", constraints)
+        self.assertNotIn("setuptools", constraints)
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "--dry-run", "--ignore-installed",
              "--no-cache-dir", str(self.project)],

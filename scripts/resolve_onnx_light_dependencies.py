@@ -206,7 +206,7 @@ def source_keys(source: str | dict) -> set[str]:
         (transport.lower(), parts.netloc.lower(), path, parts.query, "")
     )
     revisions = {revision for revision in (requested_revision, resolved_revision) if revision}
-    if not revisions:
+    if not requested_revision:
         revisions.add("")
     suffix = f"#subdirectory={quote(subdirectory, safe='/')}" if subdirectory else ""
     return {
@@ -378,10 +378,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
         str(path) + (f"[{','.join(sorted(extras))}]" if extras else "")
         for path, extras, _ in projects
     ]
-    # Pass build requirements alongside runtime requirements so incompatible
-    # runtime/build pins fail jointly rather than selecting two native ABIs.
     root_declarations = declarations
-    build_inputs = []
     try:
         with tempfile.TemporaryDirectory(prefix="onnx-light-metadata-") as temporary:
             for iteration in range(10):
@@ -403,7 +400,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 build_requirements_report = iteration_dir / "build-requirements.json"
                 pip(
                     "install", "--dry-run", "--ignore-installed", "--no-clean",
-                    "--report", str(report), *roots, *requirements, *build_inputs, env=env,
+                    "--report", str(report), *roots, *requirements, env=env,
                     build_requirements_report=build_requirements_report,
                 )
                 current = json.loads(report.read_text(encoding="utf-8"))["install"]
@@ -416,21 +413,33 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 known = {constraint(text) for _, text in root_declarations}
                 captured = json.loads(build_requirements_report.read_text(encoding="utf-8"))
                 build_records = selected_build_records(captured, selected_sources)
-                next_build_inputs = list(dict.fromkeys(
-                    text for record in build_records for text in record["requirements"]
-                ))
-                additional = selected_build_requirements(
-                    build_records, selected_sources, known, current
-                )
+                build_env = env.copy()
+                build_env.pop("PIP_CONSTRAINT", None)
+                build_env.pop("PIP_BUILD_CONSTRAINT", None)
+                additional = []
+                for index, record in enumerate(build_records):
+                    if not record["requirements"]:
+                        continue
+                    build_report = iteration_dir / f"build-{index}.json"
+                    pip(
+                        "install", "--dry-run", "--ignore-installed",
+                        "--report", str(build_report), *record["requirements"],
+                        env=build_env,
+                    )
+                    build_graph = json.loads(
+                        build_report.read_text(encoding="utf-8")
+                    )["install"]
+                    additional.extend(selected_build_requirements(
+                        [record], selected_sources, known, build_graph
+                    ))
                 next_declarations = [*root_declarations, *additional]
                 if {
                     constraint(text) for _, text in next_declarations
                 } == {
                     constraint(text) for _, text in declarations
-                } and next_build_inputs == build_inputs:
+                }:
                     break
                 declarations = next_declarations
-                build_inputs = next_build_inputs
             else:
                 raise RuntimeError("ONNX Light source build requirements did not converge")
     except subprocess.CalledProcessError as exc:
