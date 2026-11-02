@@ -439,8 +439,6 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                 captured = json.loads(build_requirements_report.read_text(encoding="utf-8"))
                 build_records = selected_build_records(captured, selected_sources)
                 build_env = env.copy()
-                build_env.pop("PIP_CONSTRAINT", None)
-                build_env.pop("PIP_BUILD_CONSTRAINT", None)
                 additional = []
                 for index, record in enumerate(build_records):
                     if not record["requirements"]:
