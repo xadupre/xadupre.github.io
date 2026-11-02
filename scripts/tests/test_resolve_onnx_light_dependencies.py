@@ -47,6 +47,10 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         for key, value in files.items():
             archive.writestr(key, value)
     return filename
+
+def get_requires_for_build_wheel(config_settings=None):
+    requirements = pathlib.Path("hook-requirements.txt")
+    return requirements.read_text().splitlines() if requirements.exists() else []
 '''
 
 
@@ -130,8 +134,17 @@ class TestRequirements(unittest.TestCase):
             self.assertEqual(len(requirements), 4)
             self.assertTrue(any("build-system.requires" in source for source, _ in requirements))
             self.assertFalse(any("ort" in text for _, text in requirements))
-            with self.assertRaisesRegex(ValueError, "unknown optional dependency"):
-                resolver.project_requirements(f"{path}[absent]")
+
+    def test_unknown_selected_extra_preserves_pips_warn_and_ignore_behavior(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            (path / "pyproject.toml").write_text(
+                '[project]\nname="fixture"\nversion="1.0"\n',
+                encoding="utf-8",
+            )
+            _, extras, requirements = resolver.project_requirements(f"{path}[absent]")
+            self.assertEqual(extras, {"absent"})
+            self.assertEqual(requirements, [])
 
     def test_constraints_preserve_direct_url_but_remove_evaluated_markers(self):
         self.assertEqual(
@@ -139,6 +152,16 @@ class TestRequirements(unittest.TestCase):
             "onnx-light @ https://example.org/a.whl",
         )
         self.assertEqual(resolver.constraint("onnx-light>=1,<3"), "onnx-light<3,>=1")
+
+    def test_vcs_download_url_uses_resolved_commit_and_subdirectory(self):
+        self.assertEqual(
+            resolver.resolved_download_url({
+                "url": "https://github.com/xadupre/project.git",
+                "vcs_info": {"vcs": "git", "commit_id": "abc123"},
+                "subdirectory_info": {"subdirectory": "packages/model"},
+            }),
+            "git+https://github.com/xadupre/project.git@abc123#subdirectory=packages/model",
+        )
 
     def test_ecosystem_self_extras_are_expanded_not_forced_as_release_requirements(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -273,6 +296,19 @@ class TestOfflineResolution(unittest.TestCase):
              "--no-cache-dir", str(self.project)],
             env=self.exported_env(), check=True, capture_output=True, text=True,
         )
+
+    def test_dynamic_backend_hook_dependency_is_included_in_resolution(self):
+        wheel(self.assets, "onnx-light", "2.0")
+        wheel(self.assets, "onnx-light-cpu", "2.0")
+        self.project_file(["onnx-light>=2"])
+        (self.project / "hook-requirements.txt").write_text(
+            "onnx-light-cpu==2.0\n",
+            encoding="utf-8",
+        )
+        output = self.prepare()
+        self.assertIn("onnx-light-cpu==2.0", output)
+        self.assertIn("onnx-light-cpu==2.0", (self.house / "constraints.txt").read_text())
+        self.assertTrue(list(self.house.glob("onnx_light_cpu-2.0*.whl")))
 
     def test_conflicting_runtime_and_build_requirements_fail_with_source(self):
         wheel(self.assets, "onnx-light", "1.0")

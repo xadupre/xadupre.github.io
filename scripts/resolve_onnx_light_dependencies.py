@@ -9,6 +9,7 @@ to the outer pip process: build-system.requires needs the same release access.
 from __future__ import annotations
 
 import argparse
+from email.parser import Parser
 import html
 import json
 import os
@@ -18,7 +19,7 @@ import sys
 import tempfile
 import tomllib
 from urllib.error import URLError
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, url2pathname, urlopen
 
 from packaging.requirements import Requirement
@@ -59,7 +60,7 @@ def project_requirements(target: str) -> tuple[Path, set[str], list[tuple[str, s
     while pending:
         extra = pending.pop()
         if extra not in optional:
-            raise ValueError(f"{path}: unknown optional dependency group {extra!r}")
+            continue
         for text in optional[extra]:
             req = Requirement(text)
             if (
@@ -75,6 +76,7 @@ def project_requirements(target: str) -> tuple[Path, set[str], list[tuple[str, s
         **{
             f"project.optional-dependencies.{extra}": optional[extra]
             for extra in sorted(extras)
+            if extra in optional
         },
     }
     requirements = []
@@ -148,6 +150,33 @@ def constraint(text: str) -> str:
     return f"{req.name}{req.specifier}"
 
 
+def resolved_download_url(download_info: dict) -> str:
+    """Return a pip-downloadable URL, pinning VCS sources at the resolved commit."""
+    vcs_info = download_info.get("vcs_info")
+    if not vcs_info:
+        return download_info["url"]
+    parts = urlsplit(download_info["url"])
+    url = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+    url = f"{vcs_info['vcs']}+{url}@{vcs_info['commit_id']}"
+    fragment = parts.fragment
+    subdirectory = download_info.get("subdirectory_info", {}).get("subdirectory")
+    if subdirectory:
+        encoded = quote(subdirectory, safe="/")
+        fragment = f"{fragment}&subdirectory={encoded}" if fragment else f"subdirectory={encoded}"
+    return f"{url}#{fragment}" if fragment else url
+
+
+def isolated_build_packages(temporary: Path) -> list[tuple[str, str]]:
+    """Find ecosystem packages installed for isolated build-backend hooks."""
+    packages = []
+    for metadata_file in temporary.glob("pip-build-env-*/**/*.dist-info/METADATA"):
+        metadata = Parser().parsestr(metadata_file.read_text(encoding="utf-8"))
+        name = canonicalize_name(metadata.get("Name", ""))
+        if name in PACKAGES:
+            packages.append((name, metadata["Version"]))
+    return packages
+
+
 def pip(*args: str, env: dict[str, str]) -> None:
     subprocess.run([sys.executable, "-m", "pip", *args], env=env, check=True)
 
@@ -208,14 +237,21 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                     "install", "--dry-run", "--ignore-installed", "--no-clean",
                     "--report", str(report), *roots, *requirements, env=env,
                 )
-                # pip's report omits isolated build inputs. Preserve unpacked
-                # source dependencies long enough to read their build declarations,
-                # then resolve those jointly with runtime requirements as well.
+                # pip's report omits isolated build inputs. Inspect both unpacked
+                # source declarations and packages installed for backend hooks, then
+                # resolve those jointly with runtime requirements as well.
                 sources = [
                     *Path(temporary).glob("pip-install-*/*/pyproject.toml"),
                     *Path(temporary).glob("pip-req-build-*/pyproject.toml"),
                 ]
                 current = json.loads(report.read_text(encoding="utf-8"))["install"]
+                known = {constraint(text) for _, text in declarations}
+                additional = []
+                for name, version in isolated_build_packages(Path(temporary)):
+                    text = f"{name}=={version}"
+                    if constraint(text) not in known:
+                        additional.append((f"{temporary} [isolated build environment]", text))
+                        known.add(constraint(text))
                 for item in current:
                     info = item["download_info"]
                     if "dir_info" in info and urlparse(info["url"]).scheme == "file":
@@ -223,8 +259,6 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                         source = path / "pyproject.toml"
                         if source.is_file():
                             sources.append(source)
-                known = {constraint(text) for _, text in declarations}
-                additional = []
                 for source in sources:
                     with source.open("rb") as stream:
                         data = tomllib.load(stream)
@@ -233,12 +267,12 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
                         if (
                             canonicalize_name(req.name) in PACKAGES
                             and applicable(req, set())
-                            and constraint(text) not in known
                         ):
                             label = f"{source} [build-system.requires]"
                             print(f"{label}: {text}", flush=True)
-                            additional.append((label, text))
-                            known.add(constraint(text))
+                            if constraint(text) not in known:
+                                additional.append((label, text))
+                                known.add(constraint(text))
                 if not additional:
                     break
                 declarations.extend(additional)
@@ -273,7 +307,7 @@ def prepare(targets: list[str], wheelhouse: Path, links: list[str] | None = None
         print(f"Selected {name}=={version} from {item['download_info']['url']}", flush=True)
         selected.append(f"{name}=={version}")
         if "dir_info" not in item["download_info"]:
-            url = item["download_info"]["url"]
+            url = resolved_download_url(item["download_info"])
             hashes = item["download_info"].get("archive_info", {}).get("hashes", {})
             if "sha256" in hashes:
                 url += ("&" if "#" in url else "#") + f"sha256={hashes['sha256']}"
