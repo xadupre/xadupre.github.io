@@ -1,6 +1,8 @@
 onnx-light-kernel-images
 ========================
 
+Version: |release|
+
 .. image:: https://codecov.io/gh/xadupre/onnx-light-kernel-images/branch/main/graph/badge.svg
     :target: https://codecov.io/gh/xadupre/onnx-light-kernel-images
     :alt: Coverage
