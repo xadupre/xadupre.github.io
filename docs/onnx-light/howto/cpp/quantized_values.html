@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Quantizes tensors into encoded values &#8212; onnx-light 0.2.6 documentation</title>
+    <title>Quantizes tensors into encoded values &#8212; onnx-light 0.2.7 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=75c7c72ae941e8b558d8" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=75c7c72ae941e8b558d8" />
 
-    <script src="../../_static/documentation_options.js?v=fc7d8818"></script>
+    <script src="../../_static/documentation_options.js?v=58050c01"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.6 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.6 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.7 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.7 documentation - Home"/>
   
   
 </a></div>
@@ -625,6 +625,34 @@ and referenced by <code class="docutils literal notranslate"><span class="pre">t
 <p>The implementation lives in <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>, not <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>, and does not
 require registered operator kernels. The Python module requires the runtime
 bindings, as do other Python reference-runtime utilities.</p>
+<section id="complete-nvfp4-weights">
+<h2>Complete NVFP4 weights<a class="headerlink" href="#complete-nvfp4-weights" title="Link to this heading">#</a></h2>
+<p>The complete fixed-weight codec is distinct from the existing portable
+<code class="docutils literal notranslate"><span class="pre">QuantizationFormat::kNvfp4</span></code>. It preserves E2M1 packed values, E4M3FN local
+scales for groups of 16 along matrix axis 1, and a FLOAT32 global scale.
+See <a class="reference internal" href="../python/quantized_values.html#l-nvfp4-weights"><span class="std std-ref">the complete numerical contract</span></a> for the
+pinned compressed-tensors reference, rounding order, packing and rejection
+policies. Activation-local dynamic scaling is <strong>not</strong> supported.</p>
+<div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="c1">// Both inputs are FLOAT tensors; K must be a positive multiple of 16.</span>
+<span class="n">Tensor</span><span class="w"> </span><span class="n">weights</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Tensor</span><span class="o">::</span><span class="n">FromFloat</span><span class="p">(</span><span class="s">"W"</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">32</span><span class="p">},</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span><span class="w"> </span><span class="mf">1.f</span><span class="p">));</span>
+<span class="n">Tensor</span><span class="w"> </span><span class="n">local</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Tensor</span><span class="o">::</span><span class="n">FromFloat</span><span class="p">(</span><span class="s">"scale"</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">},</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">float</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="w"> </span><span class="mf">1.f</span><span class="p">));</span>
+<span class="n">EncodedValueProto</span><span class="w"> </span><span class="n">encoded</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">QuantizeNvfp4Weights</span><span class="p">(</span><span class="n">weights</span><span class="p">,</span><span class="w"> </span><span class="n">local</span><span class="p">,</span><span class="w"> </span><span class="mf">2.f</span><span class="p">);</span>
+<span class="n">Tensor</span><span class="w"> </span><span class="n">restored</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">DequantizeTensor</span><span class="p">(</span><span class="n">encoded</span><span class="p">);</span>
+<span class="n">Nvfp4Weights</span><span class="w"> </span><span class="n">parameters</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ExportNvfp4Weights</span><span class="p">(</span><span class="n">encoded</span><span class="p">);</span>
+<span class="n">EncodedValueProto</span><span class="w"> </span><span class="n">imported</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ImportNvfp4Weights</span><span class="p">(</span><span class="n">parameters</span><span class="p">);</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">Nvfp4Weights</span></code> owns <code class="docutils literal notranslate"><span class="pre">weight_packed</span></code> (UINT8 <code class="docutils literal notranslate"><span class="pre">[N,K/2]</span></code>),
+<code class="docutils literal notranslate"><span class="pre">weight_scale</span></code> (FLOAT8E4M3FN <code class="docutils literal notranslate"><span class="pre">[N,K/16]</span></code>), and <code class="docutils literal notranslate"><span class="pre">weight_global_scale</span></code>
+(<code class="docutils literal notranslate"><span class="pre">float</span></code>). Export/import preserves these parameters exactly without
+requantization. The self-describing <code class="docutils literal notranslate"><span class="pre">onnx_light.nvfp4_weights.v1</span></code> descriptor
+and payload also survive ordinary <code class="docutils literal notranslate"><span class="pre">EncodedValueProto</span></code> wire serialization.
+The encoder accepts FLOAT or FLOAT8E4M3FN local scales; FLOAT scales are rounded
+to FP8 before the FLOAT32 local/global division. Zero groups require positive
+local scales, just like nonzero groups. The codec rejects incomplete groups,
+nonfinite inputs, invalid scale shapes and zero/nonfinite effective scales.
+It performs no calibration and does not change the portable plan API.</p>
+</section>
 <section id="reconstruction-precision">
 <h2>Reconstruction precision<a class="headerlink" href="#reconstruction-precision" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">QuantizationPlan::reconstruction_dtype</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">TensorProto::DOUBLE</span></code>
@@ -1450,6 +1478,7 @@ and <a class="reference external" href="https://github.com/microsoft/onnxruntime
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-nvfp4-weights">Complete NVFP4 weights</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reconstruction-precision">Reconstruction precision</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#graph-operators">Graph operators</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-shared-parameters">Model-level shared parameters</a><ul class="nav section-nav flex-column">

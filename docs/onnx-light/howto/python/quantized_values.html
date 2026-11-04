@@ -7,7 +7,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Quantizes tensors into encoded values &#8212; onnx-light 0.2.6 documentation</title>
+    <title>Quantizes tensors into encoded values &#8212; onnx-light 0.2.7 documentation</title>
   
   
   
@@ -46,7 +46,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=75c7c72ae941e8b558d8" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=75c7c72ae941e8b558d8" />
 
-    <script src="../../_static/documentation_options.js?v=fc7d8818"></script>
+    <script src="../../_static/documentation_options.js?v=58050c01"></script>
     <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -140,8 +140,8 @@
       
     
     
-    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.6 documentation - Home"/>
-    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.6 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-light" alt="onnx-light 0.2.7 documentation - Home"/>
+    <img src="../../_static/logo.svg" class="logo__image only-dark pst-js-only" alt="onnx-light 0.2.7 documentation - Home"/>
   
   
 </a></div>
@@ -625,6 +625,86 @@ and referenced by <code class="docutils literal notranslate"><span class="pre">t
 <p>The implementation lives in <code class="docutils literal notranslate"><span class="pre">onnx_core</span></code>, not <code class="docutils literal notranslate"><span class="pre">lib_onnx_proto</span></code>, and does not
 require registered operator kernels. The Python module requires the runtime
 bindings, as do other Python reference-runtime utilities.</p>
+<section id="complete-nvfp4-weights">
+<span id="l-nvfp4-weights"></span><h2>Complete NVFP4 weights<a class="headerlink" href="#complete-nvfp4-weights" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">quantize_nvfp4_weights</span></code> implements a <strong>separate</strong> complete weight contract,
+<code class="docutils literal notranslate"><span class="pre">onnx_light.nvfp4_weights.v1</span></code>. The existing <code class="docutils literal notranslate"><span class="pre">QuantizationFormat.NVFP4</span></code>
+(<code class="docutils literal notranslate"><span class="pre">nvfp4</span></code>) remains the portable E2M1 numerical profile with caller-supplied
+effective scales; its payload and decoding are unchanged.</p>
+<p>The complete contract follows the symmetric, group-size-16 weight layout in
+<a class="reference external" href="https://github.com/vllm-project/compressed-tensors/blob/eb058d630f7344099459b6795b1e3eeffdda4b40/src/compressed_tensors/compressors/nvfp4/base.py">compressed-tensors at eb058d630f7344099459b6795b1e3eeffdda4b40</a>,
+including <code class="docutils literal notranslate"><span class="pre">nvfp4/helpers.py</span></code>, <code class="docutils literal notranslate"><span class="pre">quantization/lifecycle/forward_helpers.py</span></code>
+and the NVFP4 weight presets at that revision. It uses the FLOAT32 arithmetic
+path, not the compressor’s default BFLOAT16 decompression output.
+The presets round calibrated local scales to FP8 before compression. In contrast,
+calling the upstream compressor directly with arbitrary unrounded FLOAT scales
+quantizes before its storage cast; this codec intentionally does not reproduce
+that inconsistent parameter combination.</p>
+<ul class="simple">
+<li><p>Weights are a nonempty, row-major FLOAT matrix <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">K]</span></code>. Groups run along
+axis 1, never across rows; <code class="docutils literal notranslate"><span class="pre">K</span></code> must be divisible by 16. Incomplete groups,
+empty matrices and nonfinite weights are rejected, not padded or replaced.</p></li>
+<li><p>The caller supplies local scales <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">K/16]</span></code> as FLOAT or FLOAT8E4M3FN and
+one finite, strictly positive FLOAT32 global scale. This is a fixed-parameter
+codec; it does not perform calibration.</p></li>
+<li><p>FLOAT local scales are rounded <strong>first</strong> to E4M3FN, nearest-even, with finite
+saturation at 448. Local scales must be strictly positive before and after
+rounding. Thus an all-zero weight group still requires a positive local scale;
+zero scales, negative scales, NaNs, and values rounding to zero are rejected.</p></li>
+<li><p>For each group, the effective reconstruction scale is
+<code class="docutils literal notranslate"><span class="pre">float32(float32(local_fp8)</span> <span class="pre">/</span> <span class="pre">global_scale)</span></code>. It must remain finite and
+strictly positive. Each weight is divided by that rounded scale in FLOAT32,
+saturated to <code class="docutils literal notranslate"><span class="pre">[-6,</span> <span class="pre">6]</span></code>, then rounded to E2M1, nearest-even.
+The magnitude levels are <code class="docutils literal notranslate"><span class="pre">[0,</span> <span class="pre">.5,</span> <span class="pre">1,</span> <span class="pre">1.5,</span> <span class="pre">2,</span> <span class="pre">3,</span> <span class="pre">4,</span> <span class="pre">6]</span></code>.
+Negative normalized values rounding to E2M1 zero retain a negative-zero code.
+An input <code class="docutils literal notranslate"><span class="pre">-0.0</span></code>, or normalization underflow to <code class="docutils literal notranslate"><span class="pre">-0.0</span></code>, encodes as positive
+zero, following upstream’s strict <code class="docutils literal notranslate"><span class="pre">normalized</span> <span class="pre">&lt;</span> <span class="pre">0</span></code> sign test.</p></li>
+<li><p>Codes use bit 3 for sign and bits 0–2 for magnitude. Consecutive columns
+occupy the low then high nibble of each byte. There is no hardware swizzle.
+Reconstruction multiplies the decoded E2M1 value by the rounded effective
+scale in FLOAT32. Nonfinite reconstructions are rejected.</p></li>
+</ul>
+<p>These rules assume IEEE round-to-nearest-even, gradual underflow and no
+fast-math. They do <strong>not</strong> substitute an arbitrary precombined scale for the
+hierarchy: FP8 local rounding and the subsequent FLOAT32 division can change
+both codes and reconstructed values.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light</span><span class="w"> </span><span class="kn">import</span> <span class="n">onnx</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_core</span><span class="w"> </span><span class="kn">import</span> <span class="n">quantization</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">onnx_light.onnx_py._onnxpykernels</span><span class="w"> </span><span class="kn">import</span> <span class="n">runtime</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">tensor</span><span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">array</span><span class="p">):</span>
+    <span class="k">return</span> <span class="n">runtime</span><span class="o">.</span><span class="n">tensor_from_numpy</span><span class="p">(</span>
+        <span class="n">name</span><span class="p">,</span> <span class="n">onnx</span><span class="o">.</span><span class="n">TensorProto</span><span class="o">.</span><span class="n">FLOAT</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">array</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span> <span class="n">array</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+    <span class="p">)</span>
+
+<span class="n">weights</span> <span class="o">=</span> <span class="n">tensor</span><span class="p">(</span><span class="s2">"W"</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">numpy</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+<span class="n">local</span> <span class="o">=</span> <span class="n">tensor</span><span class="p">(</span><span class="s2">"scale"</span><span class="p">,</span> <span class="n">numpy</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">numpy</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+<span class="n">encoded</span> <span class="o">=</span> <span class="n">quantization</span><span class="o">.</span><span class="n">quantize_nvfp4_weights</span><span class="p">(</span><span class="n">weights</span><span class="p">,</span> <span class="n">local</span><span class="p">,</span> <span class="mf">2.0</span><span class="p">)</span>
+<span class="n">restored</span> <span class="o">=</span> <span class="n">quantization</span><span class="o">.</span><span class="n">dequantize_tensor</span><span class="p">(</span><span class="n">encoded</span><span class="p">)</span>
+<span class="n">parameters</span> <span class="o">=</span> <span class="n">quantization</span><span class="o">.</span><span class="n">export_nvfp4_weights</span><span class="p">(</span><span class="n">encoded</span><span class="p">)</span>
+<span class="n">encoded_again</span> <span class="o">=</span> <span class="n">quantization</span><span class="o">.</span><span class="n">import_nvfp4_weights</span><span class="p">(</span><span class="n">parameters</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The ordinary <code class="docutils literal notranslate"><span class="pre">EncodedValueProto.SerializeToString</span></code> / <code class="docutils literal notranslate"><span class="pre">ParseFromString</span></code>
+methods serialize the complete value. Its inline descriptor identifies the
+version, grouping, matrix shape and FLOAT32 reconstruction; its payload retains
+the packed bytes, FP8 local scale bytes and original FLOAT32 global scale.
+The raw payload is row-major packed bytes, followed by row-major local-scale
+bytes, followed by the four little-endian bytes of the global FLOAT32, with no
+padding. Descriptor constants occupy no payload bytes.
+<code class="docutils literal notranslate"><span class="pre">export_nvfp4_weights</span></code> returns independent owned <code class="docutils literal notranslate"><span class="pre">weight_packed</span></code>
+(UINT8 <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">K/2]</span></code>), <code class="docutils literal notranslate"><span class="pre">weight_scale</span></code> (FLOAT8E4M3FN <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">K/16]</span></code>) and
+<code class="docutils literal notranslate"><span class="pre">weight_global_scale</span></code> (Python float exactly representing the stored FLOAT32).
+<code class="docutils literal notranslate"><span class="pre">import_nvfp4_weights</span></code> validates and serializes these without requantization.
+This is lossless parameter export, not a general checkpoint importer.
+Both <code class="docutils literal notranslate"><span class="pre">dequantize_tensor</span></code> and <code class="docutils literal notranslate"><span class="pre">dequantize_tensor_proto</span></code> decode this format.</p>
+<p><strong>Activation-local dynamic scaling is not supported.</strong> Weight support does not
+implement or imply parity with the upstream NVFP4 activation preset, its
+calibration, training algorithms, or accelerated matrix multiplication.
+The portable plan factory and shared-parameter catalogue are not constructors
+for this separate fixed weight codec.</p>
+</section>
 <section id="reconstruction-precision">
 <h2>Reconstruction precision<a class="headerlink" href="#reconstruction-precision" title="Link to this heading">#</a></h2>
 <p>Precision is a serialized codec contract, <strong>not</strong> the requested output dtype.
@@ -1809,6 +1889,7 @@ and <a class="reference external" href="https://github.com/microsoft/onnxruntime
   </div>
   <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
     <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-nvfp4-weights">Complete NVFP4 weights</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reconstruction-precision">Reconstruction precision</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#graph-operators">Graph operators</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-shared-parameters">Model-level shared parameters</a><ul class="nav section-nav flex-column">
