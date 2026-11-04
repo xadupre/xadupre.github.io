@@ -140,6 +140,15 @@ Input and output types must match and be ``FLOAT``, ``FLOAT16``, or
 tiles and accumulated in FLOAT before the output is narrowed. Separate FC3
 weights and biases, sparse mixer routing, and noninterleaved SwiGLU are not
 supported by the CPU kernel. The output retains the input shape.
+Native shape inference validates the operator contract independently of these
+execution restrictions. It also accepts separate SwiGLU (``swiglu_fusion=0``,
+FC3 ``[E,I,H]`` at slot 6, optional bias ``[E,I]`` at slot 7),
+concatenated SwiGLU (``swiglu_fusion=2``), ``relu2``, and fused ``geglu``
+(``swiglu_fusion=1`` or ``2``, without FC3). Fused gated FC1 weights have
+shape ``[E,2*I,H]``; separate projections have shape ``[E,I,H]``.
+Optional empty input slots retain their positions. Sparse mixer metadata
+requires ``k=2``. Successful shape inference does not imply CPU execution
+support for these configurations.
 See `ONNX Runtime's MoE CPU implementation
 <https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/contrib_ops/cpu/moe/moe_cpu.cc>`_
 for the upstream compatibility contract.
@@ -218,6 +227,14 @@ dequantized into execution-allocator scratch and projections accumulate in
 FLOAT. It does not interpret CPU weights as CUDA's MatMulNBits block packing
 or TensorRT's shuffled prepacked format. Quantized weights are inference-only;
 no QMoE gradient or graph-fusion rule is registered.
+
+Shape inference additionally accepts ``quant_type="fp4"`` with 17 positional
+input slots, including empty optional slots. MXFP4 requires 4-bit ``UINT8``
+weights, ``FLOAT8E8M0`` block scales (block size 32, also the default for FP4),
+and ``FLOAT`` per-expert global scales ``[E]`` at slots 15 and 16.
+Both N-packed ``[E,K,N/2]`` and K-packed ``[E,N,K/2]`` weights use logical
+block scales ``[E,N,K/32]``; hidden and intermediate sizes must be block-aligned.
+This is metadata-only support: the CPU execution kernel rejects FP4.
 
 The cited builder's legacy ``qmoe_block_size=0`` fallback selects
 `TensorRT-LLM's preprocessed quantizer output
