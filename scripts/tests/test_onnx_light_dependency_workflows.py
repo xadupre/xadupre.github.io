@@ -29,6 +29,14 @@ PROJECTS = {
 
 
 class TestOnnxLightDependencyWorkflows(unittest.TestCase):
+    def test_locodellm_uses_python_without_stale_runtime_wheel_pins(self):
+        workflow = yaml.safe_load(
+            (WORKFLOWS / "build_locodellm_docs.yml").read_text(encoding="utf-8")
+        )
+        steps = workflow["jobs"]["build-and-publish"]["steps"]
+        setup = next(step for step in steps if step["name"] == "Set up Python")
+        self.assertEqual(setup["with"]["python-version"], "3.14")
+
     def test_resolver_precedes_dependency_installs_with_matching_extras(self):
         for name, projects in PROJECTS.items():
             with self.subTest(workflow=name):
