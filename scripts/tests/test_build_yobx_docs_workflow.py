@@ -18,6 +18,10 @@ class TestBuildYobxDocsWorkflow(unittest.TestCase):
             step for step in cls.steps if step["name"] == "Prepare TensorFlow example"
         )
 
+    def test_python_version(self):
+        setup = next(step for step in self.steps if step["name"] == "Set up Python")
+        self.assertEqual(setup["with"]["python-version"], "3.13")
+
     def prepare_example(self, source):
         with tempfile.TemporaryDirectory() as temporary:
             example = Path(temporary) / "docs/examples/tensorflow/plot_tensorflow_to_onnx.py"
