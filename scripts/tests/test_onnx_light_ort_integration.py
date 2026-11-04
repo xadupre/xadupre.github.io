@@ -113,26 +113,16 @@ class TestOnnxLightOrtIntegration(unittest.TestCase):
         steps = workflow["jobs"]["build-and-publish"]["steps"]
         names = [step["name"] for step in steps]
         by_name = {step["name"]: step for step in steps}
-        checkout = by_name["Checkout onnx-light"]
-        self.assertEqual(checkout["with"]["repository"], "xadupre/onnx-light")
-        self.assertEqual(checkout["with"]["ref"], "main")
-        self.assertEqual(checkout["with"]["path"], "onnx-light")
-        self.assertFalse(checkout["with"]["persist-credentials"])
         build = by_name["Build native libraries for the gallery"]
         self.assertEqual(build["working-directory"], "onnx-light-ort")
         for command in (
             "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release",
-            '-DFETCHCONTENT_SOURCE_DIR_ONNX_LIGHT="$GITHUB_WORKSPACE/onnx-light"',
             "-DONNX_LIGHT_ORT_BUILD_TESTS=OFF",
             "-DONNX_LIGHT_ORT_BUILD_PYTHON=ON",
             'cmake --build build --parallel "$(nproc)"',
         ):
             with self.subTest(command=command):
                 self.assertIn(command, build["run"])
-        self.assertLess(
-            names.index("Checkout onnx-light"),
-            names.index("Build native libraries for the gallery"),
-        )
         self.assertLess(
             names.index("Install documentation dependencies"),
             names.index("Build native libraries for the gallery"),
@@ -163,6 +153,22 @@ class TestOnnxLightOrtIntegration(unittest.TestCase):
         ):
             with self.subTest(variable=variable):
                 self.assertEqual(env[variable], f"{library_dir}/{relative_path}")
+
+    def test_documentation_preserves_upstream_dependency_pins(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/build_onnx_light_ort_docs.yml").read_text(
+                encoding="utf-8"
+            )
+        )
+        steps = workflow["jobs"]["build-and-publish"]["steps"]
+        for step in steps:
+            with self.subTest(step=step["name"]):
+                self.assertNotIn(
+                    step.get("with", {}).get("repository"),
+                    ("xadupre/onnx-light", "xadupre/onnx-light-cpu"),
+                )
+                self.assertNotIn("FETCHCONTENT_SOURCE_DIR_ONNX_LIGHT", step.get("run", ""))
+                self.assertNotIn("ONNX_LIGHT_ORT_ONNX_LIGHT_REVISION", step.get("run", ""))
 
 
 if __name__ == "__main__":
