@@ -5,7 +5,7 @@
 import * as vscode from "vscode";
 import { randomBytes } from "node:crypto";
 import { mkdir, open, stat } from "node:fs/promises";
-import { dirname, isAbsolute, join, posix, relative } from "node:path";
+import { dirname, isAbsolute, join, posix, relative, resolve } from "node:path";
 import { homedir } from "node:os";
 import {
   listBackendTests,
@@ -20,9 +20,17 @@ import {
   GraphPath,
   FusionMatch,
   FusionOperation,
+  RunResult,
+  tensorStatisticsFromProto,
 } from "./graph";
 import { webviewHtml } from "./webview";
-import { applicationSettings, inspectPythonPackages } from "./settings";
+import { runModel, RunSession } from "./run";
+import {
+  applicationSettings,
+  inspectPythonPackages,
+  inspectPythonDevices,
+  latestPackageVersions,
+} from "./settings";
 import {
   defaultExportDirectory,
   ExportHistory,
@@ -33,6 +41,7 @@ import {
   runExport,
 } from "./export";
 import { ActionLog, LogEntry } from "./log";
+import { PatternLibrary } from "./patternLibrary";
 import {
   PathHistory,
   historyEntries,
@@ -48,6 +57,13 @@ import {
 } from "./huggingface";
 import { OliveRecipes } from "./oliveRecipes";
 import { optimizeWithOnnxScript } from "./optimization";
+import { promptInfo, runPrompt, type PromptResult } from "./prompt";
+import { PromptSession } from "./promptSession";
+import {
+  loadPromptPipeline,
+  promptPipelineInfo,
+  type PromptPipelineChecks,
+} from "./promptPipeline";
 
 const viewType = "onnxLightViewer.graph";
 const panelSessions = new WeakMap<vscode.WebviewPanel, () => void>();
@@ -112,8 +128,12 @@ interface LoadedModel {
   metadata?: GraphMetadata;
   fusionCount?: number;
   fusionHistory?: FusionOperation[];
+  /** Retains the optimized snapshot for replay without recomputing its rewritings. */
+  rewritingQueue?: { model: NativeModel; operations: FusionOperation[] };
   /** Materialized Python edits remain modified after undoing later native edits. */
   pythonOptimized?: boolean;
+  dimensionsRenamed?: boolean;
+  functionsEdited?: boolean;
   source?: { uri: vscode.Uri };
   /** Original source ownership survives materializing or removing external data. */
   sourceWeightLocations?: readonly string[];
@@ -170,7 +190,7 @@ function copyFileName(model: LoadedModel, encrypted = false): string {
  * Returns the retained handle, logging a reload if a previous refresh invalidated
  * it. The changed callback publishes status only after successful recreation.
  */
-async function nativeModel(
+async function recoverNativeModel(
   model: LoadedModel,
   log: ActionLog,
   changed: () => void,
@@ -217,6 +237,7 @@ export function activate(context: vscode.ExtensionContext): void {
     void vscode.window.showErrorMessage(message);
   });
   const exportHistory = new ExportHistory(context.globalState);
+  const patternLibrary = new PatternLibrary();
   let current: { panel: vscode.WebviewPanel; showLogs: () => void } | undefined;
   const openViewer = async (
     uri?: vscode.Uri,
@@ -235,6 +256,7 @@ export function activate(context: vscode.ExtensionContext): void {
       initialTab,
       pathHistory,
       exportHistory,
+      patternLibrary,
       (showLogs) => {
         if (showLogs) current = { panel, showLogs };
         else if (current?.panel === panel) current = undefined;
@@ -281,6 +303,7 @@ export function activate(context: vscode.ExtensionContext): void {
             "model",
             pathHistory,
             exportHistory,
+            patternLibrary,
             (showLogs) => {
               if (showLogs) current = { panel, showLogs };
               else if (current?.panel === panel) current = undefined;
@@ -479,6 +502,7 @@ async function configurePanel(
   initialTab: "model" | "logs",
   pathHistory: PathHistory,
   exportHistory: ExportHistory,
+  patternLibrary: PatternLibrary,
   activatePanel: (showLogs: (() => void) | undefined) => void,
 ): Promise<void> {
   panelSessions.get(panel)?.();
@@ -493,10 +517,51 @@ async function configurePanel(
   panel.iconPath = vscode.Uri.joinPath(mediaRoot, "logo.svg");
   let model: LoadedModel | undefined;
   let graphRevision = 0;
+  let dimensionRequest = 0;
   let navigationRequest = 0;
   let statisticsRequest = 0;
   let tensorStatisticsRequest = 0;
+  let promptController: AbortController | undefined;
+  let releaseController: AbortController | undefined;
+  let promptResult: { owner: LoadedModel; result: PromptResult } | undefined;
   let memoryRequest = 0;
+  let runRequest = 0;
+  let runController: AbortController | undefined;
+  let runResult:
+    | {
+        owner: LoadedModel;
+        revision: number;
+        generation: number;
+        requestId: number;
+        result: RunResult;
+      }
+    | undefined;
+
+  function executedTensor(
+    reference:
+      { requestId?: unknown; kind?: unknown; index?: unknown } | undefined,
+  ) {
+    if (
+      !runResult ||
+      runResult.owner !== model ||
+      runResult.revision !== graphRevision ||
+      runResult.generation !== runRequest ||
+      reference?.requestId !== runResult.requestId ||
+      (reference?.kind !== "inputs" && reference?.kind !== "outputs") ||
+      typeof reference.index !== "number" ||
+      !Number.isSafeInteger(reference?.index) ||
+      reference.index < 0
+    )
+      throw new Error(
+        "Run tensor is no longer available. Run the model again.",
+      );
+    const tensor =
+      runResult.result[reference.kind as "inputs" | "outputs"]?.[
+        reference.index
+      ];
+    if (!tensor?.data) throw new Error("No TensorProto data for this output.");
+    return tensor;
+  }
   let fusionRequest = 0;
   let diagnosticRequest = 0;
   let undoRequest = 0;
@@ -537,12 +602,54 @@ async function configurePanel(
     void postMessage({ type: "log-entry", entry });
     void sendStatus();
   });
+  const promptSession = new PromptSession((error) =>
+    log.record("FAILED", "Prompt session", undefined, error.message),
+  );
+  const runSession = new RunSession((error) => {
+    log.record("FAILED", "Run session", undefined, error.message);
+    void postMessage({ type: "run-session-lost", error: error.message });
+  });
+  const releaseRunSession = () => {
+    runController?.abort();
+    void runSession
+      .close()
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release Run session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+  };
   const stopHistory = pathHistory.subscribe((history) => {
     void postMessage({ type: "path-history", history });
   });
   const stopExportHistory = exportHistory.subscribe((history) => {
     void postMessage({ type: "export-history", history });
   });
+  const fusionLibrarySource = {};
+  const stopPatternLibrary = patternLibrary.subscribe((snapshot, source) => {
+    const invalidateFusion = source !== fusionLibrarySource;
+    if (invalidateFusion) {
+      fusionRequest++;
+      diagnosticRequest++;
+      fusionPreview = undefined;
+    }
+    if (model?.native) patternLibrary.install(model.native);
+    if (model?.rewritingQueue)
+      patternLibrary.install(model.rewritingQueue.model);
+    void postMessage({
+      type: "pattern-library",
+      ...snapshot,
+      invalidateFusion,
+    });
+  });
+  const nativeModel: typeof recoverNativeModel = async (...args) => {
+    const native = await recoverNativeModel(...args);
+    patternLibrary.install(native);
+    return native;
+  };
   const updateHistory = async (
     target: HistoryTarget,
     change: Parameters<PathHistory["update"]>[1],
@@ -600,11 +707,48 @@ async function configurePanel(
         pythonPath: process.platform === "win32" ? "python" : "python3",
       },
     );
-  const sendSettings = async () => {
+  const getMemoryDimensions = (): Record<string, number> => {
+    const stored = context.globalState.get<unknown>("memoryDimensions");
+    if (stored === undefined) return {};
+    if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+      log.record("FAILED", "Ignoring invalid saved memory dimension values.");
+      return {};
+    }
+    const entries = Object.entries(stored);
+    const valid = entries.filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === "number" &&
+        Number.isSafeInteger(entry[1]) &&
+        entry[1] >= 0,
+    );
+    if (valid.length !== entries.length)
+      log.record("FAILED", "Ignoring invalid saved memory dimension values.");
+    return Object.fromEntries(valid);
+  };
+  const sendSettings = async (
+    type: "settings-info" | "status-info" = "settings-info",
+  ) => {
     const application = getApplicationSettings();
-    await mkdir(application.downloadDirectory, { recursive: true });
+    if (type === "settings-info") {
+      await mkdir(application.downloadDirectory, { recursive: true });
+      await Promise.all([
+        prunePathHistory(),
+        exportHistory.prune(async (entry, target) => {
+          if (target === "models" && !isAbsolute(entry)) return true;
+          if (target === "directories" && /<(?:model_id|exporter)>/.test(entry))
+            return true;
+          const isUri =
+            /^[a-z][a-z\d+.-]*:/i.test(entry) && !/^[a-z]:/i.test(entry);
+          return historyPathExists(
+            target === "directories" && !isAbsolute(entry) && !isUri
+              ? resolve(application.downloadDirectory, entry)
+              : entry,
+          );
+        }),
+      ]);
+    }
     return postMessage({
-      type: "settings-info",
+      type,
       application,
       exportHistory: exportHistory.snapshot(),
       pathHistory: pathHistory.snapshot(),
@@ -665,6 +809,7 @@ async function configurePanel(
     );
   };
   let inspectingPackages = false;
+  let inspectingDevices = false;
   let exporting: AbortController | undefined;
   const locationUri = (value: unknown) => {
     if (typeof value !== "string" || !value.trim() || value.includes("\0"))
@@ -675,6 +820,31 @@ async function configurePanel(
         ? vscode.Uri.file(value)
         : vscode.Uri.joinPath(directoryUri(), value);
   };
+  const historyPathExists = async (path: string) => {
+    const uri =
+      /^[a-z][a-z\d+.-]*:/i.test(path) && !/^[a-z]:/i.test(path)
+        ? vscode.Uri.parse(path)
+        : locationUri(path);
+    try {
+      await vscode.workspace.fs.stat(uri);
+      return true;
+    } catch (error) {
+      if (
+        (error instanceof vscode.FileSystemError &&
+          ["FileNotFound", "FileNotADirectory"].includes(error.code)) ||
+        (error instanceof Error &&
+          "code" in error &&
+          (error.code === "ENOENT" || error.code === "ENOTDIR"))
+      )
+        return false;
+      throw error;
+    }
+  };
+  const prunePathHistory = () =>
+    pathHistory.prune(
+      async (entry) =>
+        entry.source !== "local" || (await historyPathExists(entry.path)),
+    );
   const hubFileEntries = (files: (HuggingFaceSource & { path?: string })[]) =>
     files.map((file) => ({
       name: file.path ?? file.fileName,
@@ -682,7 +852,13 @@ async function configurePanel(
       directory: false,
       ...(file.size === undefined ? {} : { size: file.size }),
     }));
-  const sendGraph = (selectedNodes?: number[], fusionRequestId?: unknown) => {
+  const sendGraph = (
+    selectedNodes?: number[],
+    fusionRequestId?: unknown,
+    preserveMemory = false,
+  ) => {
+    releaseRunSession();
+    runResult = undefined;
     fusionPreview = undefined;
     fusionRequest++;
     diagnosticRequest++;
@@ -691,11 +867,13 @@ async function configurePanel(
     return postMessage({
       type: "graph",
       graph: current.graph,
+      ...(preserveMemory ? { preserveMemory: true } : {}),
       ...(fusionRequestId === undefined ? {} : { fusionRequestId }),
       ...(selectedNodes ? { selectedNodes } : {}),
       file: {
         fusionCount: current.fusionCount ?? 0,
         fusionHistory: current.fusionHistory ?? [],
+        pendingRewritings: current.rewritingQueue?.operations ?? [],
         ...(current.graph.pipeline ? { pipeline: true } : {}),
         directory: locationText(directoryUri()),
         saveDirectory: locationText(saveDirectoryUri()),
@@ -746,7 +924,14 @@ async function configurePanel(
       message: {
         type?: string;
         path?: unknown;
+        paths?: unknown;
+        inputs?: unknown;
+        run?: { requestId?: unknown; kind?: unknown; index?: unknown };
+        index?: unknown;
+        engine?: unknown;
+        asPipeline?: unknown;
         nodeIndex?: unknown;
+        nodes?: unknown;
         actionId?: string;
         entry?: unknown;
         storage?: unknown;
@@ -754,7 +939,17 @@ async function configurePanel(
         maxExternalFileSize?: unknown;
         includeRewritings?: unknown;
         requestId?: unknown;
+        releaseId?: unknown;
+        keepLoaded?: unknown;
+        reuseResult?: unknown;
+        options?: unknown;
         name?: unknown;
+        text?: unknown;
+        replacement?: unknown;
+        libraryRevision?: unknown;
+        dirty?: unknown;
+        functionIndex?: unknown;
+        format?: unknown;
         dimensions?: unknown;
         previewId?: unknown;
         pattern?: unknown;
@@ -770,6 +965,7 @@ async function configurePanel(
         location?: unknown;
         source?: unknown;
         target?: unknown;
+        equalities?: unknown;
         password?: unknown;
         confirmation?: unknown;
         overwrite?: unknown;
@@ -785,12 +981,218 @@ async function configurePanel(
       if (!active) return;
       if (message?.type === "show-logs") {
         showLogs();
+      } else if (message?.type === "copy-function-pattern") {
+        try {
+          if (
+            typeof message.name !== "string" ||
+            typeof message.text !== "string" ||
+            typeof message.format !== "string" ||
+            !["text", "replacement"].includes(message.format)
+          )
+            throw new Error(
+              "Expected a pattern name, text and a supported copy format.",
+            );
+          await vscode.env.clipboard.writeText(message.text);
+          await postMessage({
+            type: "function-pattern-copied",
+            name: message.name,
+            format: message.format,
+          });
+        } catch (error) {
+          await postMessage({
+            type: "function-pattern-copy-error",
+            name: message.name,
+            format: message.format,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (
+        message?.type === "save-pattern-library" ||
+        message?.type === "restore-pattern-library" ||
+        message?.type === "update-library-pattern"
+      ) {
+        const operation = message.type;
+        const action =
+          operation === "save-pattern-library"
+            ? "Save pattern library"
+            : operation === "restore-pattern-library"
+              ? "Restore pattern library"
+              : "Edit library pattern";
+        const isActive = () => active;
+        try {
+          await log.run(
+            action,
+            async (id) => {
+              if (operation === "update-library-pattern") {
+                if (
+                  typeof message.name !== "string" ||
+                  typeof message.text !== "string" ||
+                  typeof message.replacement !== "string" ||
+                  typeof message.libraryRevision !== "number" ||
+                  !Number.isSafeInteger(message.libraryRevision)
+                )
+                  throw new Error(
+                    "Expected a pattern definition and library revision.",
+                  );
+                patternLibrary.update(
+                  message.name,
+                  message.text,
+                  message.replacement,
+                  message.libraryRevision,
+                );
+              } else if (operation === "save-pattern-library") {
+                if (!patternLibrary.snapshot().patterns.length)
+                  throw new Error("No created patterns to save.");
+                const uri = await vscode.window.showSaveDialog({
+                  title: "Save pattern library",
+                  defaultUri: vscode.Uri.file(
+                    join(homedir(), "function-patterns.patterns.json"),
+                  ),
+                  filters: { "Function patterns": ["patterns.json"] },
+                });
+                if (!isActive()) return;
+                const revision = patternLibrary.snapshot().revision;
+                if (
+                  !uri ||
+                  !(await writeModelFile(
+                    uri,
+                    patternLibrary.serialize(),
+                    true,
+                    () =>
+                      isActive() &&
+                      patternLibrary.snapshot().revision === revision,
+                  ))
+                ) {
+                  log.record("CANCELLED", action, id);
+                  await postMessage({
+                    type: "pattern-library-result",
+                    requestId: message.requestId,
+                    operation,
+                    cancelled: true,
+                  });
+                  return;
+                }
+              } else {
+                const uris = await vscode.window.showOpenDialog({
+                  title: "Restore pattern library",
+                  canSelectMany: false,
+                  filters: { "Function patterns": ["patterns.json", "json"] },
+                });
+                if (!isActive()) return;
+                if (!uris?.length) {
+                  log.record("CANCELLED", action, id);
+                  await postMessage({
+                    type: "pattern-library-result",
+                    requestId: message.requestId,
+                    operation,
+                    cancelled: true,
+                  });
+                  return;
+                }
+                const patterns = patternLibrary.parse(
+                  await vscode.workspace.fs.readFile(uris[0]),
+                );
+                if (!isActive()) return;
+                const conflicts = patternLibrary.conflicts(patterns);
+                const revision = patternLibrary.snapshot().revision;
+                if (conflicts.length || message.dirty === true) {
+                  const detail = conflicts.length
+                    ? `Replace existing definitions: ${conflicts.join(", ")}?`
+                    : "Discard unapplied edits and restore patterns?";
+                  const choice = await vscode.window.showWarningMessage(
+                    detail,
+                    { modal: true },
+                    "Restore",
+                  );
+                  if (!isActive()) return;
+                  if (choice !== "Restore") {
+                    log.record("CANCELLED", action, id);
+                    await postMessage({
+                      type: "pattern-library-result",
+                      requestId: message.requestId,
+                      operation,
+                      cancelled: true,
+                    });
+                    return;
+                  }
+                  if (patternLibrary.snapshot().revision !== revision)
+                    throw new Error(
+                      "The pattern library changed while confirming restoration. Restore again.",
+                    );
+                }
+                patternLibrary.merge(patterns);
+              }
+              await postMessage({
+                type: "pattern-library-result",
+                requestId: message.requestId,
+                operation,
+                ...patternLibrary.snapshot(),
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isActive()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({
+            type: "pattern-library-result",
+            requestId: message.requestId,
+            operation,
+            error: detail,
+          });
+          await vscode.window.showErrorMessage(`${action} failed: ${detail}`);
+        }
+      } else if (message?.type === "check-latest-versions") {
+        const controller = new AbortController();
+        const action = "Check latest package versions";
+        let entry: LogEntry | undefined;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId <= 0
+          )
+            throw new Error("Invalid release lookup request.");
+          if (releaseController)
+            throw new Error("A package release lookup is already running.");
+          releaseController = controller;
+          entry = log.record("RUNNING", action);
+          const releases = await latestPackageVersions(controller.signal);
+          if (!active) return;
+          const errors = releases
+            .filter((release) => release.error !== undefined)
+            .map((release) => `${release.name}: ${release.error}`);
+          log.record(
+            errors.length ? "FAILED" : "SUCCEEDED",
+            action,
+            entry.id,
+            errors.join("\n"),
+          );
+          await postMessage({
+            type: "latest-versions-info",
+            requestId: message.requestId,
+            releases,
+          });
+        } catch (error) {
+          if (!active) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", action, entry?.id, detail);
+          await postMessage({
+            type: "latest-versions-error",
+            requestId: message.requestId,
+            error: detail,
+          });
+        } finally {
+          if (releaseController === controller) releaseController = undefined;
+        }
       } else if (
         message?.type === "get-settings" ||
+        message?.type === "get-status-info" ||
         message?.type === "application-settings" ||
         message?.type === "export-history-edit" ||
         message?.type === "reset-viewer-settings" ||
-        message?.type === "inspect-python"
+        message?.type === "inspect-python" ||
+        message?.type === "inspect-devices"
       ) {
         try {
           if (message.type === "reset-viewer-settings") {
@@ -813,7 +1215,10 @@ async function configurePanel(
             await mkdir(settings.downloadDirectory, { recursive: true });
             await context.globalState.update("applicationSettings", settings);
           }
-          if (message.type === "inspect-python") {
+          if (
+            message.type === "inspect-python" ||
+            message.type === "inspect-devices"
+          ) {
             if (!vscode.workspace.isTrusted)
               throw new Error("Trust this workspace before running Python.");
             if (
@@ -826,30 +1231,54 @@ async function configurePanel(
               ...getApplicationSettings(),
               pythonPath: message.pythonPath,
             });
-            if (inspectingPackages)
-              throw new Error(
-                "A Python package inspection is already running. Try again when it finishes.",
-              );
-            inspectingPackages = true;
-            try {
-              const python = await inspectPythonPackages(pythonPath);
-              await postMessage({
-                type: "python-info",
-                requestId: message.requestId,
-                pythonPath,
-                python,
-              });
-            } finally {
-              inspectingPackages = false;
+            if (message.type === "inspect-devices") {
+              if (inspectingDevices)
+                throw new Error("A device inspection is already running.");
+              inspectingDevices = true;
+              try {
+                const devices = await inspectPythonDevices(pythonPath);
+                await postMessage({
+                  type: "device-info",
+                  requestId: message.requestId,
+                  pythonPath,
+                  devices,
+                });
+              } finally {
+                inspectingDevices = false;
+              }
+            } else {
+              if (inspectingPackages)
+                throw new Error(
+                  "A Python package inspection is already running. Try again when it finishes.",
+                );
+              inspectingPackages = true;
+              try {
+                const python = await inspectPythonPackages(pythonPath);
+                await postMessage({
+                  type: "python-info",
+                  requestId: message.requestId,
+                  pythonPath,
+                  python,
+                });
+              } finally {
+                inspectingPackages = false;
+              }
             }
           } else if (message.type !== "export-history-edit")
-            await sendSettings();
+            await sendSettings(
+              message.type === "get-status-info"
+                ? "status-info"
+                : "settings-info",
+            );
         } catch (error) {
           const detail = error instanceof Error ? error.message : String(error);
           log.record("FAILED", `Settings: ${detail}`);
           await postMessage({
-            type: "settings-error",
-            ...(message.type === "inspect-python"
+            type:
+              message.type === "inspect-devices"
+                ? "device-error"
+                : "settings-error",
+            ...(["inspect-python", "inspect-devices"].includes(message.type)
               ? { requestId: message.requestId, pythonPath: message.pythonPath }
               : {}),
             error: detail,
@@ -892,12 +1321,21 @@ async function configurePanel(
             if (!isGraphPath(path))
               throw new Error("Invalid memory profiling path.");
             setup = { stages, path };
-            if (message.type === "memory-inputs")
+            if (message.type === "memory-inputs") {
+              const remembered = getMemoryDimensions();
               return {
-                dimensions: native.memoryProfileInputs(path),
+                dimensions: native
+                  .memoryProfileInputs(path)
+                  .map((dimension) => ({
+                    ...dimension,
+                    defaultValue: Object.hasOwn(remembered, dimension.label)
+                      ? remembered[dimension.label]
+                      : dimension.defaultValue,
+                  })),
                 stages,
                 path,
               };
+            }
             const values = message.dimensions;
             if (!values || typeof values !== "object" || Array.isArray(values))
               throw new Error("Expected dynamic dimension values.");
@@ -906,15 +1344,32 @@ async function configurePanel(
                 if (
                   typeof value !== "number" ||
                   !Number.isSafeInteger(value) ||
-                  value <= 0
+                  value < 0
                 )
                   throw new Error(
-                    `Expected a positive safe integer for ${key}.`,
+                    `Expected a non-negative safe integer for ${key}.`,
                   );
                 return [key, value];
               }),
             );
-            return { profile: await native.memoryProfile(dimensions, path) };
+            const inputs = native.memoryProfileInputs(path);
+            const profile = await native.memoryProfile(dimensions, path);
+            if (!isCurrent()) return;
+            if (inputs.length) {
+              const remembered = getMemoryDimensions();
+              if (
+                inputs.some(
+                  ({ key, label }) => remembered[label] !== dimensions[key],
+                )
+              )
+                await context.globalState.update("memoryDimensions", {
+                  ...remembered,
+                  ...Object.fromEntries(
+                    inputs.map(({ key, label }) => [label, dimensions[key]]),
+                  ),
+                });
+            }
+            return { profile };
           });
           if (isCurrent() && result)
             await postMessage({
@@ -935,15 +1390,402 @@ async function configurePanel(
             `Could not estimate ONNX memory: ${detail}`,
           );
         }
+      } else if (message?.type === "run-file") {
+        const owner = model;
+        const generation = runRequest;
+        if (
+          !vscode.workspace.isTrusted ||
+          !Number.isSafeInteger(message.requestId) ||
+          typeof message.index !== "number" ||
+          !Number.isSafeInteger(message.index) ||
+          message.index < 0
+        )
+          return;
+        const uris = await vscode.window.showOpenDialog({
+          canSelectMany: false,
+          canSelectFolders: false,
+          filters: { "ONNX TensorProto": ["pb"] },
+        });
+        if (active && model === owner && generation === runRequest && uris?.[0])
+          await postMessage({
+            type: "run-file",
+            requestId: message.requestId,
+            index: message.index,
+            path: uris[0].fsPath,
+          });
+      } else if (message?.type === "run-release") {
+        if (
+          typeof message.requestId !== "number" ||
+          !Number.isSafeInteger(message.requestId) ||
+          message.requestId < 0 ||
+          typeof message.releaseId !== "number" ||
+          !Number.isSafeInteger(message.releaseId) ||
+          message.releaseId < 0 ||
+          message.requestId !== runResult?.requestId
+        )
+          return;
+        const owner = model;
+        const generation = runRequest;
+        try {
+          runController?.abort();
+          await log.run("Release Run session", () => runSession.close());
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-released",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+            });
+        } catch (error) {
+          if (active && model === owner && generation === runRequest)
+            await postMessage({
+              type: "run-session-error",
+              requestId: message.requestId,
+              releaseId: message.releaseId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+        }
+      } else if (
+        message?.type === "run-inputs" ||
+        message?.type === "run-model"
+      ) {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = ++runRequest;
+        runResult = undefined;
+        runController?.abort();
+        const controller = new AbortController();
+        runController = controller;
+        const isCurrent = () =>
+          active &&
+          !controller.signal.aborted &&
+          model === owner &&
+          graphRevision === revision &&
+          runRequest === generation;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId < 0
+          )
+            throw new Error("Invalid model run request.");
+          const current = requireModel();
+          const native = await nativeModel(current, log, () => {
+            void sendStatus();
+          });
+          if (!isCurrent()) return;
+          const stages = current.graph.pipeline
+            ? (native.graph().pipelineStages ?? [])
+            : [];
+          const path =
+            stages.length &&
+            (message.path === undefined ||
+              (Array.isArray(message.path) && !message.path.length))
+              ? stages[0].path
+              : (message.path ?? []);
+          if (!isGraphPath(path)) throw new Error("Invalid model run path.");
+          if (message.type === "run-inputs") {
+            await runSession.close();
+            if (!isCurrent()) return;
+            const inputs = native.runInputs(path);
+            if (isCurrent())
+              await postMessage({
+                type: "run-inputs",
+                requestId: message.requestId,
+                inputs,
+                stages,
+                path,
+              });
+          } else {
+            if (!vscode.workspace.isTrusted)
+              throw new Error("Trust this workspace before running a model.");
+            const result = await log.run("Run model", () =>
+              runModel(
+                native,
+                path,
+                message,
+                getApplicationSettings().pythonPath,
+                join(mediaRoot.fsPath, "run_model.py"),
+                (output) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "run-log",
+                      requestId: message.requestId,
+                      output,
+                    });
+                },
+                controller.signal,
+                runSession,
+              ),
+            );
+            if (isCurrent()) {
+              runResult = {
+                owner: current,
+                revision,
+                generation,
+                requestId: message.requestId,
+                result,
+              };
+              const preview = ({
+                data,
+                ...tensor
+              }: RunResult["outputs"][number]) => ({
+                ...tensor,
+                hasData: !!data,
+              });
+              await postMessage({
+                type: "run-result",
+                requestId: message.requestId,
+                result: {
+                  timeMs: result.timeMs,
+                  repeat: result.repeat,
+                  lifecycle: result.lifecycle,
+                  profiling: result.profiling
+                    ? { nodes: result.profiling.nodes }
+                    : undefined,
+                  inputs: result.inputs?.map(preview),
+                  outputs: result.outputs.map(preview),
+                },
+              });
+            }
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            await runSession.close();
+            if (!isCurrent()) return;
+            await postMessage({
+              type: "run-error",
+              requestId: message.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      } else if (message?.type === "run-save") {
+        const owner = model;
+        const revision = graphRevision;
+        const generation = runRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          runRequest === generation &&
+          runResult !== undefined &&
+          runResult.owner === owner &&
+          runResult.revision === revision &&
+          runResult.generation === generation;
+        try {
+          if (
+            message.format !== "protobuf" &&
+            message.format !== "statistics" &&
+            message.format !== "profiling"
+          )
+            throw new Error(
+              "Choose TensorProto, statistics JSON or profiling JSON.",
+            );
+          const profiling = message.format === "profiling";
+          if (
+            profiling &&
+            (message.run?.requestId !== runResult?.requestId ||
+              !runResult?.result.profiling)
+          )
+            throw new Error("Run the model with profiling enabled first.");
+          const tensorName = profiling
+            ? "profiling trace"
+            : executedTensor(message.run).name;
+          const uri = await vscode.window.showSaveDialog({
+            saveLabel: profiling
+              ? "Save profiling trace"
+              : message.format === "statistics"
+                ? "Save statistics"
+                : "Save tensor",
+            filters: profiling
+              ? { "Chrome trace": ["json"] }
+              : message.format === "statistics"
+                ? { "Tensor statistics": ["json"] }
+                : { TensorProto: ["pb"] },
+          });
+          if (!isCurrent()) return;
+          if (uri) {
+            const source = owner?.source?.uri;
+            const sources = source
+              ? [
+                  source,
+                  ...(owner?.sourceWeightLocations ?? []).map((location) =>
+                    vscode.Uri.joinPath(source, "..", location),
+                  ),
+                ]
+              : [];
+            await assertSaveDestination(sources, uri);
+            if (!isCurrent()) return;
+            const tensor = profiling ? undefined : executedTensor(message.run);
+            const bytes = profiling
+              ? Buffer.from(
+                  JSON.stringify(runResult!.result.profiling!.trace) + "\n",
+                )
+              : message.format === "statistics"
+                ? Buffer.from(
+                    JSON.stringify(
+                      await tensorStatisticsFromProto(tensor!.data!),
+                      null,
+                      2,
+                    ) + "\n",
+                  )
+                : tensor!.data!;
+            if (!isCurrent()) return;
+            const published = await writeModelFile(uri, bytes, true, isCurrent);
+            if (!published) return;
+          }
+          if (isCurrent())
+            await postMessage({
+              type: "run-save-info",
+              requestId: message.run?.requestId,
+              status: uri
+                ? `Saved ${tensorName} to ${locationText(uri)}.`
+                : "Save cancelled.",
+            });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "run-save-error",
+            requestId: message.run?.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (message?.type === "prompt-cancel") {
+        promptController?.abort();
+        await log.run("Release prompt session", () => promptSession.close());
+      } else if (message?.type === "prompt-release") {
+        promptController?.abort();
+        await log.run("Release prompt session", () => promptSession.close());
+        if (promptResult?.result.lifecycle)
+          promptResult.result.lifecycle.retained = false;
+        if (active)
+          await postMessage({
+            type: "prompt-released",
+            requestId: message.requestId,
+          });
+      } else if (
+        message?.type === "prompt-info" ||
+        message?.type === "run-prompt"
+      ) {
+        const owner = model;
+        promptController?.abort();
+        const controller = new AbortController();
+        promptController = controller;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          promptController === controller &&
+          !controller.signal.aborted;
+        try {
+          if (
+            typeof message.requestId !== "number" ||
+            !Number.isSafeInteger(message.requestId) ||
+            message.requestId < 0 ||
+            (message.reuseResult !== undefined &&
+              typeof message.reuseResult !== "boolean")
+          )
+            throw new Error("Invalid prompt request.");
+          if (!vscode.workspace.isTrusted)
+            throw new Error("Trust this workspace before running a prompt.");
+          const uri = owner?.source?.uri;
+          if (!owner || !uri || uri.scheme !== "file")
+            throw new Error(
+              "Open a locally saved converted language model first.",
+            );
+          if (message.type === "prompt-info") {
+            promptResult = undefined;
+            const info = await promptInfo(uri.fsPath);
+            if (isCurrent())
+              await postMessage({
+                type: "prompt-info",
+                requestId: message.requestId,
+                info,
+              });
+          } else {
+            const result = await log.run("Run prompt", () =>
+              runPrompt(
+                uri.fsPath,
+                message.options,
+                getApplicationSettings().pythonPath,
+                controller.signal,
+                (output) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-progress",
+                      requestId: message.requestId,
+                      output,
+                    });
+                },
+                message.options &&
+                  typeof message.options === "object" &&
+                  "validate" in message.options &&
+                  message.options.validate === true &&
+                  message.reuseResult === true &&
+                  promptResult?.owner === owner
+                  ? promptResult.result
+                  : undefined,
+                (token, index) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-token",
+                      requestId: message.requestId,
+                      token,
+                      index,
+                    });
+                },
+                promptSession,
+                (lifecycle) => {
+                  if (isCurrent())
+                    void postMessage({
+                      type: "prompt-lifecycle",
+                      requestId: message.requestId,
+                      lifecycle,
+                    });
+                },
+              ),
+            );
+            if (isCurrent()) {
+              promptResult = { owner, result };
+              await postMessage({
+                type: "prompt-result",
+                requestId: message.requestId,
+                result: {
+                  ...result,
+                  profiling: result.profiling
+                    ? { nodes: result.profiling.nodes }
+                    : undefined,
+                },
+              });
+            }
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            await log.run("Release prompt session", () =>
+              promptSession.close(),
+            );
+            if (isCurrent())
+              await postMessage({
+                type: "prompt-error",
+                requestId: message.requestId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+          }
+        }
       } else if (message?.type === "tensor-statistics") {
         const requestedModel = model;
         const revision = graphRevision;
+        const runGeneration = runRequest;
+        const execution = message.run ? runResult : undefined;
         const generation = ++tensorStatisticsRequest;
         const isCurrent = () =>
           active &&
           model === requestedModel &&
           graphRevision === revision &&
-          tensorStatisticsRequest === generation;
+          tensorStatisticsRequest === generation &&
+          (!message.run ||
+            (runRequest === runGeneration &&
+              runResult === execution &&
+              (!execution || execution.generation === runGeneration)));
         try {
           const statistics = await log.run("Inspect tensor data", async () => {
             if (
@@ -960,6 +1802,12 @@ async function configurePanel(
               void sendStatus();
             });
             if (!isCurrent()) return;
+            if (message.run) {
+              const tensor = executedTensor(message.run);
+              if (tensor.name !== message.name)
+                throw new Error("Invalid run tensor name.");
+              return tensorStatisticsFromProto(tensor.data!);
+            }
             return native.tensorStatistics(message.name, message.path, true);
           });
           if (isCurrent() && statistics)
@@ -1325,6 +2173,81 @@ async function configurePanel(
             `Could not convert ONNX model: ${detail}`,
           );
         }
+      } else if (message?.type === "prompt-pipeline-history") {
+        try {
+          const allowed = new Set(
+            pathHistory
+              .snapshot()
+              .open.filter(
+                (entry) => entry.source === "local" && entry.kind === "file",
+              )
+              .map((entry) => entry.path),
+          );
+          if (
+            !Number.isSafeInteger(message.requestId) ||
+            !Array.isArray(message.paths) ||
+            message.paths.length > 50 ||
+            !message.paths.every(
+              (path: unknown): path is string =>
+                typeof path === "string" && allowed.has(path),
+            )
+          )
+            throw new Error("Invalid pipeline history request.");
+          const entries = [];
+          const checks: PromptPipelineChecks = new Map();
+          for (const path of message.paths) {
+            if (!active) return;
+            try {
+              entries.push(await promptPipelineInfo(path, checks));
+            } catch (error) {
+              const detail =
+                error instanceof Error ? error.message : String(error);
+              log.record(
+                "FAILED",
+                "Inspect history pipeline",
+                undefined,
+                `${path}: ${detail}`,
+              );
+              entries.push({
+                path,
+                available: false,
+                label: `Inspection failed: ${detail}`,
+              });
+            }
+          }
+          if (active)
+            await postMessage({
+              type: "prompt-pipeline-history",
+              requestId: message.requestId,
+              entries,
+            });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", "Inspect history pipelines", undefined, detail);
+          await postMessage({
+            type: "prompt-pipeline-history",
+            requestId: message.requestId,
+            error: detail,
+          });
+        }
+      } else if (message?.type === "get-path-history") {
+        try {
+          if (message.target !== "open" && message.target !== "save")
+            throw new Error("Invalid history target.");
+          if (!(await prunePathHistory()))
+            await postMessage({
+              type: "path-history",
+              history: pathHistory.snapshot(),
+            });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          log.record("FAILED", "Refresh path history", undefined, detail);
+          await postMessage({
+            type: "path-history-error",
+            target: message.target,
+            error: detail,
+          });
+        }
       } else if (message?.type === "path-history-edit") {
         if (
           (message.target === "open" || message.target === "save") &&
@@ -1360,6 +2283,10 @@ async function configurePanel(
         }
       } else if (message?.type === "ready") {
         ready = true;
+        await postMessage({
+          type: "pattern-library",
+          ...patternLibrary.snapshot(),
+        });
         const history = pathHistory.snapshot();
         if (history.open.length || history.save.length)
           await postMessage({ type: "path-history", history });
@@ -1471,13 +2398,23 @@ async function configurePanel(
         } finally {
           if (hubSearch === controller) hubSearch = undefined;
         }
-      } else if (message?.type === "select-model-path") {
+      } else if (
+        message?.type === "select-model-path" ||
+        message?.type === "paste-model-path"
+      ) {
         try {
-          const selection = await pickLocalModel();
+          let location: string | null;
+          if (message.type === "paste-model-path") {
+            location = await vscode.env.clipboard.readText();
+            if (!location) throw new Error("The clipboard is empty.");
+          } else {
+            const selection = await pickLocalModel();
+            location = selection?.[0] ? locationText(selection[0]) : null;
+          }
           await postMessage({
             type: "model-path-selected",
             requestId: message.requestId,
-            location: selection?.[0] ? locationText(selection[0]) : null,
+            location,
           });
         } catch (error) {
           await postMessage({
@@ -1614,8 +2551,20 @@ async function configurePanel(
                   log.record("CANCELLED", "Open ONNX model", id);
                   return;
                 }
+                if (message.asPipeline === true && !vscode.workspace.isTrusted)
+                  throw new Error(
+                    "Trust this workspace before assembling a generation pipeline.",
+                  );
+                const selected =
+                  message.asPipeline === true
+                    ? vscode.Uri.file(
+                        await log.run("Assemble generation pipeline", () =>
+                          loadPromptPipeline(selection[0].fsPath),
+                        ),
+                      )
+                    : selection[0];
                 const loadedModel = await readGraph(
-                  selection[0],
+                  selected,
                   log,
                   undefined,
                   inline ? String(message.password) : undefined,
@@ -1626,11 +2575,11 @@ async function configurePanel(
                 }
                 return {
                   model: loadedModel,
-                  name: posix.basename(selection[0].path),
+                  name: posix.basename(selected.path),
                   history: historyEntries(
                     "local",
-                    locationText(selection[0]),
-                    locationText(vscode.Uri.joinPath(selection[0], "..")),
+                    locationText(selected),
+                    locationText(vscode.Uri.joinPath(selected, "..")),
                   ),
                 };
               }
@@ -1797,6 +2746,8 @@ async function configurePanel(
           model = loaded.model;
           panel.title = `ONNX: ${loaded.name}`;
           await sendGraph();
+          if (message.asPipeline === true)
+            await postMessage({ type: "show-prompt" });
           await updateHistory("open", {
             action: "remember",
             entries: loaded.history,
@@ -1915,7 +2866,12 @@ async function configurePanel(
         fusionRequest++;
       } else if (
         message?.type === "undo-fusion" ||
+        message?.type === "replay-rewritings" ||
         message?.type === "apply-rewriting" ||
+        message?.type === "create-function-pattern" ||
+        message?.type === "update-function-pattern" ||
+        message?.type === "update-model-function" ||
+        message?.type === "load-model-function" ||
         message?.type === "fusion-patterns" ||
         message?.type === "preview-fusion" ||
         message?.type === "apply-optimization" ||
@@ -1924,12 +2880,21 @@ async function configurePanel(
         const owner = model;
         const revision = graphRevision;
         const generation = ++fusionRequest;
+        const navigation = navigationRequest;
+        const editsFunctionPattern =
+          message.type === "create-function-pattern" ||
+          message.type === "update-function-pattern" ||
+          message.type === "update-model-function";
+        const updatesModelFunction = message.type === "update-model-function";
+        const loadsModelFunction = message.type === "load-model-function";
         const undoGeneration =
           message.type === "undo-fusion" ? ++undoRequest : undoRequest;
         const isCurrent = () =>
           active &&
           model === owner &&
           graphRevision === revision &&
+          (!(editsFunctionPattern || loadsModelFunction) ||
+            navigationRequest === navigation) &&
           (message.type === "undo-fusion"
             ? undoRequest === undoGeneration
             : fusionRequest === generation);
@@ -1937,17 +2902,52 @@ async function configurePanel(
           await log.run(
             message.type === "undo-fusion"
               ? "Undo fusion"
-              : message.type === "apply-optimization"
-                ? "Optimize ONNX model"
-                : message.type === "apply-rewriting"
-                  ? "Apply rewriting scenario"
-                  : message.type === "apply-fusion"
-                    ? "Apply fusion pattern"
-                    : message.type === "preview-fusion"
-                      ? "Preview fusion pattern"
-                      : "List fusion patterns",
+              : message.type === "replay-rewritings"
+                ? "Replay pending rewritings"
+                : message.type === "apply-optimization"
+                  ? "Optimize ONNX model"
+                  : message.type === "apply-rewriting"
+                    ? "Apply rewriting scenario"
+                    : message.type === "apply-fusion"
+                      ? "Apply fusion pattern"
+                      : message.type === "preview-fusion"
+                        ? "Preview fusion pattern"
+                        : message.type === "create-function-pattern"
+                          ? "Create function pattern"
+                          : message.type === "update-function-pattern"
+                            ? "Update function pattern"
+                            : updatesModelFunction
+                              ? "Update ONNX function"
+                              : loadsModelFunction
+                                ? "Load ONNX function"
+                                : "List fusion patterns",
             async (id) => {
               const current = requireModel();
+              if (loadsModelFunction) {
+                if (
+                  typeof message.functionIndex !== "number" ||
+                  !Number.isSafeInteger(message.functionIndex) ||
+                  message.functionIndex < 0
+                )
+                  throw new Error("Expected a model function index.");
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+                const definition = path.length
+                  ? native.modelFunction(message.functionIndex, path)
+                  : native.modelFunction(message.functionIndex);
+                await postMessage({
+                  type: "model-function-loaded",
+                  requestId: message.requestId,
+                  functionIndex: message.functionIndex,
+                  definition,
+                });
+                return;
+              }
               if (message.type === "undo-fusion") {
                 if (
                   message.all !== undefined &&
@@ -1960,6 +2960,9 @@ async function configurePanel(
                   () => void sendStatus(),
                 );
                 if (!isCurrent()) return;
+                const replay =
+                  current.rewritingQueue?.model ??
+                  (edited.fusionCount() ? edited.clone() : undefined);
                 if (message.all === true) {
                   while (edited.fusionCount()) edited = edited.undoFusion();
                 } else {
@@ -1973,6 +2976,8 @@ async function configurePanel(
                     : [];
                 const graph = edited.graph(false, path);
                 const retained = edited.clone();
+                const pending =
+                  replay?.fusionHistory().slice(edited.fusionCount()) ?? [];
                 model = {
                   ...current,
                   native: edited,
@@ -1981,11 +2986,18 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue:
+                    replay && pending.length
+                      ? {
+                          model: replay,
+                          operations: pending,
+                        }
+                      : undefined,
                   reload: () => retained.clone(),
                 };
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${model.pythonOptimized || model.dimensionsRenamed || model.functionsEdited || model.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 return;
               }
@@ -1996,6 +3008,222 @@ async function configurePanel(
                   "Return to a model's main graph to apply fusion patterns.",
                 );
               const path = current.graph.breadcrumbs.at(-1)?.path ?? [];
+              if (editsFunctionPattern) {
+                if (updatesModelFunction) {
+                  if (
+                    typeof message.functionIndex !== "number" ||
+                    !Number.isSafeInteger(message.functionIndex) ||
+                    message.functionIndex < 0 ||
+                    typeof message.text !== "string"
+                  )
+                    throw new Error(
+                      "Expected a model function index and function text.",
+                    );
+                  const native = await nativeModel(
+                    current,
+                    log,
+                    () => void sendStatus(),
+                  );
+                  if (!isCurrent()) return;
+                  const definitions = native.modelFunctionDescriptors(path);
+                  const definition = definitions.find(
+                    (entry) => entry.functionIndex === message.functionIndex,
+                  );
+                  if (!definition) throw new Error("Unknown model function.");
+                  const edited = path.length
+                    ? native.updateModelFunction(
+                        message.functionIndex,
+                        message.text,
+                        path,
+                      )
+                    : native.updateModelFunction(
+                        message.functionIndex,
+                        message.text,
+                      );
+                  let rewritingQueue = current.rewritingQueue;
+                  if (rewritingQueue) {
+                    const queued = rewritingQueue.model
+                      .modelFunctionDescriptors(path)
+                      .find((entry) => entry.name === definition.name);
+                    if (queued?.functionIndex === undefined)
+                      throw new Error(
+                        "The pending rewriting model no longer contains this function.",
+                      );
+                    rewritingQueue = {
+                      ...rewritingQueue,
+                      model: path.length
+                        ? rewritingQueue.model.updateModelFunction(
+                            queued.functionIndex,
+                            message.text,
+                            path,
+                          )
+                        : rewritingQueue.model.updateModelFunction(
+                            queued.functionIndex,
+                            message.text,
+                          ),
+                    };
+                  }
+                  const retained = edited.clone();
+                  const catalog = {
+                    patterns: edited.fusionPatterns(path),
+                    optimizationPatterns: edited.optimizationPatterns(path),
+                    functions: edited.modelFunctionDescriptors(path),
+                    definition: path.length
+                      ? edited.modelFunction(message.functionIndex, path)
+                      : edited.modelFunction(message.functionIndex),
+                    scenarios: edited.rewritingScenarios(path),
+                  };
+                  const replacement: LoadedModel = {
+                    ...current,
+                    native: edited,
+                    nativeReload: undefined,
+                    graph: edited.graph(false, path),
+                    metadata: undefined,
+                    rewritingQueue,
+                    functionsEdited: true,
+                    reload: () => retained.clone(),
+                  };
+                  model = replacement;
+                  graphRevision++;
+                  navigationRequest++;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name} (modified)`;
+                  await sendGraph(undefined, message.requestId);
+                  if (
+                    !active ||
+                    model !== replacement ||
+                    fusionRequest !== generation + 1
+                  )
+                    return;
+                  await postMessage({
+                    type: "model-function-updated",
+                    requestId: message.requestId,
+                    functionIndex: message.functionIndex,
+                    ...catalog,
+                  });
+                  return;
+                }
+                if (
+                  typeof message.name !== "string" ||
+                  (message.type === "create-function-pattern"
+                    ? !Array.isArray(message.nodes) ||
+                      !message.nodes.length ||
+                      !Array.from(message.nodes).every(
+                        (node: unknown) =>
+                          typeof node === "number" &&
+                          Number.isSafeInteger(node) &&
+                          node >= 0 &&
+                          node < current.graph.nodes.length,
+                      ) ||
+                      new Set(message.nodes).size !== message.nodes.length
+                    : typeof message.text !== "string" ||
+                      typeof message.replacement !== "string")
+                )
+                  throw new Error(
+                    message.type === "create-function-pattern"
+                      ? "Choose distinct operator nodes and a pattern name."
+                      : "Expected a pattern name, match text and replacement text.",
+                  );
+                const libraryRevision =
+                  message.type === "update-function-pattern"
+                    ? message.libraryRevision
+                    : 0;
+                if (
+                  typeof libraryRevision !== "number" ||
+                  !Number.isSafeInteger(libraryRevision) ||
+                  libraryRevision < 0
+                )
+                  throw new Error("Expected a valid pattern library revision.");
+                const native = await nativeModel(
+                  current,
+                  log,
+                  () => void sendStatus(),
+                );
+                if (!isCurrent()) return;
+                if (message.type === "update-function-pattern")
+                  patternLibrary.assertRevision(libraryRevision);
+                fusionPreview = undefined;
+                const pattern =
+                  message.type === "update-function-pattern"
+                    ? path.length
+                      ? native.updateFunctionPattern(
+                          message.name,
+                          message.text as string,
+                          message.replacement as string,
+                          path,
+                        )
+                      : native.updateFunctionPattern(
+                          message.name,
+                          message.text as string,
+                          message.replacement as string,
+                        )
+                    : path.length
+                      ? native.createFunctionPattern(
+                          message.nodes as number[],
+                          message.name,
+                          path,
+                        )
+                      : native.createFunctionPattern(
+                          message.nodes as number[],
+                          message.name,
+                        );
+                if (!isCurrent()) return;
+                const retained = native.clone();
+                current.reload = () => retained.clone();
+                patternLibrary.merge([pattern], fusionLibrarySource);
+                await postMessage({
+                  type: "function-pattern-created",
+                  requestId: message.requestId,
+                  pattern,
+                  patterns: native.fusionPatterns(path),
+                  optimizationPatterns: native.optimizationPatterns(path),
+                  functions: native.modelFunctionDescriptors(path),
+                  scenarios: native.rewritingScenarios(path),
+                });
+                return;
+              }
+              if (message.type === "replay-rewritings") {
+                if (!current.rewritingQueue)
+                  throw new Error("No pending rewritings to apply.");
+                const edited = current.rewritingQueue.model.clone();
+                const retained = edited.clone();
+                const replacement: LoadedModel = {
+                  ...current,
+                  native: edited,
+                  nativeReload: undefined,
+                  graph: edited.graph(false, path),
+                  metadata: undefined,
+                  fusionCount: edited.fusionCount(),
+                  fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = replacement;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? replacement.graph.name} (modified)`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== replacement ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+                await postMessage({
+                  type: "optimization-info",
+                  requestId: message.requestId,
+                  operation: "Replay pending rewritings",
+                  changed: true,
+                  matches: current.rewritingQueue.operations.flatMap(
+                    (operation) => operation.matches,
+                  ),
+                  optimizationReport: null,
+                  patterns: edited.fusionPatterns(path),
+                  optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
+                  scenarios: edited.rewritingScenarios(path),
+                });
+                return;
+              }
               if (message.type === "apply-optimization") {
                 if (
                   message.backend !== undefined &&
@@ -2020,11 +3248,9 @@ async function configurePanel(
                     throw new Error(
                       "ONNX Script requires a single ONNX model.",
                     );
-                  const native = await nativeModel(
-                    current,
-                    log,
-                    () => void sendStatus(),
-                  );
+                  const native =
+                    current.rewritingQueue?.model.clone() ??
+                    (await nativeModel(current, log, () => void sendStatus()));
                   if (!isCurrent()) return;
                   const bytes = await native.serialize(
                     undefined,
@@ -2045,7 +3271,7 @@ async function configurePanel(
                     : native;
                   edited.verify();
                   let replacement = current;
-                  if (result.changed) {
+                  if (result.changed || current.rewritingQueue) {
                     const retained = edited.clone();
                     replacement = {
                       ...current,
@@ -2055,7 +3281,9 @@ async function configurePanel(
                       metadata: undefined,
                       fusionCount: edited.fusionCount(),
                       fusionHistory: edited.fusionHistory(),
-                      pythonOptimized: true,
+                      rewritingQueue: undefined,
+                      pythonOptimized:
+                        current.pythonOptimized || result.changed,
                       reload: () => retained.clone(),
                     };
                   }
@@ -2063,7 +3291,7 @@ async function configurePanel(
                   model = replacement;
                   graphRevision++;
                   navigationRequest++;
-                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
+                  panel.title = `ONNX: ${current.fileName ?? replacement.graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                   await sendGraph(undefined, message.requestId);
                   if (
                     !active ||
@@ -2082,25 +3310,27 @@ async function configurePanel(
                     requestId: message.requestId,
                     backend: "onnxscript",
                     operation: "Optimize",
-                    changed: result.changed,
+                    changed:
+                      result.changed || current.rewritingQueue !== undefined,
                     logs: result.logs,
                     matches: [],
                     optimizationReport: null,
                     undoSupported: false,
-                    notice: result.changed
-                      ? undefined
-                      : "No changes. Existing native undo history is retained.",
+                    notice: current.rewritingQueue
+                      ? "Pending rewritings reapplied before ONNX Script."
+                      : result.changed
+                        ? undefined
+                        : "No changes. Existing native undo history is retained.",
                     patterns: edited.fusionPatterns(),
                     optimizationPatterns: edited.optimizationPatterns(),
+                    functions: edited.modelFunctionDescriptors(),
                     scenarios: edited.rewritingScenarios(),
                   });
                   return;
                 }
-                const native = await nativeModel(
-                  current,
-                  log,
-                  () => void sendStatus(),
-                );
+                const native =
+                  current.rewritingQueue?.model.clone() ??
+                  (await nativeModel(current, log, () => void sendStatus()));
                 if (!isCurrent()) return;
                 const chosen: unknown = message.patterns;
                 const catalog = native.optimizationPatterns(path);
@@ -2126,10 +3356,14 @@ async function configurePanel(
                   path,
                 );
                 if (!isCurrent()) return;
-                const changed = edited.fusionCount() > native.fusionCount();
+                const changed =
+                  edited.fusionCount() > (current.fusionCount ?? 0);
                 const graph = edited.graph(false, path);
                 const matches = changed
-                  ? (edited.fusionHistory().at(-1)?.matches ?? [])
+                  ? edited
+                      .fusionHistory()
+                      .slice(current.fusionCount ?? 0)
+                      .flatMap((operation) => operation.matches)
                   : [];
                 const retained = edited.clone();
                 const replacement: LoadedModel = {
@@ -2140,12 +3374,13 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
                 graphRevision++;
                 navigationRequest++;
-                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.fusionCount ? " (modified)" : ""}`;
+                panel.title = `ONNX: ${current.fileName ?? graph.name}${replacement.pythonOptimized || replacement.dimensionsRenamed || replacement.functionsEdited || replacement.fusionCount ? " (modified)" : ""}`;
                 await sendGraph(undefined, message.requestId);
                 if (
                   !active ||
@@ -2162,6 +3397,7 @@ async function configurePanel(
                   matches,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2199,6 +3435,7 @@ async function configurePanel(
                   metadata: undefined,
                   fusionCount: edited.fusionCount(),
                   fusionHistory: edited.fusionHistory(),
+                  rewritingQueue: undefined,
                   reload: () => retained.clone(),
                 };
                 model = replacement;
@@ -2218,6 +3455,7 @@ async function configurePanel(
                   name: message.scenario,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
@@ -2304,17 +3542,24 @@ async function configurePanel(
                   count: anchors.length,
                   patterns: edited.fusionPatterns(path),
                   optimizationPatterns: edited.optimizationPatterns(path),
+                  functions: edited.modelFunctionDescriptors(path),
                   scenarios: edited.rewritingScenarios(path),
                 });
                 return;
               }
               fusionPreview = undefined;
-              const native = await nativeModel(
+              const displayed = await nativeModel(
                 current,
                 log,
                 () => void sendStatus(),
               );
               if (!isCurrent()) return;
+              const queued =
+                message.type === "preview-fusion"
+                  ? current.rewritingQueue
+                  : undefined;
+              const replaying = queued !== undefined;
+              const native = queued?.model.clone() ?? displayed;
               const patterns = native.fusionPatterns(path);
               if (message.type === "fusion-patterns") {
                 await postMessage({
@@ -2322,18 +3567,24 @@ async function configurePanel(
                   requestId: message.requestId,
                   patterns,
                   optimizationPatterns: native.optimizationPatterns(path),
+                  functions: native.modelFunctionDescriptors(path),
                   optimizationReport: native.optimizationReport(path),
                   scenarios: native.rewritingScenarios(path),
                 });
                 return;
               }
               const chosen: unknown = message.patterns ?? [message.pattern];
+              const availablePatterns = new Set([
+                ...patterns,
+                ...(replaying ? displayed.fusionPatterns(path) : []),
+              ]);
               if (
                 !Array.isArray(chosen) ||
                 !chosen.length ||
                 !chosen.every(
                   (pattern: unknown) =>
-                    typeof pattern === "string" && patterns.includes(pattern),
+                    typeof pattern === "string" &&
+                    availablePatterns.has(pattern),
                 ) ||
                 new Set(chosen).size !== chosen.length
               )
@@ -2355,12 +3606,47 @@ async function configurePanel(
                 );
               }
               if (!snapshot) throw new Error("No fusion snapshot was created.");
+              const replayInfo = replaying
+                ? {
+                    replayed: true,
+                    patterns,
+                    optimizationPatterns: native.optimizationPatterns(path),
+                    functions: native.modelFunctionDescriptors(path),
+                    scenarios: native.rewritingScenarios(path),
+                  }
+                : {};
+              let previewOwner = current;
+              if (replaying) {
+                const retained = native.clone();
+                previewOwner = {
+                  ...current,
+                  native,
+                  nativeReload: undefined,
+                  graph: native.graph(false, path),
+                  metadata: undefined,
+                  fusionCount: native.fusionCount(),
+                  fusionHistory: native.fusionHistory(),
+                  rewritingQueue: undefined,
+                  reload: () => retained.clone(),
+                };
+                model = previewOwner;
+                graphRevision++;
+                navigationRequest++;
+                panel.title = `ONNX: ${current.fileName ?? previewOwner.graph.name} (modified)`;
+                await sendGraph(undefined, message.requestId);
+                if (
+                  !active ||
+                  model !== previewOwner ||
+                  fusionRequest !== generation + 1
+                )
+                  return;
+              }
               fusionPreview = {
                 id: generation,
-                owner: current,
+                owner: previewOwner,
                 native,
                 snapshot,
-                revision,
+                revision: graphRevision,
                 pattern: chosen[0],
                 anchors: new Set(matches.map((match) => match.anchor)),
                 matches,
@@ -2370,6 +3656,7 @@ async function configurePanel(
                 requestId: message.requestId,
                 previewId: generation,
                 matches,
+                ...replayInfo,
               });
             },
             message.actionId,
@@ -2381,12 +3668,19 @@ async function configurePanel(
             type:
               message.type === "undo-fusion"
                 ? "undo-fusion-error"
-                : "fusion-error",
+                : loadsModelFunction
+                  ? "model-function-error"
+                  : editsFunctionPattern
+                    ? "function-pattern-error"
+                    : "fusion-error",
             requestId: message.requestId,
+            ...(loadsModelFunction
+              ? { functionIndex: message.functionIndex }
+              : {}),
             error: detail,
           });
           await vscode.window.showErrorMessage(
-            `${message.type === "undo-fusion" ? "Could not undo fusion" : "Could not fuse ONNX model"}: ${detail}`,
+            `${message.type === "undo-fusion" ? "Could not undo fusion" : loadsModelFunction ? "Could not load ONNX function" : updatesModelFunction ? "Could not update ONNX function" : editsFunctionPattern ? "Could not save function pattern" : "Could not fuse ONNX model"}: ${detail}`,
           );
         }
       } else if (message?.type === "save") {
@@ -2539,9 +3833,12 @@ async function configurePanel(
                   );
               }
               const isCurrent = () => active && model === current;
-              const native = await nativeModel(current, log, () => {
-                void sendStatus();
-              });
+              const native =
+                message.includeRewritings && current.rewritingQueue
+                  ? current.rewritingQueue.model
+                  : await nativeModel(current, log, () => {
+                      void sendStatus();
+                    });
               const sourcePath =
                 current.source?.uri.scheme === "file"
                   ? current.source.uri.fsPath
@@ -2727,7 +4024,7 @@ async function configurePanel(
         requireModel().graph = graph;
         requireModel().metadata = undefined;
         graphRevision++;
-        await sendGraph(selectedNodes);
+        await sendGraph(selectedNodes, undefined, true);
       } else if (message?.type === "metadata") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
@@ -2751,6 +4048,9 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
+          releaseRunSession();
+          runRequest++;
+          runResult = undefined;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -2800,6 +4100,162 @@ async function configurePanel(
         }
         if (!isCurrent()) return;
         await postMessage({ type: "verify-info" });
+      } else if (message?.type === "symbolic-dimensions") {
+        const owner = model;
+        const revision = graphRevision;
+        const isCurrent = () =>
+          active && model === owner && graphRevision === revision;
+        try {
+          const native = await nativeModel(
+            requireModel(),
+            log,
+            () => void sendStatus(),
+          );
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "symbolic-dimensions",
+            requestId: message.requestId,
+            names: native.symbolicDimensions(),
+          });
+        } catch (error) {
+          if (!isCurrent()) return;
+          await postMessage({
+            type: "symbolic-dimensions",
+            requestId: message.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      } else if (
+        message?.type === "shorten-dimensions" ||
+        message?.type === "merge-dimensions"
+      ) {
+        const merging = message.type === "merge-dimensions";
+        const owner = model;
+        const revision = graphRevision;
+        const request = ++dimensionRequest;
+        const isCurrent = () =>
+          active &&
+          model === owner &&
+          graphRevision === revision &&
+          dimensionRequest === request;
+        try {
+          await log.run(
+            merging
+              ? "Merge symbolic dimensions"
+              : "Shorten dynamic dimension names",
+            async () => {
+              const current = requireModel();
+              const native = await nativeModel(
+                current,
+                log,
+                () => void sendStatus(),
+              );
+              if (!isCurrent()) return;
+              let equalities: { source: string; target: string }[] | undefined;
+              if (merging) {
+                const names = new Set(native.symbolicDimensions());
+                const requested: unknown = message.equalities ?? [
+                  { source: message.source, target: message.target },
+                ];
+                if (
+                  !Array.isArray(requested) ||
+                  !requested.length ||
+                  !requested.every(
+                    (entry) =>
+                      entry !== null &&
+                      typeof entry === "object" &&
+                      typeof entry.source === "string" &&
+                      typeof entry.target === "string" &&
+                      entry.source !== entry.target &&
+                      names.has(entry.source) &&
+                      names.has(entry.target),
+                  )
+                )
+                  throw new Error(
+                    "Choose two different existing symbolic dimensions.",
+                  );
+                equalities = requested.map(({ source, target }) => ({
+                  source,
+                  target,
+                }));
+                const sources = new Set(equalities.map(({ source }) => source));
+                if (
+                  sources.size !== equalities.length ||
+                  equalities.some(({ target }) => sources.has(target))
+                )
+                  throw new Error(
+                    "Each replaced dimension must have one canonical name to keep.",
+                  );
+              }
+              const edited = equalities
+                ? { ...native.mergeDimensionsBatch(equalities), prefix: "" }
+                : native.shortenDimensionNames();
+              if (!edited.count) {
+                await postMessage({
+                  type: "dimension-info",
+                  prefix: "",
+                  count: 0,
+                });
+                return;
+              }
+              const rewritingQueue = current.rewritingQueue
+                ? {
+                    ...current.rewritingQueue,
+                    model: equalities
+                      ? current.rewritingQueue.model.mergeDimensionsBatch(
+                          equalities,
+                        ).model
+                      : current.rewritingQueue.model.shortenDimensionNames(
+                          edited.prefix,
+                        ).model,
+                  }
+                : undefined;
+              const graph = edited.model.graph(
+                false,
+                current.graph.breadcrumbs.at(-1)?.path,
+              );
+              const retained = edited.model.clone();
+              releaseRunSession();
+              runRequest++;
+              runResult = undefined;
+              model = {
+                ...current,
+                native: edited.model,
+                nativeReload: undefined,
+                graph,
+                dimensionsRenamed: true,
+                rewritingQueue,
+                reload: () => retained.clone(),
+              };
+              graphRevision++;
+              navigationRequest++;
+              fusionRequest++;
+              diagnosticRequest++;
+              fusionPreview = undefined;
+              panel.title = `ONNX: ${current.fileName ?? graph.name} (modified)`;
+              void sendStatus();
+              await postMessage({
+                type: "dimension-info",
+                graph,
+                prefix: edited.prefix,
+                count: edited.count,
+                ...(equalities && {
+                  equalities,
+                  ...(equalities.length === 1 ? equalities[0] : {}),
+                }),
+                names: edited.model.symbolicDimensions(),
+              });
+            },
+            message.actionId,
+          );
+        } catch (error) {
+          if (!isCurrent()) return;
+          const detail = error instanceof Error ? error.message : String(error);
+          await postMessage({ type: "dimension-error", error: detail });
+          await vscode.window.showErrorMessage(
+            `Could not rename dynamic dimensions: ${detail}`,
+          );
+        }
       } else if (message?.type === "refresh-shapes") {
         const requestedModel = model;
         const requestedGraphRevision = graphRevision;
@@ -2823,6 +4279,9 @@ async function configurePanel(
             graphRevision !== requestedGraphRevision
           )
             return;
+          releaseRunSession();
+          runRequest++;
+          runResult = undefined;
           if (model) invalidateModel(model, log);
           const detail = error instanceof Error ? error.message : String(error);
           await postMessage({
@@ -2850,12 +4309,28 @@ async function configurePanel(
   );
   const dispose = () => {
     active = false;
+    releaseController?.abort();
+    promptController?.abort();
+    releaseRunSession();
+    runResult = undefined;
+    void promptSession
+      .close()
+      .catch((error: unknown) =>
+        log.record(
+          "FAILED",
+          "Release prompt session",
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        ),
+      );
+    promptResult = undefined;
     hubSearch?.abort();
     exporting?.abort();
     recipeController.abort();
     model = undefined;
     stopHistory();
     stopExportHistory();
+    stopPatternLibrary();
     messages.dispose();
     viewState.dispose();
     disposal.dispose();

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -41,6 +42,12 @@ struct SkippedTensorPayload {
  * source buffer or backend case alive until after the model is destroyed.
  */
 struct StoredModel {
+  struct FunctionPatternFunctions {
+    ol::FunctionProto pattern;
+    ol::FunctionProto replacement;
+    std::string pattern_text;
+    std::string replacement_text;
+  };
   struct ExternalWeight {
     ol::TensorProto reference;
     ol::TensorProto value;
@@ -65,6 +72,9 @@ struct StoredModel {
   std::shared_ptr<StoredModel> fusion_previous;
   std::vector<ol::RewritingProto> fusion_plans;
   std::vector<std::vector<FusionMatch>> fusion_history;
+  // Definitions belong to the loaded model lineage, not its undoable graph snapshots.
+  std::shared_ptr<std::map<std::string, FunctionPatternFunctions>> function_patterns =
+      std::make_shared<std::map<std::string, FunctionPatternFunctions>>();
   std::shared_ptr<const ol::core::builder::OptimizationReport> optimization_report;
   int64_t optimization_wall_time_ns = 0;
   std::shared_ptr<StoredModel> rewriting_base;
@@ -73,6 +83,7 @@ struct StoredModel {
 };
 
 std::shared_ptr<StoredModel> CloneStoredModel(const std::shared_ptr<StoredModel> &model);
+std::shared_ptr<StoredModel> UnwrapStoredModel(const Napi::Value &value);
 Napi::Object ModelHandle(Napi::Env env, std::shared_ptr<StoredModel> model);
 void AddSerializationMethods(Napi::Env env, Napi::Object result,
                              std::shared_ptr<StoredModel> model);
@@ -81,5 +92,7 @@ void AddMemoryProfileMethods(Napi::Env env, Napi::Object result,
                              std::shared_ptr<StoredModel> model);
 void AddTensorStatisticsMethods(Napi::Env env, Napi::Object result,
                                 std::shared_ptr<StoredModel> model);
+void AddDimensionMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model);
+void AddRunMethods(Napi::Env env, Napi::Object result, std::shared_ptr<StoredModel> model);
 
 } // namespace onnx_light_viewer

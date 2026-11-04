@@ -161,7 +161,7 @@ export interface Graph {
   breadcrumbs: GraphBreadcrumb[];
   nodes: GraphNode[];
   /** Definitions listed at the model root, including functions with no call sites. */
-  localFunctions: SubgraphLink[];
+  localFunctions: (SubgraphLink & { functionName: string })[];
   inputs: string[];
   outputs: string[];
   initializerCount: number;
@@ -212,6 +212,21 @@ export interface OptimizationPattern {
   device: string;
   enabledByDefault: boolean;
   groups: string[];
+  /** Exportable definition for a model-local selection pattern. */
+  definition?: FunctionPatternDefinition;
+}
+
+export interface FunctionPatternDefinition {
+  name: string;
+  text: string;
+  replacement: string;
+  /** Present for an existing ONNX function rather than a session-local pattern. */
+  functionIndex?: number;
+}
+
+export interface ModelFunctionDescriptor {
+  name: string;
+  functionIndex: number;
 }
 
 export interface FusionDiagnostic {
@@ -231,6 +246,8 @@ export interface OptimizationReport {
   matchingTimeNs: number;
   rewritingTimeNs: number;
   cleanupTimeNs: number;
+  moveShapeAndSizeTimeNs: number;
+  movedShapeAndSizeNodes: number;
   constantFoldingTimeNs: number;
   subgraphOptimizationTimeNs: number;
   patterns: {
@@ -280,6 +297,7 @@ export interface MemoryBreakdown<T extends number | string> {
 export interface MemoryProfile {
   name: string;
   device: string;
+  /** Null for no nodes or when any SDK worst-case bound remains symbolic. */
   peakBytes: number | null;
   events: {
     index: number;
@@ -287,12 +305,13 @@ export interface MemoryProfile {
     opType: string;
     existingBytes: number;
     outputBytes: number;
-    scratchBytes: number;
-    deviceBytes: number;
+    scratchBytes: number | string;
+    scratchAverageBytes: number | string | null;
+    deviceBytes: number | string;
     /** SDK post-release snapshot, including the final node. */
-    afterBytes: number | null;
-    memory: MemoryBreakdown<number>;
-    /** SDK expressions on the original symbolic shapes; scratch is not symbolic. */
+    afterBytes: number | string | null;
+    memory: MemoryBreakdown<number | string>;
+    /** SDK expressions on the original symbolic shapes, including worst-case scratch. */
     symbolicMemory: MemoryBreakdown<string>;
     decisions: {
       action: "inplace" | "release" | "release_shape_tag";
@@ -336,6 +355,57 @@ export interface TensorValues {
 
 export type TensorInspection = TensorStatistics | TensorValues;
 
+export interface RunTensor {
+  name: string;
+  text: string;
+  /** Full inline TensorProto, absent for non-tensor outputs. */
+  data?: Uint8Array;
+}
+
+export interface RunInput extends RunTensor {
+  shape?: (string | null)[];
+  dynamicAxes?: number[];
+}
+
+export type RunInputSource =
+  | string
+  | { name: string; source: "random" }
+  | { name: string; source: "protobuf"; data: Uint8Array };
+
+export interface RunOptions {
+  verbose?: number;
+  keepLoaded?: boolean;
+  dimensions?: Record<string, number>;
+}
+
+export interface PreparedRun {
+  model: Uint8Array;
+  inputs: Uint8Array[];
+}
+
+export interface RunResult {
+  timeMs: number;
+  repeat?: number;
+  inputs?: RunTensor[];
+  outputs: RunTensor[];
+  profiling?: {
+    trace: unknown[];
+    nodes: {
+      name: string;
+      op: string;
+      provider: string;
+      calls: number;
+      durationUs: number;
+    }[];
+  };
+  lifecycle: {
+    loadMs: number;
+    reused: boolean;
+    retained: boolean;
+  };
+  log?: string;
+}
+
 /** SDK statistics; integer metadata and nonfinite numbers survive webview transport exactly. */
 export interface TensorStatistics {
   name: string;
@@ -358,9 +428,33 @@ export interface TensorStatistics {
 
 /**
  * Retained model or pipeline whose inferred information survives graph projections.
- * Methods do not execute the model or write files.
+ * Analysis methods do not execute the model; run explicitly executes a snapshot.
  */
 export interface NativeModel {
+  releaseRunSession(): void;
+  runInputs(path?: GraphPath): RunInput[];
+  run(
+    inputs: RunInputSource[],
+    path?: GraphPath,
+    options?: RunOptions,
+  ): Promise<RunResult>;
+  prepareRun(
+    inputs: RunInputSource[],
+    path?: GraphPath,
+    options?: RunOptions,
+  ): Promise<PreparedRun>;
+  /** Common namespace prefix; null for static models, empty when none is shared. */
+  dimensionPrefix(): string | null;
+  /** Lists distinct variables, including those referenced inside dimension expressions. */
+  symbolicDimensions(): string[];
+  /** Renames a dimension, including in expressions, throughout a snapshot and its undo lineage. */
+  mergeDimensions(source: string, target: string): DimensionMerge;
+  /** Applies a complete source-to-canonical mapping in one snapshot traversal. */
+  mergeDimensionsBatch(
+    equalities: readonly DimensionEquality[],
+  ): DimensionMerge;
+  /** Edits dimension labels on an independent snapshot, retaining edits through undo and Save. */
+  shortenDimensionNames(prefix?: string): DimensionRename;
   /** Inspects stored data without execution; optionally returns values instead of statistics below 32 elements. */
   tensorStatistics(
     name: string,
@@ -373,6 +467,7 @@ export interface NativeModel {
     dimensions: Record<string, number>,
     path?: GraphPath,
   ): Promise<MemoryProfile>;
+  /** Copies graph state while retaining this model lineage's pattern catalog. */
   clone(): NativeModel;
   /** Number of applied Fuse operations available for session-local undo. */
   fusionCount(): number;
@@ -390,6 +485,32 @@ export interface NativeModel {
   summary(inferShapes?: boolean): GraphSummary;
   /** Pipeline fusions require the path of a stage root; ordinary models use []. */
   fusionPatterns(path?: GraphPath): string[];
+  /** Installs a validated library in this model's clone/undo lineage. */
+  setFunctionPatterns(patterns: FunctionPatternDefinition[]): void;
+  /** Registers a model-local pattern without rewriting the selected graph. */
+  createFunctionPattern(
+    nodes: number[],
+    name: string,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  /** Replaces an existing custom pattern using SDK ONNX function text syntax. */
+  updateFunctionPattern(
+    name: string,
+    text: string,
+    replacement: string,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  modelFunctions(path?: GraphPath): FunctionPatternDefinition[];
+  modelFunctionDescriptors(path?: GraphPath): ModelFunctionDescriptor[];
+  modelFunction(
+    functionIndex: number,
+    path?: GraphPath,
+  ): FunctionPatternDefinition;
+  updateModelFunction(
+    functionIndex: number,
+    text: string,
+    path?: GraphPath,
+  ): NativeModel;
   optimizationPatterns(path?: GraphPath): OptimizationPattern[];
   /** Native report for the last optimization of this snapshot, including no-op runs. */
   optimizationReport(path?: GraphPath): OptimizationReport | null;
@@ -462,6 +583,23 @@ export interface NativeModel {
   verify(): void;
 }
 
+export interface DimensionEquality {
+  source: string;
+  target: string;
+}
+
+export interface DimensionMerge<Model extends NativeModel = NativeModel> {
+  model: Model;
+  /** Stored labels updated, including retained canonical and undo snapshots. */
+  count: number;
+}
+
+export interface DimensionRename<
+  Model extends NativeModel = NativeModel,
+> extends DimensionMerge<Model> {
+  prefix: string;
+}
+
 /** Stored ONNX metadata property, preserved as a key/value pair. */
 export interface MetadataEntry {
   key: string;
@@ -510,6 +648,13 @@ export interface BackendTest {
 
 const native: {
   onnxLightVersion: string;
+  tensorStatisticsFromProto(data: Uint8Array): Promise<TensorStatistics>;
+  validateFunctionPatterns(patterns: unknown): FunctionPatternDefinition[];
+  updateModelFunctionHistory(
+    models: NativeModel[],
+    functionIndex: number,
+    text: string,
+  ): NativeModel[];
   decodeGraph(bytes: Uint8Array, fileName: string, inferShapes: boolean): Graph;
   getSchema(
     opType: string,
@@ -528,12 +673,22 @@ const native: {
   ): Promise<NativeModel>;
   loadPipeline(bytes: Uint8Array, fileName: string): PipelineData;
   loadPipelineFile(filePath: string, fileName: string): Promise<PipelineData>;
+  preparePromptPipeline(
+    prefill: string,
+    embedding: string,
+    directory: string,
+    output: string | null,
+  ): Promise<{ available: boolean; reason: string }>;
   listBackendTests(): BackendTest[];
   loadBackendTest(id: number): NativeModel;
 } = require("./native/onnx_light_viewer.node");
 
 /** C++ library release embedded in the addon, independent of the loaded model. */
 export const onnxLightVersion = native.onnxLightVersion;
+/** Computes full SDK statistics from an inline TensorProto without a retained model. */
+export const tensorStatisticsFromProto = native.tensorStatisticsFromProto;
+export const validateFunctionPatterns = native.validateFunctionPatterns;
+export const preparePromptPipeline = native.preparePromptPipeline;
 
 /** Minimal Relu snapshot with native schema documentation, requiring no model file. */
 export const demoGraph: Graph = {
@@ -567,6 +722,14 @@ export const demoGraph: Graph = {
     { name: "output", type: "FLOAT", shape: ["1", "3"] },
   ],
 };
+
+export function updateModelFunctionHistory(
+  models: NativeModel[],
+  functionIndex: number,
+  text: string,
+): NativeModel[] {
+  return native.updateModelFunctionHistory(models, functionIndex, text);
+}
 
 /**
  * One-shot projection, skipping raw tensor bytes unless inference is requested.

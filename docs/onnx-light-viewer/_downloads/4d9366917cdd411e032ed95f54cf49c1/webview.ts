@@ -23,9 +23,124 @@ export function webviewHtml(
   appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
-    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Suggestions are history, not a guarantee that a path still exists or is writable. Selecting one only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
+    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
+  const refreshIcon = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>`;
+  const fusionHourglass = `<svg class="fusion-hourglass" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 3h12M6 21h12M7 3v4l10 10v4M17 3v4L7 17v4M8 7h8M8 17h8"/></svg>`;
+  const copyPatternButton = (
+    format: string,
+    label: string,
+    prefix = "selection-pattern",
+  ): string =>
+    `<button id="copy-${prefix}-${format}" class="icon-button selection-pattern-copy" type="button" aria-label="${label}" title="${label}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+  const sessionOption = (
+    key: string,
+    description: string,
+    kind: "boolean" | "number" | "text" | "minimal",
+  ): string => {
+    const id = `prompt-config-${key.replaceAll(".", "-")}`;
+    const attributes = `id="${id}" data-config="${key}" aria-describedby="${id}-help"`;
+    const control =
+      kind === "boolean"
+        ? `<select ${attributes}><option value="">-</option><option value="0">0 - No</option><option value="1">1 - Yes</option></select>`
+        : kind === "minimal"
+          ? `<select ${attributes}><option value="">-</option><option value="apply">Apply minimal-build optimizations only</option><option value="save">Save runtime optimizations (ORT format)</option></select>`
+          : `<input ${attributes} type="${kind}" ${kind === "number" ? 'min="0" max="2147483647"' : 'maxlength="8192"'} placeholder="-">`;
+    return `<label for="${id}"><span>${key}</span>${control}<small id="${id}-help" class="prompt-option-help">${description}</small></label>`;
+  };
+  const sessionConfiguration = [
+    sessionOption(
+      "session.intra_op.allow_spinning",
+      "Let threads executing one operator spin while waiting for work. Disabling reduces idle CPU use but may increase latency.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.inter_op.allow_spinning",
+      "Let threads executing different operators spin while waiting for work. Applies to parallel graph execution.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.intra_op.spin_duration_us",
+      "Time in microseconds to spin inside an operator before blocking. Requires intra-op spinning; 0 stops spinning.",
+      "number",
+    ),
+    sessionOption(
+      "session.inter_op.spin_duration_us",
+      "Time in microseconds to spin between operators before blocking. Requires inter-op spinning; 0 stops spinning.",
+      "number",
+    ),
+    sessionOption(
+      "session.intra_op_thread_affinities",
+      "Pin worker threads to logical CPUs, e.g. 1,2;3,4. Use one semicolon-separated group per intra-op worker (thread count minus one).",
+      "text",
+    ),
+    sessionOption(
+      "session.dynamic_block_base",
+      "Split parallel work into progressively smaller blocks to balance threads. 0 disables dynamic sizing; try 4 to enable it.",
+      "number",
+    ),
+    sessionOption(
+      "session.prepack.enable_parallel",
+      "Prepack constant weights across intra-op threads during initialization. Requires prepacking and multiple intra-op threads; runtime-version dependent.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.use_env_allocators",
+      "Share allocators registered in the runtime environment instead of creating session-local allocators.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.set_denormal_as_zero",
+      "Treat very small floating-point values as zero. May improve speed but change accuracy.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_cpu_ep_fallback",
+      "Fail if selected GPU providers cannot execute every node, instead of assigning unsupported nodes to CPU. Device selection including CPU takes precedence.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_quant_qdq",
+      "Disable QuantizeLinear/DequantizeLinear graph fusions.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_double_qdq_remover",
+      "Keep redundant adjacent QDQ pairs instead of removing them during optimization.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.disable_aot_function_inlining",
+      "Disable ahead-of-time expansion of model-local functions before graph optimization.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.enable_quant_qdq_cleanup",
+      "Remove remaining QDQ pairs after quantization optimizations. Can improve speed but change accuracy.",
+      "boolean",
+    ),
+    sessionOption(
+      "session.use_device_allocator_for_initializers",
+      "Use device allocators for weight tensors instead of arena allocation.",
+      "boolean",
+    ),
+    sessionOption(
+      "optimization.enable_gelu_approximation",
+      "Replace GELU with an approximation during graph optimization. May change inference results.",
+      "boolean",
+    ),
+    sessionOption(
+      "optimization.disable_specified_optimizers",
+      "Comma-separated optimizer names to skip, e.g. GeluApproximation. Can reduce loading time; not available in minimal builds.",
+      "text",
+    ),
+    sessionOption(
+      "optimization.minimal_build_optimizations",
+      "Restrict full-runtime optimizations to those available in minimal builds, or save them for an ORT-format model.",
+      "minimal",
+    ),
+  ].join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -41,10 +156,12 @@ export function webviewHtml(
       <div class="feature-group" role="presentation">
         <span class="feature-group-title" id="navigation-theme">Navigation</span>
         <div class="feature-group-controls" role="presentation">
+          <a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a>
           <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
+          <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run</button>
         </div>
       </div>
       <div class="feature-group" role="presentation">
@@ -54,14 +171,15 @@ export function webviewHtml(
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
           <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
           <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
+          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
         </div>
       </div>
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div><a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a><button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh shapes</button><button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh metadata</button><button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>Refresh positions</button><button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button></div>
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="shape-status" role="status"></span><span id="metadata-status" role="status"></span><span id="verify-status" role="status"></span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
+        <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
         <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
@@ -70,37 +188,49 @@ export function webviewHtml(
       <div class="graph-body">
         <div class="canvas" id="canvas">
           <section id="model-error" role="alert" hidden><h2>Could not open model</h2><p id="model-error-details"></p><p>Use Open to choose another model. Details are available in Logs.</p></section>
-          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges"/><path id="overview-nodes"/><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="released-crossing-edges" class="crossing-edge released"/><g id="edges"></g><g id="nodes"></g></svg>
+          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges" class="overview-edge"/><path id="overview-edges-weight" class="overview-edge edge-weight"/><path id="overview-edges-shape" class="overview-edge edge-shape"/><path id="overview-nodes"/><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="crossing-edges-weight" class="crossing-edge edge-weight"/><path id="crossing-edges-shape" class="crossing-edge edge-shape"/><path id="released-crossing-edges" class="crossing-edge released"/><path id="released-crossing-edges-weight" class="crossing-edge released edge-weight"/><path id="released-crossing-edges-shape" class="crossing-edge released edge-shape"/><g id="edges"></g><g id="nodes"></g></svg>
           <div class="zoom-controls" aria-label="Graph zoom and navigation"><button id="go-top" disabled title="Go to the top of the model (Ctrl/Cmd+Home)" aria-keyshortcuts="Control+Home Meta+Home">Top</button><button id="go-bottom" disabled title="Go to the bottom of the model (Ctrl/Cmd+End)" aria-keyshortcuts="Control+End Meta+End">Bottom</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button></div>
         </div>
         <div id="sidebar-resizer" role="separator" tabindex="0" aria-label="Resize side panel" aria-orientation="vertical" aria-controls="graph-panels" title="Drag to resize the side panel, or use Left and Right arrow keys"></div>
         <aside id="graph-panels" aria-label="Graph panels">
           <nav id="sidebar-controls" aria-label="Sidebar panels and model actions">
-            <div class="feature-group" role="group" aria-labelledby="model-navigation-theme">
-              <span class="feature-group-title" id="model-navigation-theme">Navigation</span>
-              <div class="feature-group-controls">
-                <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
-                <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
-                <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
-                <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
-                <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
-              </div>
-            </div>
-            <div class="feature-group" role="group" aria-labelledby="convert-theme">
-              <span class="feature-group-title" id="convert-theme">Convert</span>
-              <div class="feature-group-controls">
-                <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
-              </div>
-            </div>
-            <div class="feature-group" role="group" aria-labelledby="optimization-theme">
-              <span class="feature-group-title" id="optimization-theme">Optimization</span>
-              <div class="feature-group-controls">
-                <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize</button>
-                <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse</button>
-                <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse</button>
-              </div>
-            </div>
+            <button id="open-model" class="icon-button" title="Show or hide the model file selector" aria-expanded="false" aria-controls="open-panel">Open</button>
+            <button id="save-model" class="icon-button" disabled title="Show or hide model save options" aria-expanded="false" aria-controls="save-options" aria-describedby="save-status">Save</button>
+            <button id="show-find" class="icon-button" aria-expanded="true" aria-controls="find-panel" title="Show or hide node search">Find</button>
+            <button id="show-operator" class="icon-button" aria-expanded="true" aria-controls="operator-panel" title="Show or hide operator and tensor details">Op</button>
+            <button id="show-metadata" class="icon-button" aria-expanded="false" aria-controls="metadata-panel" title="Show or hide native constants, tags, lifetimes and stored metadata">Data</button>
+            <button id="show-symbolic" class="icon-button" aria-expanded="false" aria-controls="symbolic-panel" title="Show or hide symbolic dimension and model checks">Symbolic</button>
+            <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
+            <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse${fusionHourglass}</button>
+            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse${fusionHourglass}</button>
           </nav>
+          <section id="symbolic-panel" class="inspector-panel" aria-labelledby="symbolic-title" hidden>
+            <h2 id="symbolic-title" class="eyebrow panel-title">Symbolic</h2>
+            <div class="symbolic-actions">
+              <button id="refresh-shapes" class="icon-button" disabled title="Refresh shape and type information with onnx-light" aria-label="Refresh shape and type information" aria-describedby="shape-status">${refreshIcon}Refresh shapes</button>
+              <button id="refresh-metadata" class="icon-button" disabled title="Recompute constants, tags and lifetimes for the displayed graph with onnx-light" aria-label="Refresh metadata for the displayed graph" aria-describedby="metadata-status">${refreshIcon}Refresh metadata</button>
+              <button id="refresh-positions" class="icon-button" disabled title="Restore the hierarchical layout and reset manually moved positions" aria-label="Refresh node positions">${refreshIcon}Refresh positions</button>
+              <button id="verify-model" class="icon-button" disabled title="Verify the entire model or all pipeline stages with onnx-light, without changing them" aria-label="Verify model" aria-describedby="verify-status"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Verify</button>
+              <button id="shorten-dimensions" class="icon-button" disabled title="Remove the shared namespace prefix from dynamic dimension names in the model; Save keeps these edits" aria-describedby="dimension-status">Shorten dimension names</button>
+              <button id="edit-dimensions" class="icon-button" disabled aria-expanded="false" aria-controls="merge-dimensions-form">Make dimensions equivalent</button>
+            </div>
+            <p>Remove the common prefix from dynamic dimensions, for example component.model.batch becomes batch. Save keeps the renamed dimensions.</p>
+            <form id="merge-dimensions-form" hidden>
+              <h3>Symbolic dimensions</h3>
+              <p>Drag a dimension to the right of the equals sign on the line of the name to keep. Or select a dimension, then its destination. Apply replaces these names throughout the model, including in expressions. Save keeps the edit.</p>
+              <p id="symbolic-dimensions-status" role="status"></p>
+              <ul id="symbolic-dimensions"></ul>
+              <div class="symbolic-actions">
+                <button id="merge-dimensions" type="submit" disabled aria-describedby="dimension-status">Apply replacements</button>
+                <button id="reset-dimensions" type="button" disabled>Reset equivalences</button>
+              </div>
+            </form>
+            <p id="shape-status" role="status"></p>
+            <p id="metadata-status" role="status"></p>
+            <p id="verify-status" role="status"></p>
+            <p id="dimension-status" role="status"></p>
+          </section>
           <section id="export-panel" class="inspector-panel file-panel" aria-labelledby="export-title" hidden>
             <h2 id="export-title" class="eyebrow panel-title">Convert to ONNX</h2>
             <table id="export-timings" aria-label="Download and conversion times" hidden>
@@ -116,7 +246,7 @@ export function webviewHtml(
               <fieldset id="export-fields">
                 <div class="export-field">
                   <label for="export-tool">Exporter</label>
-                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext">mbext (fast export)</option></select>
+                  <select id="export-tool"><option value="modelbuilder">modelbuilder (ONNX Runtime GenAI)</option><option value="mobius">Mobius</option><option value="olive">Olive</option><option value="olive-recipes">Olive recipes (model export workflows)</option><option value="mbext" hidden disabled>mbext (fast export)</option></select>
                 </div>
                 <div id="export-olive-options" class="export-option" hidden>
                   <div class="export-field">
@@ -127,7 +257,11 @@ export function webviewHtml(
                 </div>
                 <div id="export-source-options" class="export-option">
                 <label id="export-source-label" for="export-source">Hugging Face model ID or absolute local model directory</label>
-                <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off" list="export-source-history"><datalist id="export-source-history"></datalist>
+                <div class="model-suggestion-field">
+                  <input id="export-source" required placeholder="Qwen/Qwen3-0.6B" autocomplete="off">
+                  <details id="export-source-picker"><summary>History</summary><select id="export-source-history" size="8" aria-label="Model ID suggestions and recent sources"></select></details>
+                </div>
+                <p>Model ID suggestions are static, non-exhaustive examples, not guarantees of checkpoint or exporter compatibility. You can also enter any model ID or local path.</p>
                 </div>
                 <div id="export-olive-quantization" class="export-option" hidden>
                   <div class="export-field">
@@ -233,7 +367,7 @@ export function webviewHtml(
                     </div>
                     <div class="export-field">
                       <label for="export-runtime">Runtime configuration</label>
-                      <select id="export-runtime" data-export-option="runtime" disabled><option value="">None</option><option value="ort-genai">ONNX Runtime GenAI</option><option value="onnx-genai">ONNX GenAI</option></select>
+                      <select id="export-runtime" data-export-option="runtime" disabled><option value="ort-genai">onnxruntime-genai</option><option value="">None</option></select>
                     </div>
                     <label><input id="export-static-cache" type="checkbox" data-export-option="staticCache" disabled> Static KV cache</label>
                   </div>
@@ -302,7 +436,7 @@ export function webviewHtml(
             </div>
           </section>
           <section id="optimization-panel" class="inspector-panel" aria-labelledby="optimization-title" hidden>
-            <h2 id="optimization-title" class="eyebrow panel-title">Global optimization</h2>
+            <h2 id="optimization-title" class="eyebrow panel-title">Global optimization${fusionHourglass}</h2>
             <div class="fusion-selection-controls optimizer-backends" role="group" aria-label="Optimizer backend">
               <button id="optimizer-onnx-light" aria-pressed="true">onnx-light</button>
               <button id="optimizer-onnxscript" aria-pressed="false">onnxscript</button>
@@ -320,9 +454,15 @@ export function webviewHtml(
               <p id="optimization-status" role="status"></p>
               <section id="native-optimization-history">
                 <div class="fusion-selection-controls"><button id="optimization-unfuse-last" disabled>Unfuse last</button><button id="optimization-restore-original" disabled>Back to original model</button></div>
-                <p>Unfuse last reverses one complete native operation. Back to original model undoes all available native operations, including other pipeline stages. ONNX Script changes cannot be undone.</p>
+                <p>Unfuse last reverses one complete native operation. Back to original model restores all stages and keeps their rewritings pending. Native matching or optimization reapplies them before adding new fusions. ONNX Script changes cannot be undone.</p>
                 <h3>Matched patterns</h3>
                 <ol id="optimization-results" aria-label="Applied optimization patterns"></ol>
+                <section id="pending-rewritings" hidden>
+                  <h3>Pending rewritings</h3>
+                  <ol id="pending-rewriting-steps" aria-label="Pending rewriting patterns"></ol>
+                  <p>The original patterns are retained. The next matching or optimization reapplies them before adding new rewritings.</p>
+                  <button id="replay-rewritings" disabled>Apply pending rewritings</button>
+                </section>
               </section>
             </div>
             <div id="optimization-report-section" hidden>
@@ -330,7 +470,7 @@ export function webviewHtml(
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns</h2>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns${fusionHourglass}</h2>
             <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
@@ -354,9 +494,8 @@ export function webviewHtml(
               <ul id="fusion-matches" aria-label="Fusion candidates"></ul>
               <footer><button id="apply-fusion" class="primary" disabled>Fuse selected</button></footer>
             </details>
-            <details id="fusion-diagnostics" class="fusion-picker" open>
-              <summary>Why did matching fail?</summary>
-              <p>Expected a fusion candidate but found none? Select the operator where you expected a match, choose one of the native patterns checked above, then click Explain failed match to see the rejection reason. This does not apply a rewrite. Global passes use whole-graph previews instead.</p>
+            <details id="fusion-diagnostics" class="fusion-picker" aria-disabled="true">
+              <summary tabindex="-1">Why did matching fail?</summary>
               <label for="diagnostic-pattern">Pattern</label><select id="diagnostic-pattern" disabled></select>
               <p id="diagnostic-node">Select exactly one operator in the graph.</p>
               <button id="explain-fusion" disabled>Explain failed match</button>
@@ -387,7 +526,8 @@ export function webviewHtml(
             <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
             <form id="open-form">
               <label for="open-file">Model path, URL or backend test ID</label>
-              <input id="open-file" type="text" required autocomplete="off" list="open-file-history"><datalist id="open-file-history"></datalist>
+              <input id="open-file" type="text" required autocomplete="off">
+              <select id="open-file-history" aria-label="Recent model paths" disabled><option value="">Choose a recent path...</option></select>
               <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
                 <button id="open-native-picker" type="button">VS Code file picker...</button>
@@ -430,7 +570,8 @@ export function webviewHtml(
             </form>
             <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
-              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" list="save-file-history"><datalist id="save-file-history"></datalist>
+              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
+              <select id="save-file-history" aria-label="Recent destination paths" disabled><option value="">Choose a recent path...</option></select>
               <fieldset class="save-grid">
                 <legend>Weight storage and encryption</legend>
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>Single model or pipeline file</label>
@@ -451,7 +592,7 @@ export function webviewHtml(
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
               <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
-              <p id="save-rewritings-note">Unchecked: save the fused graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model. Undo history is session-local.</p>
+              <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
               <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
@@ -493,38 +634,185 @@ export function webviewHtml(
     <section id="memory-view" role="tabpanel" aria-labelledby="memory-tab" tabindex="0" hidden>
       <h2>Memory profiling</h2>
       <p>Estimate CPU tensor memory without executing the model. Profiling covers the complete root graph, or one selected pipeline stage, independently of the displayed subgraph.</p>
-      <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch estimates depend on registered estimators; zero can mean unavailable.</p>
+      <p>Estimate with different dimensions to compare configurations on the same plot. Select a configuration to inspect its details. Changing the model or pipeline stage clears the comparison.</p>
+      <p>One event per node in execution order, accounting for native lifetime and potential in-place reuse decisions. Function/control-flow internals and allocator overhead are not included. Scratch uses SDK worst-case bounds; unknown bounds remain symbolic, not zero. Symbolic phases leave gaps in the plot.</p>
       <form id="memory-form">
         <div id="memory-stage-field" hidden><label for="memory-stage">Pipeline stage</label><select id="memory-stage"></select></div>
-        <fieldset><legend>Dynamic dimensions (default: 1)</legend><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
+        <fieldset><legend>Dynamic dimensions</legend><p>Last successfully profiled values are restored by dimension name across models and VS Code sessions. New dimensions default to 1.</p><div id="memory-dimensions"></div><p id="memory-no-dimensions" hidden>No dynamic dimensions to fill.</p></fieldset>
         <button id="memory-run" type="submit" disabled>Estimate memory</button>
       </form>
       <p id="memory-status" role="status">Open a model to estimate its memory.</p>
       <div id="memory-results" hidden>
         <h3 id="memory-model-name"></h3>
+        <fieldset><legend>Configurations (select one to inspect)</legend><div id="memory-configurations"></div><button id="memory-remove" type="button">Remove selected configuration</button></fieldset>
         <dl class="status-details"><dt>Estimated peak</dt><dd id="memory-peak"></dd><dt>Device</dt><dd id="memory-device"></dd></dl>
         <nav aria-label="Memory chart zoom"><button id="memory-zoom-out" type="button" aria-label="Zoom out">−</button><button id="memory-zoom-in" type="button" aria-label="Zoom in">+</button><button id="memory-zoom-reset" type="button">Reset zoom</button><span id="memory-zoom-level">100%</span></nav>
         <div id="memory-chart-scroll">
         <svg id="memory-chart" viewBox="0 0 1000 330" tabindex="0" role="img" aria-labelledby="memory-chart-title memory-chart-description">
           <title id="memory-chart-title">Estimated device memory by execution event</title>
-          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
+          <desc id="memory-chart-description">Hover to inspect memory before, during and after a node. Use left/right arrows to inspect nodes, zoom buttons or Ctrl+wheel to zoom, and scroll horizontally. Step plot: one interval between nodes, two intervals during each node. Outputs and scratch are allocated before execution; releases happen after execution. Symbolic phases are not plotted; inspect nodes for SDK expressions. Highlighted rectangles identify common compute-heavy operations, not measured timings.</desc>
           <path class="memory-axis" d="M60,20V240H980"></path>
           <text id="memory-chart-peak" x="60" y="16"></text><text x="10" y="244">0</text>
           <path id="memory-node-intervals" class="memory-node-interval"></path>
           <path id="memory-operator-intervals" class="memory-operator-interval"></path>
           <g id="memory-node-numbers"></g>
           <g id="memory-operator-labels"></g>
-          <path id="memory-curve"></path>
+          <g id="memory-comparison-curves"></g>
+          <path id="memory-curve" class="memory-curve"></path>
         </svg>
         </div>
         <pre id="memory-inspection" role="status" hidden></pre>
-        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable for this profile. The curve stops at the last available value.</p>
+        <p id="memory-final-status" role="status" hidden>Final post-release memory is unavailable or symbolic. Its numerical value is not plotted.</p>
         <h3>Estimated execution events</h3>
+        <p>Each delta column lists all configurations in their curve colors; hover a value to identify its configuration. Net delta compares memory after releases with memory before output allocation. Other columns and the local-peak filter follow the selected configuration.</p>
         <p id="memory-peaks-count"></p>
         <label><input id="memory-peaks-only" type="checkbox"> Local peaks only</label>
-        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col">Already allocated</th><th scope="col">New outputs</th><th scope="col">Scratch</th><th scope="col">During execution</th><th scope="col">After release</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
-        <nav aria-label="Memory events"><button id="memory-previous" type="button" disabled>Previous</button><span id="memory-range" role="status"></span><button id="memory-next" type="button" disabled>Next</button></nav>
+        <div class="memory-table"><table><thead><tr><th scope="col">Event</th><th scope="col">Node</th><th scope="col">Operator</th><th scope="col" title="Memory during execution minus memory before the node. 1 MB = 1,000,000 bytes.">Peak delta (MB)</th><th scope="col" title="Memory after releases minus memory before output allocation. 1 MB = 1,000,000 bytes.">Net delta (MB)</th><th scope="col">In-place</th><th scope="col">Release</th><th scope="col">Release shape</th><th scope="col">Tensor shapes</th></tr></thead><tbody id="memory-events"></tbody></table></div>
+        <p id="memory-range" role="status"></p>
       </div>
+    </section>
+    <section id="prompt-view" role="tabpanel" aria-labelledby="prompt-tab" tabindex="0" hidden>
+      <h1>Run</h1>
+      <nav class="settings-tabs" role="tablist" aria-label="Execution mode">
+        <button id="execution-prompt-tab" type="button" role="tab" aria-controls="execution-prompt-view" aria-selected="true">Prompt</button>
+        <button id="execution-run-tab" type="button" role="tab" aria-controls="execution-run-view" aria-selected="false" tabindex="-1">Run</button>
+      </nav>
+      <section id="execution-prompt-view" role="tabpanel" aria-labelledby="execution-prompt-tab" tabindex="0">
+      <p>Run a converted causal language model with native C++ engines. Both engines display tokens as they arrive, with prefill and decode timings and raw scores. Python in Settings can locate native SDK libraries and is used for Hugging Face validation; inference runs in C++. The saved model on disk is used, not unsaved graph edits.</p>
+      <div id="prompt-run-page">
+      <button id="prompt-settings-open" type="button">Session settings</button>
+      <button id="prompt-generation-open" type="button">Generation settings</button>
+      <form id="prompt-form">
+        <fieldset id="prompt-fields" class="form-grid" disabled>
+          <label for="prompt-engine">Engine</label>
+          <select id="prompt-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime-genai" selected disabled>onnxruntime-genai</option></select>
+          <div id="prompt-repeat-options" class="form-grid" hidden>
+            <label for="prompt-repeat">Repetitions</label>
+            <input id="prompt-repeat" type="number" min="1" max="100" step="1" value="1" required disabled aria-describedby="prompt-repeat-help">
+            <p id="prompt-repeat-help">Repeat generation 1–100 times. Only the last repetition's tokens and token timings are displayed.</p>
+            <span>Profiling</span>
+            <button id="prompt-profile-toggle" type="button" aria-pressed="false" aria-describedby="prompt-profile-help">Enable ONNX Runtime profiling</button>
+            <p id="prompt-profile-help">Profiling adds overhead and forces a fresh session, released after generation to finalize the trace. GenAI profiles include warmup (one input token and one generation step) plus all repetitions. The Engine settings profiling control uses the same setting.</p>
+          </div>
+          <label for="prompt-text">Prompt</label>
+          <textarea id="prompt-text" rows="3" required>The capital of France is</textarea>
+          <label for="prompt-keep-loaded">Keep the current model loaded between prompts</label>
+          <input id="prompt-keep-loaded" type="checkbox">
+          <p>Off by default to limit memory use and swapping. Changing engines, models or settings releases the previous session. Keeping a native model loaded during HF validation can hold two models in memory.</p>
+          <label for="prompt-reference-source">Hugging Face reference (model ID or local checkpoint)</label>
+          <div class="model-suggestion-field">
+            <input id="prompt-reference-source" type="text" autocomplete="off" placeholder="e.g. Qwen/Qwen3-0.6B" aria-describedby="prompt-validation-status">
+            <details id="prompt-reference-picker"><summary>Suggestions</summary><select id="prompt-model-suggestions" size="8" aria-label="Reference model ID suggestions"></select></details>
+          </div>
+          <p id="prompt-validation-status" role="status">Open a model to check whether its Hugging Face reference is identified.</p>
+          <label for="prompt-validate-run">Validate with Hugging Face after generation</label>
+          <input id="prompt-validate-run" type="checkbox">
+          <p>When checked, reference files are checked before native loading, warmup or generation. The Hugging Face reference runs on CPU and uses local files only.</p>
+          <button type="submit" aria-label="Run prompt" title="Run prompt"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg></button>
+        </fieldset>
+      </form>
+      <button id="prompt-cancel" type="button" hidden>Cancel</button>
+      <button id="prompt-unload" type="button">Unload model now</button>
+      <p id="prompt-status" role="status">Open a converted language model to run a prompt.</p>
+      <p id="prompt-lifecycle" role="status"></p>
+      <div id="prompt-results" aria-live="polite"></div>
+      <button id="prompt-validate" type="button" hidden>Validate with Hugging Face</button>
+      <p>Validation compares full vocabulary logits using the same generated token prefixes. Counts are absolute differences below each threshold; smaller distances are better.</p>
+      <section id="prompt-output" aria-labelledby="prompt-output-title" hidden>
+        <h2 id="prompt-output-title">stdout / stderr</h2>
+        <pre id="prompt-progress" hidden></pre>
+      </section>
+      </div>
+      <div id="prompt-session-page" hidden>
+        <h2 id="prompt-settings-title">Engine session settings</h2>
+        <p>Applied on the next prompt run, without modifying the model or its exported configuration. A change unloads the retained session. Blank values preserve SDK/model defaults. Profiling adds overhead and writes to .prompt-profiles beside the model; GenAI uses a fresh session and finalizes its profile before returning results.</p>
+        <fieldset id="prompt-session-fields">
+          <div id="prompt-settings-light" class="prompt-settings-grid">
+            <h3>onnx-light (CPU)</h3>
+            <p>CPU kernels only. Automatic graph optimization is not exposed by Generate; use Optimize separately. The SDK recreates internal generation sessions, but reuses the loaded model, context and supported static preparations.</p>
+            <label><span>CPU threads (0 = automatic)</span><input data-setting="threads" type="number" min="0" max="4096" placeholder="SDK default"></label>
+            <h3>Memory and diagnostics</h3>
+            <label>Persistent tensor initial capacity (tokens)<input data-setting="initialCapacity" type="number" min="0" max="1048576" placeholder="SDK default (32)"></label>
+            <label>Log verbosity<input data-setting="verbose" type="number" min="0" max="10" placeholder="SDK default (0)"></label>
+            <label class="prompt-checkbox"><span>Record native kernel timings (additional memory/CPU cost)</span><input data-setting="profile" type="checkbox"></label>
+          </div>
+          <div id="prompt-settings-genai" class="prompt-settings-grid" hidden>
+            <h3>ONNX Runtime GenAI</h3>
+            <p>Leave a field blank or select "-" to use genai_config.json. If an option is absent from that file, the engine uses its built-in default. Enter a value or select another option to override it.</p>
+            <h3>CPU</h3>
+            <label><span>Intra-op threads (0 = automatic)</span><input data-setting="intraOpThreads" type="number" min="0" max="4096" placeholder="-"><small class="prompt-option-help">Set the thread count used within an operator.</small></label>
+            <label><span>Inter-op threads (0 = automatic)</span><input data-setting="interOpThreads" type="number" min="0" max="4096" placeholder="-"><small class="prompt-option-help">Set the thread count used to execute independent graph nodes in parallel execution mode.</small></label>
+            <label><span>CPU memory arena</span><select data-setting="cpuArena" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Reuse CPU allocations through the runtime memory arena.</small></label>
+            <label><span>Parallel graph execution</span><select data-setting="parallelExecution" data-boolean><option value="">-</option><option value="true">Parallel</option><option value="false">Sequential</option></select><small class="prompt-option-help">Execute independent graph nodes concurrently rather than sequentially. This is not a weight-loading thread count.</small></label>
+            <h3>Execution providers</h3>
+            <label class="prompt-checkbox"><span>Use providers from genai_config.json</span><input id="settings-device-model" type="checkbox"><small class="prompt-option-help">Keep the exported provider configuration instead of the selections on Settings / Device.</small></label>
+            <label><span>CUDA device ID</span><input data-setting="cudaDeviceId" data-device="cuda" type="number" min="0" max="65535" placeholder="-" disabled><small class="prompt-option-help">Choose the CUDA device. Requires CUDA selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
+            <label><span>CUDA memory limit (MiB)</span><input data-setting="gpuMemoryMiB" data-device="cuda" type="number" min="1" max="1048576" placeholder="-" disabled><small class="prompt-option-help">Limit CUDA provider memory. Requires CUDA selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
+            <label><span>DirectML device ID</span><input data-setting="dmlDeviceId" data-device="dml" type="number" min="0" max="65535" placeholder="-" disabled><small class="prompt-option-help">Choose the DirectML device. Requires DirectML selected on Settings / Device and exported providers disabled. Blank preserves the provider default.</small></label>
+            <h3>Initialization</h3>
+            <p>GenAI exposes session initialization/prepacking controls, not a separate parallel weight-reader thread count. Graph execution mode is not a parallel-loading setting.</p>
+            <label><span>Weight prepacking during initialization</span><select data-setting="prepacking" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Prepare constant weights for optimized kernels while loading. Disabling can reduce preparation costs but slow inference.</small></label>
+            <h3>Optimization, memory and diagnostics</h3>
+            <label><span>Graph optimization</span><select data-setting="graphOptimization"><option value="">-</option><option>ORT_DISABLE_ALL</option><option>ORT_ENABLE_BASIC</option><option>ORT_ENABLE_EXTENDED</option><option>ORT_ENABLE_ALL</option></select><small class="prompt-option-help">Choose how extensively the runtime rewrites the graph for inference, from no optimization to all supported optimizations.</small></label>
+            <label><span>Memory pattern</span><select data-setting="memoryPattern" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Reuse an allocation plan when input shapes repeat to reduce allocation overhead.</small></label>
+            <label><span>Deterministic compute</span><select data-session-option="use_deterministic_compute" data-boolean><option value="">-</option><option value="true">Enabled</option><option value="false">Disabled</option></select><small class="prompt-option-help">Request deterministic kernels where supported. May reduce performance; does not make token sampling deterministic.</small></label>
+            <label><span>Log severity (0 verbose, 1 info, 2 warning, 3 error, 4 fatal)</span><input data-setting="logSeverity" type="number" min="0" max="4" placeholder="-"><small class="prompt-option-help">Only emit messages at this severity or higher.</small></label>
+            <label><span>Log verbosity</span><input data-setting="logVerbosity" type="number" min="0" max="2147483647" placeholder="-"><small class="prompt-option-help">Control the detail of verbose logs; relevant when severity is 0.</small></label>
+            <label><span>Log ID</span><input data-setting="logId" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Identify this session in runtime log messages.</small></label>
+            <label><span>Custom operators library</span><input data-setting="customOpsLibrary" type="text" maxlength="4096" placeholder="-"><small class="prompt-option-help">Load a native shared library that registers additional ONNX Runtime operators.</small></label>
+            <label class="prompt-checkbox"><span>Enable ONNX Runtime profiling</span><input id="prompt-profile" data-setting="profile" type="checkbox"><small class="prompt-option-help">Record execution timings in a unique .prompt-profiles/run-* directory beside the model. Includes warmup (one input token and one generation step) plus all repetitions. Adds overhead; creates a fresh session and unloads it after generation to finalize the profile.</small></label>
+            <h3>Session configuration entries</h3>
+            <p>Options are listed below with their purpose; no configuration keys or JSON need to be entered. Blank values leave the exported configuration unchanged. Availability depends on the installed runtime; runtime errors are reported on Prompt. <a href="https://github.com/microsoft/onnxruntime/blob/main/include/onnxruntime/core/session/onnxruntime_session_options_config_keys.h">Official configuration keys and value documentation</a>.</p>
+            <div id="prompt-config-entries" class="prompt-settings-grid">${sessionConfiguration}</div>
+          </div>
+        </fieldset>
+      </div>
+      </section>
+      <section id="execution-run-view" role="tabpanel" aria-labelledby="execution-run-tab" tabindex="0" hidden>
+        <p>Execute the current model, including unsaved graph edits. Both engines use CPU; ONNX Runtime requires onnx, numpy and onnxruntime in the Settings Python environment. For pipelines, select a stage. Specify every dynamic dimension, then use random inputs, inline TensorProto files (.pb), or ONNX tensor text such as <code>float[3] X = {-1, 0, 2}</code>. Integer values remain exact. Inputs and outputs show type, shape and values for tensors up to 32 elements. Inspect statistics or save full tensors (.pb) and statistics (.json).</p>
+        <p id="run-lifecycle" role="status"></p>
+        <button id="run-settings-open" type="button">Settings</button>
+        <form id="run-form">
+          <fieldset id="run-fields" class="form-grid" disabled>
+            <label for="run-stage">Model</label>
+            <select id="run-stage"><option value="[]">Root graph</option></select>
+            <label for="run-engine">Engine</label>
+            <select id="run-engine"><option value="onnx-light">onnx-light</option><option value="onnxruntime">ONNX Runtime</option></select>
+            <div id="run-repeat-options" class="form-grid" hidden>
+              <label for="run-repeat">Repetitions</label>
+              <input id="run-repeat" type="number" min="1" max="100" step="1" value="1" required disabled aria-describedby="run-repeat-help">
+              <p id="run-repeat-help">Repeat execution 1–100 times. Execution time is the mean across repetitions.</p>
+            </div>
+            <label for="run-keep-loaded">Session lifetime</label>
+            <label><input id="run-keep-loaded" type="checkbox"> Keep session loaded between runs (reuse the model and session, with fresh inputs)</label>
+            <div id="run-profiling-options" class="form-grid" hidden>
+              <label for="run-profile">Profiling</label>
+              <label><input id="run-profile" type="checkbox"> Enable profiling (adds overhead; creates and releases a new session for each run)</label>
+            </div>
+            <div id="run-logging-home" class="form-grid">
+            <div id="run-logging" class="form-grid">
+            <div id="run-logging-light" class="form-grid">
+              <label for="run-verbose">Logging verbosity</label>
+              <input id="run-verbose" type="number" min="0" max="10" step="1" value="0" required>
+            </div>
+            <div id="run-logging-ort" class="form-grid" hidden>
+              <label for="run-log-severity">Log severity</label>
+              <select id="run-log-severity"><option value="0">Verbose</option><option value="1">Info</option><option value="2" selected>Warning</option><option value="3">Error</option><option value="4">Fatal</option></select>
+              <label for="run-log-verbosity">Log verbosity</label>
+              <input id="run-log-verbosity" type="number" min="0" max="2147483647" step="1" value="0" required>
+            </div>
+            </div>
+            </div>
+            <div id="run-dimensions" class="form-grid"></div>
+            <div id="run-inputs" class="form-grid"></div>
+            <button type="submit">Run model</button>
+          </fieldset>
+        </form>
+        <button id="run-unload" type="button" disabled>Unload session</button>
+        <p id="run-status" role="status">Open a model to run it.</p>
+        <pre id="run-log" aria-label="Engine logs"></pre>
+        <div id="run-results" aria-live="polite"></div>
+      </section>
     </section>
     <section id="tensors-view" role="tabpanel" aria-labelledby="tensors-tab" tabindex="0" hidden>
       <h2>Tensors</h2>
@@ -551,68 +839,129 @@ export function webviewHtml(
         <dt>Current operations</dt><dd id="status-running">Waiting for extension host</dd>
         <dt>Recovery</dt><dd id="status-recovery">Waiting for extension host</dd>
       </dl>
-      <h3>What happens after an exception?</h3>
-      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
       <section id="status-failure" hidden>
         <h3>Last failed action</h3>
         <strong id="status-failure-action"></strong>
         <p id="status-failure-time"></p>
         <pre id="status-failure-details"></pre>
       </section>
-    </section>
-    <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
-      <h2>Settings</h2>
-      <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
-      <form id="application-settings-form">
-        <label for="settings-download">Default download directory (Hugging Face cache)</label>
-        <input id="settings-download" type="text" required autocomplete="off">
-        <label for="settings-python">Python executable</label>
-        <input id="settings-python" type="text" required autocomplete="off">
-        <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the extension host.</p>
-        <button type="submit">Save paths</button>
-      </form>
-      <p id="settings-feedback" role="status"></p>
-      <section id="settings-stored-data" aria-labelledby="settings-stored-title">
-        <h3 id="settings-stored-title">Stored data and histories</h3>
-        <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
-        <dl class="status-details">
-          <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
-          <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
-        </dl>
-        <h4>Open history (<span id="settings-open-count">0</span>)</h4>
-        <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
-        <ul id="settings-open-history" aria-label="Open history"></ul>
-        <h4>Save history (<span id="settings-save-count">0</span>)</h4>
-        <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
-        <ul id="settings-save-history" aria-label="Save history"></ul>
-        <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
-        <p>Last conversion tool: <span id="settings-exporter">None</span></p>
-        <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
-        <ul id="settings-export-history" aria-label="Conversion history"></ul>
-        <p id="settings-history-feedback" role="status"></p>
-      </section>
-      <h3>Viewer preferences</h3>
-      <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
-      <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
-      <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
-      <input id="settings-width" type="number" min="200" step="1">
-      <div id="settings-panels">
-        <label><input id="settings-operator" type="checkbox" checked> Operator inspector</label>
-        <label><input id="settings-find" type="checkbox" checked> Find panel</label>
-        <label><input id="settings-metadata" type="checkbox"> Data panel</label>
-      </div>
       <h3>Application and native build</h3>
+      <table class="package-versions" aria-label="Application package versions">
+        <thead><tr><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Latest published</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">ONNX Light Viewer</th><td id="settings-app-version">Waiting for extension host</td><td id="status-app-latest">Not checked</td></tr>
+          <tr><th scope="row">onnx-light C++</th><td id="settings-native-version">Waiting for extension host</td><td id="status-native-latest">Not checked</td></tr>
+        </tbody>
+      </table>
       <dl class="status-details">
-        <dt>ONNX Light Viewer</dt><dd id="settings-app-version">Waiting for extension host</dd>
-        <dt>Compiled with onnx-light C++</dt><dd id="settings-native-version">Waiting for extension host</dd>
         <dt>Extension host platform</dt><dd id="settings-platform">Waiting for extension host</dd>
       </dl>
       <p>The bundled native addon uses the onnx-light C++ release above, independently of any Python installation.</p>
+      <button id="status-check-releases" type="button" disabled>Check latest versions (online)</button>
+      <p>Checks published releases on GitHub and PyPI when requested. Nothing is installed. Development and source builds may differ from the latest published release.</p>
+      <p id="status-release-status" role="status">Published versions not checked</p>
       <h3>Optional Python packages</h3>
       <p>Checks distribution metadata and source versions on PYTHONPATH without importing model libraries or running startup hooks. Nothing is installed. Requires a trusted workspace.</p>
       <button id="settings-inspect-python" type="button" disabled>Refresh package versions</button>
       <p id="settings-python-status" role="status">Not checked</p>
-      <dl id="settings-packages" class="status-details"></dl>
+      <table class="package-versions" aria-label="Python package versions">
+        <thead><tr><th scope="col">Package</th><th scope="col">Installed</th><th scope="col">Latest published</th></tr></thead>
+        <tbody id="settings-packages"></tbody>
+      </table>
+      <h3>What happens after an exception?</h3>
+      <p>A caught C++ exception becomes a JavaScript error and is recorded in Logs. It does not unload onnx-light. A failed shape or metadata refresh discards only the native model handle; the next native action recreates it. The displayed graph is kept.</p>
+    </section>
+    <section id="settings-view" role="tabpanel" aria-labelledby="settings-tab" tabindex="0" hidden>
+      <h2>Settings</h2>
+      <nav class="settings-tabs" role="tablist" aria-label="Settings categories">
+        <button id="settings-app-tab" type="button" role="tab" aria-controls="settings-app-view" aria-selected="true">App</button>
+        <button id="settings-history-tab" type="button" role="tab" aria-controls="settings-history-view" aria-selected="false" tabindex="-1">History</button>
+        <button id="settings-engine-tab" type="button" role="tab" aria-controls="settings-engine-view" aria-selected="false" tabindex="-1">Engine</button>
+        <button id="settings-device-tab" type="button" role="tab" aria-controls="settings-device-view" aria-selected="false" tabindex="-1">Device</button>
+        <button id="settings-generation-tab" type="button" role="tab" aria-controls="settings-generation-view" aria-selected="false" tabindex="-1">Generation</button>
+      </nav>
+      <section id="settings-app-view" role="tabpanel" aria-labelledby="settings-app-tab" tabindex="0">
+        <h3>Application paths</h3>
+        <p>Settings are saved for this VS Code user. Existing downloads are not moved when the directory changes.</p>
+        <form id="application-settings-form" class="form-grid">
+          <label for="settings-download">Default download directory (Hugging Face cache)</label>
+          <input id="settings-download" type="text" required autocomplete="off">
+          <label for="settings-python">Python executable</label>
+          <input id="settings-python" type="text" required autocomplete="off">
+          <p>Python is not needed to view models. Save an executable name or absolute path to inspect optional packages on the Status page.</p>
+          <button type="submit">Save paths</button>
+        </form>
+        <p id="settings-feedback" role="status"></p>
+        <h3>Viewer preferences</h3>
+        <button id="settings-reset-viewer" type="button">Reset viewer preferences</button>
+        <p>Restores the default sidebar width and panels. Download and Python paths are unchanged.</p>
+        <div class="form-grid">
+          <label for="settings-width">Sidebar width (pixels; blank uses the default)</label>
+          <input id="settings-width" type="number" min="200" step="1">
+        </div>
+        <div id="settings-panels">
+          <label><span>Operator inspector</span><input id="settings-operator" type="checkbox" checked></label>
+          <label><span>Find panel</span><input id="settings-find" type="checkbox" checked></label>
+          <label><span>Data panel</span><input id="settings-metadata" type="checkbox"></label>
+        </div>
+      </section>
+      <section id="settings-history-view" role="tabpanel" aria-labelledby="settings-history-tab" tabindex="0" hidden>
+        <section id="settings-stored-data" aria-labelledby="settings-stored-title">
+          <h3 id="settings-stored-title">Stored data and histories</h3>
+          <p>Histories and preferences use VS Code globalState, shared across workspaces for this VS Code user. Removing entries only forgets suggestions: downloaded files and saved models are never deleted.</p>
+          <dl class="status-details">
+            <dt>Download cache</dt><dd id="settings-cache-download">Waiting for extension host</dd>
+            <dt>Default model saves</dt><dd id="settings-cache-saves">Waiting for extension host</dd>
+          </dl>
+          <h4>Open history (<span id="settings-open-count">0</span>)</h4>
+          <button id="settings-clear-open" type="button" disabled>Clear Open history</button>
+          <ul id="settings-open-history" aria-label="Open history"></ul>
+          <h4>Save history (<span id="settings-save-count">0</span>)</h4>
+          <button id="settings-clear-save" type="button" disabled>Clear Save history</button>
+          <ul id="settings-save-history" aria-label="Save history"></ul>
+          <h4>Conversion history (<span id="settings-export-count">0</span>)</h4>
+          <p>Last conversion tool: <span id="settings-exporter">None</span></p>
+          <button id="settings-clear-export" type="button" disabled>Clear conversion history</button>
+          <ul id="settings-export-history" aria-label="Conversion history"></ul>
+          <p id="settings-history-feedback" role="status"></p>
+        </section>
+      </section>
+       <section id="settings-generation-view" role="tabpanel" aria-labelledby="settings-generation-tab" tabindex="0" hidden>
+        <h3>Token generation</h3>
+        <p>Applied to the next prompt run in either engine, without changing the exported model. Values are kept for this viewer until it is closed.</p>
+        <fieldset id="prompt-generation-fields" class="form-grid">
+          <label for="prompt-temperature">Temperature (0 = greedy decoding)</label>
+          <input id="prompt-temperature" type="number" min="0" step="any" value="0" required>
+          <label for="prompt-max-tokens">Maximum new tokens</label>
+          <input id="prompt-max-tokens" type="number" min="1" max="4096" step="1" value="32" required>
+          <p>Positive temperatures enable sampling. The token limit excludes the input prompt; generation can stop earlier at an end-of-sequence token. HF validation still compares argmax predictions and logits at the generated prefixes.</p>
+        </fieldset>
+        <button id="prompt-generation-back" type="button" hidden>Back</button>
+       </section>
+        <section id="settings-engine-view" role="tabpanel" aria-labelledby="settings-engine-tab" tabindex="0" hidden>
+          <nav class="settings-tabs" role="tablist" aria-label="Engine settings">
+            <button id="settings-onnxruntime-tab" type="button" role="tab" aria-controls="prompt-settings-genai" aria-selected="true">onnxruntime</button>
+            <button id="settings-onnx-light-tab" type="button" role="tab" aria-controls="prompt-settings-light" aria-selected="false" tabindex="-1">onnx-light</button>
+          </nav>
+          <button id="prompt-settings-back" type="button" hidden>Back</button>
+          <section id="run-session-page" hidden>
+            <h2>Regular Run settings</h2>
+            <p>Applied to the next Run model execution, not Prompt generation. Changing a value unloads the retained Run session.</p>
+            <fieldset id="run-session-fields" class="form-grid"></fieldset>
+          </section>
+      </section>
+      <section id="settings-device-view" role="tabpanel" aria-labelledby="settings-device-tab" tabindex="0" hidden>
+        <h3>Execution devices</h3>
+        <p>Devices are not exclusive. ONNX Runtime GenAI uses selected GPUs in the order CUDA, DirectML, then implicit CPU fallback. onnx-light and Hugging Face reference validation use CPU only. Values apply to the next prompt run and are kept until this viewer closes.</p>
+        <p id="settings-device-status" role="status">CPU available. GPU support has not been checked; trust the workspace to probe the selected Python runtime.</p>
+        <button id="settings-inspect-devices" type="button" disabled>Detect available devices</button>
+        <fieldset id="prompt-device-fields" class="prompt-settings-grid">
+          <label class="prompt-checkbox"><span>CPU (implicit fallback)</span><input id="settings-device-cpu" type="checkbox" checked disabled></label>
+          <label class="prompt-checkbox"><span>CUDA</span><input id="settings-device-cuda" data-provider="cuda" type="checkbox"></label>
+          <label class="prompt-checkbox"><span>DirectML</span><input id="settings-device-dml" data-provider="dml" type="checkbox"></label>
+          <p>GPU defaults are enabled only after a successful runtime device probe, not from the OS or installed package names. Manual choices are preserved during detection. Advanced JSON may disable CPU fallback; in that mode the device selections do not override providers.</p>
+        </fieldset>
+      </section>
     </section>
     <section id="controls-view" role="tabpanel" aria-labelledby="controls-tab" tabindex="0" hidden>
       <h2>Keyboard and mouse controls</h2>
@@ -767,7 +1116,7 @@ export function webviewHtml(
         </li>
       </ul>
       <h3>Exporters</h3>
-      <p>Use Convert in the right panel to run an installed mbext, modelbuilder or Mobius exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
+      <p>Use Convert in the right panel to run an installed exporter and open its ONNX output. Supported models and target runtimes vary by exporter.</p>
       <ul class="repository-list">
         <li>
           <div class="repository-heading">
@@ -787,7 +1136,7 @@ export function webviewHtml(
           <p>The ONNX Runtime GenAI model builder constructs optimized and quantized ONNX graphs for supported generative architectures.</p>
           <p class="repository-specialization"><strong>Specialized for:</strong> Hugging Face Transformers models targeting onnxruntime-genai.</p>
         </li>
-        <li>
+        <li id="mbext-repository" hidden>
           <div class="repository-heading">
           <a href="https://github.com/xadupre/mbext"><svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 3H3v18h18v-7"/></svg>mbext</a>
           ${documentationLink("mbext", "https://xadupre.github.io/docs/mbext/index.html")}
@@ -834,14 +1183,71 @@ export function webviewHtml(
         </li>
       </ul>
     </section>
+    <section id="patterns-view" role="tabpanel" aria-labelledby="patterns-tab" tabindex="0" hidden>
+      <h2>Patterns</h2>
+      <p>Created and restored FunctionPatterns are available in Fuse and Optimize across models in this viewer session. Save the library to a file and restore it in another session or share it.</p>
+      <button id="save-pattern-library" disabled>Save patterns...</button>
+      <button id="restore-pattern-library">Restore patterns...</button>
+      <p id="pattern-library-status" role="status"></p>
+      <p id="pattern-library-empty">No created patterns. Select operators in a model and use Create / edit FunctionPattern, or restore a pattern library.</p>
+      <section id="pattern-library-editor" hidden>
+        <div class="selection-pattern-row">
+          <label for="pattern-library-picker">Created patterns</label>
+          <select id="pattern-library-picker" size="5"></select>
+        </div>
+        <p>Edit the match and replacement using onnx-light textparser syntax. Applying edits updates the reusable template, not functions already fused into a model.</p>
+        <div class="selection-pattern-editor">
+          <header><label for="pattern-library-text">Match pattern</label>${copyPatternButton("text", "Copy pattern", "pattern-library")}</header>
+          <textarea id="pattern-library-text" rows="12" spellcheck="false"></textarea>
+        </div>
+        <div class="selection-pattern-editor">
+          <header><label for="pattern-library-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement", "pattern-library")}</header>
+          <textarea id="pattern-library-replacement" rows="12" spellcheck="false"></textarea>
+        </div>
+        <button id="update-library-pattern" disabled>Apply edits</button>
+        <button id="revert-library-pattern" disabled>Revert edits</button>
+      </section>
+    </section>
   </main>
+  <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
+    <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
+  </div>
+  <dialog id="selection-pattern-dialog" aria-labelledby="selection-pattern-title">
+    <header class="inspector-heading"><h2 id="selection-pattern-title" class="panel-title">FunctionPattern from selection${fusionHourglass}</h2><button id="close-selection-pattern">Close</button></header>
+    <p>The selected operators' inputs become function arguments; outputs used outside the selection remain outputs. Use the selected operators' context menu to reopen this window.</p>
+    <div class="selection-pattern-row">
+      <label for="selection-pattern-name">Function name</label>
+      <input id="selection-pattern-name" type="text" value="SelectedPattern" autocomplete="off" autofocus aria-describedby="selection-pattern-name-feedback">
+    </div>
+    <p id="selection-pattern-name-feedback" role="status" hidden></p>
+    <button id="create-function-pattern" disabled>Create pattern</button>
+    <p id="selection-pattern-status" role="status">Select one or more operators in the graph.</p>
+    <section id="selection-pattern-result" hidden>
+      <div class="selection-pattern-row">
+        <label for="selection-pattern-picker">Patterns / model functions</label><select id="selection-pattern-picker"></select>
+      </div>
+      <details open><summary>Text representation (textparser)</summary>
+        <p id="selection-pattern-edit-help">Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.</p>
+        <div id="selection-pattern-match" class="selection-pattern-editor">
+          <header><label for="selection-pattern-text">Match pattern</label>${copyPatternButton("text", "Copy pattern")}</header>
+          <textarea id="selection-pattern-text" rows="10" spellcheck="false"></textarea>
+        </div>
+        <div class="selection-pattern-editor">
+          <header><label id="selection-pattern-replacement-label" for="selection-pattern-replacement">Replacement</label>${copyPatternButton("replacement", "Copy replacement")}</header>
+          <textarea id="selection-pattern-replacement" rows="10" spellcheck="false"></textarea>
+        </div>
+        <button id="update-function-pattern" disabled>Apply edits</button>
+        <button id="revert-function-pattern" disabled>Revert edits</button>
+      </details>
+    </section>
+  </dialog>
   <dialog id="operator-doc" aria-labelledby="doc-title">
     <header class="inspector-heading"><h2 id="doc-title"></h2><button id="close-doc" autofocus>Close</button></header>
     <p id="doc-version"></p><div id="doc-body"></div>
   </dialog>
   <dialog id="tensor-statistics-dialog" aria-labelledby="tensor-statistics-title">
     <header class="inspector-heading"><h2 id="tensor-statistics-title">Tensor statistics</h2><button id="close-tensor-statistics" autofocus>Close</button></header>
-    <p>Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
+    <p id="tensor-statistics-scope">Stored tensor data only. The model is not executed; intermediate values may be unavailable.</p>
     <div id="tensor-statistics-picker">
       <label for="tensor-statistics-name">Tensor name</label>
       <input id="tensor-statistics-name" list="tensor-statistics-names" autocomplete="off"><datalist id="tensor-statistics-names"></datalist>
@@ -850,11 +1256,12 @@ export function webviewHtml(
     <p id="tensor-statistics-status" role="status"></p>
     <progress id="tensor-statistics-progress" aria-label="Loading tensor data" aria-describedby="tensor-statistics-status" hidden></progress>
     <div id="tensor-statistics-content"></div>
+    <button id="tensor-statistics-save" hidden disabled>Save statistics…</button>
   </dialog>
   <dialog id="optimization-report" aria-labelledby="optimization-report-title">
     <header class="inspector-heading"><h2 id="optimization-report-title">Global optimization report</h2><button id="close-optimization-report" autofocus>Close</button></header>
     <p id="optimization-report-scope"></p>
-    <p>Counters include nested graphs. Phase timings marked root exclude them. All timings are in milliseconds. Full native operation elapsed is measured independently, including native preparation, queueing and final canonicalization, but excluding graph transfer and rendering. Native phase timings cover only the instrumented optimizer phases.</p>
+    <p>Counters include nested graphs. Phase timings marked root exclude them. All timings are in milliseconds. Full native operation elapsed is measured independently, including native preparation, queueing and SDK finalization, but excluding graph transfer and rendering. Native phase timings cover only the instrumented optimizer phases.</p>
     <div id="optimization-report-body"></div>
     <p>Each subgraph's counters and elapsed time include its descendants; subgraph rows are not additive.</p>
   </dialog>
@@ -865,10 +1272,14 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("pattern-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-list-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("tensor-statistics-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("profiling-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("prompt-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("run-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("vendor/dagre.min.js")}"></script>
   <script nonce="${nonce}" src="${resource("graph-layout.js")}"></script>
   <script nonce="${nonce}" src="${resource("viewer.js")}"></script>

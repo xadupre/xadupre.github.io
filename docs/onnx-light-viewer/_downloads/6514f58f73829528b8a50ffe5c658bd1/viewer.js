@@ -1,7 +1,7 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
           createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
           createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
-          flattenGraphPath, graphPointDistance */
+          flattenGraphPath, graphPointDistance, graphPortOffset, graphSpatialIndex */
 const vscode = acquireVsCodeApi();
 const svgNS = "http://www.w3.org/2000/svg";
 const byId = (id) => document.getElementById(id);
@@ -15,6 +15,7 @@ let viewsByPosition = new WeakMap();
 let searchQuery;
 let searchMatches = [];
 let selected = new Set();
+let contextMenuNode;
 let renderedSelection = new Set();
 let connectionsByPosition = new Map();
 let connections = [];
@@ -39,6 +40,7 @@ let valueMetadata = new Map();
 let connectionsByName = new Map();
 let releasedValues = new Set();
 let unusedLabels = [];
+let inPlaceDecisions = new Map();
 let hasModel = false;
 let fusionUndoCount = 0;
 let displayedGraph;
@@ -69,10 +71,12 @@ const tabs = [
   "statistics",
   "memory",
   "tensors",
+  "prompt",
   "logs",
   "status",
   "controls",
   "repositories",
+  "patterns",
   "settings",
 ];
 
@@ -89,6 +93,7 @@ const sidebar = createSidebar({
 const settingsPanel = createSettingsPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
+  onPythonPackages: (packages) => exportPanel.setPythonPackages(packages),
   onViewerSettings: (settings) => {
     sidebar.restoreSettings(settings);
     vscode.postMessage({ type: "viewer-settings", settings });
@@ -99,7 +104,8 @@ const inspector = createInspector({
   tensorDescription,
   subgraphLabel,
   navigate,
-  openTensorStatistics: (name) => openTensorStatistics([name]),
+  openTensorStatistics: (name) =>
+    openTensorStatistics(tensorListPanel.storedTensorNames(), name),
   hasStoredTensor: (name) => tensorListPanel.hasStoredTensor(name),
   nodeInitializers: (node) => tensorListPanel.nodeInitializers(node),
 });
@@ -107,12 +113,29 @@ const tensorStatisticsPanel = createTensorStatisticsPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
 });
+const promptPanel = createPromptPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+});
+const runPanel = createRunPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  activatePrompt: () => promptPanel.activate(),
+  openStatistics: (names, selectedName, run, tensors) =>
+    tensorStatisticsPanel.open(names, [], selectedName, { run, tensors }),
+  resetStatistics: () => tensorStatisticsPanel.reset(),
+  canActivate: () =>
+    hasModel &&
+    !replacementPending &&
+    byId("model-view").getAttribute("aria-busy") !== "true",
+});
+let promptReloadPending = false;
 const tensorListPanel = createTensorListPanel({
   byId,
   openStatistics: openTensorStatistics,
 });
 
-function openTensorStatistics(names) {
+function openTensorStatistics(names, selectedName) {
   if (
     !hasModel ||
     replacementPending ||
@@ -123,6 +146,7 @@ function openTensorStatistics(names) {
   tensorStatisticsPanel.open(
     names,
     displayedGraph?.breadcrumbs?.at(-1)?.path ?? [],
+    selectedName,
   );
 }
 
@@ -131,6 +155,7 @@ const memoryPanel = createMemoryPanel({
   byId,
   postMessage: (message) => vscode.postMessage(message),
   formatFileSize,
+  onProfile: updateInPlaceProfile,
   selectNode: (path, index) => {
     if (replacementPending || svg.getAttribute("aria-busy") === "true") return;
     showTab("model", true);
@@ -169,8 +194,62 @@ const fusionPanel = createFusionPanel({
   },
   selectedNode: () =>
     selected.size === 1 ? nodeViews.get([...selected][0])?.node : undefined,
+  selectedNodes: () =>
+    [...selected]
+      .filter((id) => nodeViews.get(id)?.node)
+      .map((id) => Number(id.slice(5))),
   focusNodes,
 });
+const patternPanel = createPatternPanel({
+  byId,
+  requestAction,
+  postMessage: (message) => vscode.postMessage(message),
+});
+
+function closeGraphContextMenu(restoreFocus = false) {
+  const menu = byId("graph-context-menu");
+  if (menu.hidden) return;
+  menu.hidden = true;
+  const id = contextMenuNode;
+  contextMenuNode = undefined;
+  if (restoreFocus) nodeViews.get(id)?.group?.focus({ preventScroll: true });
+}
+
+function showGraphContextMenu(event, id) {
+  const menu = byId("graph-context-menu");
+  contextMenuNode = id;
+  menu.hidden = false;
+  const anchor = nodeViews.get(id).group.getBoundingClientRect();
+  const keyboard = event.clientX === 0 && event.clientY === 0;
+  const x = keyboard ? anchor.left : event.clientX;
+  const y = keyboard ? anchor.bottom : event.clientY;
+  const { width, height } = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - width - 8))}px`;
+  menu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - height - 8))}px`;
+  byId("open-selection-pattern").focus({ preventScroll: true });
+}
+
+byId("open-selection-pattern").addEventListener("click", () => {
+  closeGraphContextMenu(true);
+  fusionPanel.openSelectionPattern();
+});
+byId("graph-context-menu").addEventListener("keydown", (event) => {
+  if (event.key === "Escape" || event.key === "Tab") {
+    if (event.key === "Escape") event.preventDefault();
+    event.stopPropagation();
+    closeGraphContextMenu(true);
+  } else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+    event.preventDefault();
+    byId("open-selection-pattern").focus();
+  }
+});
+document.addEventListener("pointerdown", (event) => {
+  if (!byId("graph-context-menu").contains(event.target))
+    closeGraphContextMenu();
+});
+window.addEventListener("resize", () => closeGraphContextMenu());
+window.addEventListener("blur", () => closeGraphContextMenu());
+svg.addEventListener("wheel", () => closeGraphContextMenu(), { passive: true });
 
 function focusNodes(nodes) {
   const visible = nodes
@@ -183,14 +262,34 @@ function focusNodes(nodes) {
 
 function showTab(name, focus = false) {
   endGesture();
+  if (name === "settings" && byId("settings-view").hidden) {
+    const regularRun =
+      !byId("prompt-view").hidden && !byId("execution-run-view").hidden;
+    byId("run-session-page").hidden = !regularRun;
+    byId("prompt-session-page").hidden = regularRun;
+    if (regularRun) byId("run-session-fields").append(byId("run-logging"));
+    for (const id of ["prompt-settings-back", "prompt-generation-back"])
+      byId(id).hidden = byId("prompt-view").hidden;
+  } else if (name !== "settings")
+    byId("run-logging-home").append(byId("run-logging"));
   for (const tab of tabs) {
     const active = tab === name;
     byId(`${tab}-view`).hidden = !active;
     byId(`${tab}-tab`).setAttribute("aria-selected", String(active));
     byId(`${tab}-tab`).tabIndex = active ? 0 : -1;
   }
+  if (name === "settings") {
+    const engineTab = byId("run-session-page").hidden
+      ? document.querySelector(
+          '#settings-engine-view [role="tab"][aria-selected="true"]',
+        )
+      : byId(`settings-${byId("run-engine").value}-tab`);
+    engineTab.click();
+  }
   if (focus) byId(`${name}-tab`).focus();
   if (name === "model") fit();
+  else if (name === "prompt" && hasModel && !replacementPending)
+    runPanel.activateSelected();
   else if (name === "statistics") requestStatistics();
   else if (name === "memory") memoryPanel.open();
   else if (name === "tensors") {
@@ -208,7 +307,9 @@ function showTab(name, focus = false) {
     });
     if (selectedConnection) names.push(selectedConnection.name);
     tensorListPanel.open(names);
-  } else if (name === "settings") vscode.postMessage({ type: "get-settings" });
+  } else if (name === "settings" || name === "repositories")
+    vscode.postMessage({ type: "get-settings" });
+  else if (name === "status") vscode.postMessage({ type: "get-status-info" });
   else if (name === "logs")
     byId("logs-view").scrollTop = byId("logs-view").scrollHeight;
 }
@@ -300,7 +401,20 @@ function requestAction(type, action, parameters = {}) {
 }
 
 function setLoading(pending, message = "") {
+  const wasLoading = byId("model-view").getAttribute("aria-busy") === "true";
+  if (pending) {
+    symbolicDimensionRequest++;
+    showSymbolicDimensions([]);
+  }
   if (pending) tensorStatisticsPanel.reset();
+  if (pending) {
+    promptPanel.reset();
+    runPanel.reset();
+    promptReloadPending = true;
+  } else if (promptReloadPending && hasModel) {
+    promptReloadPending = false;
+    if (!byId("prompt-view").hidden) runPanel.activateSelected();
+  }
   tensorListPanel.setBusy(pending);
   if (pending) byId("model-error").hidden = true;
   byId("load-progress").hidden = !pending;
@@ -312,9 +426,11 @@ function setLoading(pending, message = "") {
     "refresh-metadata",
     "refresh-positions",
     "verify-model",
+    "shorten-dimensions",
   ])
     byId(id).disabled =
       pending || !hasModel || byId(id).getAttribute("aria-busy") === "true";
+  updateDimensionEnabled();
   for (const id of ["undo-fusion", "unfuse-last", "unfuse-all"])
     byId(id).disabled =
       pending ||
@@ -333,6 +449,7 @@ function setLoading(pending, message = "") {
       hasModel &&
       (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
   );
+  if (!pending && wasLoading) requestSymbolicDimensions();
 }
 
 function showLoadError(error) {
@@ -658,6 +775,68 @@ function bindGraphLink(link, activate) {
   });
 }
 
+function isSmallInitializer(parameter) {
+  const count = parameter.distribution?.elementCount;
+  if (count != null) return BigInt(count) <= 10n;
+  return (
+    Array.isArray(parameter.shape) &&
+    parameter.shape.every((dimension) => /^\d+$/.test(dimension)) &&
+    parameter.shape.reduce((size, dimension) => size * BigInt(dimension), 1n) <=
+      10n
+  );
+}
+
+function operatorParameters(node) {
+  const attributes = (node.attributes ?? []).filter(
+    (attribute) => !attribute.graphs?.length,
+  );
+  const initializers = node.parameters ?? [];
+  const showInitializers =
+    initializers.length < 4 && initializers.every(isSmallInitializer);
+  const parameters = attributes.map((attribute, index) => ({
+    description: `${attribute.name} = ${attribute.value}`,
+    className: "node-attribute",
+    index,
+  }));
+  if (initializers.length)
+    parameters.push({
+      description: `${initializers.length} initializer${initializers.length === 1 ? "" : "s"}`,
+      className: "node-parameter-summary",
+    });
+  if (showInitializers)
+    parameters.push(
+      ...initializers.map((parameter, index) => {
+        const suffix = `: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`;
+        return {
+          description: `${parameter.name}${suffix}`,
+          displayDescription: `${shortName(parameter.name, 22, true)}${suffix}`,
+          className: "node-initializer",
+          index: parameters.length + index,
+        };
+      }),
+    );
+  return parameters;
+}
+
+function updateOperatorParameters(view) {
+  const parameters = operatorParameters(view.node);
+  const labels = view.group?.querySelectorAll(".node-parameter");
+  // Keep the original bounds, row layout and font sizes; renamed dimensions only get shorter.
+  view.parameterRows.forEach((row, index) => {
+    if (row.index === undefined) return;
+    const parameter = parameters[row.index];
+    row.description = parameter.description;
+    row.displayDescription = (
+      parameter.displayDescription ?? parameter.description
+    ).replace(/[\r\n]+/g, " ");
+    const text = labels?.[index];
+    if (!text) return;
+    text.firstChild.nodeValue = row.displayDescription ?? row.description;
+    text.setAttribute("aria-label", row.description);
+    text.querySelector("title").textContent = row.description;
+  });
+}
+
 function operatorSizes(nodes) {
   const context = document.createElement("canvas").getContext("2d");
   const family = getComputedStyle(svg).fontFamily;
@@ -673,37 +852,23 @@ function operatorSizes(nodes) {
     nodes.map((node) => {
       const typeWidth = widths.get(node.opType);
       const nameWidth = context.measureText(node.name).width;
-      const parameters = [
-        ...(node.attributes ?? [])
-          .filter((attribute) => !attribute.graphs?.length)
-          .map((attribute) => ({
-            description: `${attribute.name} = ${attribute.value}`,
-            className: "node-attribute",
-          })),
-        ...(node.parameters ?? []).map((parameter) => ({
-          description: `${parameter.name}: ${parameter.type}${parameter.shape === undefined ? "" : ` [${parameter.shape?.join(", ") ?? "?"}]`}${parameter.value === undefined ? "" : ` = ${parameter.value}`}`,
-          className: "node-initializer",
-        })),
-      ];
-      const compact =
-        parameters.length <= 2 &&
-        parameters.every(
-          ({ description }) =>
-            description.length <= 38 && !/[\r\n]/.test(description),
-        );
-      const parameterRows = (
-        compact
-          ? parameters
-          : [
-              {
-                description: `${parameters.length} parameter${parameters.length === 1 ? "" : "s"} (see inspector)`,
-                className: "node-parameter-summary",
-              },
-            ]
-      ).map((parameter) => ({
-        ...parameter,
-        textWidth: context.measureText(parameter.description).width,
-      }));
+      const indexLabel = node.pipelineModel ? "" : `#${node.id.slice(5)}`;
+      const indexWidth = context.measureText(indexLabel).width;
+      const storedInputs = node.pipelineModel
+        ? []
+        : tensorListPanel.storedInputs(node);
+      const parameters = operatorParameters(node);
+      const parameterRows = parameters.map((parameter, index) => {
+        const displayDescription = (
+          parameter.displayDescription ?? parameter.description
+        ).replace(/[\r\n]+/g, " ");
+        return {
+          ...parameter,
+          displayDescription,
+          textWidth: context.measureText(displayDescription).width,
+          y: 58 + index * 14,
+        };
+      });
       const subgraphs = (node.attributes ?? []).flatMap((attribute) =>
         (attribute.graphs ?? []).map((graph, index) => {
           const text = subgraphLabel(attribute, index);
@@ -733,25 +898,38 @@ function operatorSizes(nodes) {
           ...subgraphs.map((graph) => Math.ceil(graph.textWidth + 68)),
         ),
       );
+      const nameSpace =
+        width -
+        24 -
+        indexWidth -
+        (indexLabel ? 6 : 0) -
+        (storedInputs.length ? 26 : 0);
       let nameLength = node.name.length;
-      if (nameWidth > width - 24) {
+      if (nameWidth > nameSpace) {
         let low = 1;
         let high = nameLength;
         while (low < high) {
           const length = Math.ceil((low + high) / 2);
           const name = shortName(node.name, length, true);
-          if (context.measureText(name).width <= width - 24) low = length;
+          if (context.measureText(name).width <= nameSpace) low = length;
           else high = length - 1;
         }
         nameLength = low;
       }
+      const parameterHeight = parameterRows.length * 14;
+      const outputHeight = node.outputs.length ? 14 : 0;
       return [
         node.id,
         {
           width,
-          height: 88 + parameterRows.length * 16 + subgraphs.length * 20,
+          height: 56 + parameterHeight + outputHeight + subgraphs.length * 20,
+          parameterHeight,
+          subgraphY: 52 + parameterHeight + outputHeight,
           parameterRows,
           subgraphs,
+          indexLabel,
+          indexWidth,
+          storedInputs,
           displayName: shortName(node.name, nameLength, true),
           typeFontSize: Math.min(16, (16 * (width - 24)) / (typeWidth || 1)),
         },
@@ -805,7 +983,8 @@ function countUpdates(previous, current, key) {
   ).length;
 }
 
-function updateTensorInformation(tensors) {
+function updateTensorInformation(tensors, preserveView = true) {
+  const previousCamera = preserveView ? camera : undefined;
   const updates = countUpdates(
     [...tensorInformation.values()],
     tensors,
@@ -814,6 +993,29 @@ function updateTensorInformation(tensors) {
   tensorInformation = new Map(tensors.map((tensor) => [tensor.name, tensor]));
   tensorListPanel.updateTypes(tensors);
   for (const entry of tensorLabels) updateTensorLabel(entry);
+  for (const connection of connections)
+    if (connection.title)
+      connection.title.textContent = `${connection.name}: ${tensorDescription(connection.name)}`;
+  arrangeConnectionLabels();
+  reframe();
+  if (previousCamera) {
+    zoom = Math.max(
+      bounds.width / previousCamera.width,
+      bounds.height / previousCamera.height,
+    );
+    pan = {
+      x:
+        previousCamera.x +
+        previousCamera.width / 2 -
+        bounds.x -
+        bounds.width / 2,
+      y:
+        previousCamera.y +
+        previousCamera.height / 2 -
+        bounds.y -
+        bounds.height / 2,
+    };
+  }
   return updates;
 }
 
@@ -824,7 +1026,7 @@ function refreshPositions() {
     positions.set(id, { ...view.initial });
   }
   moveNodes(positions, 0, 0);
-  bounds = { ...layoutBounds };
+  reframe();
   zoom = 1;
   pan = { x: 0, y: 0 };
   fit();
@@ -865,6 +1067,199 @@ function verificationStatus(
   if (svg.hasAttribute("viewBox")) fit();
 }
 
+function dimensionStatus(
+  pending,
+  message = "",
+  status = pending ? RefreshStatus.PENDING : RefreshStatus.IDLE,
+) {
+  const button = byId("shorten-dimensions");
+  button.setAttribute("aria-busy", String(pending));
+  if (pending) {
+    symbolicDimensionRequest++;
+    byId("symbolic-dimensions-status").textContent = "";
+  }
+  updateDimensionEnabled();
+  refreshButtonStatus("shorten-dimensions", status, message);
+  byId("dimension-status").textContent = message;
+}
+
+function updateDimensionEnabled() {
+  const button = byId("shorten-dimensions");
+  button.disabled =
+    button.getAttribute("aria-busy") === "true" ||
+    replacementPending ||
+    !hasModel ||
+    byId("model-view").getAttribute("aria-busy") === "true" ||
+    svg.getAttribute("aria-busy") === "true";
+  byId("edit-dimensions").disabled = button.disabled;
+  const unchanged = !dimensionEqualities().length;
+  byId("merge-dimensions").disabled = button.disabled || unchanged;
+  byId("reset-dimensions").disabled = button.disabled || unchanged;
+  for (const name of byId("symbolic-dimensions").querySelectorAll("button")) {
+    name.disabled = button.disabled;
+    name.draggable = !button.disabled;
+  }
+  for (const zone of byId("symbolic-dimensions").querySelectorAll(
+    ".dimension-drop",
+  )) {
+    zone.setAttribute("aria-disabled", String(button.disabled));
+    zone.tabIndex = button.disabled ? -1 : 0;
+  }
+}
+
+let symbolicDimensionRequest = 0;
+const dimensionEquivalences = new Map();
+let selectedSymbolicDimension;
+let draggedSymbolicDimension;
+
+function showSymbolicDimensions(names) {
+  dimensionEquivalences.clear();
+  for (const name of names) dimensionEquivalences.set(name, name);
+  selectedSymbolicDimension = undefined;
+  draggedSymbolicDimension = undefined;
+  renderDimensionEquivalences();
+  byId("symbolic-dimensions-status").textContent = names.length
+    ? `${names.length} distinct symbolic dimension${names.length === 1 ? "" : "s"}.`
+    : "No symbolic dimensions.";
+}
+
+function dimensionEqualities() {
+  return [...dimensionEquivalences]
+    .filter(([source, target]) => source !== target)
+    .map(([source, target]) => ({ source, target }));
+}
+
+function moveSymbolicDimension(source, target) {
+  if (
+    byId("shorten-dimensions").disabled ||
+    !dimensionEquivalences.has(source) ||
+    dimensionEquivalences.get(target) !== target ||
+    source === target
+  )
+    return;
+  const moveGroup = dimensionEquivalences.get(source) === source;
+  for (const [name, canonical] of dimensionEquivalences)
+    if (name === source || (moveGroup && canonical === source))
+      dimensionEquivalences.set(name, target);
+  selectedSymbolicDimension = undefined;
+  draggedSymbolicDimension = undefined;
+  renderDimensionEquivalences(
+    byId("symbolic-dimensions").contains(document.activeElement)
+      ? target
+      : undefined,
+  );
+}
+
+function renderDimensionEquivalences(focusTarget) {
+  const list = byId("symbolic-dimensions");
+  list.replaceChildren();
+  let destination;
+  const dimensionButton = (name) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dimension-name";
+    button.textContent = name;
+    button.dataset.dimension = name;
+    button.setAttribute("aria-pressed", "false");
+    button.addEventListener("click", () => {
+      selectedSymbolicDimension =
+        selectedSymbolicDimension === name ? undefined : name;
+      for (const other of list.querySelectorAll(".dimension-name"))
+        other.setAttribute(
+          "aria-pressed",
+          String(other.dataset.dimension === selectedSymbolicDimension),
+        );
+    });
+    button.addEventListener("dragstart", (event) => {
+      if (button.disabled) {
+        event.preventDefault();
+        return;
+      }
+      draggedSymbolicDimension = name;
+      event.dataTransfer.setData("text/plain", name);
+      event.dataTransfer.effectAllowed = "move";
+    });
+    button.addEventListener("dragend", () => {
+      draggedSymbolicDimension = undefined;
+      for (const zone of list.querySelectorAll(".dimension-drop"))
+        zone.classList.remove("drop-target");
+    });
+    return button;
+  };
+  const aliasesByTarget = new Map();
+  for (const [name, target] of dimensionEquivalences) {
+    if (name === target) continue;
+    if (!aliasesByTarget.has(target)) aliasesByTarget.set(target, []);
+    aliasesByTarget.get(target).push(name);
+  }
+  for (const [name, canonical] of dimensionEquivalences) {
+    if (name !== canonical) continue;
+    const item = document.createElement("li");
+    const equal = document.createElement("span");
+    equal.textContent = "=";
+    equal.setAttribute("aria-hidden", "true");
+    const zone = document.createElement("div");
+    if (name === focusTarget) destination = zone;
+    zone.className = "dimension-drop";
+    zone.setAttribute("role", "group");
+    zone.setAttribute("aria-label", `Dimensions equal to ${name}`);
+    const place = () => {
+      if (selectedSymbolicDimension)
+        moveSymbolicDimension(selectedSymbolicDimension, name);
+    };
+    zone.addEventListener("click", (event) => {
+      if (event.target === zone) place();
+    });
+    zone.addEventListener("keydown", (event) => {
+      if (
+        event.target === zone &&
+        (event.key === "Enter" || event.key === " ")
+      ) {
+        event.preventDefault();
+        place();
+      }
+    });
+    zone.addEventListener("dragover", (event) => {
+      if (draggedSymbolicDimension && !byId("shorten-dimensions").disabled) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        zone.classList.add("drop-target");
+      }
+    });
+    zone.addEventListener("dragleave", () =>
+      zone.classList.remove("drop-target"),
+    );
+    zone.addEventListener("drop", (event) => {
+      event.preventDefault();
+      zone.classList.remove("drop-target");
+      moveSymbolicDimension(draggedSymbolicDimension, name);
+    });
+    for (const alias of aliasesByTarget.get(name) ?? [])
+      zone.append(dimensionButton(alias));
+    item.append(dimensionButton(name), equal, zone);
+    list.append(item);
+  }
+  updateDimensionEnabled();
+  destination?.focus();
+}
+
+function requestSymbolicDimensions() {
+  if (
+    byId("symbolic-panel").hidden ||
+    byId("merge-dimensions-form").hidden ||
+    !hasModel ||
+    replacementPending
+  )
+    return;
+  showSymbolicDimensions([]);
+  byId("symbolic-dimensions-status").textContent =
+    "Listing symbolic dimensions…";
+  vscode.postMessage({
+    type: "symbolic-dimensions",
+    requestId: ++symbolicDimensionRequest,
+  });
+}
+
 function updateReleases() {
   const next = new Set(
     metadataVisible
@@ -889,6 +1284,24 @@ function markReleased({ path, text, name }, released) {
     "aria-label",
     released ? `${name}: releasable after ${inspectedView.node.name}` : name,
   );
+}
+
+function connectionTag({ name, to }) {
+  const consumer = viewsByPosition.get(to)?.node;
+  if (
+    consumer?.opType === "Shape" &&
+    (!consumer.domain || consumer.domain === "ai.onnx")
+  )
+    return "shape";
+  const tag = valueMetadata.get(name)?.tag;
+  return tag === "weight" || tag === "shape" ? tag : "";
+}
+
+function markConnectionTag(connection) {
+  if (!connection.path) return;
+  const tag = connectionTag(connection);
+  connection.path.classList.toggle("edge-weight", tag === "weight");
+  connection.path.classList.toggle("edge-shape", tag === "shape");
 }
 
 function inspectMetadata() {
@@ -927,6 +1340,9 @@ function acceptMetadata(metadata) {
   graphMetadata = metadata;
   nodeMetadata = new Map(metadata.nodes.map((node) => [node.id, node]));
   valueMetadata = new Map(metadata.values.map((value) => [value.name, value]));
+  for (const connection of connections) markConnectionTag(connection);
+  overviewDirty = true;
+  updateConnectionHighlight();
   metadataStatus(
     false,
     `Metadata refreshed: ${updates} update${updates === 1 ? "" : "s"}`,
@@ -945,16 +1361,65 @@ function addUnusedLabel(view, unusedOutputs = []) {
   if (!view?.group || !unusedOutputs.length) return;
   const text = label(
     view.group,
-    view.initial.x,
-    view.initial.y - view.halfHeight + 29,
+    view.initial.x + view.halfWidth - 12,
+    view.initial.y - view.halfHeight + 24,
     `Unused: ${unusedOutputs.length}`,
     "unused-label",
+    "end",
   );
   text.append(
     element("title", {}, `Unused outputs: ${unusedOutputs.join(", ")}`),
   );
   text.setAttribute("visibility", metadataVisible ? "visible" : "hidden");
   unusedLabels.push(text);
+}
+
+function updateInPlaceProfile(profile, path) {
+  inPlaceDecisions = new Map();
+  if (
+    profile &&
+    JSON.stringify(path ?? []) ===
+      JSON.stringify(displayedGraph?.breadcrumbs?.at(-1)?.path ?? [])
+  )
+    for (const event of profile.events)
+      inPlaceDecisions.set(
+        `node-${event.index}`,
+        (event.decisions ?? []).filter(({ action }) => action === "inplace"),
+      );
+  for (const view of nodeViews.values()) addInPlaceLinks(view);
+}
+
+function addInPlaceLinks(view) {
+  if (!view.group || !view.node) return;
+  view.group.querySelector(".node-inplace-links")?.remove();
+  const decisions = inPlaceDecisions.get(view.id);
+  if (!decisions?.length) return;
+  const { node, initial, halfWidth, halfHeight, group } = view;
+  const links = element("g", {
+    class: "node-inplace-links",
+    "aria-hidden": "true",
+  });
+  for (const { input, output } of decisions) {
+    const inputIndex = node.inputs.indexOf(input);
+    const outputIndex = node.outputs.indexOf(output);
+    if (!input || !output || inputIndex < 0 || outputIndex < 0) continue;
+    const x =
+      initial.x +
+      graphPortOffset(
+        halfWidth * 2,
+        inputIndex,
+        node.inputs.length + (node.captures?.length ?? 0),
+      );
+    const outputX =
+      initial.x +
+      graphPortOffset(halfWidth * 2, outputIndex, node.outputs.length);
+    links.append(
+      element("path", {
+        d: `M${x},${initial.y - halfHeight} C${x},${initial.y} ${outputX},${initial.y} ${outputX},${initial.y + halfHeight}`,
+      }),
+    );
+  }
+  group.insertBefore(links, group.querySelector("rect").nextSibling);
 }
 
 function setMetadataVisible(visible) {
@@ -1018,6 +1483,7 @@ function inspect(view) {
 }
 
 function updateSelection(activeId, forceInspect = false) {
+  closeGraphContextMenu();
   for (const id of new Set([...renderedSelection, ...selected])) {
     const isSelected = selected.has(id);
     if (isSelected === renderedSelection.has(id)) continue;
@@ -1069,6 +1535,15 @@ function mountNode(view) {
       selectNode(id, event.ctrlKey || event.metaKey || event.shiftKey);
     }
   });
+  group.addEventListener("contextmenu", (event) => {
+    if (!view.node || svg.getAttribute("aria-busy") === "true") return;
+    if (!selected.has(id)) selectNode(id, false);
+    if (!fusionPanel.canOpenSelectionPattern()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    endGesture();
+    showGraphContextMenu(event, id);
+  });
   group.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -1076,6 +1551,7 @@ function mountNode(view) {
     }
   });
   addUnusedLabel(view, nodeMetadata.get(id)?.unusedOutputs);
+  addInPlaceLinks(view);
 }
 
 function selectNode(id, additive) {
@@ -1095,13 +1571,36 @@ function updateConnection(connection) {
   if (!connection.group) return;
   const { path, hit, text, information } = connection;
   const { x, y } = connectionLabelPosition(connection);
+  const multiline =
+    connection.nameLines?.length > 1 || connection.informationLines?.length > 1;
+  const labelX = multiline ? x - connection.labelWidth / 2 : x;
   const data = connectionPath(connection);
   path.setAttribute("d", data);
   hit.setAttribute("d", data);
-  text.setAttribute("x", x + 10);
-  text.setAttribute("y", y);
-  information.setAttribute("x", x + 10);
-  information.setAttribute("y", y + 14);
+  let baseline = y - (connection.labelHeight ?? 28) / 2 + 10;
+  for (const [label, lines] of [
+    [text, connection.nameLines ?? [connection.name]],
+    [
+      information,
+      connection.informationLines ?? [tensorDescription(connection.name)],
+    ],
+  ]) {
+    label.setAttribute("x", labelX);
+    label.setAttribute("y", baseline);
+    label.setAttribute("text-anchor", multiline ? "start" : "middle");
+    const value = label === information ? label.querySelector("tspan") : label;
+    if (
+      value.children.length !== lines.length ||
+      lines.some((line, index) => value.children[index].textContent !== line)
+    )
+      value.replaceChildren(
+        ...lines.map((line, index) =>
+          element("tspan", { x: labelX, dy: index ? 14 : 0 }, line),
+        ),
+      );
+    for (const line of value.children) line.setAttribute("x", labelX);
+    baseline += lines.length * 14;
+  }
 }
 
 function selectConnection(connection) {
@@ -1126,9 +1625,10 @@ function updateConnectionHighlight() {
     svg.append(highlight);
   }
   const { from, to } = selectedConnection;
+  const tag = connectionTag(selectedConnection);
   highlight.replaceChildren(
     element("path", {
-      class: "selected-edge",
+      class: `selected-edge${tag ? ` edge-${tag}` : ""}`,
       d: connectionPath(selectedConnection),
     }),
     ...[...new Set([from, to])].map((position) => {
@@ -1231,37 +1731,44 @@ function updateConnectionVisibility(connection) {
     bottom = Math.max(bottom, y);
   }
   Object.assign(connection, { left, top, right, bottom });
-  const label = connectionLabelPosition(connection);
+  const label = connectionLabelBounds(connection);
   const visible = intersectsCamera(
-    Math.min(left, label.x),
-    Math.min(top, label.y),
-    Math.max(right, label.x + 240),
-    Math.max(bottom, label.y + 28),
+    Math.min(left, label.left),
+    Math.min(top, label.top),
+    Math.max(right, label.right),
+    Math.max(bottom, label.bottom),
   );
   const labelsVisible =
     !virtualized ||
-    intersectsCamera(label.x, label.y, label.x + 240, label.y + 28);
+    intersectsCamera(label.left, label.top, label.right, label.bottom);
   if (virtualized && !overviewVisible && visible && !labelsVisible)
     crossingConnections.add(connection);
   else crossingConnections.delete(connection);
   setVisible(connection, connection.group, visible && labelsVisible);
 }
 
+function drawTaggedConnections(id, connections) {
+  const groups = new Map([
+    ["", []],
+    ["weight", []],
+    ["shape", []],
+  ]);
+  for (const connection of connections)
+    groups.get(connectionTag(connection)).push(connectionPath(connection));
+  for (const [tag, segments] of groups) {
+    const path = byId(tag ? `${id}-${tag}` : id);
+    const data = segments.join(" ");
+    if (path.getAttribute("d") !== data) path.setAttribute("d", data);
+  }
+}
+
 function drawCrossingConnections() {
   const normal = [];
   const released = [];
   for (const connection of crossingConnections)
-    (releasedValues.has(connection.name) ? released : normal).push(
-      connectionPath(connection),
-    );
-  for (const [id, segments] of [
-    ["crossing-edges", normal],
-    ["released-crossing-edges", released],
-  ]) {
-    const path = byId(id);
-    const data = segments.join(" ");
-    if (path.getAttribute("d") !== data) path.setAttribute("d", data);
-  }
+    (releasedValues.has(connection.name) ? released : normal).push(connection);
+  drawTaggedConnections("crossing-edges", normal);
+  drawTaggedConnections("released-crossing-edges", released);
 }
 
 function moveNodes(origins, dx, dy) {
@@ -1397,10 +1904,10 @@ function moveGesture(event) {
 }
 
 function reframe() {
-  let x = 0;
-  let y = 0;
-  let right = layoutBounds.width;
-  let bottom = layoutBounds.height;
+  let x = layoutBounds.x;
+  let y = layoutBounds.y;
+  let right = layoutBounds.x + layoutBounds.width;
+  let bottom = layoutBounds.y + layoutBounds.height;
   for (const { position, halfWidth, halfHeight } of nodeViews.values()) {
     x = Math.min(x, position.x - halfWidth - 20);
     y = Math.min(y, position.y - halfHeight - 20);
@@ -1408,6 +1915,13 @@ function reframe() {
     bottom = Math.max(bottom, position.y + halfHeight + 20);
   }
   for (const connection of connections) {
+    if (connection.labelWidth !== undefined) {
+      const label = connectionLabelBounds(connection);
+      x = Math.min(x, label.left - 8);
+      y = Math.min(y, label.top - 8);
+      right = Math.max(right, label.right + 8);
+      bottom = Math.max(bottom, label.bottom + 8);
+    }
     if (!connection.route) continue;
     for (const point of connectionPoints(connection)) {
       x = Math.min(x, point.x - 20);
@@ -1468,9 +1982,17 @@ function setZoomAreaMode(active) {
   svg.classList.toggle("zoom-area", active);
 }
 
-function connectionPoints({ from, to, fromHeight, toHeight, route }) {
-  const start = { x: from.x, y: from.y + fromHeight };
-  const end = { x: to.x, y: to.y - toHeight };
+function connectionPoints({
+  from,
+  to,
+  fromHeight,
+  toHeight,
+  fromOffset = 0,
+  toOffset = 0,
+  route,
+}) {
+  const start = { x: from.x + fromOffset, y: from.y + fromHeight };
+  const end = { x: to.x + toOffset, y: to.y - toHeight };
   if (!route) return [start, end];
   const span = route.to.y - toHeight - route.from.y - fromHeight;
   return [
@@ -1496,14 +2018,23 @@ function connectionPoints({ from, to, fromHeight, toHeight, route }) {
 }
 
 function connectionLabelPosition(connection) {
-  const points = connectionPoints(connection);
+  const routePoints = connectionPoints(connection);
+  const geometry = JSON.stringify([!!connection.route, routePoints]);
+  if (connection.labelPathGeometry !== geometry) {
+    connection.labelPathPoints = flattenGraphPath(
+      routePoints,
+      !!connection.route,
+    );
+    connection.labelPathGeometry = geometry;
+  }
+  const points = connection.labelPathPoints;
   let length = 0;
   for (let i = 1; i < points.length; i++)
     length += Math.hypot(
       points[i].x - points[i - 1].x,
       points[i].y - points[i - 1].y,
     );
-  let remaining = length / 2;
+  let remaining = length * (connection.labelFraction ?? 0.5);
   for (let i = 1; i < points.length; i++) {
     const start = points[i - 1],
       end = points[i];
@@ -1511,13 +2042,114 @@ function connectionLabelPosition(connection) {
     if (remaining <= segment && segment) {
       const fraction = remaining / segment;
       return {
-        x: start.x + (end.x - start.x) * fraction,
+        x:
+          start.x +
+          (end.x - start.x) * fraction +
+          (connection.labelOffset ?? 0),
         y: start.y + (end.y - start.y) * fraction,
       };
     }
     remaining -= segment;
   }
-  return points[0];
+  return {
+    x: points[0].x + (connection.labelOffset ?? 0),
+    y: points[0].y,
+  };
+}
+
+function connectionLabelBounds(connection) {
+  const { x, y } = connectionLabelPosition(connection);
+  const halfWidth = (connection.labelWidth ?? 216) / 2 + 4;
+  const halfHeight = (connection.labelHeight ?? 28) / 2 + 4;
+  return {
+    left: x - halfWidth,
+    top: y - halfHeight,
+    right: x + halfWidth,
+    bottom: y + halfHeight,
+  };
+}
+
+function wrapConnectionLabel(text, context) {
+  if (context.measureText(text).width <= 216) return [text];
+  const lines = [];
+  let line = "";
+  for (const word of text.match(/\S+\s*/gu) ?? []) {
+    if (line && context.measureText((line + word).trimEnd()).width > 216) {
+      lines.push(line.trimEnd());
+      line = "";
+    }
+    line += word;
+  }
+  lines.push(line.trimEnd());
+  return lines;
+}
+
+function arrangeConnectionLabels() {
+  const context = document.createElement("canvas").getContext("2d");
+  context.font = `10px ${getComputedStyle(svg).fontFamily}`;
+  const entries = connections.map((connection) => {
+    connection.labelFraction = 0.5;
+    connection.labelOffset = 0;
+    connection.nameLines = wrapConnectionLabel(connection.name, context);
+    connection.informationLines = wrapConnectionLabel(
+      tensorDescription(connection.name),
+      context,
+    );
+    const lines = [...connection.nameLines, ...connection.informationLines];
+    connection.labelWidth = Math.max(
+      ...lines.map((line) => context.measureText(line).width),
+    );
+    connection.labelHeight = lines.length * 14;
+    return {
+      connection,
+      bounds: connectionLabelBounds(connection),
+      placed: false,
+    };
+  });
+  const labels = graphSpatialIndex(entries);
+  const nodes = graphSpatialIndex(
+    [...nodeViews.values()].map(({ position, halfWidth, halfHeight }) => ({
+      bounds: {
+        left: position.x - halfWidth,
+        top: position.y - halfHeight,
+        right: position.x + halfWidth,
+        bottom: position.y + halfHeight,
+      },
+    })),
+  );
+  for (const entry of entries) {
+    const { connection } = entry;
+    const budget = { remaining: 256 };
+    let placed = false;
+    for (const fraction of [0.5, 0.25, 0.75, 0.125, 0.875]) {
+      if (budget.remaining <= 0) break;
+      for (const offset of [0, -32, 32, -64, 64, -128, 128, -256, 256]) {
+        if (budget.remaining <= 0) break;
+        connection.labelFraction = fraction;
+        connection.labelOffset = offset;
+        const bounds = connectionLabelBounds(connection);
+        if (
+          labels.find(bounds, (other) => other.placed, budget) ||
+          nodes.find(bounds, () => true, budget)
+        )
+          continue;
+        entry.bounds = bounds;
+        placed = true;
+        break;
+      }
+      if (placed) break;
+    }
+    if (!placed) {
+      connection.labelFraction = 0.5;
+      connection.labelOffset = 0;
+      entry.bounds = connectionLabelBounds(connection);
+    }
+    entry.placed = true;
+    labels.update(entry);
+    updateConnection(connection);
+    if (camera) updateConnectionVisibility(connection);
+  }
+  if (camera && virtualized) drawCrossingConnections();
 }
 
 function connectionPath(connection) {
@@ -1534,18 +2166,13 @@ function connectionPath(connection) {
     }
     return path;
   }
-  const { from, to, fromHeight, toHeight } = connection;
-  const y1 = from.y + fromHeight;
-  const y2 = to.y - toHeight;
-  const middle = (y1 + y2) / 2;
-  return `M${from.x},${y1} C${from.x},${middle} ${to.x},${middle} ${to.x},${y2}`;
+  const [start, end] = connectionPoints(connection);
+  const middle = (start.y + end.y) / 2;
+  return `M${start.x},${start.y} C${start.x},${middle} ${end.x},${middle} ${end.x},${end.y}`;
 }
 
 function drawOverview() {
-  byId("overview-edges").setAttribute(
-    "d",
-    connections.map(connectionPath).join(" "),
-  );
+  drawTaggedConnections("overview-edges", connections);
   byId("overview-nodes").setAttribute(
     "d",
     [...nodeViews.values()]
@@ -1567,7 +2194,7 @@ function drawOverview() {
     const text = label(
       labels,
       position.x,
-      position.y - halfHeight + 52,
+      position.y - halfHeight + 44,
       node.opType,
       "operator-label",
     );
@@ -1720,11 +2347,13 @@ function findNode(event) {
 }
 
 function navigate(path, nodeIndex) {
+  if (byId("shorten-dimensions").getAttribute("aria-busy") === "true") return;
   tensorStatisticsPanel.reset();
   tensorListPanel.setBusy(true);
   endGesture();
   byId("navigation-status").textContent = "Opening graph…";
   svg.setAttribute("aria-busy", "true");
+  updateDimensionEnabled();
   fit();
   requestAction("navigate", "Navigate graph", {
     path,
@@ -1762,6 +2391,7 @@ function render(graph, metadata) {
   refreshStatus(false);
   verificationStatus(false);
   svg.setAttribute("aria-busy", "false");
+  dimensionStatus(false);
   byId("navigation-status").textContent = "";
   const breadcrumbs = graph.breadcrumbs ?? [];
   const navigation = graph.pipelineStages?.length
@@ -1801,7 +2431,12 @@ function render(graph, metadata) {
   crossingConnections = new Set();
   readablePending = false;
   byId("graph-overview").setAttribute("display", "none");
-  byId("overview-edges").removeAttribute("d");
+  for (const id of [
+    "overview-edges",
+    "overview-edges-weight",
+    "overview-edges-shape",
+  ])
+    byId(id).removeAttribute("d");
   byId("overview-nodes").removeAttribute("d");
   byId("overview-labels").replaceChildren();
   graphMetadata = undefined;
@@ -1831,6 +2466,8 @@ function render(graph, metadata) {
   const sizes = operatorSizes(graph.nodes);
   const layout = sugiyamaLayout(graph, sizes);
   const { producers, positions } = layout;
+  const outputOffset = (producer, name) =>
+    layout.outputOffsets.get(producer)?.get(name) ?? 0;
   bounds = layout.bounds;
   layoutBounds = bounds;
   const addPort = (name, index, output) => {
@@ -1876,14 +2513,26 @@ function render(graph, metadata) {
   const inputPositions = new Map(
     graph.inputs.map((name, index) => [name, addPort(name, index, false)]),
   );
-  const connect = (from, to, name, fromHeight, toHeight, points) => {
+  const connect = (
+    from,
+    to,
+    name,
+    fromHeight,
+    toHeight,
+    points,
+    fromOffset = 0,
+    toOffset = 0,
+  ) => {
     if (!from || !to) return;
     const connection = {
       from,
       to,
+      nextEndpoint: from,
       name,
       fromHeight,
       toHeight,
+      fromOffset,
+      toOffset,
       route: points?.length
         ? { points, from: { ...from }, to: { ...to } }
         : undefined,
@@ -1897,7 +2546,12 @@ function render(graph, metadata) {
         });
         const hit = element("path", { class: "edge-hit" });
         const path = element("path", { class: "edge" });
-        group.append(hit, path);
+        const title = element(
+          "title",
+          {},
+          `${name}: ${tensorDescription(name)}`,
+        );
+        group.append(title, hit, path);
         group.addEventListener("pointerdown", (event) => {
           if (
             event.button !== 0 ||
@@ -1922,15 +2576,9 @@ function render(graph, metadata) {
             selectConnection(connection);
           }
         });
-        const text = label(
-          group,
-          0,
-          0,
-          shortName(name, 15),
-          "tensor-label",
-          "start",
-        );
-        const information = tensorLabel(group, 0, 0, name, 34, "start");
+        const text = label(group, 0, 0, "", "tensor-label");
+        text.setAttribute("aria-label", name);
+        const information = tensorLabel(group, 0, 0, name, 68);
         Object.assign(connection, {
           group,
           from,
@@ -1939,10 +2587,12 @@ function render(graph, metadata) {
           toHeight,
           path,
           hit,
+          title,
           text,
           information,
         });
         updateConnection(connection);
+        markConnectionTag(connection);
         markReleased(connection, releasedValues.has(name));
       },
     };
@@ -1963,9 +2613,7 @@ function render(graph, metadata) {
   for (const node of graph.nodes) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
-    const storedInputs = node.pipelineModel
-      ? []
-      : tensorListPanel.storedInputs(node);
+    const { storedInputs } = size;
     const create = (position) => {
       const top = position.y - size.height / 2;
       const group = element("g", {
@@ -1982,10 +2630,27 @@ function render(graph, metadata) {
           rx: 12,
         }),
       );
+      for (const [names, output] of [
+        [[...node.inputs, ...(node.captures ?? [])], false],
+        [node.outputs, true],
+      ]) {
+        names.forEach((name, index) => {
+          const x =
+            position.x + graphPortOffset(size.width, index, names.length);
+          const y = output ? top + size.height : top;
+          const port = element("path", {
+            class: `node-port ${output ? "node-output" : "node-input"}`,
+            "data-index": index,
+            d: `M${x},${y} v${output ? 12 : -12}`,
+          });
+          if (name) port.append(element("title", {}, name));
+          group.append(port);
+        });
+      }
       const typeLabel = label(
         group,
         position.x,
-        top + 52,
+        top + 44,
         node.opType,
         "operator-label",
       );
@@ -1993,13 +2658,27 @@ function render(graph, metadata) {
       const nameLabel = label(
         group,
         position.x + size.width / 2 - 12,
-        top + 15,
+        top + 14,
         size.displayName,
         "operator-name",
         "end",
       );
       nameLabel.style.fontSize = "10px";
       nameLabel.setAttribute("aria-label", node.name);
+      if (size.indexLabel) {
+        const index = label(
+          group,
+          position.x - size.width / 2 + 8 + (storedInputs.length ? 26 : 0),
+          top + 14,
+          size.indexLabel,
+          "operator-index",
+          "start",
+        );
+        index.setAttribute(
+          "aria-label",
+          `Node position: ${node.id.slice(5)} (zero-based)`,
+        );
+      }
       if (storedInputs.length) {
         const link = element("g", {
           class: "node-statistics-link",
@@ -2008,7 +2687,7 @@ function render(graph, metadata) {
           "aria-label": `Inspect stored tensors for ${node.opType}: ${node.name}`,
         });
         const x = position.x - size.width / 2 + 8;
-        const y = top + 18;
+        const y = top + 3;
         link.append(
           element("title", {}, "Browse tensors and weight statistics"),
           element("rect", { x, y, width: 20, height: 20, rx: 4 }),
@@ -2023,22 +2702,23 @@ function render(graph, metadata) {
         bindGraphLink(link, () => openTensorStatistics(storedInputs));
         group.append(link);
       }
-      if (node.outputs.length) {
+      const namedOutputs = node.outputs.filter(Boolean);
+      if (namedOutputs.length) {
         const information = tensorLabel(
           group,
           position.x,
-          top + 78 + size.parameterRows.length * 16,
-          node.outputs,
+          top + 58 + size.parameterHeight,
+          namedOutputs,
           26,
         );
         information.classList.add("node-tensor-info");
       }
-      size.parameterRows.forEach((parameter, index) => {
+      size.parameterRows.forEach((parameter) => {
         const text = label(
           group,
           position.x,
-          top + 68 + index * 16,
-          parameter.description,
+          top + parameter.y,
+          parameter.displayDescription ?? parameter.description,
           `tensor-info node-parameter ${parameter.className}`,
         );
         text.style.fontSize = `${Math.min(9, (10 * (size.width - 24)) / (parameter.textWidth || 1))}px`;
@@ -2046,7 +2726,7 @@ function render(graph, metadata) {
         text.append(element("title", {}, parameter.description));
       });
       size.subgraphs.forEach((graph, index) => {
-        const y = top + 88 + size.parameterRows.length * 16 + index * 20;
+        const y = top + size.subgraphY + index * 20;
         const link = element("g", {
           class: "subgraph-link",
           role: "button",
@@ -2108,9 +2788,12 @@ function render(graph, metadata) {
       halfHeight: size.height / 2,
       typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
+      parameterRows: size.parameterRows,
     });
     if (!virtualized) nodes.append(nodeViews.get(node.id).group);
-    for (const input of [...node.inputs, ...(node.captures ?? [])]) {
+    const inputs = [...node.inputs, ...(node.captures ?? [])];
+    inputs.forEach((input, index) => {
+      if (!input) return;
       const producer = producers.get(input);
       connect(
         producer ? positions.get(producer) : inputPositions.get(input),
@@ -2118,30 +2801,41 @@ function render(graph, metadata) {
         input,
         producer ? sizes.get(producer).height / 2 : 26,
         size.height / 2,
-        producer
-          ? layout.routes.get(node.id)?.get(producer)
-          : layout.inputRoutes.get(node.id)?.get(input),
+        layout.portRoutes.get(node.id)?.[index],
+        outputOffset(producer, input),
+        graphPortOffset(size.width, index, inputs.length),
       );
-    }
+    });
   }
   graph.outputs.forEach((name, index) => {
     const producer = producers.get(name);
     const from = producer ? positions.get(producer) : inputPositions.get(name);
     const to = addPort(name, index, true);
     const fromHeight = producer ? sizes.get(producer).height / 2 : 26;
-    connect(from, to, name, fromHeight, 26, layout.outputRoutes.get(name));
+    connect(
+      from,
+      to,
+      name,
+      fromHeight,
+      26,
+      layout.outputRoutes.get(name),
+      outputOffset(producer, name),
+    );
   });
   overviewDirty = true;
   zoom = 1;
   pan = { x: 0, y: 0 };
   if (graph.nodes.length) selected.add(graph.nodes[0].id);
-  updateTensorInformation(graph.tensors ?? []);
+  updateTensorInformation(graph.tensors ?? [], false);
   updateSelection(undefined, true);
   if (virtualized) readableZoom();
   else fit();
   byId("refresh-positions").disabled = false;
   if (metadata) acceptMetadata(metadata);
   else if (metadataVisible) requestMetadata();
+  symbolicDimensionRequest++;
+  showSymbolicDimensions([]);
+  requestSymbolicDimensions();
 }
 
 svg.addEventListener("pointerdown", (event) => {
@@ -2214,6 +2908,38 @@ svg.addEventListener("pointerdown", (event) => {
     pointerId: event.pointerId,
   });
   svg.setPointerCapture(event.pointerId);
+});
+svg.addEventListener("dblclick", (event) => {
+  if (
+    event.button !== 0 ||
+    !svg.hasAttribute("viewBox") ||
+    zoomAreaMode ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    svg.getAttribute("aria-busy") === "true" ||
+    event.target.closest(".graph-node, .port")
+  )
+    return;
+  const viewport = byId("canvas").getBoundingClientRect();
+  const point = graphPoint(event, viewport);
+  if (!point) return;
+  const group = event.target.closest(".connection");
+  const connection = group
+    ? connections.find((connection) => connection.group === group)
+    : findConnectionAt(point, connections, viewport);
+  if (!connection) return;
+  event.preventDefault();
+  const position = connection.nextEndpoint;
+  connection.nextEndpoint =
+    position === connection.from ? connection.to : connection.from;
+  const view = viewsByPosition.get(position);
+  selected = new Set([view.id]);
+  updateSelection(view.id);
+  readableZoom();
+  selectConnection(connection);
+  view.group?.focus({ preventScroll: true });
 });
 svg.addEventListener("pointermove", moveGesture);
 svg.addEventListener("pointerup", (event) => {
@@ -2318,6 +3044,33 @@ byId("refresh-shapes").addEventListener("click", () => {
   refreshStatus(true, "Inferring shapes/types…");
   requestAction("refresh-shapes", "Refresh shapes");
 });
+byId("shorten-dimensions").addEventListener("click", () => {
+  if (svg.getAttribute("aria-busy") === "true") return;
+  dimensionStatus(true, "Renaming dynamic dimensions...");
+  requestAction("shorten-dimensions", "Shorten dynamic dimension names");
+});
+byId("show-symbolic").addEventListener("click", requestSymbolicDimensions);
+byId("edit-dimensions").addEventListener("click", () => {
+  const form = byId("merge-dimensions-form");
+  form.hidden = !form.hidden;
+  byId("edit-dimensions").setAttribute("aria-expanded", String(!form.hidden));
+  if (form.hidden) {
+    symbolicDimensionRequest++;
+    showSymbolicDimensions([]);
+  } else requestSymbolicDimensions();
+});
+byId("reset-dimensions").addEventListener("click", () => {
+  showSymbolicDimensions([...dimensionEquivalences.keys()]);
+});
+byId("merge-dimensions-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (byId("merge-dimensions").disabled) return;
+  const equalities = dimensionEqualities();
+  dimensionStatus(true, "Merging symbolic dimensions…");
+  requestAction("merge-dimensions", "Merge symbolic dimensions", {
+    equalities,
+  });
+});
 byId("refresh-positions").addEventListener("click", () => {
   const entry = newAction("Refresh positions");
   try {
@@ -2390,6 +3143,8 @@ svg.addEventListener(
   { passive: false },
 );
 window.addEventListener("message", (event) => {
+  if (event.data?.type === "pattern-library")
+    fusionPanel.libraryChanged(event.data);
   settingsPanel.receive(event.data);
   if (event.data?.type === "model-progress") {
     if (
@@ -2402,9 +3157,12 @@ window.addEventListener("message", (event) => {
   }
   if (
     tensorStatisticsPanel.handleMessage(event.data) ||
+    promptPanel.handleMessage(event.data) ||
+    runPanel.handleMessage(event.data) ||
     memoryPanel.handleMessage(event.data) ||
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
+    patternPanel.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
   )
     return;
@@ -2414,7 +3172,7 @@ window.addEventListener("message", (event) => {
     sidebar.restoreSettings(event.data.settings);
     settingsPanel.restoreViewer(event.data.settings);
   } else if (
-    ["settings-info", "python-info", "settings-error"].includes(
+    ["settings-info", "status-info", "python-info", "settings-error"].includes(
       event.data?.type,
     )
   ) {
@@ -2422,6 +3180,9 @@ window.addEventListener("message", (event) => {
       sidebar.restoreSettings(event.data.viewer);
   } else if (event.data?.type === "log-entry") {
     displayLog(event.data.entry);
+  } else if (event.data?.type === "show-prompt") {
+    runPanel.showPrompt();
+    showTab("prompt", true);
   } else if (event.data?.type === "log-history") {
     for (const entry of event.data.entries) displayLog(entry);
     const panel = byId("logs-view");
@@ -2505,8 +3266,12 @@ window.addEventListener("message", (event) => {
     filePanels.reset();
     displayedGraph = event.data.graph;
     tensorListPanel.setGraph(displayedGraph);
+    promptReloadPending = false;
+    promptPanel.reset();
+    runPanel.reset();
+    if (!byId("prompt-view").hidden) runPanel.activateSelected();
     tensorStatisticsPanel.reset();
-    memoryPanel.setGraph(displayedGraph);
+    memoryPanel.setGraph(displayedGraph, event.data.preserveMemory === true);
     fusionPanel.reset(
       displayedGraph,
       event.data.fusionRequestId,
@@ -2530,6 +3295,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "navigation-error") {
     svg.setAttribute("aria-busy", "false");
     tensorListPanel.setBusy(replacementPending);
+    updateDimensionEnabled();
     byId("navigation-status").textContent =
       `Could not open graph: ${event.data.error}`;
     fit();
@@ -2553,7 +3319,69 @@ window.addEventListener("message", (event) => {
       `Metadata analysis failed: ${event.data.error}`,
       RefreshStatus.FAILED,
     );
+  } else if (event.data?.type === "symbolic-dimensions") {
+    if (event.data.requestId !== symbolicDimensionRequest) return;
+    if (event.data.error) {
+      showSymbolicDimensions([]);
+      byId("symbolic-dimensions-status").textContent =
+        `Could not list symbolic dimensions: ${event.data.error}`;
+    } else showSymbolicDimensions(event.data.names);
+  } else if (event.data?.type === "dimension-info") {
+    if (event.data.graph) {
+      displayedGraph = event.data.graph;
+      updateTensorInformation(displayedGraph.tensors);
+      tensorListPanel.setGraph(displayedGraph);
+      for (const node of displayedGraph.nodes) {
+        const view = nodeViews.get(node.id);
+        if (view?.node) {
+          view.node = node;
+          updateOperatorParameters(view);
+        }
+      }
+      promptReloadPending = false;
+      promptPanel.reset();
+      runPanel.reset();
+      if (!byId("prompt-view").hidden) runPanel.activateSelected();
+      tensorStatisticsPanel.reset();
+      memoryPanel.setGraph(displayedGraph);
+      const selection = new Set(selected);
+      fusionPanel.invalidate();
+      selected = selection;
+      updateSelection([...selected].at(-1));
+      fusionPanel.updateGraph(displayedGraph);
+      inspect(inspectedView);
+      refreshStatus(false);
+      verificationStatus(false);
+      metadataStatus(false);
+      byId("undo-fusion").setAttribute("aria-busy", "false");
+      setLoading(replacementPending);
+      if (!byId("statistics-view").hidden) requestStatistics();
+      else {
+        statisticsRequest++;
+        statisticsStatus("Open Statistics to update model statistics.");
+      }
+    }
+    dimensionStatus(
+      false,
+      event.data.count
+        ? event.data.equalities
+          ? `Applied ${event.data.equalities.length} dimension equivalence${event.data.equalities.length === 1 ? "" : "s"}. Save to keep the changes.`
+          : event.data.source
+            ? `Replaced "${event.data.source}" with "${event.data.target}". Save to keep the changes.`
+            : `${event.data.count} dynamic dimension${event.data.count === 1 ? "" : "s"} renamed; removed prefix "${event.data.prefix}". Save to keep the changes.`
+        : "No common namespace prefix to remove.",
+      event.data.count ? RefreshStatus.UPDATED : RefreshStatus.UNCHANGED,
+    );
+    if (event.data.names) showSymbolicDimensions(event.data.names);
+    else requestSymbolicDimensions();
+  } else if (event.data?.type === "dimension-error") {
+    dimensionStatus(
+      false,
+      `Dimension renaming failed: ${event.data.error}`,
+      RefreshStatus.FAILED,
+    );
   } else if (event.data?.type === "shape-info") {
+    requestSymbolicDimensions();
     const updates = updateTensorInformation(event.data.tensors);
     inspect(inspectedView);
     refreshStatus(

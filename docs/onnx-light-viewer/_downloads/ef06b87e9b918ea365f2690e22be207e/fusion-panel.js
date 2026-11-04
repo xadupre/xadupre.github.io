@@ -7,6 +7,7 @@ function createFusionPanel({
   canFuse,
   clearSelection,
   selectedNode,
+  selectedNodes,
   focusNodes,
 }) {
   let fusionGraph;
@@ -19,8 +20,10 @@ function createFusionPanel({
   let optimizationBackend = "onnx-light";
   let selectedOptimizationResult = false;
   let optimizationHistory = [];
+  let pendingRewritings = [];
   let undoCount = 0;
   let restoreRequest;
+  let restoreNotice = "";
   let scenarios = [];
   let selectedStep;
   let diagnosticRequest = 0;
@@ -28,9 +31,128 @@ function createFusionPanel({
   let diagnosticNode;
   let diagnosticResult;
   let nativePatterns = new Set();
+  let creatingPattern = false;
+  let selectionCatalogLoaded = false;
+  let functionBodyRequest = 0;
+  let restoreFunctionEditor = false;
+  let libraryRevision = 0;
+  const selectionPatterns = new Map();
+  const selectionPatternDrafts = new Map();
+  function canOpenSelectionPattern() {
+    return canFuse() && !fusionBusy && selectedNodes().length > 0;
+  }
+  function openSelectionPattern() {
+    if (!canOpenSelectionPattern()) return false;
+    selectionChanged();
+    byId("selection-pattern-dialog").showModal();
+    if (!selectionCatalogLoaded) {
+      fusionControls(true);
+      byId("selection-pattern-status").textContent =
+        "Loading created patterns…";
+      requestAction("fusion-patterns", "List selection patterns", {
+        requestId: ++fusionRequest,
+      });
+    } else {
+      const pattern = selectionPatterns.get(
+        byId("selection-pattern-picker").value,
+      );
+      if (pattern?.functionIndex !== undefined && pattern.text === undefined)
+        showSelectionPattern();
+    }
+    return true;
+  }
+  function selectionPatternControls() {
+    const count = selectedNodes().length;
+    const name = byId("selection-pattern-name").value.trim();
+    const modelFunction = fusionGraph?.localFunctions?.some(
+      (fn) => fn.functionName === name,
+    );
+    const nameExists =
+      selectionPatterns.has(name) || nativePatterns.has(name) || modelFunction;
+    byId("selection-pattern-name").setCustomValidity(
+      nameExists ? `Pattern name already exists: ${name}.` : "",
+    );
+    byId("selection-pattern-name").setAttribute(
+      "aria-invalid",
+      String(nameExists),
+    );
+    const feedback = byId("selection-pattern-name-feedback");
+    feedback.hidden = !nameExists;
+    feedback.textContent = nameExists
+      ? `Pattern name already exists: ${name}.${modelFunction ? " The loaded ONNX model already contains this function." : ""} Choose another name to create a new pattern.${selectionPatterns.has(name) || modelFunction ? " To edit it, select it under Patterns / model functions." : ""}`
+      : "";
+    byId("open-selection-pattern").disabled = !canOpenSelectionPattern();
+    byId("create-function-pattern").disabled =
+      fusionBusy || !canFuse() || !count || !name || nameExists;
+    byId("selection-pattern-name").disabled = fusionBusy || !canFuse();
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    const bodyUnloaded =
+      pattern?.functionIndex !== undefined && pattern.text === undefined;
+    for (const id of [
+      "selection-pattern-text",
+      "selection-pattern-replacement",
+    ])
+      byId(id).disabled = fusionBusy || !canFuse() || bodyUnloaded;
+    for (const format of ["text", "replacement"])
+      byId(`copy-selection-pattern-${format}`).disabled = bodyUnloaded;
+    byId("selection-pattern-picker").disabled = fusionBusy;
+    byId("update-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      bodyUnloaded ||
+      (byId("selection-pattern-text").value === pattern.text &&
+        byId("selection-pattern-replacement").value === pattern.replacement);
+    byId("revert-function-pattern").disabled =
+      fusionBusy ||
+      !canFuse() ||
+      !pattern ||
+      bodyUnloaded ||
+      !selectionPatternDrafts.has(byId("selection-pattern-picker").value);
+  }
+  function showSelectionPattern() {
+    const requestId = ++functionBodyRequest;
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    const draft = selectionPatternDrafts.get(
+      byId("selection-pattern-picker").value,
+    );
+    byId("selection-pattern-result").hidden = !pattern;
+    byId("selection-pattern-text").value = draft?.text ?? pattern?.text ?? "";
+    byId("selection-pattern-replacement").value =
+      draft?.replacement ?? pattern?.replacement ?? "";
+    const modelFunction = pattern?.functionIndex !== undefined;
+    byId("selection-pattern-match").hidden = modelFunction;
+    byId("selection-pattern-replacement-label").textContent = modelFunction
+      ? "Function body"
+      : "Replacement";
+    byId("selection-pattern-edit-help").textContent = modelFunction
+      ? "Edit this ONNX function's body without changing its name, domain, overload or input/output/attribute interface. Apply edits updates all its calls in memory; Save keeps the change."
+      : "Edit the match and replacement functions using onnx-light textparser syntax, then apply the definition before matching or optimizing.";
+    selectionPatternControls();
+    if (
+      modelFunction &&
+      pattern.text === undefined &&
+      byId("selection-pattern-dialog").open
+    ) {
+      byId("selection-pattern-status").textContent = "Loading function body…";
+      requestAction("load-model-function", "Load ONNX function", {
+        requestId,
+        functionIndex: pattern.functionIndex,
+      });
+    }
+  }
   function diagnosticControls() {
     const picker = byId("diagnostic-pattern");
     picker.disabled = fusionBusy || !canFuse() || !picker.options.length;
+    const diagnostics = byId("fusion-diagnostics");
+    diagnostics.setAttribute("aria-disabled", String(picker.disabled));
+    const summary = diagnostics.querySelector("summary");
+    summary.tabIndex = picker.disabled ? -1 : 0;
+    if (picker.disabled) diagnostics.open = false;
     byId("explain-fusion").disabled =
       picker.disabled || diagnosticBusy || !diagnosticNode;
     byId("fusion-diagnostics").setAttribute(
@@ -59,6 +181,12 @@ function createFusionPanel({
     diagnosticControls();
   }
   function selectionChanged() {
+    selectionPatternControls();
+    const count = selectedNodes().length;
+    if (!fusionBusy)
+      byId("selection-pattern-status").textContent = count
+        ? `${count} operator${count === 1 ? "" : "s"} selected. Create a pattern without changing the model.`
+        : "Select one or more operators in the graph.";
     const node = selectedNode();
     if (node?.id === diagnosticNode?.id) return;
     diagnosticNode = node;
@@ -167,6 +295,7 @@ function createFusionPanel({
         ["Matching (root)", milliseconds(report.matchingTimeNs)],
         ["Rewriting (root)", milliseconds(report.rewritingTimeNs)],
         ["Cleanup (root)", milliseconds(report.cleanupTimeNs)],
+        ["Shape/Size relocation", milliseconds(report.moveShapeAndSizeTimeNs)],
         ["Constant folding (root)", milliseconds(report.constantFoldingTimeNs)],
         [
           "Subgraph optimization",
@@ -298,6 +427,7 @@ function createFusionPanel({
   function fusionControls(busy, message = "") {
     if (busy && diagnosticBusy) clearDiagnostic();
     fusionBusy = busy;
+    selectionPatternControls();
     diagnosticControls();
     byId("show-optimization-report").disabled = busy || !optimizationReport;
     for (const backend of ["onnx-light", "onnxscript"]) {
@@ -320,12 +450,20 @@ function createFusionPanel({
       "optimization-restore-original",
     ])
       byId(id).disabled = busy || !canFuse() || !undoCount;
+    byId("replay-rewritings").disabled =
+      busy || !canFuse() || !pendingRewritings.length;
     for (const control of byId("fusion-matches").querySelectorAll(
       "input, button",
     ))
       control.disabled = busy;
-    byId("fusion-panel").setAttribute("aria-busy", String(busy));
-    byId("optimization-panel").setAttribute("aria-busy", String(busy));
+    for (const id of [
+      "fusion-panel",
+      "optimization-panel",
+      "selection-pattern-dialog",
+      "fuse-pattern",
+      "optimize-model",
+    ])
+      byId(id).setAttribute("aria-busy", String(busy));
     const patterns = byId("fusion-pattern");
     patterns.disabled = busy || !patterns.querySelector("input");
     byId("fusion-pattern-group").disabled =
@@ -338,8 +476,8 @@ function createFusionPanel({
     byId("select-fusions").disabled = busy || !fusionPreview?.matches.length;
     byId("clear-fusions").disabled = busy || !fusionSelection().length;
     byId("apply-fusion").disabled = busy || !fusionSelection().length;
-    byId("fuse-pattern").disabled = !canFuse();
-    byId("optimize-model").disabled = !canFuse();
+    byId("fuse-pattern").disabled = creatingPattern || !canFuse();
+    byId("optimize-model").disabled = creatingPattern || !canFuse();
     const optimization = byId("optimization-patterns");
     optimization.disabled =
       busy || !canFuse() || !optimization.querySelector("input");
@@ -415,24 +553,45 @@ function createFusionPanel({
     nativePatterns = new Set(patterns.map((pattern) => pattern.name));
     const fieldset = byId("optimization-patterns");
     fieldset.replaceChildren();
+    const fromSelection = (pattern) =>
+      pattern.groups?.includes("Selection patterns");
     const priorities = [
-      ...new Set(patterns.map((pattern) => pattern.priority)),
+      ...new Set(
+        patterns
+          .filter((pattern) => !fromSelection(pattern))
+          .map((pattern) => pattern.priority),
+      ),
     ].sort((a, b) => a - b);
-    for (const priority of priorities) {
+    const buckets = priorities.map((priority) => ({
+      priority,
+      title: `Priority ${priority}`,
+      members: patterns.filter(
+        (pattern) => !fromSelection(pattern) && pattern.priority === priority,
+      ),
+    }));
+    const custom = patterns.filter(fromSelection);
+    if (custom.length)
+      buckets.push({
+        priority: "selection",
+        title: "Selection patterns",
+        members: custom,
+      });
+    for (const { priority, title, members: unsorted } of buckets) {
       const group = document.createElement("details");
       const summary = document.createElement("summary");
       const toggle = document.createElement("input");
       toggle.type = "checkbox";
       toggle.dataset.priority = String(priority);
-      toggle.setAttribute("aria-label", `Select priority ${priority} patterns`);
-      const members = patterns
-        .filter((pattern) => pattern.priority === priority)
-        .sort((a, b) => a.name.localeCompare(b.name));
+      toggle.setAttribute(
+        "aria-label",
+        priority === "selection"
+          ? "Select selection patterns"
+          : `Select ${title.toLowerCase()} patterns`,
+      );
+      const members = unsorted.sort((a, b) => a.name.localeCompare(b.name));
       summary.append(
         toggle,
-        document.createTextNode(
-          ` Priority ${priority} (${members.length} patterns)`,
-        ),
+        document.createTextNode(` ${title} (${members.length} patterns)`),
       );
       group.append(summary);
       for (const pattern of members) {
@@ -545,6 +704,22 @@ function createFusionPanel({
   }
 
   function showOptimizationResults() {
+    const queued = pendingRewritings.flatMap((operation) =>
+      operation.matches.map((match) => ({
+        pattern: match.pattern,
+        stage: operation.stage,
+      })),
+    );
+    byId("rewriting-count").textContent =
+      `${queued.length} pending rewriting${queued.length === 1 ? "" : "s"}`;
+    byId("pending-rewritings").hidden = !queued.length;
+    byId("pending-rewriting-steps").replaceChildren(
+      ...queued.map((match) => {
+        const item = document.createElement("li");
+        item.textContent = `${match.stage ? `[${match.stage}] ` : ""}${match.pattern}`;
+        return item;
+      }),
+    );
     byId("optimization-results").replaceChildren();
     const path = fusionGraph?.breadcrumbs?.at(-1)?.path ?? [];
     const stage = path.length === 1 ? path[0].pipeline : undefined;
@@ -756,6 +931,13 @@ function createFusionPanel({
         ? "Restoring the original model…"
         : "Unfusing the last operation…";
     });
+  byId("replay-rewritings").addEventListener("click", () => {
+    fusionControls(true);
+    byId("optimization-status").textContent = "Applying pending rewritings…";
+    requestAction("replay-rewritings", "Replay pending rewritings", {
+      requestId: ++fusionRequest,
+    });
+  });
   for (const [id, checked] of [
     ["select-optimization-patterns", true],
     ["clear-optimization-patterns", false],
@@ -786,6 +968,12 @@ function createFusionPanel({
     });
   });
   byId("diagnostic-pattern").addEventListener("change", clearDiagnostic);
+  byId("fusion-diagnostics")
+    .querySelector("summary")
+    .addEventListener("click", (event) => {
+      if (byId("fusion-diagnostics").getAttribute("aria-disabled") === "true")
+        event.preventDefault();
+    });
   byId("show-optimization-report").addEventListener(
     "click",
     openOptimizationReport,
@@ -812,6 +1000,93 @@ function createFusionPanel({
       "Click Run Matching to find candidates for the selected patterns.";
     postMessage({ type: "cancel-fusion" });
   }
+  byId("selection-pattern-name").addEventListener(
+    "input",
+    selectionPatternControls,
+  );
+  byId("close-selection-pattern").addEventListener("click", () => {
+    restoreFunctionEditor = false;
+    functionBodyRequest++;
+    byId("selection-pattern-dialog").close();
+  });
+  byId("selection-pattern-dialog").addEventListener("cancel", () => {
+    restoreFunctionEditor = false;
+    functionBodyRequest++;
+  });
+  byId("selection-pattern-picker").addEventListener(
+    "change",
+    showSelectionPattern,
+  );
+  for (const field of ["text", "replacement"]) {
+    byId(`selection-pattern-${field}`).addEventListener("input", () => {
+      const key = byId("selection-pattern-picker").value;
+      selectionPatternDrafts.set(key, {
+        text: byId("selection-pattern-text").value,
+        replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(key)?.libraryRevision ?? libraryRevision,
+      });
+      selectionPatternControls();
+    });
+  }
+  byId("revert-function-pattern").addEventListener("click", () => {
+    if (byId("revert-function-pattern").disabled) return;
+    selectionPatternDrafts.delete(byId("selection-pattern-picker").value);
+    showSelectionPattern();
+    byId("selection-pattern-status").textContent = "Edits reverted.";
+  });
+  for (const format of ["text", "replacement"]) {
+    byId(`copy-selection-pattern-${format}`).addEventListener("click", () => {
+      postMessage({
+        type: "copy-function-pattern",
+        name: byId("selection-pattern-picker").value,
+        format,
+        text: byId(`selection-pattern-${format}`).value,
+      });
+    });
+  }
+  byId("update-function-pattern").addEventListener("click", () => {
+    if (byId("update-function-pattern").disabled) return;
+    creatingPattern = true;
+    fusionPreview = undefined;
+    byId("fusion-matches").replaceChildren();
+    fusionControls(true);
+    byId("selection-pattern-status").textContent = "Applying function edits…";
+    const pattern = selectionPatterns.get(
+      byId("selection-pattern-picker").value,
+    );
+    if (pattern.functionIndex !== undefined) {
+      restoreFunctionEditor = byId("selection-pattern-dialog").open;
+      requestAction("update-model-function", "Update ONNX function", {
+        requestId: ++fusionRequest,
+        functionIndex: pattern.functionIndex,
+        text: byId("selection-pattern-replacement").value,
+      });
+    } else
+      requestAction("update-function-pattern", "Update FunctionPattern", {
+        requestId: ++fusionRequest,
+        name: byId("selection-pattern-picker").value,
+        text: byId("selection-pattern-text").value,
+        replacement: byId("selection-pattern-replacement").value,
+        libraryRevision:
+          selectionPatternDrafts.get(byId("selection-pattern-picker").value)
+            ?.libraryRevision ?? libraryRevision,
+      });
+  });
+  byId("create-function-pattern").addEventListener("click", () => {
+    if (byId("create-function-pattern").disabled) return;
+    const nodes = selectedNodes();
+    creatingPattern = true;
+    fusionPreview = undefined;
+    byId("fusion-matches").replaceChildren();
+    fusionControls(true);
+    byId("selection-pattern-status").textContent = "Creating FunctionPattern…";
+    requestAction("create-function-pattern", "Create FunctionPattern", {
+      requestId: ++fusionRequest,
+      nodes,
+      name: byId("selection-pattern-name").value.trim(),
+    });
+  });
   byId("fusion-pattern").addEventListener("change", changeFusionPatterns);
   for (const [id, checked] of [
     ["select-patterns", true],
@@ -870,7 +1145,159 @@ function createFusionPanel({
       });
     });
 
+  function showFusionCatalog(data) {
+    selectionCatalogLoaded = true;
+    for (const pattern of data.optimizationPatterns ?? [])
+      if (pattern.definition)
+        selectionPatterns.set(pattern.name, pattern.definition);
+    const available = new Set(
+      (data.optimizationPatterns ?? []).map((pattern) => pattern.name),
+    );
+    for (const fn of data.functions ?? []) {
+      const key = `model-function:${fn.functionIndex}`;
+      selectionPatterns.set(key, { ...selectionPatterns.get(key), ...fn });
+      available.add(key);
+    }
+    if (data.definition?.functionIndex !== undefined) {
+      selectionPatternDrafts.delete(
+        `model-function:${data.definition.functionIndex}`,
+      );
+      selectionPatterns.set(
+        `model-function:${data.definition.functionIndex}`,
+        data.definition,
+      );
+    }
+    for (const name of selectionPatterns.keys())
+      if (!available.has(name)) {
+        selectionPatterns.delete(name);
+        selectionPatternDrafts.delete(name);
+      }
+    const previous = byId("selection-pattern-picker").value;
+    byId("selection-pattern-picker").replaceChildren(
+      ...[...selectionPatterns.entries()].map(([key, definition]) => {
+        const option = document.createElement("option");
+        option.value = key;
+        option.textContent = definition.name;
+        return option;
+      }),
+    );
+    if (selectionPatterns.has(previous))
+      byId("selection-pattern-picker").value = previous;
+    else {
+      const functionIndex = selectedNode()?.function?.path.at(-1)?.function;
+      const key = `model-function:${functionIndex}`;
+      if (selectionPatterns.has(key))
+        byId("selection-pattern-picker").value = key;
+    }
+    showSelectionPattern();
+    showScenarios(data.scenarios, data.name);
+    showOptimizationPatterns(data.optimizationPatterns);
+    byId("fusion-pattern").replaceChildren();
+    for (const pattern of [...data.patterns].sort()) {
+      const label = document.createElement("label");
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.value = pattern;
+      label.append(checkbox, document.createTextNode(pattern));
+      byId("fusion-pattern").append(label);
+    }
+    showPatternGroups(
+      "fusion-pattern-group",
+      "fusion-pattern",
+      data.optimizationPatterns,
+      changeFusionPatterns,
+    );
+    showPatternGroups(
+      "optimization-pattern-group",
+      "optimization-patterns",
+      data.optimizationPatterns,
+      updateOptimizationSelection,
+    );
+    updateDiagnosticPatterns();
+  }
+
   function handleMessage(data) {
+    if (
+      data?.type === "model-function-loaded" ||
+      data?.type === "model-function-error"
+    ) {
+      const key = `model-function:${data.functionIndex}`;
+      if (
+        data.requestId !== functionBodyRequest ||
+        !byId("selection-pattern-dialog").open ||
+        byId("selection-pattern-picker").value !== key
+      )
+        return true;
+      if (data.type === "model-function-error") {
+        byId("selection-pattern-status").textContent =
+          `Could not load function: ${data.error}`;
+        return true;
+      }
+      selectionPatterns.set(key, data.definition);
+      showSelectionPattern();
+      byId("selection-pattern-status").textContent =
+        "Function body loaded. Apply edits updates all its calls; Save keeps the change.";
+      return true;
+    }
+    if (data?.type === "model-function-updated") {
+      if (
+        fusionCompletion !== data.requestId ||
+        fusionRequest !== data.requestId + 1
+      )
+        return true;
+      fusionCompletion = undefined;
+      creatingPattern = false;
+      showFusionCatalog(data);
+      byId("selection-pattern-picker").value =
+        `model-function:${data.functionIndex}`;
+      showSelectionPattern();
+      fusionControls(false);
+      if (restoreFunctionEditor) byId("selection-pattern-dialog").showModal();
+      restoreFunctionEditor = false;
+      byId("selection-pattern-status").textContent =
+        "Function updated for all its calls. Save the model to keep the change.";
+      return true;
+    }
+    if (
+      data?.type === "function-pattern-copied" ||
+      data?.type === "function-pattern-copy-error"
+    ) {
+      if (data.name === byId("selection-pattern-picker").value)
+        byId("selection-pattern-status").textContent =
+          data.type === "function-pattern-copied"
+            ? `Copied ${data.format === "text" ? "pattern" : data.format}.`
+            : `Copy failed: ${data.error}`;
+      return true;
+    }
+    if (
+      data?.type === "function-pattern-created" ||
+      data?.type === "function-pattern-error"
+    ) {
+      if (data.requestId !== fusionRequest) return true;
+      creatingPattern = false;
+      if (data.type === "function-pattern-error") {
+        fusionControls(false);
+        byId("selection-pattern-status").textContent = data.error;
+        return true;
+      }
+      selectionPatternDrafts.delete(data.pattern.name);
+      selectionPatterns.set(data.pattern.name, data.pattern);
+      showFusionCatalog(data);
+      byId("selection-pattern-picker").value = data.pattern.name;
+      showSelectionPattern();
+      const checkbox = [
+        ...byId("fusion-pattern").querySelectorAll("input"),
+      ].find((input) => input.value === data.pattern.name);
+      if (checkbox) checkbox.checked = true;
+      updateDiagnosticPatterns();
+      fusionControls(
+        false,
+        "Run Matching to find this pattern throughout the model.",
+      );
+      byId("selection-pattern-status").textContent =
+        `Ready: ${data.pattern.name}. Close this window, open Fuse and select this pattern, or enable Selection patterns in Global optimization.`;
+      return true;
+    }
     if (
       data?.type === "fusion-diagnostic" ||
       data?.type === "fusion-diagnostic-error"
@@ -932,42 +1359,25 @@ function createFusionPanel({
           "true",
         );
       }
-      showScenarios(data.scenarios, data.name);
-      showOptimizationPatterns(data.optimizationPatterns);
+      showFusionCatalog(data);
       showOptimizationReport(data.optimizationReport);
       if (data.type === "optimization-info")
         byId("onnxscript-optimization-output").textContent =
           data.backend === "onnxscript" ? (data.logs ?? "") : "";
       if (data.type === "fusion-patterns")
-        byId("optimization-status").textContent = "";
-      byId("fusion-pattern").replaceChildren();
-      for (const pattern of [...data.patterns].sort()) {
-        const label = document.createElement("label");
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.value = pattern;
-        label.append(checkbox, document.createTextNode(pattern));
-        byId("fusion-pattern").append(label);
-      }
-      showPatternGroups(
-        "fusion-pattern-group",
-        "fusion-pattern",
-        data.optimizationPatterns,
-        changeFusionPatterns,
-      );
-      showPatternGroups(
-        "optimization-pattern-group",
-        "optimization-patterns",
-        data.optimizationPatterns,
-        updateOptimizationSelection,
-      );
-      updateDiagnosticPatterns();
+        byId("optimization-status").textContent = restoreNotice;
+      restoreNotice = "";
       fusionControls(
         false,
         data.patterns.length
           ? `${data.patterns.length} native patterns available. Select patterns, then click Run Matching.`
           : "No native patterns have compatible anchors in this graph.",
       );
+      if (
+        data.type === "fusion-patterns" &&
+        byId("selection-pattern-dialog").open
+      )
+        selectionChanged();
       if (data.type !== "fusion-patterns") {
         byId("fusion-status").textContent =
           data.type === "optimization-info"
@@ -1000,7 +1410,23 @@ function createFusionPanel({
         }
       }
     } else if (data?.type === "fusion-preview") {
-      if (data.requestId === fusionRequest) showFusionMatches(data);
+      if (data.replayed) {
+        if (
+          fusionCompletion === undefined ||
+          data.requestId !== fusionCompletion ||
+          fusionRequest !== fusionCompletion + 1
+        )
+          return true;
+        fusionCompletion = undefined;
+        showFusionCatalog(data);
+        byId("fusion-panel").hidden = false;
+        byId("fuse-pattern").setAttribute("aria-expanded", "true");
+        byId("fusion-status").textContent =
+          "Pending rewritings reapplied. New matches use the optimized graph.";
+        showFusionMatches(data);
+        revealPanel(byId("fusion-panel"));
+        fit();
+      } else if (data.requestId === fusionRequest) showFusionMatches(data);
     } else if (data?.type === "fusion-error") {
       if (data.requestId !== fusionRequest) return true;
       if (
@@ -1009,6 +1435,9 @@ function createFusionPanel({
       )
         byId("onnxscript-optimization-output").textContent = data.error;
       fusionControls(false, data.error);
+      if (byId("selection-pattern-dialog").open)
+        byId("selection-pattern-status").textContent =
+          `Could not load patterns: ${data.error}`;
       byId("fusion-status").textContent = `Fusion failed: ${data.error}`;
       if (!byId("optimization-panel").hidden)
         byId("optimization-status").textContent =
@@ -1019,11 +1448,25 @@ function createFusionPanel({
     return true;
   }
   function reset(graph, operationRequestId, file) {
+    if (operationRequestId !== fusionRequest) restoreFunctionEditor = false;
+    functionBodyRequest++;
+    if (byId("selection-pattern-dialog").open)
+      byId("selection-pattern-dialog").close();
+    creatingPattern = false;
+    selectionCatalogLoaded = false;
+    selectionPatterns.clear();
+    selectionPatternDrafts.clear();
+    byId("selection-pattern-picker").replaceChildren();
+    showSelectionPattern();
+    byId("selection-pattern-status").textContent =
+      "Select one or more operators in the graph.";
     const restoring =
       restoreRequest !== undefined && restoreRequest === operationRequestId;
     restoreRequest = undefined;
+    restoreNotice = "";
     fusionGraph = graph;
     optimizationHistory = file?.fusionHistory ?? [];
+    pendingRewritings = file?.pendingRewritings ?? [];
     undoCount = file?.fusionCount ?? 0;
     selectedStep = undefined;
     fusionCompletion =
@@ -1049,6 +1492,11 @@ function createFusionPanel({
     byId("optimization-feedback").textContent = "";
     byId("optimization-status").textContent = "";
     if (restoring) {
+      const count = pendingRewritings.reduce(
+        (total, operation) => total + operation.matches.length,
+        0,
+      );
+      restoreNotice = `Model restored. ${count} rewriting${count === 1 ? "" : "s"} kept pending; the next matching or optimization reapplies them.`;
       byId("optimization-panel").hidden = false;
       byId("optimize-model").setAttribute("aria-expanded", "true");
       fusionControls(true);
@@ -1058,23 +1506,61 @@ function createFusionPanel({
     }
   }
   function setEnabled(enabled) {
-    byId("fuse-pattern").disabled = !enabled;
-    byId("optimize-model").disabled = !enabled;
+    byId("fuse-pattern").disabled = creatingPattern || !enabled;
+    byId("optimize-model").disabled = creatingPattern || !enabled;
     for (const id of [
       "optimization-unfuse-last",
       "optimization-restore-original",
     ])
       byId(id).disabled = !enabled || fusionBusy || !undoCount;
+    byId("replay-rewritings").disabled =
+      !enabled || fusionBusy || !pendingRewritings.length;
     diagnosticControls();
+    selectionPatternControls();
   }
 
   return {
     handleMessage,
     reset,
+    updateGraph: (graph) => {
+      fusionGraph = graph;
+      fusionControls(false);
+    },
     setEnabled,
     selectionChanged,
+    libraryChanged: (data) => {
+      libraryRevision = data.revision;
+      if (!data.invalidateFusion) return;
+      restoreFunctionEditor = false;
+      creatingPattern = false;
+      selectionCatalogLoaded = false;
+      fusionRequest++;
+      clearFusionPreview();
+      clearDiagnostic();
+      fusionControls(false);
+      if (byId("selection-pattern-dialog").open) {
+        byId("selection-pattern-dialog").close();
+        byId("selection-pattern-status").textContent =
+          "The pattern library changed. Reopen the editor to load its definitions.";
+      }
+      if (
+        canFuse() &&
+        (!byId("fusion-panel").hidden || !byId("optimization-panel").hidden)
+      ) {
+        fusionControls(true);
+        requestAction("fusion-patterns", "Refresh pattern library", {
+          requestId: ++fusionRequest,
+        });
+      }
+    },
+    canOpenSelectionPattern,
+    openSelectionPattern,
     refresh: () => fusionControls(fusionBusy),
     invalidate: () => {
+      restoreFunctionEditor = false;
+      if (byId("selection-pattern-dialog").open)
+        byId("selection-pattern-dialog").close();
+      creatingPattern = false;
       restoreRequest = undefined;
       fusionRequest++;
       fusionCompletion = undefined;
