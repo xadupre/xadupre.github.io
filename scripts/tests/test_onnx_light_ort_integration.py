@@ -80,6 +80,7 @@ class TestOnnxLightOrtIntegration(unittest.TestCase):
         self.assertIn("github.event_name == 'schedule'", job["if"])
         self.assertIn("github.actor == 'github-actions[bot]'", job["if"])
         steps = {step["name"]: step for step in job["steps"]}
+        self.assertEqual(steps["Set up Python"]["with"]["python-version"], "3.13")
         checkout = steps["Checkout onnx-light-ort"]
         self.assertEqual(checkout["with"]["repository"], "xadupre/onnx-light-ort")
         self.assertEqual(checkout["with"]["ref"], "${{ inputs.ref || 'main' }}")
