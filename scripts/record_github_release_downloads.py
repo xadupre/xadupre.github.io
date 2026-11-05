@@ -1,8 +1,8 @@
 """Record daily GitHub release download counts for ONNX and LLM repositories.
 
-Discover public xadupre onnx-light and yet-another projects, and include ONNX
-upstreams, llama.cpp and vLLM. Only attached release assets have counters;
-GitHub-generated source archives are excluded.
+Discover public xadupre onnx-light, yet-another and arranged-agents projects,
+and include ONNX upstreams, llama.cpp and vLLM. Only attached release assets
+have counters; GitHub-generated source archives are excluded.
 """
 
 from __future__ import annotations
@@ -28,7 +28,9 @@ EXTRA_UPSTREAMS = (
 
 def is_owner_project(name: str) -> bool:
     """Limit owner discovery to the requested project families."""
-    return name == "onnx-light" or name.startswith(("onnx-light-", "yet-another-"))
+    return name in ("onnx-light", "arranged-agents") or name.startswith(
+        ("onnx-light-", "yet-another-")
+    )
 
 
 def discover_repositories(token: str, home: Path = HOME) -> list[str]:

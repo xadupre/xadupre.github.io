@@ -33,8 +33,8 @@ function formatCount(value) {
 function isTrackedProject(repository) {
   if (!repository.startsWith("xadupre/")) return true;
   const name = repository.slice("xadupre/".length);
-  return name === "onnx-light" || name.startsWith("onnx-light-") ||
-    name.startsWith("yet-another-");
+  return name === "onnx-light" || name === "arranged-agents" ||
+    name.startsWith("onnx-light-") || name.startsWith("yet-another-");
 }
 
 function assetHistory(data, repository, asset) {

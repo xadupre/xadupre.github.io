@@ -61,15 +61,16 @@ test("per-file history preserves zero, missing observations and legacy totals", 
     {id: 2, download_count: 12})), [null, null, null, 12]);
 });
 
-test("owner scope excludes other ONNX projects and includes both requested families", () => {
+test("owner scope includes requested projects and excludes unrelated owner projects", () => {
   for (const repo of [
     "xadupre/onnx-light", "xadupre/onnx-light-cpu", "xadupre/yet-another-tool",
+    "xadupre/onnx-light-viewer", "xadupre/arranged-agents",
     "onnx/onnx", "microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions",
     "ggml-org/llama.cpp", "vllm-project/vllm",
   ]) assert.equal(context.isTrackedProject(repo), true, repo);
   for (const repo of [
     "xadupre/onnx-asv-benchmark", "xadupre/onnxruntime", "xadupre/onnx-diagnostic",
-    "xadupre/onnx-lightish",
+    "xadupre/onnx-lightish", "xadupre/arranged-agents-extra",
   ]) assert.equal(context.isTrackedProject(repo), false, repo);
 });
 
