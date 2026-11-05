@@ -437,9 +437,21 @@ directory path, or a HuggingFace id like
 <dt><code class="docutils literal notranslate"><span class="pre">BENCHMARK</span></code></dt><dd><p>One built-in benchmark name or one or more LM-Eval task names. Use
 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">locodellm</span> <span class="pre">benchmarks</span></code> to list available benchmarks.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--precision</span></code></dt><dd><p>Precision qualifier for conversion (e.g. <code class="docutils literal notranslate"><span class="pre">fp32</span></code>, <code class="docutils literal notranslate"><span class="pre">fp16</span></code>, <code class="docutils literal notranslate"><span class="pre">int4</span></code>).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--precision</span></code></dt><dd><p>Precision qualifier for conversion (e.g. <code class="docutils literal notranslate"><span class="pre">fp32</span></code>, <code class="docutils literal notranslate"><span class="pre">fp16</span></code>, <code class="docutils literal notranslate"><span class="pre">int4</span></code>).
+With PyTorch, selects the loading dtype: <code class="docutils literal notranslate"><span class="pre">auto</span></code> (default), <code class="docutils literal notranslate"><span class="pre">fp32</span></code>,
+<code class="docutils literal notranslate"><span class="pre">fp16</span></code>, or <code class="docutils literal notranslate"><span class="pre">bf16</span></code>. It does not quantize the model.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--provider</span></code></dt><dd><p>Execution provider (e.g. <code class="docutils literal notranslate"><span class="pre">CUDAExecutionProvider</span></code>).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--backend</span></code></dt><dd><p>Generation backend: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">pytorch</span></code>. The PyTorch backend
+loads Hugging Face Transformers checkpoints directly, without ONNX
+conversion. It supports both built-in benchmarks (including the Python
+tool harness) and generation-based LM-Eval tasks.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--device</span></code></dt><dd><p>PyTorch device, e.g. <code class="docutils literal notranslate"><span class="pre">cpu</span></code> (default), <code class="docutils literal notranslate"><span class="pre">cuda</span></code>, or <code class="docutils literal notranslate"><span class="pre">cuda:0</span></code>.
+<code class="docutils literal notranslate"><span class="pre">auto</span></code> lets Accelerate distribute model weights across available
+devices. Requires <code class="docutils literal notranslate"><span class="pre">--backend</span> <span class="pre">pytorch</span></code>.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--provider</span></code></dt><dd><p>ONNX execution provider (e.g. <code class="docutils literal notranslate"><span class="pre">CUDAExecutionProvider</span></code>). This option,
+<code class="docutils literal notranslate"><span class="pre">--provider-option</span></code>, and <code class="docutils literal notranslate"><span class="pre">--session-option</span></code> cannot be used with PyTorch.</p>
 </dd>
 <dt><code class="docutils literal notranslate"><span class="pre">--provider-option</span> <span class="pre">NAME=VALUE</span></code></dt><dd><p>ONNX Runtime option for the selected provider. May be repeated.</p>
 </dd>
@@ -456,7 +468,10 @@ The model decides whether to use the tool, receives its output, and can
 revise its solution before returning a final function. The default,
 without this option, remains a single generation with no tool.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--chat-template</span></code></dt><dd><p>Chat template to use (e.g. <code class="docutils literal notranslate"><span class="pre">chatml</span></code>).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--chat-template</span></code></dt><dd><p>Chat template to use (e.g. <code class="docutils literal notranslate"><span class="pre">chatml</span></code>).
+With PyTorch, the tokenizer’s native chat template is used by default
+when available; otherwise prompts are sent as plain text. An explicit
+<code class="docutils literal notranslate"><span class="pre">chatml</span></code> overrides the native template.</p>
 </dd>
 <dt><code class="docutils literal notranslate"><span class="pre">--output,</span> <span class="pre">-o</span></code></dt><dd><p>Built-in benchmark output path. Every output writes a detailed <code class="docutils literal notranslate"><span class="pre">.json</span></code>
 file with interaction traces, generated code, and per-input results plus
@@ -510,18 +525,57 @@ final benchmark scoring does not. Without the harness these counts are zero.</p>
 </section>
 <section id="python-tool-harness">
 <h2>Python tool harness<a class="headerlink" href="#python-tool-harness" title="Link to this heading">#</a></h2>
-<p>Runs the same built-in problems with optional tool use:</p>
+<p>Runs the same built-in problems with Python execution and feedback:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>Qwen/Qwen2.5-Coder-0.5B-Instruct<span class="w"> </span>basic<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--harness<span class="w"> </span>python<span class="w"> </span>--chat-template<span class="w"> </span>chatml<span class="w"> </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--output<span class="w"> </span>results.xlsx<span class="w"> </span>--verbose<span class="w"> </span><span class="m">1</span>
 </pre></div>
 </div>
-<p>The model is instructed to request one execution per turn using
-<code class="docutils literal notranslate"><span class="pre">&lt;python&gt;...script...&lt;/python&gt;</span></code>. The application executes the script and
+<p>The model can request one or more executions per turn using
+<code class="docutils literal notranslate"><span class="pre">&lt;python&gt;...script...&lt;/python&gt;</span></code> blocks. The application executes the scripts and
 returns stdout, stderr, exit code, timeout status, and the remaining budget.
+The Nemotron form
+<code class="docutils literal notranslate"><span class="pre">&lt;tool_call&gt;&lt;function=stateful_python_code_exec&gt;&lt;parameter=code&gt;...code...&lt;/parameter&gt;&lt;/function&gt;&lt;/tool_call&gt;</span></code>
+is also accepted, with <code class="docutils literal notranslate"><span class="pre">stateful_python_code_exec</span></code> or <code class="docutils literal notranslate"><span class="pre">python</span></code> as the tool
+name, as an explicit Python execution request outside Markdown fences and
+thinking. Despite the native tool name, it uses the same fresh-process
+semantics as <code class="docutils literal notranslate"><span class="pre">&lt;python&gt;</span></code>; Python variables do not persist between scripts.
+The abbreviated Nemotron response starting with <code class="docutils literal notranslate"><span class="pre">&lt;parameter=code&gt;</span></code> is also
+recognized when it occupies the entire answer after thinking and ends with
+<code class="docutils literal notranslate"><span class="pre">&lt;/parameter&gt;&lt;/function&gt;&lt;/tool_call&gt;</span></code>. Missing closing tags and unknown
+explicit tool names remain errors.
+Grouped calls execute sequentially in message order, not concurrently, because
+scripts can depend on files in their shared working directory. All results are
+returned together before the next model response, even if a script fails.
+Each block consumes one execution; a batch exceeding the remaining budget is
+rejected in full without executing any of its scripts.
 After the tenth execution the model can still provide its final function,
 but an eleventh request is refused and the problem is marked failed.
 Hidden test inputs and expected results are not supplied to the tool.</p>
+<p>Final-answer extraction prefers Markdown blocks labelled <code class="docutils literal notranslate"><span class="pre">python</span></code> or <code class="docutils literal notranslate"><span class="pre">py</span></code>
+and ignores accompanying unlabelled output or other-language blocks. When no
+Python-labelled block is present, unlabelled blocks remain accepted as code.
+Assertions included in the published Python code still execute and can fail;
+the parser does not remove incorrect checks to improve a score.</p>
+<p>Every <code class="docutils literal notranslate"><span class="pre">&lt;python&gt;...&lt;/python&gt;</span></code> block outside Markdown fences requests execution,
+even if it only defines functions or accompanies a proposed final answer.
+The model always receives stdout, stderr, and execution status before another
+generation. Defining a function alone produces no output; the model must include
+its own calls, <code class="docutils literal notranslate"><span class="pre">print</span></code>, or <code class="docutils literal notranslate"><span class="pre">assert</span></code> statements to check its behavior.
+Final functions use Markdown fences without tool tags. Tool use is optional:
+a final answer is accepted without requiring any script or function execution.
+Only the explicit message format distinguishes tool requests from published code.</p>
+<p>The summary reports <code class="docutils literal notranslate"><span class="pre">success_rate</span></code> over benchmark test inputs,
+<code class="docutils literal notranslate"><span class="pre">avg_generated_tokens</span></code> and <code class="docutils literal notranslate"><span class="pre">avg_prompts</span></code> per problem, and
+<code class="docutils literal notranslate"><span class="pre">total_function_calls</span></code>. Token totals include thinking and all model responses;
+prompt counts include the initial prompt and every subsequent model turn.
+<code class="docutils literal notranslate"><span class="pre">function_call_count</span></code> counts actual invocations of Python functions defined in
+tool scripts, including recursive and helper calls, not definitions or hidden-test
+evaluation. <code class="docutils literal notranslate"><span class="pre">tool_call_count</span></code> separately counts executed scripts.
+<code class="docutils literal notranslate"><span class="pre">multi_tool_turn_count</span></code> counts model responses requesting at least two scripts,
+and <code class="docutils literal notranslate"><span class="pre">max_tool_calls_per_turn</span></code> records the largest requested batch, including a
+batch rejected for exceeding the budget. These describe grouped requests, not
+parallel execution.</p>
 <p>Each script runs in a fresh Python process, with the current interpreter,
 in a temporary working directory shared only across that problem’s calls.
 Executions time out after 10 seconds, and each stdout/stderr response is
@@ -552,7 +606,11 @@ Initial generation options are in <code class="docutils literal notranslate"><sp
 prompts include their own <code class="docutils literal notranslate"><span class="pre">generation_options</span></code>.</p>
 <p>Responses preserve any <code class="docutils literal notranslate"><span class="pre">&lt;think&gt;</span></code> sections or other reasoning text actually
 emitted by the model. Internal reasoning that the model does not expose
-cannot be recorded.</p>
+cannot be recorded.
+Tool-call detection and final code extraction ignore this thinking text,
+including when the opening <code class="docutils literal notranslate"><span class="pre">&lt;think&gt;</span></code> was already supplied by the tokenizer’s
+chat template. The complete original responses remain unchanged in the JSON
+events, and token counts still include reasoning tokens.</p>
 <p>The final evaluation includes compilation/execution errors and the per-input
 results, solely for inspection in the JSON file. It is <strong>never sent to the
 model</strong> and does not trigger a retry or tool call. Neither the benchmark
@@ -567,6 +625,42 @@ the existing in-process execution behavior.</p>
 </section>
 <section id="examples">
 <h2>Examples<a class="headerlink" href="#examples" title="Link to this heading">#</a></h2>
+<section id="run-directly-with-pytorch">
+<h3>Run directly with PyTorch<a class="headerlink" href="#run-directly-with-pytorch" title="Link to this heading">#</a></h3>
+<p>Install the optional backend dependencies:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"locodellm[pytorch]"</span>
+</pre></div>
+</div>
+<p>Load a native Qwen3.5 checkpoint without converting it to ONNX:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>Qwen/Qwen3.5-4B<span class="w"> </span>basic<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--backend<span class="w"> </span>pytorch<span class="w"> </span>--device<span class="w"> </span>cuda<span class="w"> </span>--precision<span class="w"> </span>bf16<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span>--output<span class="w"> </span>results.xlsx
+</pre></div>
+</div>
+<p>For a pre-quantized Transformers checkpoint, omit <code class="docutils literal notranslate"><span class="pre">--precision</span> <span class="pre">int4</span></code>:
+the model’s own quantization configuration is used. For example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>QuantTrio/Qwen3.5-4B-AWQ<span class="w"> </span>basic<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--backend<span class="w"> </span>pytorch<span class="w"> </span>--device<span class="w"> </span>cuda<span class="w"> </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output<span class="w"> </span>results.xlsx
+</pre></div>
+</div>
+<p>AWQ, GPTQ, and FP8 checkpoints require their respective Transformers
+quantization dependencies, supported kernels, and compatible hardware.
+The PyTorch extra alone does not guarantee support for every quantization.
+GGUF files and <code class="docutils literal notranslate"><span class="pre">mock/</span></code> ONNX models are not PyTorch checkpoints.
+Qwen3.5 vision-language checkpoints are loaded with
+<code class="docutils literal notranslate"><span class="pre">AutoModelForImageTextToText</span></code> for text-only benchmark prompts.</p>
+<p>Use the Python tool harness independently of the inference backend:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>Qwen/Qwen3.5-4B<span class="w"> </span>basic<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--backend<span class="w"> </span>pytorch<span class="w"> </span>--device<span class="w"> </span>cuda<span class="w"> </span>--harness<span class="w"> </span>python<span class="w"> </span>--max-length<span class="w"> </span><span class="m">1024</span>
+</pre></div>
+</div>
+<p>CSV exports and the Excel <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> sheet include <code class="docutils literal notranslate"><span class="pre">backend</span></code> and
+<code class="docutils literal notranslate"><span class="pre">device</span></code> columns so PyTorch runs can be distinguished from ONNX runs.
+ONNX remains the default.</p>
+</section>
+<section id="run-with-onnx-runtime-genai">
+<h3>Run with ONNX Runtime GenAI<a class="headerlink" href="#run-with-onnx-runtime-genai" title="Link to this heading">#</a></h3>
 <p>Install the optional dependency before running LM-Eval benchmarks:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">".[eval]"</span>
 </pre></div>
@@ -575,9 +669,9 @@ the existing in-process execution behavior.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>path/to/model<span class="w"> </span>gsm8k<span class="w"> </span>--limit<span class="w"> </span><span class="m">10</span>
 </pre></div>
 </div>
-<p>Only LM-Eval tasks using <code class="docutils literal notranslate"><span class="pre">generate_until</span></code> are supported; likelihood and
-perplexity tasks require model logits, which ONNX Runtime GenAI does not
-expose.</p>
+<p>Only LM-Eval tasks using <code class="docutils literal notranslate"><span class="pre">generate_until</span></code> are supported by the session
+adapter, with either backend. Likelihood and perplexity tasks are not
+implemented by this adapter.</p>
 <p>Run with the mock model:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>bench<span class="w"> </span>mock/generate<span class="w"> </span>basic<span class="w"> </span>--chat-template<span class="w"> </span>chatml
 </pre></div>
@@ -634,6 +728,7 @@ incrementally during the run):</p>
 </div>
 </section>
 </section>
+</section>
 
 
                 </article>
@@ -686,7 +781,11 @@ incrementally during the run):</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#options">Options</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#output-columns">Output columns</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#python-tool-harness">Python tool harness</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples">Examples</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-directly-with-pytorch">Run directly with PyTorch</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-with-onnx-runtime-genai">Run with ONNX Runtime GenAI</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -723,7 +822,7 @@ incrementally during the run):</p>
         <div class="footer-item">
 
   <p class="sphinx-version">
-    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.1.1.
+    Created using <a href="https://www.sphinx-doc.org/">Sphinx</a> 9.2.0.
   </p>
 </div>
       
