@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Nov 04, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -497,8 +497,8 @@ one GEMM per broadcast batch item
 </div>
 <p>The reusable <code class="docutils literal notranslate"><span class="pre">MatMulPlan</span></code> library API can own a constant <code class="docutils literal notranslate"><span class="pre">B</span></code> tensor, giving
 callers a stable lifetime independent of the source buffer. The registered
-ONNX adapter does not currently cache a plan or constant B: it constructs a
-fresh plan from both concrete input shapes on every invocation.</p>
+ONNX adapter caches plans by dtype and concrete input shapes. Eligible immutable
+FP32 projection weights can be prepared separately in the runtime value store.</p>
 </section>
 <section id="types-and-algorithm-selection">
 <h2>Types and algorithm selection<a class="headerlink" href="#types-and-algorithm-selection" title="Link to this heading">#</a></h2>
@@ -508,9 +508,26 @@ types, and incompatible matrix or batch dimensions fail before compute.</p>
 <p>FLOAT and DOUBLE execute directly through <code class="docutils literal notranslate"><span class="pre">MatMulPlan&lt;T&gt;</span></code>. FLOAT16 and
 BFLOAT16 use <code class="docutils literal notranslate"><span class="pre">MatMulPlan&lt;float&gt;</span></code> together with <code class="docutils literal notranslate"><span class="pre">GemmHalfPlan</span></code> for the
 native half-capable algorithms, with FP32 accumulation and final narrowing.
-For BF16 general and direct algorithms, the current fallback materializes
-complete FP32 copies of A and B plus the FP32 output before converting back to
-BF16; this path is not bounded to one panel.</p>
+The adapter owns one FP32 output workspace across all broadcast batches.
+Native half routines pack compact panels; fallback routines widen only while
+packing or reducing, not by materializing complete FP32 copies of A and B.</p>
+</section>
+<section id="peak-memory-accounting">
+<h2>Peak-memory accounting<a class="headerlink" href="#peak-memory-accounting" title="Link to this heading">#</a></h2>
+<p>The CPU <code class="docutils literal notranslate"><span class="pre">MatMul</span></code> peak-memory hook uses the same shape plans and checked
+packing-size formulas as execution. It excludes declared output <code class="docutils literal notranslate"><span class="pre">Y</span></code>, inputs,
+and preparation-owned weights, and includes the FP32 half-output workspace,
+shared B panel waves, per-worker A/micro-B panels, skinny accumulators, and
+split-K partial outputs. Concurrent batch products are accounted for separately
+from inner-GEMM parallelism; nested split-K packing is serial per partition.</p>
+<p>The shape-only registration API carries neither dtype nor executor policy.
+Consequently the hook reports only a conservative worst case across FLOAT,
+DOUBLE, FLOAT16, BFLOAT16 and all plan-admitted executor sizes. It does not
+assume that profiling’s current (often serial) executor is execution’s executor.
+For a known participant limit, the plan <code class="docutils literal notranslate"><span class="pre">ScratchBytes(limit)</span></code> and
+<code class="docutils literal notranslate"><span class="pre">HalfScratchBytes(is_bfloat16,</span> <span class="pre">limit)</span></code> APIs give a tighter bound. Unrestricted
+executor bounds can exceed typical session usage, especially for large batches
+or projections; this is packing concurrency, not full-source promotion.</p>
 <p>The embedded <code class="docutils literal notranslate"><span class="pre">GemmPlan</span></code> chooses the current shape-specific algorithm once:</p>
 <ul class="simple">
 <li><p>direct execution for small natural-layout reductions;</p></li>
@@ -585,6 +602,7 @@ adapter.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#shape-and-plan-model">Shape and plan model</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#types-and-algorithm-selection">Types and algorithm selection</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#peak-memory-accounting">Peak-memory accounting</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#scheduling-and-invariants">Scheduling and invariants</a></li>
 </ul>
   </nav></div>
@@ -620,7 +638,7 @@ adapter.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Nov 04, 2026.
+  Last updated on Nov 05, 2026.
 </p></div>
       
     </div>
