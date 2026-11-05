@@ -82,6 +82,11 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "name": "onnx-light-viewer",
                                 "private": False,
                             },
+                            {
+                                "full_name": "xadupre/arranged-agents",
+                                "name": "arranged-agents",
+                                "private": False,
+                            },
                         ]
                 elif parsed.path.endswith("/releases/1/assets"):
                     if case.fail_assets:
@@ -186,6 +191,7 @@ class TestReleaseDownloads(unittest.TestCase):
                 "microsoft/onnxruntime-genai",
                 "onnx/onnx",
                 "vllm-project/vllm",
+                "xadupre/arranged-agents",
                 "xadupre/onnx-light",
                 "xadupre/onnx-light-cpu",
                 "xadupre/onnx-light-kernel-images",
@@ -204,12 +210,18 @@ class TestReleaseDownloads(unittest.TestCase):
             home.write_text(
                 '<a href="https://github.com/xadupre/onnx-asv-benchmark">excluded</a>'
                 '<a href="https://github.com/xadupre/onnxruntime">excluded</a>'
+                '<a href="https://github.com/xadupre/arranged-agents-extra">excluded</a>'
+                '<a href="https://github.com/xadupre/arranged-agents">included</a>'
+                '<a href="https://github.com/xadupre/onnx-light-viewer">included</a>'
                 '<a href="https://github.com/xadupre/yet-another-project">included</a>',
                 encoding="utf-8",
             )
             repositories = downloads.discover_repositories("", home)
             self.assertNotIn("xadupre/onnx-asv-benchmark", repositories)
             self.assertNotIn("xadupre/onnxruntime", repositories)
+            self.assertNotIn("xadupre/arranged-agents-extra", repositories)
+            self.assertIn("xadupre/arranged-agents", repositories)
+            self.assertIn("xadupre/onnx-light-viewer", repositories)
             self.assertIn("xadupre/yet-another-project", repositories)
             self.assertIn("microsoft/onnxruntime-genai", repositories)
             self.assertIn("microsoft/onnxruntime-extensions", repositories)
