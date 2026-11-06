@@ -23,7 +23,7 @@ All C ABI callbacks prevent native exceptions from escaping.
 Requirements
 ------------
 
-Build with a C++20 compiler and CMake 3.28 or newer, with
+Build with a C++20 compiler and CMake 4.0 or newer, with
 ``ONNX_LIGHT_ORT_BUILD_PLUGIN=ON``. CMake supplies onnx-light, the standalone
 onnx-light-cpu kernels and pinned ORT headers. The plugin does not link ORT,
 but execution requires a real ORT host supporting API 18.

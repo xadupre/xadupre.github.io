@@ -25,7 +25,7 @@ additional include paths to verify this contract.
 Requirements
 ------------
 
-Build with a C++20 compiler, CMake 3.28 or newer and
+Build with a C++20 compiler, CMake 4.0 or newer and
 ``ONNX_LIGHT_ORT_BUILD_HOST=ON``. CMake supplies onnx-light and pinned ORT
 headers; no ORT runtime is needed. Use only explicitly selected, trusted native
 plugins matching the audited API-18 profile below.
