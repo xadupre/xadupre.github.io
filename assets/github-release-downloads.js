@@ -31,6 +31,7 @@ function formatCount(value) {
 }
 
 function isTrackedProject(repository) {
+  if (repository === "xadupre/onnx-light-com-microsoft") return false;
   if (!repository.startsWith("xadupre/")) return true;
   const name = repository.slice("xadupre/".length);
   return name === "onnx-light" || name === "arranged-agents" ||

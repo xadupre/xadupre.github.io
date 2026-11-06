@@ -71,6 +71,7 @@ test("owner scope includes requested projects and excludes unrelated owner proje
   for (const repo of [
     "xadupre/onnx-asv-benchmark", "xadupre/onnxruntime", "xadupre/onnx-diagnostic",
     "xadupre/onnx-lightish", "xadupre/arranged-agents-extra",
+    "xadupre/onnx-light-com-microsoft",
   ]) assert.equal(context.isTrackedProject(repo), false, repo);
 });
 
@@ -119,6 +120,7 @@ test("projects omit aggregate totals and preserve period and selectable file cur
     updated_at: "2026-10-21T06:00:00Z",
     repositories: [
       {repository: "xadupre/onnx-asv-benchmark", total: 999, releases: []},
+      {repository: "xadupre/onnx-light-com-microsoft", total: 998, releases: []},
       {repository: "xadupre/onnx-light-empty", total: 0, releases: []},
       {repository: "onnx/onnx", total: 17, releases: [{
         tag: "v0", total: 5, prerelease: false,

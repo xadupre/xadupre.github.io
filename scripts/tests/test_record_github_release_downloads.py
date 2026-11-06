@@ -78,6 +78,11 @@ class TestReleaseDownloads(unittest.TestCase):
                     else:
                         payload = [
                             {
+                                "full_name": "xadupre/onnx-light-com-microsoft",
+                                "name": "onnx-light-com-microsoft",
+                                "private": False,
+                            },
+                            {
                                 "full_name": "xadupre/onnx-light-viewer",
                                 "name": "onnx-light-viewer",
                                 "private": False,
@@ -211,6 +216,7 @@ class TestReleaseDownloads(unittest.TestCase):
                 '<a href="https://github.com/xadupre/onnx-asv-benchmark">excluded</a>'
                 '<a href="https://github.com/xadupre/onnxruntime">excluded</a>'
                 '<a href="https://github.com/xadupre/arranged-agents-extra">excluded</a>'
+                '<a href="https://github.com/xadupre/onnx-light-com-microsoft">excluded</a>'
                 '<a href="https://github.com/xadupre/arranged-agents">included</a>'
                 '<a href="https://github.com/xadupre/onnx-light-viewer">included</a>'
                 '<a href="https://github.com/xadupre/yet-another-project">included</a>',
@@ -220,6 +226,7 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertNotIn("xadupre/onnx-asv-benchmark", repositories)
             self.assertNotIn("xadupre/onnxruntime", repositories)
             self.assertNotIn("xadupre/arranged-agents-extra", repositories)
+            self.assertNotIn("xadupre/onnx-light-com-microsoft", repositories)
             self.assertIn("xadupre/arranged-agents", repositories)
             self.assertIn("xadupre/onnx-light-viewer", repositories)
             self.assertIn("xadupre/yet-another-project", repositories)

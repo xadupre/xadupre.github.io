@@ -28,6 +28,8 @@ EXTRA_UPSTREAMS = (
 
 def is_owner_project(name: str) -> bool:
     """Limit owner discovery to the requested project families."""
+    if name == "onnx-light-com-microsoft":
+        return False
     return name in ("onnx-light", "arranged-agents") or name.startswith(
         ("onnx-light-", "yet-another-")
     )
