@@ -11,7 +11,6 @@ import { huggingFaceTasks } from "./huggingFaceTasks";
  * @param nonce Fresh per-panel nonce authorizing only the bundled scripts.
  * @param onnxLightVersion C++ release embedded in the compiled native addon.
  * @param initialTab Initially selected viewer tab.
- * @param appVersion Viewer release from the extension's package metadata.
  * @returns Complete HTML document; graph and log data require the ready handshake.
  */
 export function webviewHtml(
@@ -20,7 +19,6 @@ export function webviewHtml(
   nonce: string,
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
-  appVersion: string = "",
 ): string {
   const historyControls = (target: "open" | "save"): string =>
     `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
@@ -150,11 +148,10 @@ export function webviewHtml(
   <link rel="stylesheet" href="${resource("viewer.css")}">
   <title>ONNX Light Viewer</title>
 </head>
-<body>
+<body data-onnx-light-version="${onnxLightVersion}">
   <main class="workspace" aria-label="ONNX graph explorer">
     <nav class="viewer-tabs" role="tablist" aria-label="Viewer">
       <div class="feature-group" role="presentation">
-        <span class="feature-group-title" id="navigation-theme">Navigation</span>
         <div class="feature-group-controls" role="presentation">
           <a id="repository-link" href="https://github.com/xadupre/onnx-light-viewer" title="ONNX Light Viewer on GitHub" aria-label="Open the ONNX Light Viewer GitHub repository"><img src="${resource("logo.svg")}" alt="" width="24" height="24"></a>
           <button id="model-tab" role="tab" aria-controls="model-view" aria-selected="${initialTab === "model"}" tabindex="${initialTab === "model" ? 0 : -1}">Model</button>
@@ -165,7 +162,6 @@ export function webviewHtml(
         </div>
       </div>
       <div class="feature-group" role="presentation">
-        <span class="feature-group-title" id="application-theme">Application</span>
         <div class="feature-group-controls" role="presentation">
           <button id="logs-tab" role="tab" aria-controls="logs-view" aria-selected="${initialTab === "logs"}" tabindex="${initialTab === "logs" ? 0 : -1}">Logs</button>
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
@@ -178,11 +174,15 @@ export function webviewHtml(
     </nav>
     <section id="model-view" role="tabpanel" aria-labelledby="model-tab"${initialTab === "logs" ? " hidden" : ""}>
       <header class="graph-toolbar">
-        <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span id="initializer-count">0 initializers</span><span id="app-version" title="ONNX Light Viewer version">ONNX Light Viewer ${appVersion}</span><span id="onnx-light-version" data-version="${onnxLightVersion}" title="onnx-light C++ release used by this viewer">onnx-light ${onnxLightVersion}</span><span id="navigation-status" role="status"></span><span id="load-status" role="status"></span></div>
-        <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
+        <div class="graph-heading">
+          <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+          <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
+          <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
+        </div>
+        <span id="navigation-status" role="status"></span>
+        <span id="load-status" role="status"></span>
         <span id="save-status" role="status"></span>
         <span id="fusion-status" role="status"></span>
-        <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
         <progress id="load-progress" aria-label="Loading ONNX model" hidden></progress>
       </header>
       <div class="graph-body">
@@ -525,16 +525,25 @@ export function webviewHtml(
             </section>
             <details id="open-browser" hidden><summary id="open-browser-title">Or enter a repository / URL</summary></details>
             <form id="open-form">
-              <label for="open-file">Model path, URL or backend test ID</label>
+              <p id="open-format" role="status">Format is detected automatically when opening; directories are runtime packages.</p>
+              <label id="open-file-label" for="open-file">Model file or package path</label>
               <input id="open-file" type="text" required autocomplete="off">
               <select id="open-file-history" aria-label="Recent model paths" disabled><option value="">Choose a recent path...</option></select>
               <div id="open-path-options" class="path-picker-actions" role="group" aria-label="Model path selection">
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
                 <button id="open-native-picker" type="button">VS Code file picker...</button>
+                <button id="open-native-folder-picker" type="button">VS Code folder picker...</button>
               </div>
+              <div id="open-package-options" hidden>
+                <button id="inspect-open-package" type="button">Inspect package</button>
+                <label for="open-package-model">Model inside the package</label><select id="open-package-model" disabled><option value="">Use the package default model</option></select>
+                <p id="open-package-status" role="status"></p>
+                <p>Select the model to view; hardware compatibility is not selected automatically. All assets are preserved when saving a package. Provider kernels are still required for execution.</p>
+              </div>
+              <p id="loaded-format" role="status"></p>
               <label for="open-password">Password (encrypted models only)</label>
               <input id="open-password" type="password" autocomplete="off">
-              <progress id="open-progress" aria-label="Opening ONNX model" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
+              <progress id="open-progress" aria-label="Opening model or package" aria-describedby="open-progress-status" hidden></progress><p id="open-progress-status" role="status" hidden></p>
               <p id="open-error" role="alert"></p>
               <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
             </form>
@@ -570,15 +579,21 @@ export function webviewHtml(
             </form>
             <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
-              <label for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
+              <label for="save-container">What to save</label>
+              <select id="save-container"><option value="model">Model file</option><option value="generic">Generic runtime package (models + weights)</option><option value="genai" disabled>GenAI runtime package (+ configuration + tokenizer)</option><option value="compiled" disabled>Compiled EPContext package (+ provider assets)</option></select>
+              <div id="save-package-layout-options" hidden><label for="save-package-layout">Package container</label><select id="save-package-layout"><option value="archive">ZIP archive (.ortpackage)</option><option value="directory">Directory</option></select></div>
+              <p id="save-package-note" hidden>Choose a new .ortpackage archive or directory. Save preserves all package assets and replaces only the selected model with its current edits. GenAI and compiled packages require an existing package; Save does not generate a tokenizer, GenAI configuration or provider compilation.</p>
+              <label id="save-file-label" for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
               <select id="save-file-history" aria-label="Recent destination paths" disabled><option value="">Choose a recent path...</option></select>
               <fieldset class="save-grid">
-                <legend>Weight storage and encryption</legend>
-                <label><input type="radio" name="save-format" value="embedded-plain" checked>Single model or pipeline file</label>
+                <legend>Model serialization, weight storage and encryption</legend>
+                <label><input type="radio" name="save-format" value="embedded-plain" checked>ONNX protobuf (.onnx) or pipeline (.pipe-onnx), with embedded weights</label>
+                <label><input type="radio" name="save-format" value="ort" aria-describedby="ort-save-note">ORT FlatBuffer model (.ort), with embedded weights</label>
+                <p id="ort-save-note">Native ORT FlatBuffer for full ONNX Runtime builds, not minimal builds. Single models only; unsupported SDK constructs report an error.</p>
                 <label><input type="radio" name="save-format" value="embedded-encrypted">Encrypted .onnx.enc file, including all weights</label>
                 <label><input type="radio" name="save-format" value="external-plain">Model or pipeline and separate weight files</label>
                 <label class="unavailable"><input type="radio" name="save-format" value="external-encrypted" disabled aria-describedby="external-encryption-note">Separate encrypted weight files (unavailable)</label>
-                <p id="external-encryption-note">Unavailable in onnx-light. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p>
+                <p id="external-encryption-note">Unavailable in onnx-light. ONNX Runtime does not decrypt weight files natively; the application must decrypt them before loading. <a href="https://github.com/xadupre/onnx-light/issues/5533">Track native support</a>.</p>
                 <label><input type="radio" name="save-format" value="reuse-plain">Reuse unchanged external files</label>
                 <p>For reuse, save in the source folder. Embedded weights still need saving.</p>
               </fieldset>
@@ -594,7 +609,7 @@ export function webviewHtml(
               <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
               <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
-              <progress id="save-progress" aria-label="Saving ONNX model" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
+              <progress id="save-progress" aria-label="Saving model or package" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
               <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
             </form>
@@ -1209,6 +1224,7 @@ export function webviewHtml(
       </section>
     </section>
   </main>
+  <div id="graph-switcher" role="menu" aria-label="Functions and subgraphs" tabindex="-1" hidden></div>
   <div id="graph-context-menu" role="menu" aria-label="Selected operators" hidden>
     <button id="open-selection-pattern" role="menuitem" aria-haspopup="dialog" aria-controls="selection-pattern-dialog">Create / edit FunctionPattern...</button>
   </div>
