@@ -1989,6 +1989,39 @@ Release all consumers before modifying that storage; failed mutations leave
 the tensor and its views unchanged. Live-view updates are not supported.
 Borrowed storage with no owner token remains the caller’s lifetime
 responsibility. Shape metadata is snapshotted at export.</p>
+<section id="onnx-runtime-interoperability">
+<h3>ONNX Runtime interoperability<a class="headerlink" href="#onnx-runtime-interoperability" title="Link to this heading">#</a></h3>
+<p>Use the public protocol API when available:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">onnxruntime</span>
+
+<span class="n">value</span> <span class="o">=</span> <span class="n">onnxruntime</span><span class="o">.</span><span class="n">OrtValue</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span>
+<span class="n">imported</span> <span class="o">=</span> <span class="n">TensorProto</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+<span class="n">view</span> <span class="o">=</span> <span class="n">numpy</span><span class="o">.</span><span class="n">from_dlpack</span><span class="p">(</span><span class="n">value</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>The audit for microsoft/onnxruntime#33848 found no onnx-light calls to the
+removed native <code class="docutils literal notranslate"><span class="pre">is_bool_tensor</span></code> argument. Both TensorProto and runtime Tensor
+exports already distinguish BOOL (<code class="docutils literal notranslate"><span class="pre">kDLBool</span></code>, 8 bits) from UINT8 (<code class="docutils literal notranslate"><span class="pre">kDLUInt</span></code>,
+8 bits); no dtype override or conversion is needed. The reference evaluator
+uses NumPy’s DLPack protocol, not ONNX Runtime’s native importer.</p>
+<p>Compatibility depends on the runtime’s actual DLPack contract, not its version
+string. Builds with the public protocol API but the old native bool override
+(including the observed 1.31.1 build) support zero-copy CPU float32 and uint8
+interchange. They reject native <code class="docutils literal notranslate"><span class="pre">kDLBool</span></code> imports with <code class="docutils literal notranslate"><span class="pre">Unsupported</span> <span class="pre">code</span> <span class="pre">6</span></code>
+and export bool storage with uint8 metadata. onnx-light preserves that export
+as UINT8; it cannot recover a bool dtype from uint8 metadata. Do not reinterpret
+uint8 as bool to bypass this limitation. Builds without the public API are not
+supported by this interoperability path; other optional runtime integration
+does not require DLPack.</p>
+<p>Builds containing #33848 use a one-argument native importer and preserve native
+bool metadata. They also accept byte offsets, explicit contiguous strides, and
+null producer deleters. With a null deleter, the caller must keep the allocation
+and managed descriptor alive until all consumers are released. Low-precision
+interchange remains limited to the exact dtypes implemented by both peers;
+packed sub-byte types are not supported by TensorProto’s DLPack API.
+The runtime still exchanges legacy <code class="docutils literal notranslate"><span class="pre">dltensor</span></code> capsules, not versioned capsules.
+Each import must receive a fresh capsule; a consumed capsule must never be reused.</p>
+</section>
 <section id="explicit-destructive-transfer">
 <h3>Explicit destructive transfer<a class="headerlink" href="#explicit-destructive-transfer" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">tensor.release_dlpack()</span></code> transfers <code class="docutils literal notranslate"><span class="pre">raw_data</span></code> to an independent,
@@ -2228,6 +2261,7 @@ and <code class="docutils literal notranslate"><span class="pre">ld-linux-x86-64
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dlpack-import">DLPack import</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dlpack-export">DLPack export</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#onnx-runtime-interoperability">ONNX Runtime interoperability</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#explicit-destructive-transfer">Explicit destructive transfer</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#binary-size-measurement">Binary-size measurement</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#native-transfer-build-budget">Native transfer build budget</a></li>

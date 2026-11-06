@@ -4,13 +4,15 @@
 Uses every portable quantization profile from Python
 ===================================================
 
-This example quantizes and dequantizes all 43 profiles exposed by
+This example quantizes and dequantizes all 45 profiles exposed by
 :mod:`onnx_light.onnx_core.quantization`. It shows the parameters to supply
 for affine, scalar-codebook, vector-codebook, transformed and cast storage.
 The :ref:`profile catalogue <l-quantized-values>` describes their numerical
 contracts and limitations.
 
-The first 40 are **onnx-light representations, not vendor-compatible files**.
+The original 40 are **onnx-light representations, not vendor-compatible files**.
+``mxfp8`` adds the explicit E4M3FN/group-32/E8M0 weight contract.
+``mxfp6_e2m3`` adds packed E2M3/group-32/E8M0 without changing ``mxfp6`` E3M2.
 The three ``ORT_MATMULNBITS_INT*`` profiles produce compatible ONNX Runtime
 operator inputs, not execution-provider-specific prepacked buffers.
 In particular, selecting ``gptq`` or ``awq`` does not run calibration;
@@ -371,6 +373,31 @@ for profile in (
     assert inputs.zero_points is None
     print(f"ORT: K={inputs.k}, N={inputs.n}, bits={inputs.bits}, block_size={inputs.block_size}")
 
+
+# %%
+# Complete MXFP8
+# --------------
+#
+# MXFP8 selects its own E8M0 scales along the final matrix axis. It stores
+# native E4M3FN bytes, unlike the portable ``fp8_e4m3`` codebook profile.
+# Complete groups of 32 and FLOAT32 input are required.
+
+weights = numpy.linspace(-1, 1, 64, dtype=numpy.float32).reshape(2, 32)
+plan = make_quantization_plan(QuantizationFormat.MXFP8, weights.size)
+roundtrip(weights, plan)
+
+# %%
+# Complete MXFP6 E2M3
+# -------------------
+#
+# This profile stores native E2M3 codes, four per three bytes, with automatic
+# E8M0 scales. The legacy MXFP6/FP6_LLM examples above retain their E3M2 tables.
+
+weights = numpy.tile([1, -0.125, 7.5, 0], 8).astype(numpy.float32).reshape(1, 32)
+plan = make_quantization_plan(QuantizationFormat.MXFP6_E2M3, weights.size)
+encoded, restored = roundtrip(weights, plan)
+assert encoded.raw_data == bytes([0x48, 0xF8, 0x01] * 8 + [127])
+numpy.testing.assert_array_equal(restored, weights)
 
 # %%
 # Coverage

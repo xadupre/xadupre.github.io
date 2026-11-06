@@ -9020,7 +9020,24 @@ The same rewrite may be applied to the right MatMul input.
 <span id="_CPPv3N10onnx_light13onnx_patterns11GeluPatternE"></span><span id="_CPPv2N10onnx_light13onnx_patterns11GeluPatternE"></span><span id="onnx_light::onnx_patterns::GeluPattern"></span><span class="target" id="classonnx__light_1_1onnx__patterns_1_1GeluPattern"></span><span class="k"><span class="pre">class</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">GeluPattern</span></span></span><span class="w"> </span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="k"><span class="pre">public</span></span><span class="w"> </span><a class="reference internal" href="../../common/simple_span.html#_CPPv410onnx_light" title="onnx_light"><span class="n"><span class="pre">onnx_light</span></span></a><span class="p"><span class="pre">::</span></span><a class="reference internal" href="../../onnx_core/backend_test/expect.html#_CPPv4N10onnx_light4coreE" title="onnx_light::core"><span class="n"><span class="pre">core</span></span></a><span class="p"><span class="pre">::</span></span><a class="reference internal" href="../../onnx_core/builder/graph_builder.html#_CPPv4N10onnx_light4core7builderE" title="onnx_light::core::builder"><span class="n"><span class="pre">builder</span></span></a><span class="p"><span class="pre">::</span></span><a class="reference internal" href="../../onnx_core/builder/pattern_optimization.html#_CPPv4N10onnx_light4core7builder19PatternOptimizationE" title="onnx_light::core::builder::PatternOptimization"><span class="n"><span class="pre">PatternOptimization</span></span></a><a class="headerlink" href="#_CPPv4N10onnx_light13onnx_patterns11GeluPatternE" title="Link to this definition">#</a><br /></dt>
 <dd><div class="docutils container">
 <em>#include &lt;activation_pattern.h&gt;</em></div>
-<p>Fuses the tanh approximation of Gelu.</p>
+<p>Fuses exact Erf-based Gelu and its tanh approximation.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Before (exact):
+             ┌─────┐      ┌─────┐      ┌─────┐
+   x ───────→│ Div │─────→│ Erf │─────→│ Add │←── one
+   │         └─────┘      └─────┘      └─────┘
+   │           ↑                         │
+   │         sqrt(2)                     │
+   │         ┌─────┐                  ┌─────┐
+   └────────→│ Mul │─────────────────→│ Mul │────→ y
+   half ────→└─────┘                  └─────┘
+
+After (exact):
+         ┌──────────────────────────┐
+  x ────→│ Gelu(approximate="none") │────→ y
+         └──────────────────────────┘
+</pre></div>
+</div>
+<p>The exact form requires a known default-domain opset of at least 20 and FLOAT, FLOAT16, or DOUBLE data. Commutative inputs may be swapped. Scaling by one half must precede the final multiplication on either branch; division by two on either branch is also supported. Final scaling by one half is refused because the preceding product can overflow before scaling. <code class="docutils literal notranslate"><span class="pre">x</span> <span class="pre">/</span> <span class="pre">sqrt(2)</span></code> may instead multiply by <code class="docutils literal notranslate"><span class="pre">1</span> <span class="pre">/</span> <span class="pre">sqrt(2)</span></code>. Constants must equal their dtype-rounded values; division also accepts ORT’s historical sqrt(2) constants for FLOAT tensors only. DOUBLE tensors require the canonical double-precision constant. Unlike ORT’s general relative tolerance, the one and one-half constants must be exact. <a class="reference internal" href="../../onnx/common/tensor.html#structonnx__light_1_1Tensor"><span class="std std-ref">Tensor</span></a> constants must have exactly one inline element and must not be overridable graph inputs. Known intermediate shapes and types must agree with the input, and intermediates must be unshared. Overloads, attributes, device configurations, and intermediate metadata are refused. Final node metadata and output names are preserved. Exact fusion does not use a configured non-default replacement domain.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span>Before:
    x, three
       │

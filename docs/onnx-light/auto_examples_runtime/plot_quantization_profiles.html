@@ -610,12 +610,14 @@ to download the full example code.</p>
 </div>
 <section class="sphx-glr-example-title" id="uses-every-portable-quantization-profile-from-python">
 <span id="l-example-quantization-profiles"></span><span id="sphx-glr-auto-examples-runtime-plot-quantization-profiles-py"></span><h1>Uses every portable quantization profile from Python<a class="headerlink" href="#uses-every-portable-quantization-profile-from-python" title="Link to this heading">#</a></h1>
-<p>This example quantizes and dequantizes all 43 profiles exposed by
+<p>This example quantizes and dequantizes all 45 profiles exposed by
 <a class="reference internal" href="../api/python/onnx_core/quantization.html#module-onnx_light.onnx_core.quantization" title="onnx_light.onnx_core.quantization"><code class="xref py py-mod docutils literal notranslate"><span class="pre">onnx_light.onnx_core.quantization</span></code></a>. It shows the parameters to supply
 for affine, scalar-codebook, vector-codebook, transformed and cast storage.
 The <a class="reference internal" href="../howto/python/quantized_values.html#l-quantized-values"><span class="std std-ref">profile catalogue</span></a> describes their numerical
 contracts and limitations.</p>
-<p>The first 40 are <strong>onnx-light representations, not vendor-compatible files</strong>.
+<p>The original 40 are <strong>onnx-light representations, not vendor-compatible files</strong>.
+<code class="docutils literal notranslate"><span class="pre">mxfp8</span></code> adds the explicit E4M3FN/group-32/E8M0 weight contract.
+<code class="docutils literal notranslate"><span class="pre">mxfp6_e2m3</span></code> adds packed E2M3/group-32/E8M0 without changing <code class="docutils literal notranslate"><span class="pre">mxfp6</span></code> E3M2.
 The three <code class="docutils literal notranslate"><span class="pre">ORT_MATMULNBITS_INT*</span></code> profiles produce compatible ONNX Runtime
 operator inputs, not execution-provider-specific prepacked buffers.
 In particular, selecting <code class="docutils literal notranslate"><span class="pre">gptq</span></code> or <code class="docutils literal notranslate"><span class="pre">awq</span></code> does not run calibration;
@@ -1002,16 +1004,56 @@ ORT: K=35, N=3, bits=8, block_size=16
 </pre></div>
 </div>
 </section>
+<section id="complete-mxfp8">
+<h2>Complete MXFP8<a class="headerlink" href="#complete-mxfp8" title="Link to this heading">#</a></h2>
+<p>MXFP8 selects its own E8M0 scales along the final matrix axis. It stores
+native E4M3FN bytes, unlike the portable <code class="docutils literal notranslate"><span class="pre">fp8_e4m3</span></code> codebook profile.
+Complete groups of 32 and FLOAT32 input are required.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">weights</span></a> <span class="o">=</span> <a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-function reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.linspace.html#numpy.linspace" title="numpy.linspace"><span class="n">numpy</span><span class="o">.</span><span class="n">linspace</span></a><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-attribute reference external" href="https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.float32" title="numpy.float32"><span class="n">numpy</span><span class="o">.</span><span class="n">float32</span></a><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="w">
+</span><span class="n">plan</span> <span class="o">=</span> <span class="n">make_quantization_plan</span><span class="p">(</span><a class="sphx-glr-backref-module-onnx_light-onnx_py-_onnxpykernels-runtime sphx-glr-backref-type-py-class sphx-glr-backref-instance reference internal" href="../api/python/onnx_core/quantization.html#onnx_light.onnx_core.quantization.QuantizationFormat" title="onnx_light.onnx_py._onnxpykernels.runtime.QuantizationFormat"><span class="n">QuantizationFormat</span><span class="o">.</span><span class="n">MXFP8</span></a><span class="p">,</span> <a class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://docs.python.org/3/builtins/functions.html#int" title="int"><span class="n">weights</span><span class="o">.</span><span class="n">size</span></a><span class="p">)</span><span class="w">
+</span><span class="n">roundtrip</span><span class="p">(</span><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">weights</span></a><span class="p">,</span> <span class="n">plan</span><span class="p">)</span><span class="w">
+</span></pre></div></div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>mxfp8            runs= 1 blocks= 2 max_abs_error=0.030754
+
+(&lt;onnx_light.onnx_py._onnxpyprotoop.EncodedValueProto object at 0x7fd964093cc0&gt;, array([[-1.      , -0.9375  , -0.9375  , -0.875   , -0.875   , -0.8125  ,
+        -0.8125  , -0.75    , -0.75    , -0.6875  , -0.6875  , -0.625   ,
+        -0.625   , -0.5625  , -0.5625  , -0.5     , -0.5     , -0.46875 ,
+        -0.4375  , -0.40625 , -0.375   , -0.34375 , -0.3125  , -0.28125 ,
+        -0.234375, -0.203125, -0.171875, -0.140625, -0.109375, -0.078125,
+        -0.046875, -0.015625],
+       [ 0.015625,  0.046875,  0.078125,  0.109375,  0.140625,  0.171875,
+         0.203125,  0.234375,  0.28125 ,  0.3125  ,  0.34375 ,  0.375   ,
+         0.40625 ,  0.4375  ,  0.46875 ,  0.5     ,  0.5     ,  0.5625  ,
+         0.5625  ,  0.625   ,  0.625   ,  0.6875  ,  0.6875  ,  0.75    ,
+         0.75    ,  0.8125  ,  0.8125  ,  0.875   ,  0.875   ,  0.9375  ,
+         0.9375  ,  1.      ]], dtype=float32))
+</pre></div>
+</div>
+</section>
+<section id="complete-mxfp6-e2m3">
+<h2>Complete MXFP6 E2M3<a class="headerlink" href="#complete-mxfp6-e2m3" title="Link to this heading">#</a></h2>
+<p>This profile stores native E2M3 codes, four per three bytes, with automatic
+E8M0 scales. The legacy MXFP6/FP6_LLM examples above retain their E3M2 tables.</p>
+<div class="highlight-Python notranslate"><div class="highlight"><pre><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">weights</span></a> <span class="o">=</span> <a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-function reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.tile.html#numpy.tile" title="numpy.tile"><span class="n">numpy</span><span class="o">.</span><span class="n">tile</span></a><span class="p">(</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mf">0.125</span><span class="p">,</span> <span class="mf">7.5</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span><span class="p">,</span> <span class="mi">8</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-attribute reference external" href="https://numpy.org/doc/stable/reference/arrays.scalars.html#numpy.float32" title="numpy.float32"><span class="n">numpy</span><span class="o">.</span><span class="n">float32</span></a><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">)</span><span class="w">
+</span><span class="n">plan</span> <span class="o">=</span> <span class="n">make_quantization_plan</span><span class="p">(</span><a class="sphx-glr-backref-module-onnx_light-onnx_py-_onnxpykernels-runtime sphx-glr-backref-type-py-class sphx-glr-backref-instance reference internal" href="../api/python/onnx_core/quantization.html#onnx_light.onnx_core.quantization.QuantizationFormat" title="onnx_light.onnx_py._onnxpykernels.runtime.QuantizationFormat"><span class="n">QuantizationFormat</span><span class="o">.</span><span class="n">MXFP6_E2M3</span></a><span class="p">,</span> <a class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://docs.python.org/3/builtins/functions.html#int" title="int"><span class="n">weights</span><span class="o">.</span><span class="n">size</span></a><span class="p">)</span><span class="w">
+</span><a class="sphx-glr-backref-module-onnx_light-onnx_py-_onnxpyprotoop sphx-glr-backref-type-py-class sphx-glr-backref-instance reference internal" href="../api/python/onnx/onnx_pb.html#onnx_light.onnx.onnx_pb.EncodedValueProto" title="onnx_light.onnx_py._onnxpyprotoop.EncodedValueProto"><span class="n">encoded</span></a><span class="p">,</span> <a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">restored</span></a> <span class="o">=</span> <span class="n">roundtrip</span><span class="p">(</span><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">weights</span></a><span class="p">,</span> <span class="n">plan</span><span class="p">)</span><span class="w">
+</span><span class="k">assert</span> <a class="sphx-glr-backref-module-onnx_light-onnx_py-_onnxpyprotoop sphx-glr-backref-type-py-class sphx-glr-backref-instance reference internal" href="../api/python/onnx/onnx_pb.html#onnx_light.onnx.onnx_pb.EncodedValueProto" title="onnx_light.onnx_py._onnxpyprotoop.EncodedValueProto"><span class="n">encoded</span></a><span class="o">.</span><span class="n">raw_data</span> <span class="o">==</span> <span class="nb">bytes</span><span class="p">(</span><span class="p">[</span><span class="mh">0x48</span><span class="p">,</span> <span class="mh">0xF8</span><span class="p">,</span> <span class="mh">0x01</span><span class="p">]</span> <span class="o">*</span> <span class="mi">8</span> <span class="o">+</span> <span class="p">[</span><span class="mi">127</span><span class="p">]</span><span class="p">)</span><span class="w">
+</span><a class="sphx-glr-backref-module-numpy-testing sphx-glr-backref-type-py-function reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.testing.assert_array_equal.html#numpy.testing.assert_array_equal" title="numpy.testing.assert_array_equal"><span class="n">numpy</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_array_equal</span></a><span class="p">(</span><a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">restored</span></a><span class="p">,</span> <a class="sphx-glr-backref-module-numpy sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="numpy.ndarray"><span class="n">weights</span></a><span class="p">)</span><span class="w">
+</span></pre></div></div>
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>mxfp6_e2m3       runs= 1 blocks= 1 max_abs_error=0
+</pre></div>
+</div>
+</section>
 <section id="coverage">
 <h2>Coverage<a class="headerlink" href="#coverage" title="Link to this heading">#</a></h2>
 <p>The example fails if a public profile has not been demonstrated.</p>
 <div class="highlight-Python notranslate"><div class="highlight"><pre><span class="k">assert</span> <a class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://docs.python.org/3/builtins/stdtypes.html#set" title="set"><span class="n">covered</span></a> <span class="o">==</span> <span class="nb">set</span><span class="p">(</span><span class="n">quantization_formats</span><span class="p">(</span><span class="p">)</span><span class="p">)</span><span class="p">,</span> <span class="nb">set</span><span class="p">(</span><span class="n">quantization_formats</span><span class="p">(</span><span class="p">)</span><span class="p">)</span> <span class="o">-</span> <a class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://docs.python.org/3/builtins/stdtypes.html#set" title="set"><span class="n">covered</span></a><span class="w">
 </span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;</span><span class="s2">Demonstrated </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><a class="sphx-glr-backref-module-builtins sphx-glr-backref-type-py-class sphx-glr-backref-instance reference external" href="https://docs.python.org/3/builtins/stdtypes.html#set" title="set"><span class="n">covered</span></a><span class="p">)</span><span class="si">}</span><span class="s2"> quantization profiles.</span><span class="s2">&quot;</span><span class="p">)</span><span class="w">
 </span></pre></div></div>
-<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Demonstrated 43 quantization profiles.
+<div class="sphx-glr-script-out highlight-none notranslate"><div class="highlight"><pre><span></span>Demonstrated 45 quantization profiles.
 </pre></div>
 </div>
-<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.018 seconds)</p>
+<p class="sphx-glr-timing"><strong>Total running time of the script:</strong> (0 minutes 0.011 seconds)</p>
 <div class="sphx-glr-footer sphx-glr-footer-example docutils container" id="sphx-glr-download-auto-examples-runtime-plot-quantization-profiles-py">
 <div class="sphx-glr-download sphx-glr-download-jupyter docutils container">
 <p><a class="reference download internal" download="" href="../_downloads/06306b6422b4edc0ec16589c84eefa30/plot_quantization_profiles.ipynb"><code class="xref download docutils literal notranslate"><span class="pre">Download</span> <span class="pre">Jupyter</span> <span class="pre">notebook:</span> <span class="pre">plot_quantization_profiles.ipynb</span></code></a></p>
@@ -1037,7 +1079,7 @@ ORT: K=35, N=3, bits=8, block_size=16
 <p class="rubric">Example last updated</p>
 <dl class="field-list simple">
 <dt class="field-odd">Date<span class="colon">:</span></dt>
-<dd class="field-odd"><p>2026-11-05</p>
+<dd class="field-odd"><p>2026-11-06</p>
 </dd>
 </dl>
 </section>
@@ -1101,6 +1143,8 @@ ORT: K=35, N=3, bits=8, block_size=16
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#cast-storage-tiles-and-column-major-order">Cast storage, tiles and column-major order</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#serialization-and-a-model-scoped-type-catalogue">Serialization and a model-scoped type catalogue</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#onnx-runtime-matmulnbits-input-packing">ONNX Runtime MatMulNBits input packing</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-mxfp8">Complete MXFP8</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-mxfp6-e2m3">Complete MXFP6 E2M3</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#coverage">Coverage</a></li>
 </ul>
   </nav></div>
