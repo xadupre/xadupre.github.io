@@ -60,7 +60,7 @@ See :ref:`l-plot-sql-to-onnx` for the lower-level SQL → ONNX API.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 34-40
+.. GENERATED FROM PYTHON SOURCE LINES 34-41
 
 1. Basic SELECT — arithmetic expression
 ----------------------------------------
@@ -68,8 +68,9 @@ See :ref:`l-plot-sql-to-onnx` for the lower-level SQL → ONNX API.
 The simplest case: select a computed column from two source columns.
 ``input_dtypes`` maps each **source** column name to its numpy dtype;
 only columns that actually appear in the plan need to be listed.
+Opset 21 is used explicitly for ONNX Runtime compatibility.
 
-.. GENERATED FROM PYTHON SOURCE LINES 40-56
+.. GENERATED FROM PYTHON SOURCE LINES 41-57
 
 .. code-block:: Python
 
@@ -78,7 +79,7 @@ only columns that actually appear in the plan need to be listed.
     lf_add = lf_add.select([(pl.col("a") + pl.col("b")).alias("total")])
 
     dtypes = {"a": np.float64, "b": np.float64}
-    artifact_add = lazyframe_to_onnx(lf_add, dtypes)
+    artifact_add = lazyframe_to_onnx(lf_add, dtypes, target_opset=21)
 
     a = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     b = np.array([4.0, 5.0, 6.0], dtype=np.float64)
@@ -102,11 +103,11 @@ only columns that actually appear in the plan need to be listed.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 57-58
+.. GENERATED FROM PYTHON SOURCE LINES 58-59
 
 The ONNX model
 
-.. GENERATED FROM PYTHON SOURCE LINES 58-60
+.. GENERATED FROM PYTHON SOURCE LINES 59-61
 
 .. code-block:: Python
 
@@ -124,12 +125,12 @@ The ONNX model
     input: name='a' type=dtype('float64') shape=['N']
     input: name='b' type=dtype('float64') shape=['N']
     Add(a, b) -> total
-    output: name='total' type='NOTENSOR' shape=None
+    output: name='total' type=dtype('float64') shape=['N']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 61-66
+.. GENERATED FROM PYTHON SOURCE LINES 62-67
 
 2. WHERE clause — row filtering
 --------------------------------
@@ -137,7 +138,7 @@ The ONNX model
 ``filter`` is translated to a boolean mask followed by ``Compress`` nodes
 that select only the matching rows from every output column.
 
-.. GENERATED FROM PYTHON SOURCE LINES 66-81
+.. GENERATED FROM PYTHON SOURCE LINES 67-82
 
 .. code-block:: Python
 
@@ -145,7 +146,7 @@ that select only the matching rows from every output column.
     lf_where = pl.LazyFrame({"a": [1.0, 2.0, 3.0], "b": [4.0, 5.0, 6.0]})
     lf_where = lf_where.filter(pl.col("a") > 1.5).select([pl.col("a"), pl.col("b")])
 
-    artifact_where = lazyframe_to_onnx(lf_where, dtypes)
+    artifact_where = lazyframe_to_onnx(lf_where, dtypes, target_opset=21)
     sess = onnxruntime.InferenceSession(
         artifact_where.SerializeToString(), providers=["CPUExecutionProvider"]
     )
@@ -171,11 +172,11 @@ that select only the matching rows from every output column.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 82-83
+.. GENERATED FROM PYTHON SOURCE LINES 83-84
 
 The ONNX model
 
-.. GENERATED FROM PYTHON SOURCE LINES 83-85
+.. GENERATED FROM PYTHON SOURCE LINES 84-86
 
 .. code-block:: Python
 
@@ -193,17 +194,17 @@ The ONNX model
     input: name='a' type=dtype('float64') shape=['N']
     input: name='b' type=dtype('float64') shape=['N']
     init: name='filter_mask_r_lit' type=float32 shape=(1,) -- array([1.5], dtype=float32)
-    CastLike(filter_mask_r_lit, a) -> _onx_castlike_filter_mask_r_lit
-      Greater(a, _onx_castlike_filter_mask_r_lit) -> _onx_greater_a
-        Compress(a, _onx_greater_a, axis=0) -> output_0
-    Compress(b, _onx_greater_a, axis=0) -> output_1
-    output: name='output_0' type='NOTENSOR' shape=None
-    output: name='output_1' type='NOTENSOR' shape=None
+    CastLike(filter_mask_r_lit, a) -> castlike
+      Greater(a, castlike) -> greater
+        Compress(a, greater, axis=0) -> output_0
+    Compress(b, greater, axis=0) -> output_1
+    output: name='output_0' type=dtype('float64') shape=['Compress_compress_count']
+    output: name='output_1' type=dtype('float64') shape=['Compress_compress_2_count']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-92
+.. GENERATED FROM PYTHON SOURCE LINES 87-93
 
 3. Aggregation functions
 -------------------------
@@ -212,7 +213,7 @@ Polars aggregation methods — ``sum()``, ``mean()`` (→ ``AVG``), ``min()``,
 ``max()`` — are mapped to the corresponding ``ReduceSum``, ``ReduceMean``,
 ``ReduceMin``, and ``ReduceMax`` ONNX nodes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 92-110
+.. GENERATED FROM PYTHON SOURCE LINES 93-111
 
 .. code-block:: Python
 
@@ -221,7 +222,7 @@ Polars aggregation methods — ``sum()``, ``mean()`` (→ ``AVG``), ``min()``,
     lf_agg = lf_agg.select([pl.col("a").sum().alias("s"), pl.col("b").mean().alias("m")])
 
     dtypes_agg = {"a": np.float64, "b": np.float64}
-    artifact_agg = lazyframe_to_onnx(lf_agg, dtypes_agg)
+    artifact_agg = lazyframe_to_onnx(lf_agg, dtypes_agg, target_opset=21)
     sess = onnxruntime.InferenceSession(
         artifact_agg.SerializeToString(), providers=["CPUExecutionProvider"]
     )
@@ -248,11 +249,11 @@ Polars aggregation methods — ``sum()``, ``mean()`` (→ ``AVG``), ``min()``,
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 111-112
+.. GENERATED FROM PYTHON SOURCE LINES 112-113
 
 The ONNX model
 
-.. GENERATED FROM PYTHON SOURCE LINES 112-114
+.. GENERATED FROM PYTHON SOURCE LINES 113-115
 
 .. code-block:: Python
 
@@ -270,15 +271,16 @@ The ONNX model
     input: name='a' type=dtype('float64') shape=['N']
     input: name='b' type=dtype('float64') shape=['N']
     init: name='select_s_axes' type=int64 shape=(1,) -- array([0])
-    ReduceMean(b, select_s_axes, keepdims=0) -> m
+    init: name='select_m_axes' type=int64 shape=(1,) -- array([0])
+    ReduceMean(b, select_m_axes, keepdims=0) -> m
     ReduceSum(a, select_s_axes, keepdims=0) -> s
-    output: name='s' type='NOTENSOR' shape=None
-    output: name='m' type='NOTENSOR' shape=None
+    output: name='s' type=dtype('float64') shape=[]
+    output: name='m' type=dtype('float64') shape=[]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-120
+.. GENERATED FROM PYTHON SOURCE LINES 116-121
 
 4. Filter + arithmetic combined
 --------------------------------
@@ -286,7 +288,7 @@ The ONNX model
 Filters and computed expressions can be chained freely.  Here we keep only
 rows where ``a > 0`` and then compute ``a + b`` for those rows.
 
-.. GENERATED FROM PYTHON SOURCE LINES 120-137
+.. GENERATED FROM PYTHON SOURCE LINES 121-138
 
 .. code-block:: Python
 
@@ -299,7 +301,7 @@ rows where ``a > 0`` and then compute ``a + b`` for those rows.
     a2 = np.array([1.0, -2.0, 3.0], dtype=np.float64)
     b2 = np.array([4.0, 5.0, 6.0], dtype=np.float64)
 
-    artifact_combined = lazyframe_to_onnx(lf_combined, dtypes)
+    artifact_combined = lazyframe_to_onnx(lf_combined, dtypes, target_opset=21)
     sess = onnxruntime.InferenceSession(
         artifact_combined.SerializeToString(), providers=["CPUExecutionProvider"]
     )
@@ -320,11 +322,11 @@ rows where ``a > 0`` and then compute ``a + b`` for those rows.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 138-139
+.. GENERATED FROM PYTHON SOURCE LINES 139-140
 
 The ONNX model
 
-.. GENERATED FROM PYTHON SOURCE LINES 139-141
+.. GENERATED FROM PYTHON SOURCE LINES 140-142
 
 .. code-block:: Python
 
@@ -342,17 +344,17 @@ The ONNX model
     input: name='a' type=dtype('float64') shape=['N']
     input: name='b' type=dtype('float64') shape=['N']
     init: name='filter_mask_r_lit' type=float32 shape=(1,) -- array([0.], dtype=float32)
-    CastLike(filter_mask_r_lit, a) -> _onx_castlike_filter_mask_r_lit
-      Greater(a, _onx_castlike_filter_mask_r_lit) -> _onx_greater_a
-        Compress(a, _onx_greater_a, axis=0) -> _onx_compress_a
-    Compress(b, _onx_greater_a, axis=0) -> _onx_compress_b
-      Add(_onx_compress_a, _onx_compress_b) -> total
-    output: name='total' type='NOTENSOR' shape=None
+    CastLike(filter_mask_r_lit, a) -> castlike
+      Greater(a, castlike) -> greater
+        Compress(a, greater, axis=0) -> compress
+    Compress(b, greater, axis=0) -> compress_2
+      Add(compress, compress_2) -> total
+    output: name='total' type=dtype('float64') shape=['broadcast(Compress_compress_count, Compress_compress_2_count)']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 142-147
+.. GENERATED FROM PYTHON SOURCE LINES 143-148
 
 5. Visualise the ONNX node types
 ---------------------------------
@@ -360,7 +362,7 @@ The ONNX model
 The bar chart below compares how many ONNX nodes each LazyFrame plan
 produces and which node types appear in the combined filter+arithmetic model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 147-191
+.. GENERATED FROM PYTHON SOURCE LINES 148-192
 
 .. code-block:: Python
 
@@ -420,7 +422,7 @@ produces and which node types appear in the combined filter+arithmetic model.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 192-198
+.. GENERATED FROM PYTHON SOURCE LINES 193-199
 
 6. Display the ONNX model graph
 --------------------------------
@@ -429,7 +431,7 @@ produces and which node types appear in the combined filter+arithmetic model.
 inspect nodes, edges, and tensor shapes at a glance.  Here we visualize the
 combined filter + arithmetic model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 198-202
+.. GENERATED FROM PYTHON SOURCE LINES 199-203
 
 .. code-block:: Python
 
@@ -452,7 +454,7 @@ combined filter + arithmetic model.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.446 seconds)
+   **Total running time of the script:** (0 minutes 0.321 seconds)
 
 
 .. _sphx_glr_download_auto_examples_sql_plot_lazyframe_to_onnx.py:

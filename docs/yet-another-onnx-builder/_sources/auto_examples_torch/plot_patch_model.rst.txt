@@ -511,17 +511,19 @@ exporter.
 
  .. code-block:: none
 
-    /opt/hostedtoolcache/Python/3.12.14/x64/lib/python3.12/site-packages/torch/jit/_script.py:1491: FutureWarning: `torch.jit.script` is deprecated. Please switch to `torch.compile` or `torch.export`.
-      warnings.warn(
 
     Patches involved in the exported graph: 1
     transformers: LlamaRotaryEmbedding.forward -> common_RotaryEmbedding.forward
     --- original
     +++ rewritten
-    @@ -1,21 +1,26 @@
+    @@ -1,9 +1,26 @@
     -@torch.no_grad()
     -@dynamic_rope_update  # power user: used with advanced RoPE types (e.g. dynamic rope)
     -def forward(self, x, position_ids):
+    -    freqs = position_ids[..., None].float() * self.inv_freq.to(device=x.device, dtype=torch.float)
+    -    emb = torch.cat((freqs, freqs), dim=-1)
+    -    cos = emb.cos() * self.attention_scaling
+    -    sin = emb.sin() * self.attention_scaling
     +@patched_dynamic_rope_update
     +def forward(self, x, position_ids, layer_type=None):
     +    if layer_type is not None:
@@ -533,25 +535,17 @@ exporter.
     +        inv_freq = self.inv_freq
     +        attention_scaling = self.attention_scaling
     +
-         inv_freq_expanded = (
-    -        self.inv_freq[None, :, None]
-    -        .expand(position_ids.shape[0], -1, 1)
-    -        .to(dtype=torch.float, device=x.device)
+    +    inv_freq_expanded = (
     +        inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1).to(x.device)
-         )
-         position_ids_expanded = position_ids[:, None, :].float()
- 
-         device_type = (
-             x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
-         )
-    -    # Disable any outside autocast context if any, to really force fp32
-    -    with maybe_autocast(device_type=device_type, enabled=False):
-    -        freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
+    +    )
+    +    position_ids_expanded = position_ids[:, None, :].float()
+    +
+    +    device_type = (
+    +        x.device.type if isinstance(x.device.type, str) and x.device.type != "mps" else "cpu"
+    +    )
     +    with torch.autocast(device_type=device_type, enabled=False):  # Force float32
     +        freqs = (inv_freq_expanded.float() @ position_ids_expanded.float()).transpose(1, 2)
-             emb = torch.cat((freqs, freqs), dim=-1)
-    -        cos = emb.cos() * self.attention_scaling
-    -        sin = emb.sin() * self.attention_scaling
+    +        emb = torch.cat((freqs, freqs), dim=-1)
     +        cos = emb.cos() * attention_scaling
     +        sin = emb.sin() * attention_scaling
  
@@ -559,7 +553,7 @@ exporter.
 
     --- original
     +++ rewritten
-    @@ -1,103 +1,193 @@
+    @@ -1,105 +1,193 @@
     -def dynamic_rope_update(rope_forward):
     -    """
     -    Decorator function to update the RoPE parameters in the forward pass, if the model is using a dynamic RoPE
@@ -660,23 +654,25 @@ exporter.
     -                "original_max_position_embeddings"
     -            ]
     -
-    -        if seq_len > original_max_position_embeddings:
-    -            if not hasattr(self, f"{layer_type}_long_inv_freq"):
-    -                rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type]
-    -                long_inv_freq, _ = rope_init_fn(
-    -                    self.config,
-    -                    device,
-    -                    seq_len=original_max_position_embeddings + 1,
-    -                    layer_type=layer_type,
-    -                )
-    -            self.register_buffer(f"{prefix}inv_freq", long_inv_freq, persistent=False)
-    -            setattr(self, f"{prefix}long_inv_freq", long_inv_freq)
-    -        else:
-    -            # This .to() is needed if the model has been moved to a device after being initialized (because
-    -            # the buffer is automatically moved, but not the original copy)
-    -            original_inv_freq = original_inv_freq.to(device)
-    -            self.register_buffer(f"{prefix}inv_freq", original_inv_freq, persistent=False)
-    -            setattr(self, f"{prefix}original_inv_freq", original_inv_freq)
+    -        long_inv_freq = getattr(self, f"{prefix}long_inv_freq", None)
+    -        if long_inv_freq is None:
+    -            rope_init_fn = ROPE_INIT_FUNCTIONS[rope_type]
+    -            long_inv_freq, _ = rope_init_fn(
+    -                self.config,
+    -                device,
+    -                seq_len=original_max_position_embeddings + 1,
+    -                layer_type=layer_type,
+    -            )
+    -        # `long_inv_freq` is a plain attribute and does not follow `model.to(...)`, so move it here
+    -        long_inv_freq = long_inv_freq.to(device)
+    -        original_inv_freq = original_inv_freq.to(device)
+    -        setattr(self, f"{prefix}long_inv_freq", long_inv_freq)
+    -
+    -        # `seq_len` is a scalar, so this picks the long or short set for all positions, like an if/else but traceable
+    -        inv_freq = torch.where(
+    -            seq_len > original_max_position_embeddings, long_inv_freq, original_inv_freq
+    -        )
+    -        self.register_buffer(f"{prefix}inv_freq", inv_freq, persistent=False)
     -
     -    def dynamic_frequency_update(self, position_ids, device, layer_type=None):
     -        """
@@ -863,7 +859,7 @@ exporter.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 5.590 seconds)
+   **Total running time of the script:** (0 minutes 2.646 seconds)
 
 
 .. _sphx_glr_download_auto_examples_torch_plot_patch_model.py:

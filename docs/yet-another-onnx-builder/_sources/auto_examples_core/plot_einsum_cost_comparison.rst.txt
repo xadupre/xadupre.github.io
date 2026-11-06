@@ -68,14 +68,14 @@ absent from the output) — and for each one:
 
     import matplotlib.pyplot as plt
     import numpy as np
-    import onnx
-    import onnx.helper as oh
+    from yobx._onnx_shim import onnx
+    import onnx_light.onnx.helper as oh
     import onnxruntime
     import pandas as pd
 
     from yobx.doc import plot_dot
     from yobx.helpers.einsum_helper import decompose_einsum, decompose_einsum_2inputs
-    from yobx.xshape import BasicShapeBuilder, InferenceMode
+    from yobx.xshape import NativeShapeInference, InferenceMode
 
 
 
@@ -283,7 +283,7 @@ FLOPs estimator, so its FLOPs are reported as N/A.
             else:
                 # The model was already built with symbolic dims; run cost
                 # inference directly (no separate sym_model needed).
-                bld = BasicShapeBuilder()
+                bld = NativeShapeInference()
                 cost = bld.run_model(model, inference=InferenceMode.COST)
                 # Pick the node whose symbolic formula contains the most dimension
                 # products (longest string with '*') as a proxy for the most
@@ -383,21 +383,21 @@ available for the abstract Einsum operator.
 
  .. code-block:: none
 
-           Equation                     Strategy   Op type                                                     FLOPs formula
-          ij,jk->ik          ML=decompose_einsum      Gemm                                                       2*K*M*N+M*N
-          ij,jk->ik Naive2=decompose_einsum_2inp    MatMul                                                           2*K*M*N
-           ij,ij->i          ML=decompose_einsum    MatMul                                                             2*K*M
-           ij,ij->i Naive2=decompose_einsum_2inp    MatMul                                                             2*K*M
-       bij,bjk->bik          ML=decompose_einsum    MatMul                                                         2*B*K*M*N
-       bij,bjk->bik Naive2=decompose_einsum_2inp    MatMul                                                         2*B*K*M*N
-         bij,bj->bi          ML=decompose_einsum    MatMul                                                           2*B*K*M
-         bij,bj->bi Naive2=decompose_einsum_2inp    MatMul                                                           2*B*K*M
-       bik,bjk->bij          ML=decompose_einsum    MatMul                                                         2*B*I*J*K
-       bik,bjk->bij Naive2=decompose_einsum_2inp    MatMul                                                         2*B*I*J*K
-    abij,abjk->abik          ML=decompose_einsum Transpose                                                           A*B*K*N
-    abij,abjk->abik Naive2=decompose_einsum_2inp    MatMul                                                       2*A*B*I*K*N
-        abij,ij->ab          ML=decompose_einsum    MatMul (not available: no node produced a multi-factor symbolic formula)
-        abij,ij->ab Naive2=decompose_einsum_2inp    MatMul (not available: no node produced a multi-factor symbolic formula)
+           Equation                     Strategy   Op type                                                      FLOPs formula
+          ij,jk->ik          ML=decompose_einsum      Gemm                                                        2*K*M*N+M*N
+          ij,jk->ik Naive2=decompose_einsum_2inp    MatMul                                                            2*K*M*N
+           ij,ij->i          ML=decompose_einsum    MatMul                                                              2*K*M
+           ij,ij->i Naive2=decompose_einsum_2inp    MatMul                                                              2*K*M
+       bij,bjk->bik          ML=decompose_einsum    MatMul              2*Reshape_dim0*Reshape_dim1*Reshape_dim1*Reshape_dim2
+       bij,bjk->bik Naive2=decompose_einsum_2inp    MatMul                                                          2*B*K*M*N
+         bij,bj->bi          ML=decompose_einsum    MatMul              2*Reshape_dim0*Reshape_dim1*Reshape_dim1*Reshape_dim2
+         bij,bj->bi Naive2=decompose_einsum_2inp    MatMul                                                            2*B*K*M
+       bik,bjk->bij          ML=decompose_einsum    MatMul              2*Reshape_dim0*Reshape_dim1*Reshape_dim1*Reshape_dim2
+       bik,bjk->bij Naive2=decompose_einsum_2inp    MatMul                                                          2*B*I*J*K
+    abij,abjk->abik          ML=decompose_einsum Transpose   Reshape_dim0*Reshape_dim1*Reshape_dim2*Reshape_dim3*Reshape_dim4
+    abij,abjk->abik Naive2=decompose_einsum_2inp    MatMul              2*Reshape_dim0*Reshape_dim1*Reshape_dim2*Reshape_dim2
+        abij,ij->ab          ML=decompose_einsum      Gemm 2*Reshape_dim0*Reshape_dim0*Reshape_dim1+Reshape_dim0*Reshape_dim0
+        abij,ij->ab Naive2=decompose_einsum_2inp    MatMul                           2*Reshape_dim0*Reshape_dim1*Reshape_dim2
 
 
 
@@ -446,13 +446,13 @@ available for the abstract Einsum operator.
  .. code-block:: none
 
            Equation  #nodes(ML)  #nodes(Naive2)  #nodes(Einsum)  FLOPs(ML)  FLOPs(Naive2)  ms(ML)  ms(Naive2)  ms(Einsum)
-          ij,jk->ik           1               4               1     526336         524296   0.019       0.022       0.027
-           ij,ij->i           4               4               1      16391          16391   0.034       0.034       0.048
-       bij,bjk->bik           1               1               1    2097152        2097152   0.030       0.030       0.049
-         bij,bj->bi           6               3               1      65550          65541   0.020       0.018       0.021
-       bik,bjk->bij           2               2               1     101376         101376   0.016       0.016       0.023
-    abij,abjk->abik          22              11               1       1577          49188   0.038       0.023       0.021
-        abij,ij->ab          12               9               1         30             20   0.024       0.019       0.018
+          ij,jk->ik           2               4               1     530432         524296   0.012       0.015       0.014
+           ij,ij->i           4               4               1      16391          16391   0.022       0.022       0.025
+       bij,bjk->bik          32               1               1      16454        2097152   0.038       0.015       0.034
+         bij,bj->bi          21               3               1         40          65541   0.019       0.010       0.009
+       bik,bjk->bij          29               2               1         68         101376   0.020       0.009       0.010
+    abij,abjk->abik          34              17               1       1624             44   0.026       0.015       0.008
+        abij,ij->ab          22              11               1         56             27   0.015       0.009       0.008
 
     (ML) = decompose_einsum  (Naive2) = decompose_einsum_2inputs  (Einsum) = ONNX Einsum node   ms = ms/inference
 
@@ -498,9 +498,19 @@ representative equation (batched matmul ``bij,bjk->bik``).
 
 
     Node-type distribution for 'bij,bjk->bik':
-    Op type  ML  Naive2  Einsum
-     Einsum   0       0       1
-     MatMul   1       1       0
+       Op type  ML  Naive2  Einsum
+        Concat   7       0       0
+        Einsum   0       0       1
+        Gather   1       0       0
+        MatMul   1       1       0
+           Max   1       0       0
+    ReduceProd   2       0       0
+       Reshape   3       0       0
+         Shape   5       0       0
+         Slice   6       0       0
+       Squeeze   1       0       0
+     Transpose   3       0       0
+     Unsqueeze   2       0       0
 
 
 
@@ -575,7 +585,7 @@ We render two graph comparisons side-by-side:
     *
 
       .. image-sg:: /auto_examples_core/images/sphx_glr_plot_einsum_cost_comparison_001.png
-         :alt: ONNX graph comparison for 'abij,abjk->abik' (multi-batch matmul 4D) — largest A/B difference Strategy ML: 22 nodes  |  Strategy Naive2: 11 nodes, ML — decompose_einsum 'abij,abjk->abik' — 22 nodes, Naive2 — decompose_einsum_2inputs 'abij,abjk->abik' — 11 nodes
+         :alt: ONNX graph comparison for 'bij,bjk->bik' (batched matmul 3D) — largest A/B difference Strategy ML: 32 nodes  |  Strategy Naive2: 1 nodes, ML — decompose_einsum 'bij,bjk->bik' — 32 nodes, Naive2 — decompose_einsum_2inputs 'bij,bjk->bik' — 1 nodes
          :srcset: /auto_examples_core/images/sphx_glr_plot_einsum_cost_comparison_001.png
          :class: sphx-glr-multi-img
 
@@ -589,7 +599,7 @@ We render two graph comparisons side-by-side:
     *
 
       .. image-sg:: /auto_examples_core/images/sphx_glr_plot_einsum_cost_comparison_003.png
-         :alt: ONNX graph comparison for 'abij,ij->ab' (4D→2D reduction) — column-dot reduction Strategy ML: 12 nodes  |  Strategy Naive2: 9 nodes, ML — decompose_einsum 'abij,ij->ab' — 12 nodes, Naive2 — decompose_einsum_2inputs 'abij,ij->ab' — 9 nodes
+         :alt: ONNX graph comparison for 'abij,ij->ab' (4D→2D reduction) — column-dot reduction Strategy ML: 22 nodes  |  Strategy Naive2: 11 nodes, ML — decompose_einsum 'abij,ij->ab' — 22 nodes, Naive2 — decompose_einsum_2inputs 'abij,ij->ab' — 11 nodes
          :srcset: /auto_examples_core/images/sphx_glr_plot_einsum_cost_comparison_003.png
          :class: sphx-glr-multi-img
 
@@ -599,7 +609,7 @@ We render two graph comparisons side-by-side:
  .. code-block:: none
 
 
-    Largest structural difference: 'abij,abjk->abik' (multi-batch matmul 4D)  ML=22 nodes, Naive2=11 nodes, Δ=11
+    Largest structural difference: 'bij,bjk->bik' (batched matmul 3D)  ML=32 nodes, Naive2=1 nodes, Δ=31
 
 
 
@@ -705,7 +715,7 @@ We render two graph comparisons side-by-side:
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 4.248 seconds)
+   **Total running time of the script:** (0 minutes 3.376 seconds)
 
 
 .. _sphx_glr_download_auto_examples_core_plot_einsum_cost_comparison.py:

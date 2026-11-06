@@ -54,7 +54,7 @@ def normalize_rows(X):
 rng = np.random.default_rng(0)
 X_sample = rng.standard_normal((10, 4)).astype(np.float32)
 
-onx_standalone = trace_numpy_to_onnx(normalize_rows, X_sample)
+onx_standalone = trace_numpy_to_onnx(normalize_rows, X_sample, target_opset=21)
 
 print("Nodes in the standalone ONNX model:")
 for node in onx_standalone.graph.node:
@@ -91,7 +91,7 @@ def log1p_abs(X):
 transformer = FunctionTransformer(func=log1p_abs)
 transformer.fit(X_sample)
 
-onx_ft = to_onnx(transformer, (X_sample[:1],))
+onx_ft = to_onnx(transformer, (X_sample[:1],), target_opset=21)
 
 print("\nNodes in the FunctionTransformer ONNX model:")
 for node in onx_ft.graph.node:
@@ -121,7 +121,7 @@ print("FunctionTransformer ✓")
 identity_tf = FunctionTransformer(func=None)
 identity_tf.fit(X_sample)
 
-onx_id = to_onnx(identity_tf, (X_sample[:1],))
+onx_id = to_onnx(identity_tf, (X_sample[:1],), target_opset=21)
 
 print("\nNodes in the identity transformer ONNX model:")
 for node in onx_id.graph.node:
@@ -146,7 +146,7 @@ pipe = Pipeline([("func", FunctionTransformer(func=log1p_abs)), ("scaler", Stand
 X_train = rng.standard_normal((80, 4)).astype(np.float32)
 pipe.fit(X_train)
 
-onx_pipe = to_onnx(pipe, (X_train[:1],))
+onx_pipe = to_onnx(pipe, (X_train[:1],), target_opset=21)
 
 print("\nNodes in the pipeline ONNX model:")
 for node in onx_pipe.graph.node:

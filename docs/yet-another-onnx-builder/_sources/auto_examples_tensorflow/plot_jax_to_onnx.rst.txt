@@ -23,28 +23,19 @@
 Converting a JAX function to ONNX
 ==================================
 
-:func:`yobx.tensorflow.to_onnx` can also convert :epkg:`JAX` functions to
-ONNX.  Under the hood it uses :func:`jax.experimental.jax2tf.convert` to
-lower the JAX computation to a :class:`tensorflow.ConcreteFunction` and then
-applies the same TF→ONNX conversion pipeline used for Keras models.
-
-Alternatively, :func:`yobx.tensorflow.tensorflow_helper.jax_to_concrete_function`
-can be called explicitly to obtain the intermediate
-:class:`~tensorflow.ConcreteFunction` before passing it to
-:func:`~yobx.tensorflow.to_onnx`.
+:func:`yobx.jax.to_onnx` converts :epkg:`JAX` functions directly to
+onnx-light graphs, without requiring TensorFlow.
 
 The workflow is:
 
 1. **Write** a plain JAX function (or wrap a :mod:`flax`/:mod:`equinox` model
    in a function).
-2. Call :func:`yobx.tensorflow.to_onnx` with a representative *dummy input*.
-   The converter detects that the callable is a JAX function and automatically
-   routes it through :func:`~yobx.tensorflow.tensorflow_helper.jax_to_concrete_function`.
+2. Call :func:`yobx.jax.to_onnx` with a representative *dummy input*.
 3. **Run** the exported ONNX model with any ONNX runtime — this example uses
    :epkg:`onnxruntime`.
 4. **Verify** that the ONNX outputs match JAX's own outputs.
 
-.. GENERATED FROM PYTHON SOURCE LINES 30-40
+.. GENERATED FROM PYTHON SOURCE LINES 21-30
 
 .. code-block:: Python
 
@@ -55,8 +46,7 @@ The workflow is:
     from yobx.doc import plot_dot
     from yobx.helpers import max_diff
     from yobx.helpers.onnx_helper import pretty_onnx
-    from yobx.tensorflow import to_onnx
-    from yobx.tensorflow.tensorflow_helper import jax_to_concrete_function
+    from yobx.jax import to_onnx
 
 
 
@@ -65,16 +55,15 @@ The workflow is:
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 41-47
+.. GENERATED FROM PYTHON SOURCE LINES 31-36
 
 1. Simple element-wise function
 --------------------------------
 
 We start with the simplest possible JAX function: an element-wise
-``sin`` applied to a float32 matrix.  :func:`to_onnx` auto-detects that
-the callable is a JAX function and converts it transparently.
+``sin`` applied to a float32 matrix.
 
-.. GENERATED FROM PYTHON SOURCE LINES 47-62
+.. GENERATED FROM PYTHON SOURCE LINES 36-51
 
 .. code-block:: Python
 
@@ -87,7 +76,7 @@ the callable is a JAX function and converts it transparently.
         return jnp.sin(x)
 
 
-    onx_sin = to_onnx(jax_sin, (X,))
+    onx_sin = to_onnx(jax_sin, (X,), target_opset=21)
 
     print("Opset            :", onx_sin.opset_import[0].version)
     print("Number of nodes  :", len(onx_sin.graph.node))
@@ -108,14 +97,14 @@ the callable is a JAX function and converts it transparently.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 63-67
+.. GENERATED FROM PYTHON SOURCE LINES 52-56
 
 Run and compare
 ~~~~~~~~~~~~~~~~
 
 Verify that the ONNX model reproduces the JAX output.
 
-.. GENERATED FROM PYTHON SOURCE LINES 67-80
+.. GENERATED FROM PYTHON SOURCE LINES 56-69
 
 .. code-block:: Python
 
@@ -148,7 +137,7 @@ Verify that the ONNX model reproduces the JAX output.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 81-86
+.. GENERATED FROM PYTHON SOURCE LINES 70-75
 
 2. Multi-layer MLP in JAX
 --------------------------
@@ -156,7 +145,7 @@ Verify that the ONNX model reproduces the JAX output.
 A slightly more complex function: a two-layer MLP with ReLU activations
 whose weights are stored as JAX arrays captured in a closure.
 
-.. GENERATED FROM PYTHON SOURCE LINES 86-108
+.. GENERATED FROM PYTHON SOURCE LINES 75-97
 
 .. code-block:: Python
 
@@ -176,7 +165,7 @@ whose weights are stored as JAX arrays captured in a closure.
 
 
     X_mlp = rng.standard_normal((10, 8)).astype(np.float32)
-    onx_mlp = to_onnx(jax_mlp, (X_mlp,))
+    onx_mlp = to_onnx(jax_mlp, (X_mlp,), target_opset=21)
 
     op_types = [n.op_type for n in onx_mlp.graph.node]
     print("\nOp-types in the MLP graph:", op_types)
@@ -191,16 +180,16 @@ whose weights are stored as JAX arrays captured in a closure.
  .. code-block:: none
 
 
-    Op-types in the MLP graph: ['MatMul', 'Relu', 'MatMul']
+    Op-types in the MLP graph: ['MatMul', 'Add', 'Relu', 'MatMul', 'Add']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 109-110
+.. GENERATED FROM PYTHON SOURCE LINES 98-99
 
 Display the model.
 
-.. GENERATED FROM PYTHON SOURCE LINES 110-112
+.. GENERATED FROM PYTHON SOURCE LINES 99-101
 
 .. code-block:: Python
 
@@ -215,22 +204,26 @@ Display the model.
  .. code-block:: none
 
     opset: domain='' version=21
-    input: name='X:0' type=dtype('float32') shape=['dim', 8]
-    init: name='%6' type=float32 shape=(8, 16)
-    init: name='%8' type=float32 shape=(16, 4)
-    MatMul(X:0, %6) -> _onx_matmul_jax2tf_arg_0:0
-      Relu(_onx_matmul_jax2tf_arg_0:0) -> _onx_max_add_matmul_jax2tf_arg_0:0
-        MatMul(_onx_max_add_matmul_jax2tf_arg_0:0, %8) -> Identity:0
-    output: name='Identity:0' type='NOTENSOR' shape=None
+    input: name='X' type=dtype('float32') shape=['batch', 8]
+    init: name='constant' type=float32 shape=(8, 16)
+    init: name='constant_3' type=float32 shape=(16, 4)
+    init: name='unsqueeze' type=float32 shape=(1, 16)
+    init: name='unsqueeze_2' type=float32 shape=(1, 4) -- array([0., 0., 0., 0.], dtype=float32)
+    MatMul(X, constant) -> matmul
+      Add(matmul, unsqueeze) -> add
+        Relu(add) -> max
+          MatMul(max, constant_3) -> matmul_2
+            Add(matmul_2, unsqueeze_2) -> add_2
+    output: name='add_2' type=dtype('float32') shape=['batch', 4]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 113-114
+.. GENERATED FROM PYTHON SOURCE LINES 102-103
 
 Verify predictions on a held-out batch.
 
-.. GENERATED FROM PYTHON SOURCE LINES 114-125
+.. GENERATED FROM PYTHON SOURCE LINES 103-114
 
 .. code-block:: Python
 
@@ -253,12 +246,12 @@ Verify predictions on a held-out batch.
 
  .. code-block:: none
 
-    MLP predictions match ✓ -  {'abs': 1.9073486328125e-06, 'rel': 4.993551806577958e-07, 'sum': 1.3425946235656738e-05, 'n': 40.0, 'dnan': 0.0, 'argm': (2, 3)}
+    MLP predictions match ✓ -  {'abs': 1.9073486328125e-06, 'rel': 2.279725582610682e-06, 'sum': 1.1816620826721191e-05, 'n': 40.0, 'dnan': 0.0, 'argm': (3, 0)}
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 126-131
+.. GENERATED FROM PYTHON SOURCE LINES 115-120
 
 3. Dynamic batch dimension
 ---------------------------
@@ -266,12 +259,12 @@ Verify predictions on a held-out batch.
 By default :func:`to_onnx` marks axis 0 as a dynamic (symbolic) batch
 dimension.  The converted model runs correctly for any batch size.
 
-.. GENERATED FROM PYTHON SOURCE LINES 131-150
+.. GENERATED FROM PYTHON SOURCE LINES 120-139
 
 .. code-block:: Python
 
 
-    onx_dyn = to_onnx(jax_mlp, (X_mlp,), dynamic_shapes=({0: "batch"},))
+    onx_dyn = to_onnx(jax_mlp, (X_mlp,), target_opset=21, dynamic_shapes=({0: "batch"},))
 
     input_shape = onx_dyn.graph.input[0].type.tensor_type.shape
     batch_dim = input_shape.dim[0]
@@ -298,24 +291,22 @@ dimension.  The converted model runs correctly for any batch size.
  .. code-block:: none
 
 
-    Batch dimension param  : dim
+    Batch dimension param  : batch
     Dynamic-batch model verified for batch sizes 1 ✓ -  {'abs': 0.0, 'rel': 0.0, 'sum': 0.0, 'n': 4.0, 'dnan': 0.0, 'argm': (0, 0)}
-    Dynamic-batch model verified for batch sizes 7 ✓ -  {'abs': 0.0, 'rel': 0.0, 'sum': 0.0, 'n': 28.0, 'dnan': 0.0, 'argm': (0, 0)}
-    Dynamic-batch model verified for batch sizes 20 ✓ -  {'abs': 0.0, 'rel': 0.0, 'sum': 0.0, 'n': 80.0, 'dnan': 0.0, 'argm': (0, 0)}
+    Dynamic-batch model verified for batch sizes 7 ✓ -  {'abs': 1.9073486328125e-06, 'rel': 3.8096310887352683e-06, 'sum': 8.841976523399353e-06, 'n': 28.0, 'dnan': 0.0, 'argm': (1, 2)}
+    Dynamic-batch model verified for batch sizes 20 ✓ -  {'abs': 1.9073486328125e-06, 'rel': 1.560540562975691e-06, 'sum': 1.9183382391929626e-05, 'n': 80.0, 'dnan': 0.0, 'argm': (15, 3)}
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 151-157
+.. GENERATED FROM PYTHON SOURCE LINES 140-144
 
-4. Explicit jax_to_concrete_function
----------------------------------------
+4. Softmax
+----------
 
-:func:`~yobx.tensorflow.tensorflow_helper.jax_to_concrete_function` can be
-called directly when you want to inspect or reuse the intermediate
-:class:`~tensorflow.ConcreteFunction` before exporting to ONNX.
+Softmax demonstrates a composite JAX operation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 157-178
+.. GENERATED FROM PYTHON SOURCE LINES 144-164
 
 .. code-block:: Python
 
@@ -327,8 +318,7 @@ called directly when you want to inspect or reuse the intermediate
 
     X_cls = rng.standard_normal((6, 10)).astype(np.float32)
 
-    cf = jax_to_concrete_function(jax_softmax, (X_cls,), dynamic_shapes=({0: "batch"},))
-    onx_cls = to_onnx(cf, (X_cls,), dynamic_shapes=({0: "batch"},))
+    onx_cls = to_onnx(jax_softmax, (X_cls,), target_opset=21, dynamic_shapes=({0: "batch"},))
 
     ref_cls = onnxruntime.InferenceSession(
         onx_cls.SerializeToString(), providers=["CPUExecutionProvider"]
@@ -338,7 +328,7 @@ called directly when you want to inspect or reuse the intermediate
 
     expected_cls = np.asarray(jax_softmax(X_cls))
     assert np.allclose(expected_cls, result_cls, atol=1e-5), "Softmax mismatch!"
-    print("Explicit jax_to_concrete_function verified ✓ - ", max_diff(expected_cls, result_cls))
+    print("Softmax verified ✓ - ", max_diff(expected_cls, result_cls))
 
 
 
@@ -348,18 +338,18 @@ called directly when you want to inspect or reuse the intermediate
 
  .. code-block:: none
 
-    Explicit jax_to_concrete_function verified ✓ -  {'abs': 2.9802322387695312e-08, 'rel': 1.7332412235332218e-07, 'sum': 4.4051557779312134e-07, 'n': 60.0, 'dnan': 0.0, 'argm': (2, 7)}
+    Softmax verified ✓ -  {'abs': 2.9802322387695312e-08, 'rel': 1.7332412235332218e-07, 'sum': 4.4051557779312134e-07, 'n': 60.0, 'dnan': 0.0, 'argm': (2, 7)}
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 179-182
+.. GENERATED FROM PYTHON SOURCE LINES 165-168
 
 5. Visualize the ONNX graph
 ----------------------------
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 182-183
+.. GENERATED FROM PYTHON SOURCE LINES 168-169
 
 .. code-block:: Python
 
@@ -379,7 +369,7 @@ called directly when you want to inspect or reuse the intermediate
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 7.665 seconds)
+   **Total running time of the script:** (0 minutes 1.497 seconds)
 
 
 .. _sphx_glr_download_auto_examples_tensorflow_plot_jax_to_onnx.py:

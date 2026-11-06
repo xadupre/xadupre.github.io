@@ -95,15 +95,16 @@ onnxruntime and verifies the results agree.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 56-61
+.. GENERATED FROM PYTHON SOURCE LINES 56-62
 
 1. Basic SELECT
 ---------------
 
 The simplest query selects two columns and computes their element-wise sum.
 Each column in *input_dtypes* becomes a separate ONNX graph input.
+Opset 21 is used explicitly for ONNX Runtime compatibility.
 
-.. GENERATED FROM PYTHON SOURCE LINES 61-74
+.. GENERATED FROM PYTHON SOURCE LINES 62-75
 
 .. code-block:: Python
 
@@ -112,7 +113,7 @@ Each column in *input_dtypes* becomes a separate ONNX graph input.
     a = np.array([1.0, 2.0, 3.0], dtype=np.float32)
     b = np.array([4.0, 5.0, 6.0], dtype=np.float32)
 
-    onx_add = sql_to_onnx("SELECT a + b AS total FROM t", dtypes)
+    onx_add = sql_to_onnx("SELECT a + b AS total FROM t", dtypes, target_opset=21)
 
     (total,) = run(onx_add, {"a": a, "b": b})
     print("a + b =", total)
@@ -134,11 +135,11 @@ Each column in *input_dtypes* becomes a separate ONNX graph input.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 75-76
+.. GENERATED FROM PYTHON SOURCE LINES 76-77
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 76-78
+.. GENERATED FROM PYTHON SOURCE LINES 77-79
 
 .. code-block:: Python
 
@@ -156,12 +157,12 @@ The model
     input: name='a' type=dtype('float32') shape=['N']
     input: name='b' type=dtype('float32') shape=['N']
     Add(a, b) -> total
-    output: name='total' type='NOTENSOR' shape=None
+    output: name='total' type=dtype('float32') shape=['N']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 79-84
+.. GENERATED FROM PYTHON SOURCE LINES 80-85
 
 2. WHERE clause (row filtering)
 --------------------------------
@@ -169,12 +170,12 @@ The model
 The ``WHERE`` clause is translated to a boolean mask followed by
 ``Compress`` nodes that select only the matching rows from every column.
 
-.. GENERATED FROM PYTHON SOURCE LINES 84-93
+.. GENERATED FROM PYTHON SOURCE LINES 85-94
 
 .. code-block:: Python
 
 
-    onx_where = sql_to_onnx("SELECT a, b FROM t WHERE a > 1.5", dtypes)
+    onx_where = sql_to_onnx("SELECT a, b FROM t WHERE a > 1.5", dtypes, target_opset=21)
     a_filt, b_filt = run(onx_where, {"a": a, "b": b})
 
     print("rows where a > 1.5:")
@@ -197,11 +198,11 @@ The ``WHERE`` clause is translated to a boolean mask followed by
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 94-95
+.. GENERATED FROM PYTHON SOURCE LINES 95-96
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 95-97
+.. GENERATED FROM PYTHON SOURCE LINES 96-98
 
 .. code-block:: Python
 
@@ -219,17 +220,17 @@ The model
     input: name='a' type=dtype('float32') shape=['N']
     input: name='b' type=dtype('float32') shape=['N']
     init: name='filter_mask_r_lit' type=float32 shape=(1,) -- array([1.5], dtype=float32)
-    CastLike(filter_mask_r_lit, a) -> _onx_castlike_filter_mask_r_lit
-      Greater(a, _onx_castlike_filter_mask_r_lit) -> _onx_greater_a
-        Compress(a, _onx_greater_a, axis=0) -> output_0
-    Compress(b, _onx_greater_a, axis=0) -> output_1
-    output: name='output_0' type='NOTENSOR' shape=None
-    output: name='output_1' type='NOTENSOR' shape=None
+    CastLike(filter_mask_r_lit, a) -> castlike
+      Greater(a, castlike) -> greater
+        Compress(a, greater, axis=0) -> output_0
+    Compress(b, greater, axis=0) -> output_1
+    output: name='output_0' type=dtype('float32') shape=['Compress_compress_count']
+    output: name='output_1' type=dtype('float32') shape=['Compress_compress_2_count']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 98-103
+.. GENERATED FROM PYTHON SOURCE LINES 99-104
 
 3. Aggregation functions
 -------------------------
@@ -237,12 +238,12 @@ The model
 ``SUM``, ``AVG``, ``MIN``, and ``MAX`` in the SELECT list are emitted as
 ``ReduceSum``, ``ReduceMean``, ``ReduceMin``, and ``ReduceMax`` ONNX nodes.
 
-.. GENERATED FROM PYTHON SOURCE LINES 103-114
+.. GENERATED FROM PYTHON SOURCE LINES 104-115
 
 .. code-block:: Python
 
 
-    onx_agg = sql_to_onnx("SELECT SUM(a) AS s, AVG(b) AS m FROM t", dtypes)
+    onx_agg = sql_to_onnx("SELECT SUM(a) AS s, AVG(b) AS m FROM t", dtypes, target_opset=21)
     s_arr, m_arr = run(onx_agg, {"a": a, "b": b})
     s = float(s_arr)
     m = float(m_arr)
@@ -266,11 +267,11 @@ The model
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 115-116
+.. GENERATED FROM PYTHON SOURCE LINES 116-117
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 116-118
+.. GENERATED FROM PYTHON SOURCE LINES 117-119
 
 .. code-block:: Python
 
@@ -288,27 +289,28 @@ The model
     input: name='a' type=dtype('float32') shape=['N']
     input: name='b' type=dtype('float32') shape=['N']
     init: name='select_s_axes' type=int64 shape=(1,) -- array([0])
-    ReduceMean(b, select_s_axes, keepdims=0) -> m
+    init: name='select_m_axes' type=int64 shape=(1,) -- array([0])
+    ReduceMean(b, select_m_axes, keepdims=0) -> m
     ReduceSum(a, select_s_axes, keepdims=0) -> s
-    output: name='s' type='NOTENSOR' shape=None
-    output: name='m' type='NOTENSOR' shape=None
+    output: name='s' type=dtype('float32') shape=[]
+    output: name='m' type=dtype('float32') shape=[]
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 119-123
+.. GENERATED FROM PYTHON SOURCE LINES 120-124
 
 4. WHERE + arithmetic SELECT
 ----------------------------
 
 Filters and expressions can be combined freely.
 
-.. GENERATED FROM PYTHON SOURCE LINES 123-132
+.. GENERATED FROM PYTHON SOURCE LINES 124-133
 
 .. code-block:: Python
 
 
-    onx_combined = sql_to_onnx("SELECT a + b AS total FROM t WHERE a > 0", dtypes)
+    onx_combined = sql_to_onnx("SELECT a + b AS total FROM t WHERE a > 0", dtypes, target_opset=21)
     a2 = np.array([1.0, -2.0, 3.0], dtype=np.float32)
     b2 = np.array([4.0, 5.0, 6.0], dtype=np.float32)
 
@@ -329,11 +331,11 @@ Filters and expressions can be combined freely.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 133-134
+.. GENERATED FROM PYTHON SOURCE LINES 134-135
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 134-136
+.. GENERATED FROM PYTHON SOURCE LINES 135-137
 
 .. code-block:: Python
 
@@ -351,17 +353,17 @@ The model
     input: name='a' type=dtype('float32') shape=['N']
     input: name='b' type=dtype('float32') shape=['N']
     init: name='filter_mask_r_lit' type=int64 shape=(1,) -- array([0])
-    CastLike(filter_mask_r_lit, a) -> _onx_castlike_filter_mask_r_lit
-      Greater(a, _onx_castlike_filter_mask_r_lit) -> _onx_greater_a
-        Compress(a, _onx_greater_a, axis=0) -> _onx_compress_a
-    Compress(b, _onx_greater_a, axis=0) -> _onx_compress_b
-      Add(_onx_compress_a, _onx_compress_b) -> total
-    output: name='total' type='NOTENSOR' shape=None
+    CastLike(filter_mask_r_lit, a) -> castlike
+      Greater(a, castlike) -> greater
+        Compress(a, greater, axis=0) -> compress
+    Compress(b, greater, axis=0) -> compress_2
+      Add(compress, compress_2) -> total
+    output: name='total' type=dtype('float32') shape=['broadcast(Compress_compress_count, Compress_compress_2_count)']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 137-149
+.. GENERATED FROM PYTHON SOURCE LINES 138-150
 
 5. Custom Python functions
 ---------------------------
@@ -376,7 +378,7 @@ real inputs with lightweight proxy objects that record every numpy
 operation as an ONNX node, so the resulting graph is equivalent to
 running the Python function at inference time.
 
-.. GENERATED FROM PYTHON SOURCE LINES 149-169
+.. GENERATED FROM PYTHON SOURCE LINES 150-173
 
 .. code-block:: Python
 
@@ -391,7 +393,10 @@ running the Python function at inference time.
     a3 = np.array([4.0, -1.0, 9.0, 0.0], dtype=np.float32)
 
     onx_func = sql_to_onnx(
-        "SELECT clip_sqrt(a) AS r FROM t", dtypes_a, custom_functions={"clip_sqrt": clip_sqrt}
+        "SELECT clip_sqrt(a) AS r FROM t",
+        dtypes_a,
+        custom_functions={"clip_sqrt": clip_sqrt},
+        target_opset=21,
     )
 
     (r,) = run(onx_func, {"a": a3})
@@ -414,11 +419,11 @@ running the Python function at inference time.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 170-171
+.. GENERATED FROM PYTHON SOURCE LINES 174-175
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 171-173
+.. GENERATED FROM PYTHON SOURCE LINES 175-177
 
 .. code-block:: Python
 
@@ -434,27 +439,30 @@ The model
 
     opset: domain='' version=21
     input: name='a' type=dtype('float32') shape=['N']
-    Relu(a) -> _onx_max_a
-      Sqrt(_onx_max_a) -> r
-    output: name='r' type='NOTENSOR' shape=None
+    Relu(a) -> max
+      Sqrt(max) -> r
+    output: name='r' type=dtype('float32') shape=['N']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 174-178
+.. GENERATED FROM PYTHON SOURCE LINES 178-182
 
 6. Custom function in WHERE clause
 -----------------------------------
 
 Custom functions also work in ``WHERE`` predicates.
 
-.. GENERATED FROM PYTHON SOURCE LINES 178-188
+.. GENERATED FROM PYTHON SOURCE LINES 182-195
 
 .. code-block:: Python
 
 
     onx_where_func = sql_to_onnx(
-        "SELECT a FROM t WHERE clip_sqrt(a) > 1", dtypes_a, custom_functions={"clip_sqrt": clip_sqrt}
+        "SELECT a FROM t WHERE clip_sqrt(a) > 1",
+        dtypes_a,
+        custom_functions={"clip_sqrt": clip_sqrt},
+        target_opset=21,
     )
 
     (a_filt2,) = run(onx_where_func, {"a": a3})
@@ -476,11 +484,11 @@ Custom functions also work in ``WHERE`` predicates.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 189-190
+.. GENERATED FROM PYTHON SOURCE LINES 196-197
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 190-193
+.. GENERATED FROM PYTHON SOURCE LINES 197-200
 
 .. code-block:: Python
 
@@ -498,24 +506,24 @@ The model
     opset: domain='' version=21
     input: name='a' type=dtype('float32') shape=['N']
     init: name='filter_mask_r_lit' type=int64 shape=(1,) -- array([1])
-    Relu(a) -> _onx_max_a
-      Sqrt(_onx_max_a) -> _onx_sqrt_max_a
-        CastLike(filter_mask_r_lit, _onx_sqrt_max_a) -> _onx_castlike_filter_mask_r_lit
-        Greater(_onx_sqrt_max_a, _onx_castlike_filter_mask_r_lit) -> _onx_greater_filter_mask_l_clip_sqrt
-          Compress(a, _onx_greater_filter_mask_l_clip_sqrt, axis=0) -> output_0
-    output: name='output_0' type='NOTENSOR' shape=None
+    Relu(a) -> max
+      Sqrt(max) -> sqrt_2
+        CastLike(filter_mask_r_lit, sqrt_2) -> castlike
+        Greater(sqrt_2, castlike) -> greater
+          Compress(a, greater, axis=0) -> output_0
+    output: name='output_0' type=dtype('float32') shape=['Compress_compress_count']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 194-198
+.. GENERATED FROM PYTHON SOURCE LINES 201-205
 
 7. Two-argument custom function
 ---------------------------------
 
 Functions with more than one argument receive one tensor per argument.
 
-.. GENERATED FROM PYTHON SOURCE LINES 198-216
+.. GENERATED FROM PYTHON SOURCE LINES 205-226
 
 .. code-block:: Python
 
@@ -528,7 +536,10 @@ Functions with more than one argument receive one tensor per argument.
 
     dtypes_ab = {"a": np.float32, "b": np.float32}
     onx_ws = sql_to_onnx(
-        "SELECT wsum(a, b) AS ws FROM t", dtypes_ab, custom_functions={"wsum": weighted_sum}
+        "SELECT wsum(a, b) AS ws FROM t",
+        dtypes_ab,
+        custom_functions={"wsum": weighted_sum},
+        target_opset=21,
     )
 
     (ws,) = run(onx_ws, {"a": a, "b": b})
@@ -551,11 +562,11 @@ Functions with more than one argument receive one tensor per argument.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 217-218
+.. GENERATED FROM PYTHON SOURCE LINES 227-228
 
 The model
 
-.. GENERATED FROM PYTHON SOURCE LINES 218-220
+.. GENERATED FROM PYTHON SOURCE LINES 228-230
 
 .. code-block:: Python
 
@@ -572,16 +583,17 @@ The model
     opset: domain='' version=21
     input: name='a' type=dtype('float32') shape=['N']
     input: name='b' type=dtype('float32') shape=['N']
-    init: name='init1_s_' type=float32 shape=() -- array([0.5], dtype=float32)-- Opset.make_node.1/Small##Opset.make_node.1/Small
-    Mul(init1_s_, a) -> _onx_mul_init1_s_
-    Mul(init1_s_, b) -> _onx_mul_init1_s_2
-      Add(_onx_mul_init1_s_, _onx_mul_init1_s_2) -> ws
-    output: name='ws' type='NOTENSOR' shape=None
+    init: name='init' type=float32 shape=() -- array([0.5], dtype=float32)
+    init: name='init_2' type=float32 shape=() -- array([0.5], dtype=float32)
+    Mul(init, a) -> mul_2
+    Mul(init_2, b) -> mul_4
+      Add(mul_2, mul_4) -> ws
+    output: name='ws' type=dtype('float32') shape=['N']
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 221-226
+.. GENERATED FROM PYTHON SOURCE LINES 231-236
 
 8. Visualise the ONNX node types
 -----------------------------------
@@ -589,7 +601,7 @@ The model
 The bar chart below compares how many ONNX nodes each query produces and
 which node types appear in the custom-function query.
 
-.. GENERATED FROM PYTHON SOURCE LINES 226-271
+.. GENERATED FROM PYTHON SOURCE LINES 236-281
 
 .. code-block:: Python
 
@@ -650,7 +662,7 @@ which node types appear in the custom-function query.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 272-279
+.. GENERATED FROM PYTHON SOURCE LINES 282-289
 
 9. Display the ONNX model graph
 --------------------------------
@@ -660,7 +672,7 @@ inspect nodes, edges, and tensor shapes at a glance.  Here we visualize the
 basic ``SELECT a + b`` query — a single ``Add`` node connecting two inputs
 to one output.
 
-.. GENERATED FROM PYTHON SOURCE LINES 279-283
+.. GENERATED FROM PYTHON SOURCE LINES 289-293
 
 .. code-block:: Python
 
@@ -683,7 +695,7 @@ to one output.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.322 seconds)
+   **Total running time of the script:** (0 minutes 0.216 seconds)
 
 
 .. _sphx_glr_download_auto_examples_sql_plot_sql_to_onnx.py:

@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
-import onnx.parser
+from yobx._onnx_shim import onnx
+import onnx_light.onnx.parser
 from yobx.doc import plot_dot
 
 model = onnx.parser.parse_model(

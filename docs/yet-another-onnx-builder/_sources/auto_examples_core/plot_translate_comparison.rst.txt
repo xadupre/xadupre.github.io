@@ -20,303 +20,58 @@
 
 .. _l-plot-translate-comparison:
 
-Comparing the five ONNX translation APIs
-=========================================
+Translating ONNX models to source code
+======================================
 
-:func:`translate <yobx.translate.translate>` converts an
-:class:`onnx.ModelProto` into Python source code that, when executed,
-recreates the same model.  Five output APIs are available:
+:func:`onnx_light.tools.translate` converts an ONNX model into source code
+that rebuilds it. The native implementation supports a compact
+``onnx_light.onnx.helper`` expression and an incremental ``GraphBuilder``
+script.
 
-* ``"onnx"`` — uses :mod:`onnx.helper` (``oh.make_node``, ``oh.make_graph``, …)
-  via :class:`~yobx.translate.inner_emitter.InnerEmitter`.
-* ``"onnx-short"`` — same as ``"onnx"`` but replaces large initializers with
-  random values to keep the snippet compact, via
-  :class:`~yobx.translate.inner_emitter.InnerEmitterShortInitializer`.
-* ``"onnx-compact"`` — produces a single nested expression instead of assembling
-  separate lists of nodes/inputs/outputs, via
-  :class:`~yobx.translate.inner_emitter.InnerEmitterCompact`.
-* ``"light"`` — fluent ``start(…).vin(…).…`` chain,
-  via :class:`~yobx.translate.light_emitter.LightEmitter`.
-* ``"builder"`` — ``GraphBuilder``-based function wrapper,
-  via :class:`~yobx.translate.builder_emitter.BuilderEmitter`.
-
-This example builds a small model, translates it with every API, shows the
-generated code, and verifies that the ``"onnx"`` snippet can be re-executed to
-reproduce the original model.
-
-.. GENERATED FROM PYTHON SOURCE LINES 28-35
+.. GENERATED FROM PYTHON SOURCE LINES 12-34
 
 .. code-block:: Python
 
 
     import numpy as np
-    import onnx
-    import onnx.helper as oh
-    import onnx.numpy_helper as onh
-    from yobx.translate import translate, translate_header
-
-
-
-
-
-
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 36-41
-
-Build the model
-----------------
-
-We use ``Z = Relu(X @ W + b)`` as a running example:
-a single ``Gemm`` followed by ``Relu``.
-
-.. GENERATED FROM PYTHON SOURCE LINES 41-62
-
-.. code-block:: Python
-
-
-    TFLOAT = onnx.TensorProto.FLOAT
-    INT64 = onnx.TensorProto.INT64
-
-    W = onh.from_array(np.random.randn(8, 5).astype(np.float32), name="W")
-    b = onh.from_array(np.random.randn(5).astype(np.float32), name="b")
+    import onnx_light.onnx as onnx
+    import onnx_light.onnx.helper as oh
+    import onnx_light.onnx.numpy_helper as onh
+    from onnx_light.tools import translate, translate_header
 
     model = oh.make_model(
         oh.make_graph(
             [oh.make_node("Gemm", ["X", "W", "b"], ["T"]), oh.make_node("Relu", ["T"], ["Z"])],
             "gemm_relu",
-            [oh.make_tensor_value_info("X", TFLOAT, [None, 8])],
-            [oh.make_tensor_value_info("Z", TFLOAT, [None, 5])],
-            [W, b],
+            [oh.make_tensor_value_info("X", onnx.TensorProto.FLOAT, [None, 8])],
+            [oh.make_tensor_value_info("Z", onnx.TensorProto.FLOAT, [None, 5])],
+            [
+                onh.from_array(np.random.randn(8, 5).astype(np.float32), name="W"),
+                onh.from_array(np.random.randn(5).astype(np.float32), name="b"),
+            ],
         ),
         opset_imports=[oh.make_opsetid("", 17)],
         ir_version=9,
     )
 
-    print(f"Model: {len(model.graph.node)} node(s), {len(model.graph.initializer)} initializer(s)")
 
 
 
 
 
-.. rst-class:: sphx-glr-script-out
 
- .. code-block:: none
 
-    Model: 2 node(s), 2 initializer(s)
+.. GENERATED FROM PYTHON SOURCE LINES 35-37
 
+Compact helper expression
+-------------------------
 
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 63-69
-
-1. ``"onnx"`` API — full initializer values
----------------------------------------------
-
-The generated code uses :func:`onnx.helper.make_node`,
-:func:`onnx.helper.make_graph`, and :func:`onnx.helper.make_model`.
-Every initializer is serialised as an exact ``np.array(…)`` literal.
-
-.. GENERATED FROM PYTHON SOURCE LINES 69-74
-
-.. code-block:: Python
-
-
-    code_onnx = translate(model, api="onnx")
-    print("=== api='onnx' ===")
-    print(code_onnx)
-
-
-
-
-
-.. rst-class:: sphx-glr-script-out
-
- .. code-block:: none
-
-    === api='onnx' ===
-    opset_imports = [
-        oh.make_opsetid('', 17),
-    ]
-    inputs = []
-    outputs = []
-    nodes = []
-    initializers = []
-    sparse_initializers = []
-    functions = []
-    initializers.append(
-        onh.from_array(
-            np.array([[-2.8501951694488525, -0.5612078309059143, 1.0888885259628296, 0.836222767829895, 0.8602944612503052], [-0.5604823231697083, -2.19199800491333, -0.6678777933120728, -0.6487101316452026, 0.08450940251350403], [0.8968738913536072, 1.1287903785705566, 0.3421708643436432, 0.5692922472953796, -0.4278814196586609], [-0.09210827946662903, -0.9187420606613159, 0.13873837888240814, -1.5727717876434326, -0.10080558061599731], [0.21605294942855835, 0.6848098635673523, 0.007529611699283123, -2.1378822326660156, 0.5840367674827576], [2.7655389308929443, -1.927566647529602, -0.7800881862640381, 0.20291732251644135, -1.607230544090271], [0.23991000652313232, -1.0260566473007202, 0.4492259919643402, 2.119370937347412, 0.6684412360191345], [-1.208194375038147, 1.9516820907592773, 1.0205625295639038, -0.8302878737449646, -1.3480478525161743]], dtype=np.float32),
-            name='W'
-        )
-    )
-    initializers.append(
-        onh.from_array(
-            np.array([-1.2197785377502441, -1.8406898975372314, -2.3381173610687256, -1.5528756380081177, -0.1304451823234558], dtype=np.float32),
-            name='b'
-        )
-    )
-    inputs.append(oh.make_tensor_value_info('X', onnx.TensorProto.FLOAT, shape=(None, 8)))
-    nodes.append(
-        oh.make_node(
-            'Gemm',
-            ['X', 'W', 'b'],
-            ['T']
-        )
-    )
-    nodes.append(
-        oh.make_node(
-            'Relu',
-            ['T'],
-            ['Z']
-        )
-    )
-    outputs.append(oh.make_tensor_value_info('Z', onnx.TensorProto.FLOAT, shape=(None, 5)))
-    graph = oh.make_graph(
-        nodes,
-        'gemm_relu',
-        inputs,
-        outputs,
-        initializers,
-        sparse_initializer=sparse_initializers,
-    )
-    model = oh.make_model(
-        graph,
-        functions=functions,
-        opset_imports=opset_imports,
-        ir_version=9,
-    )
-
-
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 75-81
-
-2. ``"onnx-short"`` API — large initializers replaced by random values
------------------------------------------------------------------------
-
-Identical to ``"onnx"`` except that initializers with more than 16 elements
-are replaced by ``np.random.randn(…)`` / ``np.random.randint(…)`` calls.
-This keeps the snippet readable when dealing with large weight tensors.
-
-.. GENERATED FROM PYTHON SOURCE LINES 81-86
-
-.. code-block:: Python
-
-
-    code_short = translate(model, api="onnx-short")
-    print("=== api='onnx-short' ===")
-    print(code_short)
-
-
-
-
-
-.. rst-class:: sphx-glr-script-out
-
- .. code-block:: none
-
-    === api='onnx-short' ===
-    opset_imports = [
-        oh.make_opsetid('', 17),
-    ]
-    inputs = []
-    outputs = []
-    nodes = []
-    initializers = []
-    sparse_initializers = []
-    functions = []
-    value = np.random.randn(8, 5).astype(np.float32)
-    initializers.append(
-        onh.from_array(
-            np.array(value, dtype=np.float32),
-            name='W'
-        )
-    )
-    initializers.append(
-        onh.from_array(
-            np.array([-1.2197785377502441, -1.8406898975372314, -2.3381173610687256, -1.5528756380081177, -0.1304451823234558], dtype=np.float32),
-            name='b'
-        )
-    )
-    inputs.append(oh.make_tensor_value_info('X', onnx.TensorProto.FLOAT, shape=(None, 8)))
-    nodes.append(
-        oh.make_node(
-            'Gemm',
-            ['X', 'W', 'b'],
-            ['T']
-        )
-    )
-    nodes.append(
-        oh.make_node(
-            'Relu',
-            ['T'],
-            ['Z']
-        )
-    )
-    outputs.append(oh.make_tensor_value_info('Z', onnx.TensorProto.FLOAT, shape=(None, 5)))
-    graph = oh.make_graph(
-        nodes,
-        'gemm_relu',
-        inputs,
-        outputs,
-        initializers,
-        sparse_initializer=sparse_initializers,
-    )
-    model = oh.make_model(
-        graph,
-        functions=functions,
-        opset_imports=opset_imports,
-        ir_version=9,
-    )
-
-
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 87-88
-
-Size comparison between the two onnx variants:
-
-.. GENERATED FROM PYTHON SOURCE LINES 88-92
-
-.. code-block:: Python
-
-
-    print(f"\nFull code length  : {len(code_onnx):>6} characters")
-    print(f"Short code length : {len(code_short):>6} characters")
-
-
-
-
-
-.. rst-class:: sphx-glr-script-out
-
- .. code-block:: none
-
-
-    Full code length  :   1899 characters
-    Short code length :   1116 characters
-
-
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 93-100
-
-3. ``"onnx-compact"`` API — single nested expression
--------------------------------------------------------
-
-Instead of building separate lists of nodes, inputs, outputs, and initializers
-before assembling them, this emitter produces a single nested
-``oh.make_model(oh.make_graph([…], …), …)`` expression.
-This is often more concise than ``"onnx"`` while still being fully readable.
-
-.. GENERATED FROM PYTHON SOURCE LINES 100-105
+.. GENERATED FROM PYTHON SOURCE LINES 37-41
 
 .. code-block:: Python
 
 
     code_compact = translate(model, api="onnx-compact")
-    print("=== api='onnx-compact' ===")
     print(code_compact)
 
 
@@ -327,7 +82,6 @@ This is often more concise than ``"onnx"`` while still being fully readable.
 
  .. code-block:: none
 
-    === api='onnx-compact' ===
     model = oh.make_model(
         oh.make_graph(
             [
@@ -342,11 +96,10 @@ This is often more concise than ``"onnx"`` while still being fully readable.
                 oh.make_tensor_value_info('Z', onnx.TensorProto.FLOAT, (None, 5)),
             ],
             [
-                onh.from_array(np.array([[-2.8501951694488525, -0.5612078309059143, 1.0888885259628296, 0.836222767829895, 0.8602944612503052], [-0.5604823231697083, -2.19199800491333, -0.6678777933120728, -0.6487101316452026, 0.08450940251350403], [0.8968738913536072, 1.1287903785705566, 0.3421708643436432, 0.5692922472953796, -0.4278814196586609], [-0.09210827946662903, -0.9187420606613159, 0.13873837888240814, -1.5727717876434326, -0.10080558061599731], [0.21605294942855835, 0.6848098635673523, 0.007529611699283123, -2.1378822326660156, 0.5840367674827576], [2.7655389308929443, -1.927566647529602, -0.7800881862640381, 0.20291732251644135, -1.607230544090271], [0.23991000652313232, -1.0260566473007202, 0.4492259919643402, 2.119370937347412, 0.6684412360191345], [-1.208194375038147, 1.9516820907592773, 1.0205625295639038, -0.8302878737449646, -1.3480478525161743]], dtype=np.float32), name='W'),
-                onh.from_array(np.array([-1.2197785377502441, -1.8406898975372314, -2.3381173610687256, -1.5528756380081177, -0.1304451823234558], dtype=np.float32), name='b'),
+                onh.from_array(np.array([[1.7933183908462524, 0.1599542200565338, -0.018211238086223602, 0.4687612056732178, -0.06996996700763702], [-0.20952315628528595, 0.24389097094535828, 0.3215225636959076, -1.9314565658569336, -0.2129099816083908], [1.6602528095245361, 1.3685986995697021, 0.001661198795773089, 0.12126868963241577, -0.527466356754303], [-1.4472512006759644, 0.4820227026939392, 0.707349419593811, -0.8221206068992615, -0.17074978351593018], [-1.1701850891113281, -0.07480404525995255, 3.2690882682800293, 0.011048520915210247, -0.38631197810173035], [-0.003311985172331333, -1.3943760395050049, 0.9038352966308594, 0.07667233794927597, 1.4130244255065918], [0.5171977877616882, -1.2684743404388428, -0.6706350445747375, 0.20692867040634155, -0.61497563123703], [-0.33913302421569824, 1.6595067977905273, -0.07696742564439774, -0.14445766806602478, -0.7233589291572571]], dtype=np.float32), name='W'),
+                onh.from_array(np.array([-0.7196519374847412, 0.7727372050285339, -1.0028917789459229, 1.4334123134613037, -2.1447410583496094], dtype=np.float32), name='b'),
             ],
         ),
-        functions=[],
         opset_imports=[oh.make_opsetid('', 17)],
         ir_version=9,
     )
@@ -354,66 +107,18 @@ This is often more concise than ``"onnx"`` while still being fully readable.
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 106-110
 
-4. ``"light"`` API — fluent chain
------------------------------------
+.. GENERATED FROM PYTHON SOURCE LINES 42-44
 
-The output is a single method-chain expression (``start(…).vin(…).…``).
+Native GraphBuilder script
+--------------------------
 
-.. GENERATED FROM PYTHON SOURCE LINES 110-115
-
-.. code-block:: Python
-
-
-    code_light = translate(model, api="light")
-    print("=== api='light' ===")
-    print(code_light)
-
-
-
-
-
-.. rst-class:: sphx-glr-script-out
-
- .. code-block:: none
-
-    === api='light' ===
-    (
-        start(opset=17)
-        .cst(np.array([[-2.8501951694488525, -0.5612078309059143, 1.0888885259628296, 0.836222767829895, 0.8602944612503052], [-0.5604823231697083, -2.19199800491333, -0.6678777933120728, -0.6487101316452026, 0.08450940251350403], [0.8968738913536072, 1.1287903785705566, 0.3421708643436432, 0.5692922472953796, -0.4278814196586609], [-0.09210827946662903, -0.9187420606613159, 0.13873837888240814, -1.5727717876434326, -0.10080558061599731], [0.21605294942855835, 0.6848098635673523, 0.007529611699283123, -2.1378822326660156, 0.5840367674827576], [2.7655389308929443, -1.927566647529602, -0.7800881862640381, 0.20291732251644135, -1.607230544090271], [0.23991000652313232, -1.0260566473007202, 0.4492259919643402, 2.119370937347412, 0.6684412360191345], [-1.208194375038147, 1.9516820907592773, 1.0205625295639038, -0.8302878737449646, -1.3480478525161743]], dtype=np.float32))
-        .rename('W')
-        .cst(np.array([-1.2197785377502441, -1.8406898975372314, -2.3381173610687256, -1.5528756380081177, -0.1304451823234558], dtype=np.float32))
-        .rename('b')
-        .vin('X', elem_type=onnx.TensorProto.FLOAT, shape=(None, 8))
-        .bring('X', 'W', 'b')
-        .Gemm()
-        .rename('T')
-        .bring('T')
-        .Relu()
-        .rename('Z')
-        .bring('Z')
-        .vout(elem_type=onnx.TensorProto.FLOAT, shape=(None, 5))
-        .to_onnx()
-    )
-
-
-
-
-.. GENERATED FROM PYTHON SOURCE LINES 116-120
-
-5. ``"builder"`` API — GraphBuilder
--------------------------------------
-
-The output uses ``GraphBuilder`` to wrap the graph nodes in a Python function.
-
-.. GENERATED FROM PYTHON SOURCE LINES 120-125
+.. GENERATED FROM PYTHON SOURCE LINES 44-48
 
 .. code-block:: Python
 
 
     code_builder = translate(model, api="builder")
-    print("=== api='builder' ===")
     print(code_builder)
 
 
@@ -424,119 +129,71 @@ The output uses ``GraphBuilder`` to wrap the graph nodes in a Python function.
 
  .. code-block:: none
 
-    === api='builder' ===
-
-    def gemm_relu(
-        op: "GraphBuilder",
-        X: "FLOAT[None, 8]",
-    ):
-        W = np.array([[-2.8501951694488525, -0.5612078309059143, 1.0888885259628296, 0.836222767829895, 0.8602944612503052], [-0.5604823231697083, -2.19199800491333, -0.6678777933120728, -0.6487101316452026, 0.08450940251350403], [0.8968738913536072, 1.1287903785705566, 0.3421708643436432, 0.5692922472953796, -0.4278814196586609], [-0.09210827946662903, -0.9187420606613159, 0.13873837888240814, -1.5727717876434326, -0.10080558061599731], [0.21605294942855835, 0.6848098635673523, 0.007529611699283123, -2.1378822326660156, 0.5840367674827576], [2.7655389308929443, -1.927566647529602, -0.7800881862640381, 0.20291732251644135, -1.607230544090271], [0.23991000652313232, -1.0260566473007202, 0.4492259919643402, 2.119370937347412, 0.6684412360191345], [-1.208194375038147, 1.9516820907592773, 1.0205625295639038, -0.8302878737449646, -1.3480478525161743]], dtype=np.float32)
-        b = np.array([-1.2197785377502441, -1.8406898975372314, -2.3381173610687256, -1.5528756380081177, -0.1304451823234558], dtype=np.float32)
-        T = op.Gemm(X, W, b, outputs=['T'])
-        Z = op.Relu(T, outputs=['Z'])
-        op.Identity(Z, outputs=["Z"])
-        return Z
-
-    g = GraphBuilder({'': 17}, ir_version=9)
-    g.make_tensor_input("X", onnx.TensorProto.FLOAT, (None, 8))
-    gemm_relu(g.op, "X")
-    g.make_tensor_output("Z", onnx.TensorProto.FLOAT, (None, 5), indexed=False)
-    model = g.to_onnx()
+    g = GraphBuilder('gemm_relu')
+    g.set_opset_version('', 17)
+    g.inp('X', onnx.TensorProto.FLOAT, (None, 8))
+    g.init(np.array([[1.7933183908462524, 0.1599542200565338, -0.018211238086223602, 0.4687612056732178, -0.06996996700763702], [-0.20952315628528595, 0.24389097094535828, 0.3215225636959076, -1.9314565658569336, -0.2129099816083908], [1.6602528095245361, 1.3685986995697021, 0.001661198795773089, 0.12126868963241577, -0.527466356754303], [-1.4472512006759644, 0.4820227026939392, 0.707349419593811, -0.8221206068992615, -0.17074978351593018], [-1.1701850891113281, -0.07480404525995255, 3.2690882682800293, 0.011048520915210247, -0.38631197810173035], [-0.003311985172331333, -1.3943760395050049, 0.9038352966308594, 0.07667233794927597, 1.4130244255065918], [0.5171977877616882, -1.2684743404388428, -0.6706350445747375, 0.20692867040634155, -0.61497563123703], [-0.33913302421569824, 1.6595067977905273, -0.07696742564439774, -0.14445766806602478, -0.7233589291572571]], dtype=np.float32), name='W')
+    g.init(np.array([-0.7196519374847412, 0.7727372050285339, -1.0028917789459229, 1.4334123134613037, -2.1447410583496094], dtype=np.float32), name='b')
+    g.op.Gemm('X', 'W', 'b', outputs=['T'])
+    g.op.Relu('T', outputs=['Z'])
+    g.out('Z', onnx.TensorProto.FLOAT, (None, 5))
+    model = g.to_onnx(ir_version=9)
 
 
 
 
-.. GENERATED FROM PYTHON SOURCE LINES 126-131
+
+.. GENERATED FROM PYTHON SOURCE LINES 49-51
 
 Round-trip verification
 -----------------------
 
-The ``"onnx"`` snippet is fully self-contained and executable.
-Running it should recreate a model with the same graph structure.
-
-.. GENERATED FROM PYTHON SOURCE LINES 131-148
+.. GENERATED FROM PYTHON SOURCE LINES 51-61
 
 .. code-block:: Python
 
 
-    header = translate_header("onnx")
-    full_code = header + "\n" + code_onnx
-    ns: dict = {}
-    exec(compile(full_code, "<translate>", "exec"), ns)  # noqa: S102
-    recreated = ns["model"]
-
-    assert isinstance(recreated, onnx.ModelProto)
-    assert len(recreated.graph.node) == len(
-        model.graph.node
-    ), f"Expected {len(model.graph.node)} nodes, got {len(recreated.graph.node)}"
-    assert len(recreated.graph.initializer) == len(model.graph.initializer), (
-        f"Expected {len(model.graph.initializer)} initializers, "
-        f"got {len(recreated.graph.initializer)}"
-    )
-    print("\nRound-trip succeeded ✓")
+    namespace = {}
+    exec(
+        compile(translate_header("onnx-compact") + code_compact, "<translate>", "exec"), namespace
+    )  # noqa: S102
+    recreated = namespace["model"]
+    assert [node.op_type for node in recreated.graph.node] == [
+        node.op_type for node in model.graph.node
+    ]
 
 
 
 
 
-.. rst-class:: sphx-glr-script-out
-
- .. code-block:: none
-
-
-    Round-trip succeeded ✓
 
 
 
+.. GENERATED FROM PYTHON SOURCE LINES 62-64
 
-.. GENERATED FROM PYTHON SOURCE LINES 149-156
+Compare generated source sizes
+------------------------------
 
-Plot: code size by API
------------------------
-
-The bar chart compares the number of characters produced by each API for the
-same model.  ``"onnx-short"`` is always ≤ ``"onnx"`` because it compresses
-large initializers.  ``"onnx-compact"`` is typically shorter than ``"onnx"``
-because it uses a single nested expression instead of building separate lists.
-
-.. GENERATED FROM PYTHON SOURCE LINES 156-185
+.. GENERATED FROM PYTHON SOURCE LINES 64-75
 
 .. code-block:: Python
 
 
     import matplotlib.pyplot as plt  # noqa: E402
 
-    api_labels = ["onnx", "onnx-short", "onnx-compact", "light", "builder"]
-    code_sizes = [
-        len(code_onnx),
-        len(code_short),
-        len(code_compact),
-        len(code_light),
-        len(code_builder),
-    ]
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.bar(
-        api_labels, code_sizes, color=["#4c72b0", "#dd8452", "#8172b2", "#55a868", "#c44e52"]
-    )
+    labels = ["onnx-compact", "builder"]
+    sizes = [len(code_compact), len(code_builder)]
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(labels, sizes, color=["#8172b2", "#c44e52"])
     ax.set_ylabel("Generated code size (characters)")
-    ax.set_title("ONNX translation: code size by API")
-    for bar, size in zip(bars, code_sizes):
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() * 1.01,
-            str(size),
-            ha="center",
-            va="bottom",
-            fontsize=9,
-        )
+    ax.set_title("onnx-light translation APIs")
     plt.tight_layout()
     plt.show()
 
 
 
 .. image-sg:: /auto_examples_core/images/sphx_glr_plot_translate_comparison_001.png
-   :alt: ONNX translation: code size by API
+   :alt: onnx-light translation APIs
    :srcset: /auto_examples_core/images/sphx_glr_plot_translate_comparison_001.png
    :class: sphx-glr-single-img
 
@@ -547,7 +204,7 @@ because it uses a single nested expression instead of building separate lists.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.118 seconds)
+   **Total running time of the script:** (0 minutes 0.062 seconds)
 
 
 .. _sphx_glr_download_auto_examples_core_plot_translate_comparison.py:
