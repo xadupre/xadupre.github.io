@@ -29,7 +29,8 @@ page (`onnx/onnx` and `microsoft/onnxruntime`), `microsoft/onnxruntime-genai`,
 `microsoft/onnxruntime-extensions`, `ggml-org/llama.cpp` and
 `vllm-project/vllm`. Other owner projects, including
 `onnx-asv-benchmark`, are excluded even if linked from the home page.
-Repositories are rediscovered daily.
+Repositories are rediscovered daily. The retired `xadupre/onnx-light-com-microsoft`
+project is excluded from discovery and display.
 All published releases, including prereleases, and all uploaded asset types are
 included. GitHub-generated source archives have no asset download counter and
 are excluded, as are clones and PyPI installations.
