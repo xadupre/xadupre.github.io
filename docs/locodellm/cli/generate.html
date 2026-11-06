@@ -413,10 +413,13 @@
 <h1>generate<a class="headerlink" href="#generate" title="Link to this heading">#</a></h1>
 <p>Generates text from a prompt using a local LLM. The model can be a mock
 model id, a local path to an ONNX model directory, or a HuggingFace
-repository id (which is automatically downloaded and converted).</p>
+repository id (which is automatically downloaded and converted).
+With <code class="docutils literal notranslate"><span class="pre">--backend</span> <span class="pre">pytorch</span></code>, Transformers weights are loaded directly without
+ONNX conversion.</p>
 <section id="usage">
 <h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>generate<span class="w"> </span>MODEL<span class="w"> </span>PROMPT<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
+python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>generate<span class="w"> </span>MODEL<span class="w"> </span>--input<span class="w"> </span>tasks.json<span class="w"> </span><span class="o">[</span>OPTIONS<span class="o">]</span>
 </pre></div>
 </div>
 </section>
@@ -427,17 +430,107 @@ repository id (which is automatically downloaded and converted).</p>
 directory path, or a HuggingFace id like
 <code class="docutils literal notranslate"><span class="pre">Qwen/Qwen2.5-Coder-0.5B-Instruct</span></code>.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">PROMPT</span></code></dt><dd><p>The prompt text to send to the model.</p>
+<dt><code class="docutils literal notranslate"><span class="pre">PROMPT</span></code></dt><dd><p>The prompt text to send to the model. Mutually exclusive with <code class="docutils literal notranslate"><span class="pre">--input</span></code>.</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--precision</span></code></dt><dd><p>Precision qualifier for conversion (e.g. <code class="docutils literal notranslate"><span class="pre">fp32</span></code>, <code class="docutils literal notranslate"><span class="pre">fp16</span></code>, <code class="docutils literal notranslate"><span class="pre">int4</span></code>).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--input</span></code></dt><dd><p>Reads a JSON object with exactly two fields: <code class="docutils literal notranslate"><span class="pre">prompts</span></code>, a nonempty list
+of nonempty strings, and <code class="docutils literal notranslate"><span class="pre">repo</span></code>, the root of an existing local Git
+working tree with a commit.
+Relative repository paths are resolved from the input file’s directory.
+Enables the Python harness automatically. Prompts execute sequentially
+in independent conversations against the same directory, with a separate
+script budget per prompt. Before every prompt, tracked files are reset to
+the run’s starting revision and nonignored untracked files and directories
+are removed, including modifications present before the run.
+Ignored files are preserved. Changes persist between Python calls within
+a prompt, but not between prompts. The last prompt’s changes remain on disk.
+No repository is cloned or committed. Input and output JSON files must be
+outside the target working tree so cleanup cannot delete them.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--precision</span></code></dt><dd><p>Precision qualifier for ONNX conversion (e.g. <code class="docutils literal notranslate"><span class="pre">fp32</span></code>, <code class="docutils literal notranslate"><span class="pre">fp16</span></code>, <code class="docutils literal notranslate"><span class="pre">int4</span></code>).
+With PyTorch, loading dtype: <code class="docutils literal notranslate"><span class="pre">auto</span></code>, <code class="docutils literal notranslate"><span class="pre">fp32</span></code>, <code class="docutils literal notranslate"><span class="pre">fp16</span></code>, or <code class="docutils literal notranslate"><span class="pre">bf16</span></code>.
+Pre-quantized checkpoints retain their own quantization configuration.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--backend</span></code></dt><dd><p>Generation backend: <code class="docutils literal notranslate"><span class="pre">onnx</span></code> (default) or <code class="docutils literal notranslate"><span class="pre">pytorch</span></code>. The PyTorch backend
+requires the optional <code class="docutils literal notranslate"><span class="pre">pytorch</span></code> dependencies.
+Generation stops at either the model’s configured EOS tokens or the
+tokenizer’s EOS token, including chat turn endings when they differ.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--device</span></code></dt><dd><p>Device for the PyTorch backend: <code class="docutils literal notranslate"><span class="pre">cpu</span></code> (default), <code class="docutils literal notranslate"><span class="pre">cuda</span></code>, <code class="docutils literal notranslate"><span class="pre">cuda:0</span></code>,
+or <code class="docutils literal notranslate"><span class="pre">auto</span></code> for automatic placement. Requires <code class="docutils literal notranslate"><span class="pre">--backend</span> <span class="pre">pytorch</span></code>.</p>
 </dd>
 <dt><code class="docutils literal notranslate"><span class="pre">--provider</span></code></dt><dd><p>Execution provider (e.g. <code class="docutils literal notranslate"><span class="pre">CUDAExecutionProvider</span></code>).</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--max-length</span></code></dt><dd><p>Maximum token length for generation (default: 200).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--max-length</span></code></dt><dd><p>Maximum token length for generation (default: 200). With <code class="docutils literal notranslate"><span class="pre">--harness</span></code>,
+maximum new tokens per model turn (default: 1024).</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--harness</span> <span class="pre">python</span></code></dt><dd><p>Executes model-requested Python and Bash scripts and returns their output to the model.
+The historical option name <code class="docutils literal notranslate"><span class="pre">python</span></code> enables both tools.
+Requests use <code class="docutils literal notranslate"><span class="pre">&lt;python&gt;...&lt;/python&gt;</span></code> or <code class="docutils literal notranslate"><span class="pre">&lt;bash&gt;...&lt;/bash&gt;</span></code> outside thinking
+and Markdown fences. Mixed requests execute sequentially in message order,
+share a working directory and budget, and return their results together.
+Bash runs with <code class="docutils literal notranslate"><span class="pre">pipefail</span></code> enabled, without profile or rc files, and requires
+<code class="docutils literal notranslate"><span class="pre">bash</span></code> on PATH. Shell variables do not persist between executions.
+Scripts can read and write files. Each script starts a fresh process
+in a temporary directory shared across this prompt’s calls and deleted at
+the end, unless <code class="docutils literal notranslate"><span class="pre">--input</span></code> selects a persistent repository directory.
+Internal harness scripts and counters always remain in temporary storage.
+Execution uses the current user’s permissions: this is not a sandbox.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--harness</span> <span class="pre">bash</span></code></dt><dd><p>Enables only Bash tool requests. The initial prompt advertises only
+<code class="docutils literal notranslate"><span class="pre">&lt;bash&gt;...&lt;/bash&gt;</span></code> calls; Python tool requests are rejected before execution,
+including entire mixed batches. This explicit choice is preserved with
+<code class="docutils literal notranslate"><span class="pre">--input</span></code>. It selects a tool protocol, not a sandbox: Bash can still
+launch installed programs, including Python.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--max-tool-calls</span></code></dt><dd><p>Maximum combined number of Python and Bash scripts (default: 10).
+Each script in a grouped request consumes one execution.
+A request must include its closing tool tag before it can execute.
+An incomplete request, including one preceded by explanatory prose, is
+reported as a harness error rather than accepted as a final answer.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--output,</span> <span class="pre">-o</span></code></dt><dd><p>Writes a JSON document containing <code class="docutils literal notranslate"><span class="pre">initial_prompt</span></code>, ordered <code class="docutils literal notranslate"><span class="pre">events</span></code>,
+<code class="docutils literal notranslate"><span class="pre">initial_generation_options</span></code>, the final <code class="docutils literal notranslate"><span class="pre">text</span></code>, <code class="docutils literal notranslate"><span class="pre">token_count</span></code>,
+<code class="docutils literal notranslate"><span class="pre">tool_call_count</span></code>, <code class="docutils literal notranslate"><span class="pre">tool_calls</span></code>, and <code class="docutils literal notranslate"><span class="pre">error</span></code>. Events include model
+responses, subsequent prompts, executed commands, stdout, stderr, and exit
+status. The file is written when the conversation ends, including on harness
+failure; a harness failure then raises an error instead of reporting success.
+With <code class="docutils literal notranslate"><span class="pre">--input</span></code>, the document contains <code class="docutils literal notranslate"><span class="pre">repo</span></code>, <code class="docutils literal notranslate"><span class="pre">base_revision</span></code>, and a
+<code class="docutils literal notranslate"><span class="pre">results</span></code> list of per-prompt records, including the original <code class="docutils literal notranslate"><span class="pre">prompt</span></code>
+and a <code class="docutils literal notranslate"><span class="pre">diff</span></code> patch against the starting revision. The patch captures
+tracked modifications and deletions, staged changes, and new nonignored
+files, including binary patches, without altering the real Git index.
+Records are saved after every prompt, before any subsequent cleanup.
+Execution stops at the first harness error, retaining the completed
+records, the failing record, and its diff; subsequent prompts are not executed.
+Each executed tool record and command event includes <code class="docutils literal notranslate"><span class="pre">tool</span></code> (<code class="docutils literal notranslate"><span class="pre">python</span></code>
+or <code class="docutils literal notranslate"><span class="pre">bash</span></code>). Bash scripts contribute zero to Python function-call counts.</p>
 </dd>
 <dt><code class="docutils literal notranslate"><span class="pre">--chat-template</span></code></dt><dd><p>Chat template to use (e.g. <code class="docutils literal notranslate"><span class="pre">chatml</span></code>).</p>
 </dd>
-<dt><code class="docutils literal notranslate"><span class="pre">--verbose,</span> <span class="pre">-v</span></code></dt><dd><p>Verbosity level (default: 0).</p>
+<dt><code class="docutils literal notranslate"><span class="pre">--live-log</span> <span class="pre">[PATH]</span></code></dt><dd><p>Appends a human-readable live transcript to PATH. Without a path, creates a
+temporary <code class="docutils literal notranslate"><span class="pre">locodellm-live-*.log</span></code> file and prints its full path on stderr.
+The file is retained after completion or failure and can be followed with
+<code class="docutils literal notranslate"><span class="pre">tail</span> <span class="pre">-f</span> <span class="pre">PATH</span></code>. Prompts, streamed model text, executed scripts, tool stdout,
+stderr, exit status, and harness errors are flushed as they become available,
+independently of <code class="docutils literal notranslate"><span class="pre">--verbose</span></code>. Tool output is polled every 50 ms; a tool must
+flush its own output to make it visible immediately.
+Transformers text is emitted in decoded fragments, not necessarily every token.
+The path is included as <code class="docutils literal notranslate"><span class="pre">live_log</span></code> in saved results. Keep it outside the
+target repository and separate from the input/output JSON files.</p>
+</dd>
+<dt><code class="docutils literal notranslate"><span class="pre">--verbose,</span> <span class="pre">-v</span></code></dt><dd><p>Verbosity level (default: 0). Level 1 immediately flushes progress messages
+to stderr: startup, input validation, loading, prompt number, repository
+reset, model turns, script execution and exit status, diff capture, and saving.
+The PyTorch backend reports configuration, weight and tokenizer loading,
+then first-token waiting, periodic generated-token counts, and completion.
+Each periodic token-count line includes <code class="docutils literal notranslate"><span class="pre">text=...</span></code> with the latest
+30 decoded characters, so the displayed text advances during generation.
+During PyTorch decoding, a response-start preview is flushed as soon as
+30 characters are available, without waiting for generation to finish.
+After each model response, the first 30 characters are also printed as a
+completed-response preview. Line breaks are escaped to keep previews on one line.
+Token counts appear during decoding; they do not indicate progress inside
+model loading or before the first token. The final answer remains on stdout.</p>
 </dd>
 </dl>
 </section>
@@ -465,6 +558,41 @@ You can call this function and it will return the string "hello".
 <span class="w">    </span>--chat-template<span class="w"> </span>chatml<span class="w"> </span>--precision<span class="w"> </span>fp32<span class="w"> </span>--verbose<span class="w"> </span><span class="m">1</span>
 </pre></div>
 </div>
+<p>Running a custom prompt with up to 100 Python scripts and collecting events:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>generate<span class="w"> </span>./model<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="s1">'Write 42 to value.txt, read it back, and report its contents.'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--chat-template<span class="w"> </span>chatml<span class="w"> </span>--harness<span class="w"> </span>python<span class="w"> </span>--max-tool-calls<span class="w"> </span><span class="m">100</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span>--output<span class="w"> </span>evenements.json
+</pre></div>
+</div>
+<p>The final answer is printed to stdout; it need not be a Python function.
+To keep generated files after the run, the prompt must specify an absolute
+output path outside the temporary directory, or use JSON input:</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">  </span><span class="nt">"repo"</span><span class="p">:</span><span class="w"> </span><span class="s2">"../my-project"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"prompts"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">"Update README.md to explain the installation steps."</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">"Add a test for the documented behavior."</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>Save this as <code class="docutils literal notranslate"><span class="pre">tasks.json</span></code> and run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>generate<span class="w"> </span>./model<span class="w"> </span>--input<span class="w"> </span>tasks.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--chat-template<span class="w"> </span>chatml<span class="w"> </span>--max-tool-calls<span class="w"> </span><span class="m">100</span><span class="w"> </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--output<span class="w"> </span>evenements.json
+</pre></div>
+</div>
+<p>For native Transformers weights, use a Hugging Face model id or a complete
+local checkpoint directory containing its configuration, tokenizer, and weights,
+not the Hugging Face cache root (<code class="docutils literal notranslate"><span class="pre">models--OWNER--NAME</span></code>):</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>locodellm<span class="w"> </span>generate<span class="w"> </span>Qwen/Qwen3.5-35B-A3B-FP8<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--backend<span class="w"> </span>pytorch<span class="w"> </span>--device<span class="w"> </span>auto<span class="w"> </span>--input<span class="w"> </span>tasks.json<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max-tool-calls<span class="w"> </span><span class="m">100</span><span class="w"> </span>--max-length<span class="w"> </span><span class="m">1024</span><span class="w"> </span>--output<span class="w"> </span>evenements.json
+</pre></div>
+</div>
+<p>Missing checkpoint files are downloaded when using a model id. FP8 checkpoints
+require hardware and quantization support compatible with Transformers.</p>
 </section>
 </section>
 
