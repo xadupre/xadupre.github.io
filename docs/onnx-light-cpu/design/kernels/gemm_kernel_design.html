@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -755,8 +755,8 @@ column). In those cases the kernel vectorizes the large dimension (or the
 <code class="docutils literal notranslate"><span class="pre">K</span></code> reduction) instead of the tiny one.</p>
 <p>The plan selects the general five-loop engine or a direct, skinny-M, skinny-N,
 or split-K path once from the prepared shape. It may own constant B in its
-original representation; persistent B prepacking is explicitly excluded from
-the roadmap. The skinny-N path reduces each output element through several
+original representation or, for eligible FP32 LM-head projections, as K-by-16
+panels instead. The skinny-N path reduces each output element through several
 partial accumulators over a unit-stride <code class="docutils literal notranslate"><span class="pre">K</span></code> body with an exact scalar tail,
 so single-column and small-N shapes vectorize the reduction instead of walking
 it with a serial dependency chain. A single output column (<code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">==</span> <span class="pre">1</span></code>) is kept
@@ -771,6 +771,59 @@ non-transposed <code class="docutils literal notranslate"><span class="pre">B</s
 micro-panels. Its lower per-participant work budget reflects the memory-streaming
 kernel. An oversized runtime pool falls back to serial execution when at most
 four useful panel groups would otherwise wake dozens of idle workers.</p>
+<section id="prepared-fp32-lm-head-panel-pairs">
+<h3>Prepared FP32 LM-head panel pairs<a class="headerlink" href="#prepared-fp32-lm-head-panel-pairs" title="Link to this heading">#</a></h3>
+<p>For AVX-512 with a 12-row register tile, <code class="docutils literal notranslate"><span class="pre">GemmWidePreparedB</span></code> consumes two
+existing K-by-16 panels together. Each A broadcast feeds two FMAs in the
+named-accumulator MR12 kernel, without converting the weights to K-by-32 panels.
+The 24 accumulators stay in registers; the core is deliberately out of line
+because GCC otherwise spills accumulators when inlining it into the row loop.
+Each worker pairs panels only within its existing executor range. An unpaired
+panel and row remainders retain the existing microtiles. AVX2 and other fallbacks,
+preparation eligibility, scheduling policy, and weight ownership are unchanged.
+There is no new weight copy or execution scratch.</p>
+<p>The following isolated measurements were collected on an Intel Xeon Platinum
+8370C (two physical cores, four logical CPUs), GCC 13.3 Release, AVX-512/FMA,
+with CPU affinity 0-3. Baseline is the original one-panel prepared loop;
+both binaries use identical benchmark instrumentation, seed, inputs, and
+persistent <code class="docutils literal notranslate"><span class="pre">ThreadExecutor</span></code> through <code class="docutils literal notranslate"><span class="pre">ExecutionExecutorScope</span></code>. Three ABBA
+rounds alternate baseline/candidate process order. Values are medians of six
+process medians per variant: three warmups followed by five timed executions
+(12 for decode). K is 512 throughout. Times are seconds:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>M     N      threads  baseline    paired
+128   32000  1        0.0588650   0.0389212
+128   32016  1        0.0588820   0.0391348
+128   32000  4        0.0259412   0.0165250
+128   32016  4        0.0259633   0.0165860
+1     32000  1        0.0045830   0.0045716
+1     32016  1        0.0102866   0.0104675
+1     32000  4        0.0025266   0.0025284
+1     32016  4        0.0045501   0.0044507
+12    32000  1        0.0412423   0.0403506
+12    32016  1        0.0410270   0.0399215
+12    32000  4        0.0195098   0.0202746
+12    32016  4        0.0195002   0.0202623
+</pre></div>
+</div>
+<p>Prepared latency falls by 33.5-36.3%. Decode differs by at most 2.2%;
+four-thread small-M is 3.9% slower and remains a regression to monitor.
+The dynamic-B M=128 control is within 0.2%. Decode and small-M do not use
+prepared panels. Cold plan construction, timed separately by the driver’s
+<code class="docutils literal notranslate"><span class="pre">preparation_seconds</span></code> field, is 0.0436-0.0458 seconds for the baseline and
+0.0441-0.0467 seconds for the candidate at these vocabulary widths.
+This includes allocating and packing the plan’s weights, not full session setup.</p>
+<p>Reproduce each configuration with <code class="docutils literal notranslate"><span class="pre">gemm_throughput</span> <span class="pre">1</span> <span class="pre">lm_head</span> <span class="pre">fp32</span></code> and
+<code class="docutils literal notranslate"><span class="pre">gemm_throughput</span> <span class="pre">4</span> <span class="pre">lm_head</span> <span class="pre">fp32</span></code>, applying the same affinity and alternating
+binary order. The driver reports effective ISA, executor block count,
+<code class="docutils literal notranslate"><span class="pre">prepared_b</span></code>, and persistent weight bytes. Assembly inspection confirms two
+B loads and twelve broadcasts feeding 24 register FMAs per K step, without
+accumulator spills in the paired reduction. Hardware counters were unavailable
+(<code class="docutils literal notranslate"><span class="pre">perf_event_paranoid=4</span></code>). An AVX2-ceiling build also passed the focused GEMM
+tests; no AVX2 speedup is claimed.</p>
+<p>These are isolated kernel results, not an ORT comparison or a completed TinyLLM
+end-to-end acceptance run. The exported full TinyLLM model and its runtime
+dependencies were unavailable in this checkout, so unchanged full-model logits
+and full-prefill latency still require validation with that external artifact.</p>
 <p><code class="docutils literal notranslate"><span class="pre">detail::SelectGemmAlgorithm()</span></code> (<code class="docutils literal notranslate"><span class="pre">gemm_plan.cc</span></code>) picks one of these five
 strategies from <code class="docutils literal notranslate"><span class="pre">m</span></code>, <code class="docutils literal notranslate"><span class="pre">n</span></code>, <code class="docutils literal notranslate"><span class="pre">k</span></code>, <code class="docutils literal notranslate"><span class="pre">trans_a</span></code>/<code class="docutils literal notranslate"><span class="pre">trans_b</span></code>, and the
 target’s <code class="docutils literal notranslate"><span class="pre">vector_lanes</span></code>/<code class="docutils literal notranslate"><span class="pre">register_rows</span></code>. Split-K is checked first (it only
@@ -858,6 +911,7 @@ separately (hover a zone for the exact condition):</p>
 <text x="380" y="804" font-size="10.5" fill="#1a1a1a">dimension / K instead.</text>
 </g>
 </svg></section>
+</section>
 <section id="platform-support">
 <h2>Platform support<a class="headerlink" href="#platform-support" title="Link to this heading">#</a></h2>
 <section id="x86-64">
@@ -1247,7 +1301,10 @@ dispatch.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#kernel-selection-decision-tree">Kernel selection decision tree</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#task-scheduler-decomposition">Task scheduler decomposition</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#thread-runtime-and-affinity">Thread runtime and affinity</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-execution-interfaces">Prepared execution interfaces</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-execution-interfaces">Prepared execution interfaces</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prepared-fp32-lm-head-panel-pairs">Prepared FP32 LM-head panel pairs</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#platform-support">Platform support</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#x86-64">x86_64</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arm64-apple-silicon">ARM64 / Apple Silicon</a></li>
@@ -1289,7 +1346,7 @@ dispatch.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 06, 2026.
 </p></div>
       
     </div>
