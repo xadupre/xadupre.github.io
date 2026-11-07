@@ -20,8 +20,6 @@ export function webviewHtml(
   onnxLightVersion: string,
   initialTab: "model" | "logs" = "model",
 ): string {
-  const historyControls = (target: "open" | "save"): string =>
-    `<details id="${target}-history" class="path-history" hidden><summary>Recent paths</summary><p>Missing local paths are removed automatically. Selecting a path only fills the field.</p><button id="${target}-clear-history" type="button">Clear ${target === "open" ? "Open" : "Save"} history</button><ul id="${target}-history-entries" aria-label="Recent ${target} paths"></ul></details>`;
   const documentationLink = (name: string, url: string): string =>
     `<a class="repository-documentation" href="${url}" aria-label="${name} documentation" title="${name} documentation"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M12 5v16M12 5C9 3 5 3 2 4v15c3-1 7-1 10 2 3-3 7-3 10-2V4c-3-1-7-1-10 1Z"/></svg></a>`;
   const refreshIcon = `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></svg>`;
@@ -176,6 +174,7 @@ export function webviewHtml(
       <header class="graph-toolbar">
         <div class="graph-heading">
           <nav id="graph-navigation" aria-label="Graph breadcrumbs" hidden></nav>
+          <select id="rewriting-scenario" aria-label="Rewriting" title="Choose a saved rewriting or None for the original model" disabled><option value="">None</option></select>
           <div class="graph-stats" aria-live="polite"><span id="graph-summary">No model loaded</span><span aria-hidden="true"> / </span><span id="initializer-count">0 initializers</span></div>
           <span id="rewriting-count" role="status" title="Rewritings waiting to be reapplied before the next native matching or optimization">0 pending rewritings</span>
         </div>
@@ -202,8 +201,7 @@ export function webviewHtml(
             <button id="show-symbolic" class="icon-button" aria-expanded="false" aria-controls="symbolic-panel" title="Show or hide symbolic dimension and model checks">Symbolic</button>
             <button id="export-model" class="icon-button" title="Convert a model to ONNX with Python" aria-expanded="false" aria-controls="export-panel">Convert</button>
             <button id="optimize-model" class="icon-button" disabled title="Show or hide full native model optimization" aria-expanded="false" aria-controls="optimization-panel">Optimize${fusionHourglass}</button>
-            <button id="fuse-pattern" class="icon-button" disabled title="Show or hide fusion patterns and select candidates to fuse on the main graph" aria-expanded="false" aria-controls="fusion-panel">Fuse${fusionHourglass}</button>
-            <button id="undo-fusion" class="icon-button" disabled title="Choose whether to unfuse the last operation or all operations" aria-expanded="false" aria-controls="unfuse-panel" aria-describedby="fusion-status">Unfuse${fusionHourglass}</button>
+            <button id="fuse-pattern" class="icon-button" disabled title="Show fusion patterns, saved rewritings and applied operations to unfuse" aria-expanded="false" aria-controls="fusion-panel">Fuse / Unfuse${fusionHourglass}</button>
           </nav>
           <section id="symbolic-panel" class="inspector-panel" aria-labelledby="symbolic-title" hidden>
             <h2 id="symbolic-title" class="eyebrow panel-title">Symbolic</h2>
@@ -388,13 +386,6 @@ export function webviewHtml(
               <footer><button id="cancel-export" type="button" disabled>Cancel conversion</button><button id="export-submit" class="primary" type="submit">Convert and open</button></footer>
             </form>
           </section>
-          <section id="unfuse-panel" class="inspector-panel" aria-labelledby="unfuse-title" hidden>
-            <h2 id="unfuse-title" class="eyebrow panel-title">Unfuse</h2>
-            <p id="unfuse-count" role="status"></p>
-            <p>Unfuse last reverses one Fuse selected operation. Repeat to go back further, or unfuse all operations in this session.</p>
-            <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button><button id="close-unfuse">Close</button></div>
-            <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
-          </section>
           <section id="find-panel" class="inspector-panel" aria-labelledby="find-title">
             <h2 id="find-title" class="eyebrow panel-title">Find</h2>
             <form id="find-node" role="search"><label for="node-search">Find node or operator</label><div class="node-search-controls"><input id="node-search" type="search" placeholder="Name or operator" aria-controls="node-search-suggestions" autocomplete="off"><button type="submit" title="Go to the next matching node" aria-label="Go to the next matching node">Go</button></div><span id="node-search-result" role="status"></span><ul id="node-search-suggestions" aria-label="Matching nodes" hidden></ul></form>
@@ -470,16 +461,22 @@ export function webviewHtml(
             </div>
           </section>
           <section id="fusion-panel" class="inspector-panel" aria-labelledby="fusion-title" hidden>
-            <h2 id="fusion-title" class="eyebrow panel-title">Fusion patterns${fusionHourglass}</h2>
+            <h2 id="fusion-title" class="eyebrow panel-title">Fuse / Unfuse${fusionHourglass}</h2>
             <p>Select patterns, run matching, then fuse selected candidates. Run global passes one at a time.</p>
             <details id="rewriting-scenarios" class="fusion-picker">
               <summary>Saved rewriting scenarios</summary>
-              <label for="rewriting-scenario">Scenario</label><select id="rewriting-scenario" disabled></select>
               <p id="rewriting-progress" role="status">No saved rewriting scenarios in this model.</p>
               <ol id="rewriting-steps" aria-label="Stored rewriting steps"></ol>
-              <div class="fusion-selection-controls"><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
-              <p>Scenarios are alternatives against the original graph. Unfuse current edits before switching scenarios. Each click can be undone with Unfuse.</p>
+              <div class="fusion-selection-controls"><button id="rewriting-restart" disabled>Restart step by step</button><button id="rewriting-next" disabled>Apply next pattern</button><button id="rewriting-all" disabled>Apply remaining scenario</button></div>
+              <p>Choose a saved rewriting in the graph header to display its result, or None for the original graph. Switching replaces current native fusion edits; it never changes the source file.</p>
             </details>
+            <section id="unfuse-panel" class="fusion-picker" aria-labelledby="unfuse-title" hidden>
+              <h3 id="unfuse-title">Applied fusions</h3>
+              <p id="unfuse-count" role="status"></p>
+              <p>Unfuse last reverses one operation; Unfuse all restores the original graph and keeps the operations pending.</p>
+              <div class="fusion-selection-controls"><button id="unfuse-last" disabled>Unfuse last</button><button id="unfuse-all" disabled>Unfuse all</button></div>
+              <ol id="unfuse-history" reversed aria-label="Applied fusion operations, most recent first"></ol>
+            </section>
             <details class="fusion-picker" open>
               <summary>Native patterns</summary>
               <fieldset id="fusion-pattern-group" disabled aria-label="Native pattern groups"><legend>Select pattern groups</legend></fieldset>
@@ -533,7 +530,9 @@ export function webviewHtml(
                 <button id="open-path-browse" type="button" aria-haspopup="dialog" aria-controls="open-path-dialog">Browse folders...</button>
                 <button id="open-native-picker" type="button">VS Code file picker...</button>
                 <button id="open-native-folder-picker" type="button">VS Code folder picker...</button>
+                <button id="open-load-pipeline" type="button" data-load-pipeline hidden>Load as pipeline</button>
               </div>
+              <p id="open-pipeline-status" class="pipeline-status" role="status" hidden></p>
               <div id="open-package-options" hidden>
                 <button id="inspect-open-package" type="button">Inspect package</button>
                 <label for="open-package-model">Model inside the package</label><select id="open-package-model" disabled><option value="">Use the package default model</option></select>
@@ -547,7 +546,6 @@ export function webviewHtml(
               <p id="open-error" role="alert"></p>
               <footer><button id="cancel-open" type="button">Close</button><button id="open-submit" class="primary" type="submit">Open model</button></footer>
             </form>
-            ${historyControls("open")}
           </section>
           <dialog id="open-path-dialog" class="file-panel" aria-labelledby="open-path-title" aria-describedby="open-path-help">
             <h2 id="open-path-title">Choose a model path</h2>
@@ -572,19 +570,21 @@ export function webviewHtml(
           </dialog>
           <section id="save-options" class="inspector-panel file-panel" aria-labelledby="save-title" hidden>
             <h2 id="save-title" class="eyebrow panel-title">Save model copy</h2>
-            <form id="save-browse" class="file-browse">
-              <label for="save-location">Destination directory</label>
-              <input id="save-location" type="text" autocomplete="off" list="save-location-history"><datalist id="save-location-history"></datalist>
-              <div><button type="submit">Browse</button><button id="save-parent" type="button" disabled>Parent folder</button></div>
-            </form>
-            <ul id="save-files" class="file-list" aria-label="Destination folders and models"></ul>
             <form id="save-form">
               <label for="save-container">What to save</label>
               <select id="save-container"><option value="model">Model file</option><option value="generic">Generic runtime package (models + weights)</option><option value="genai" disabled>GenAI runtime package (+ configuration + tokenizer)</option><option value="compiled" disabled>Compiled EPContext package (+ provider assets)</option></select>
               <div id="save-package-layout-options" hidden><label for="save-package-layout">Package container</label><select id="save-package-layout"><option value="archive">ZIP archive (.ortpackage)</option><option value="directory">Directory</option></select></div>
+              <label id="save-file-label" for="save-file">File name or path</label>
+              <div class="save-path-field">
+                <div class="save-path-combobox">
+                  <input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off" aria-describedby="save-path-help">
+                  <select id="save-file-history" aria-label="Recent destination paths" title="Choose a recent destination" disabled hidden><option value="">Choose a recent path...</option></select>
+                  <svg class="save-history-arrow" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true"><path d="M2 4 6 8 10 4" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+                </div>
+                <button id="save-path-browse" type="button" aria-label="Choose output file">Browse...</button>
+              </div>
+              <p id="save-path-help">Choose the output file, including its name. Browse selects a path; Save copy writes it.</p>
               <p id="save-package-note" hidden>Choose a new .ortpackage archive or directory. Save preserves all package assets and replaces only the selected model with its current edits. GenAI and compiled packages require an existing package; Save does not generate a tokenizer, GenAI configuration or provider compilation.</p>
-              <label id="save-file-label" for="save-file">Destination path</label><input id="save-file" type="text" value="model-copy.onnx" required autocomplete="off">
-              <select id="save-file-history" aria-label="Recent destination paths" disabled><option value="">Choose a recent path...</option></select>
               <fieldset class="save-grid">
                 <legend>Model serialization, weight storage and encryption</legend>
                 <label><input type="radio" name="save-format" value="embedded-plain" checked>ONNX protobuf (.onnx) or pipeline (.pipe-onnx), with embedded weights</label>
@@ -606,14 +606,12 @@ export function webviewHtml(
                 <label for="save-password">Password</label><input id="save-password" type="password" autocomplete="new-password">
                 <label for="save-confirmation">Confirm password</label><input id="save-confirmation" type="password" autocomplete="new-password">
               </div>
-              <label><input id="save-rewritings" type="checkbox" aria-describedby="save-rewritings-note">Include fusion rewritings</label>
-              <p id="save-rewritings-note">Unchecked: save the current graph without rewriting plans. Checked: save the original graph and one concatenated RewritingProto plan per modified model, including pending rewritings. Undo history is session-local.</p>
+              <label><input id="save-rewritings" type="checkbox">Include fusion rewritings</label>
               <label><input id="save-overwrite" type="checkbox">Replace an existing destination copy</label>
               <progress id="save-progress" aria-label="Saving model or package" aria-describedby="save-progress-status" hidden></progress><p id="save-progress-status" role="status" hidden></p>
               <p id="save-options-error" role="alert"></p>
               <footer><button id="cancel-save" type="button">Close</button><button id="save-submit" class="primary" type="submit">Save copy</button></footer>
             </form>
-            ${historyControls("save")}
           </section>
         </aside>
       </div>
