@@ -39,6 +39,22 @@ function isTrackedProject(repository) {
 }
 
 function assetHistory(data, repository, asset) {
+  if (data.format === "daily-delta-v1") {
+    let count = 0;
+    let present = false;
+    const id = String(asset.id);
+    return data.history.map(row => {
+      if (row.removed_assets.includes(id)) {
+        present = false;
+        count = 0;
+      }
+      if (Object.hasOwn(row.assets, id)) {
+        count += row.assets[id].downloads ?? 0;
+        present = true;
+      }
+      return row.observed && present ? count : null;
+    });
+  }
   return data.history.map(row => {
     const counts = row.assets?.[repository];
     if (counts && Object.hasOwn(counts, String(asset.id))) return counts[asset.id];
@@ -225,7 +241,7 @@ function renderReleaseDownloads(data) {
     title.textContent = item.repository;
     project.appendChild(title);
     projects.appendChild(project);
-    if (item.file) {
+    if (item.directory) {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = "Files and releases (load on demand)";
@@ -241,7 +257,7 @@ function renderReleaseDownloads(data) {
         status.className = "hint";
         status.textContent = "Loading file history...";
         try {
-          const projectData = await loadProjectHistory(item);
+          const projectData = await loadProjectHistory(item, data.updated_at);
           const snapshot = projectData.repositories?.[0];
           if (snapshot?.repository !== item.repository ||
               !Array.isArray(snapshot.releases) || !Array.isArray(projectData.history)) {
@@ -320,33 +336,70 @@ async function fetchReleaseData(url) {
   return response.json();
 }
 
-async function loadProjectHistory(item) {
-  if (!item.file.endsWith("/latest.json")) {
-    throw new Error("Daily JSON files have not been published. Run DATA GitHub release downloads.");
-  }
-  const base = "../cache_data/github-release-downloads/" +
-    item.file.slice(0, -"latest.json".length);
-  const data = await fetchReleaseData(base + "latest.json");
-  if (!Array.isArray(data.dates) ||
-      data.dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date))) {
+async function loadProjectHistory(item, updatedAt) {
+  if (!Array.isArray(item.dates) ||
+      item.dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date))) {
     throw new Error("Invalid project observation dates.");
   }
-  data.history = [];
-  for (let offset = 0; offset < data.dates.length; offset += 8) {
-    const dates = data.dates.slice(offset, offset + 8);
+  const base = "../cache_data/github-release-downloads/" + item.directory + "/";
+  const names = await fetchReleaseData(base + "assets.json");
+  const history = [];
+  for (let offset = 0; offset < item.dates.length; offset += 8) {
+    const dates = item.dates.slice(offset, offset + 8);
     const observations = await Promise.all(dates.map(async date => {
       const observation = await fetchReleaseData(base + date + ".json");
-      if (observation.date !== date) throw new Error("Invalid daily observation.");
+      if (observation.date !== date || observation.repository !== item.repository) {
+        throw new Error("Invalid daily observation.");
+      }
       return observation;
     }));
-    data.history.push(...observations);
+    history.push(...observations);
   }
-  return data;
+  const releases = new Map();
+  const assets = new Map();
+  for (const row of history) {
+    for (const id of row.removed_assets) assets.delete(id);
+    for (const id of row.removed_releases) releases.delete(id);
+    for (const [id, metadata] of Object.entries(row.releases)) releases.set(id, metadata);
+    for (const [id, change] of Object.entries(row.assets)) {
+      const {downloads = 0, ...metadata} = change;
+      const previous = assets.get(id) ?? {download_count: 0};
+      const count = previous.download_count + downloads;
+      if (!Number.isSafeInteger(downloads) || !Number.isSafeInteger(count) || count < 0) {
+        throw new Error("Invalid asset download delta.");
+      }
+      assets.set(id, {...previous, ...metadata, download_count: count});
+    }
+  }
+  const snapshot = new Map(Array.from(releases, ([id, metadata]) =>
+    [id, {id: Number(id), ...metadata, assets: []}]));
+  for (const [id, asset] of assets) {
+    const release = snapshot.get(asset.release_id);
+    if (!release || typeof names[id] !== "string") {
+      throw new Error("Missing metadata for asset " + id);
+    }
+    release.assets.push({id: Number(id), name: names[id], download_count: asset.download_count});
+  }
+  for (const release of snapshot.values()) release.assets.sort((a, b) => a.id - b.id);
+  return {
+    format: "daily-delta-v1",
+    updated_at: updatedAt,
+    repositories: [{
+      repository: item.repository,
+      total: item.total,
+      releases: Array.from(snapshot.values())
+        .sort((a, b) => a.published_at.localeCompare(b.published_at) || a.id - b.id),
+    }],
+    history,
+  };
 }
 
 async function loadReleaseDownloads() {
   try {
     const data = await fetchReleaseData("../cache_data/github-release-downloads/index.json");
+    if (data.format !== "daily-delta-v1") {
+      throw new Error("Daily delta files have not been published. Run DATA GitHub release downloads.");
+    }
     await loadChartJs();
     renderReleaseDownloads(data);
   } catch (error) {

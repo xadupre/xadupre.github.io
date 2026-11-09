@@ -39,25 +39,36 @@ The daily `DATA GitHub release downloads` workflow publishes
 the `github-release-downloads/` directory to `xadupre/cache_data`, using the existing
 `CACHE_DATA_SSH_KEY`. Its `index.json` contains daily repository totals.
 Each project has its own directory, for example
-`github-release-downloads/ggml-org/llama.cpp/`, with `latest.json` for current
-release/file metadata and the list of observation dates, and one plain JSON file
-per UTC day (`2026-11-09.json`) containing that day's per-file counters.
+`github-release-downloads/ggml-org/llama.cpp/`, with one plain JSON delta journal
+per UTC day (`2026-11-09.json`) and no `latest.json`.
+An `assets.json` dictionary maps asset IDs to filenames. It contains no counters,
+retains names for removed files, and is written only when names are added or changed.
+The index lists each project's observation dates. Daily files contain only new
+or changed release metadata/file membership, signed download-counter changes, and explicit
+asset/release removals. The first observation supplies the cumulative baseline;
+unchanged counters and metadata are not repeated, and zero download deltas are
+omitted even when a file's metadata changes. Deleted and later re-created
+assets start a new baseline, and counter decreases remain negative changes.
 New days do not rewrite previous daily files; same-day reruns replace only that
-day's observation, plus the current metadata and summary index.
+day's journal and the summary index.
 The dashboard initially loads only the index; expand a project's "Files and
-releases" section to download its metadata and daily history, with at most eight
-concurrent requests. No compressed files are published or read by the browser.
-Successful collections migrate legacy monolithic JSON/gzip and per-project gzip
-caches without dropping observations, removing the old files only after all
-daily JSON files, metadata and the index have been written.
+releases" section to download its daily journals, with at most eight concurrent
+requests. The browser accumulates them to rebuild current metadata and cumulative
+curves; it does not allocate a complete counter snapshot for every day.
+No compressed files are published or read by the browser.
+Successful collections convert previous daily snapshots, legacy monolithic
+JSON/gzip and per-project gzip caches into journals without dropping observations.
+Obsolete metadata/gzip files are removed only after the journals and index
+have been written. The first journal can be large because it establishes the
+initial metadata and counters; subsequent files contain only changes.
 The site displays current counts per file and
 1-day/7-day/30-day net counter changes when the exact baseline date exists,
 without aggregate repository or release totals. Expand each project's file list
 and check filenames to show individual cumulative curves; release tags distinguish
 identically named files. Per-file graphs are hidden until a file is selected.
-Daily samples retain counters keyed by GitHub asset ID. Existing total-only
+Daily journals key counters by GitHub asset ID. Existing total-only
 history is preserved, but per-file curves have gaps before per-file observations
-were collected (the latest snapshot can supply its own day's counts).
+were collected.
 History starts at collection time; past daily
 downloads cannot be reconstructed. Deleted/replaced assets can decrease totals,
 and counts do not represent unique users. Same-day reruns replace that day's
