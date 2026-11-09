@@ -37,15 +37,19 @@ are excluded, as are clones and PyPI installations.
 
 The daily `DATA GitHub release downloads` workflow publishes
 the `github-release-downloads/` directory to `xadupre/cache_data`, using the existing
-`CACHE_DATA_SSH_KEY`. Its small `index.json` contains daily repository totals;
-each project has its own compact, deterministic gzip file, for example
-`github-release-downloads/ggml-org/llama.cpp.json.gz`, containing its releases
-and complete per-file history. The dashboard initially loads only the index;
-expand a project's "Files and releases" section to download its file and
-decompress it in the browser. Successful collections migrate either legacy
-monolithic JSON or gzip caches without dropping observations, removing them
-only after all project files and the index have been written. The dashboard
-falls back to the legacy cache only while the index is absent (HTTP 404).
+`CACHE_DATA_SSH_KEY`. Its `index.json` contains daily repository totals.
+Each project has its own directory, for example
+`github-release-downloads/ggml-org/llama.cpp/`, with `latest.json` for current
+release/file metadata and the list of observation dates, and one plain JSON file
+per UTC day (`2026-11-09.json`) containing that day's per-file counters.
+New days do not rewrite previous daily files; same-day reruns replace only that
+day's observation, plus the current metadata and summary index.
+The dashboard initially loads only the index; expand a project's "Files and
+releases" section to download its metadata and daily history, with at most eight
+concurrent requests. No compressed files are published or read by the browser.
+Successful collections migrate legacy monolithic JSON/gzip and per-project gzip
+caches without dropping observations, removing the old files only after all
+daily JSON files, metadata and the index have been written.
 The site displays current counts per file and
 1-day/7-day/30-day net counter changes when the exact baseline date exists,
 without aggregate repository or release totals. Expand each project's file list

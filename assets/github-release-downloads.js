@@ -241,8 +241,7 @@ function renderReleaseDownloads(data) {
         status.className = "hint";
         status.textContent = "Loading file history...";
         try {
-          const projectData = await fetchReleaseData(
-            "../cache_data/github-release-downloads/" + item.file, true);
+          const projectData = await loadProjectHistory(item);
           const snapshot = projectData.repositories?.[0];
           if (snapshot?.repository !== item.repository ||
               !Array.isArray(snapshot.releases) || !Array.isArray(projectData.history)) {
@@ -315,31 +314,39 @@ function renderReleaseDownloads(data) {
   document.getElementById("message").textContent = "";
 }
 
-async function fetchReleaseData(url, compressed = false) {
+async function fetchReleaseData(url) {
   const response = await fetch(url);
   if (!response.ok) throw new Error("HTTP " + response.status + " for " + url);
-  return compressed
-    ? new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json()
-    : response.json();
+  return response.json();
+}
+
+async function loadProjectHistory(item) {
+  if (!item.file.endsWith("/latest.json")) {
+    throw new Error("Daily JSON files have not been published. Run DATA GitHub release downloads.");
+  }
+  const base = "../cache_data/github-release-downloads/" +
+    item.file.slice(0, -"latest.json".length);
+  const data = await fetchReleaseData(base + "latest.json");
+  if (!Array.isArray(data.dates) ||
+      data.dates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date))) {
+    throw new Error("Invalid project observation dates.");
+  }
+  data.history = [];
+  for (let offset = 0; offset < data.dates.length; offset += 8) {
+    const dates = data.dates.slice(offset, offset + 8);
+    const observations = await Promise.all(dates.map(async date => {
+      const observation = await fetchReleaseData(base + date + ".json");
+      if (observation.date !== date) throw new Error("Invalid daily observation.");
+      return observation;
+    }));
+    data.history.push(...observations);
+  }
+  return data;
 }
 
 async function loadReleaseDownloads() {
   try {
-    const response = await fetch("../cache_data/github-release-downloads/index.json");
-    let data;
-    if (response.status === 404) {
-      const legacy = await fetch("../cache_data/github-release-downloads.json.gz");
-      if (legacy.status === 404) {
-        data = await fetchReleaseData("../cache_data/github-release-downloads.json");
-      } else {
-        if (!legacy.ok) throw new Error("HTTP " + legacy.status);
-        data = await new Response(
-          legacy.body.pipeThrough(new DecompressionStream("gzip"))).json();
-      }
-    } else {
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      data = await response.json();
-    }
+    const data = await fetchReleaseData("../cache_data/github-release-downloads/index.json");
     await loadChartJs();
     renderReleaseDownloads(data);
   } catch (error) {
