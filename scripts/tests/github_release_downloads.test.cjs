@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const {test} = require("node:test");
+const {gzipSync} = require("node:zlib");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../../assets/github-release-downloads.js"), "utf8");
@@ -304,5 +305,68 @@ test("missing data and network failures stay visible", async () => {
     await context.loadReleaseDownloads();
     assert.equal(message.className, "error");
     assert.match(message.textContent, /Unable to display release downloads/);
+  }
+});
+
+test("loader decompresses the static gzip cache before rendering", async () => {
+  const data = {updated_at: "2026-10-21T06:00:00Z", repositories: [], history: []};
+  const requested = [];
+  let rendered;
+  const loader = vm.createContext({
+    Response, DecompressionStream,
+    fetch: async url => {
+      requested.push(url);
+      return new Response(gzipSync(JSON.stringify(data)));
+    },
+    loadChartJs: async () => {},
+  });
+  vm.runInContext(source, loader);
+  loader.renderReleaseDownloads = value => { rendered = value; };
+  await loader.loadReleaseDownloads();
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), data);
+  assert.deepEqual(requested, ["../cache_data/github-release-downloads.json.gz"]);
+});
+
+test("loader falls back to legacy JSON only when the gzip cache is absent", async () => {
+  const data = {history: [{date: "2026-10-20"}]};
+  const requested = [];
+  let rendered;
+  const loader = vm.createContext({
+    fetch: async url => {
+      requested.push(url);
+      return url.endsWith(".gz")
+        ? new Response(null, {status: 404})
+        : Response.json(data);
+    },
+    loadChartJs: async () => {},
+  });
+  vm.runInContext(source, loader);
+  loader.renderReleaseDownloads = value => { rendered = value; };
+  await loader.loadReleaseDownloads();
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), data);
+  assert.deepEqual(requested, [
+    "../cache_data/github-release-downloads.json.gz",
+    "../cache_data/github-release-downloads.json",
+  ]);
+});
+
+test("corrupt gzip and server errors are reported without using stale JSON", async () => {
+  for (const response of [
+    new Response("invalid gzip"),
+    new Response(null, {status: 503}),
+  ]) {
+    const message = {};
+    const requested = [];
+    const loader = vm.createContext({Response, DecompressionStream});
+    vm.runInContext(source, loader);
+    loader.document = {getElementById() { return message; }};
+    loader.fetch = async url => {
+      requested.push(url);
+      return response;
+    };
+    await loader.loadReleaseDownloads();
+    assert.equal(message.className, "error");
+    assert.match(message.textContent, /Unable to display release downloads/);
+    assert.equal(requested.length, 1);
   }
 });

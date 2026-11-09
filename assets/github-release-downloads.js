@@ -277,12 +277,18 @@ function renderReleaseDownloads(data) {
 
 async function loadReleaseDownloads() {
   try {
-    const response = await fetch("../cache_data/github-release-downloads.json");
+    let response = await fetch("../cache_data/github-release-downloads.json.gz");
+    const compressed = response.status !== 404;
+    if (!compressed) {
+      response = await fetch("../cache_data/github-release-downloads.json");
+    }
     if (!response.ok) {
       throw new Error("HTTP " + response.status +
         ". The daily DATA GitHub release downloads workflow must publish its first collection.");
     }
-    const data = await response.json();
+    const data = compressed
+      ? await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json()
+      : await response.json();
     await loadChartJs();
     renderReleaseDownloads(data);
   } catch (error) {

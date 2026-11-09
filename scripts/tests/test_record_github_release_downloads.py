@@ -1,6 +1,7 @@
 """Exercise release download collection against a real local HTTP API."""
 
 import datetime as dt
+import gzip
 import json
 import subprocess
 import sys
@@ -279,7 +280,11 @@ class TestReleaseDownloads(unittest.TestCase):
                 self.assertEqual(result["history"][0]["assets"][repository]["0"], 3)
                 self.assertIn((f"/repos/{repository}/releases", 2), self.requests)
             self.assertEqual(
-                json.loads((Path(tmp) / "github-release-downloads.json").read_text()),
+                json.loads(
+                    gzip.decompress(
+                        (Path(tmp) / "github-release-downloads.json.gz").read_bytes()
+                    )
+                ),
                 result,
             )
 
@@ -288,10 +293,13 @@ class TestReleaseDownloads(unittest.TestCase):
             repositories = ["xadupre/onnx-light-cpu", "xadupre/onnx-empty"]
             now = dt.datetime(2026, 10, 20, 6, tzinfo=dt.UTC)
             first = downloads.record_downloads(tmp, repositories=repositories, now=now)
+            path = Path(tmp) / "github-release-downloads.json.gz"
+            first_bytes = path.read_bytes()
             repeated = downloads.record_downloads(
                 tmp, repositories=repositories, now=now
             )
             self.assertEqual(first, repeated)
+            self.assertEqual(path.read_bytes(), first_bytes)
             self.count = 4
             updated = downloads.record_downloads(
                 tmp, repositories=repositories, now=now
@@ -316,9 +324,9 @@ class TestReleaseDownloads(unittest.TestCase):
                 ],
                 [402, 102],
             )
-            path = Path(tmp) / "github-release-downloads.json"
-            self.assertEqual(json.loads(path.read_text()), next_day)
-            self.assertFalse(path.with_suffix(".json.tmp").exists())
+            path = Path(tmp) / "github-release-downloads.json.gz"
+            self.assertEqual(json.loads(gzip.decompress(path.read_bytes())), next_day)
+            self.assertFalse(path.with_suffix(".gz.tmp").exists())
 
     def test_legacy_history_retains_totals_without_inventing_asset_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -336,6 +344,61 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(counts["101"], 2)
             self.assertNotIn("102", counts)
             self.assertEqual(sum(counts.values()), 302)
+            self.assertFalse(path.exists())
+            with gzip.open(path.with_suffix(".json.gz"), "rt") as stream:
+                self.assertEqual(json.load(stream), result)
+
+    def test_compression_preserves_large_legacy_asset_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "github-release-downloads.json"
+            history = [
+                {
+                    "date": (dt.date(2026, 1, 1) + dt.timedelta(days=day)).isoformat(),
+                    "totals": {"ggml-org/llama.cpp": 1000 * day},
+                    "assets": {
+                        "ggml-org/llama.cpp": {
+                            str(100000000 + asset): day for asset in range(1000)
+                        }
+                    },
+                }
+                for day in range(60)
+            ]
+            path.write_text(json.dumps({"history": history}, indent=2), encoding="utf-8")
+            legacy_size = path.stat().st_size
+            result = downloads.record_downloads(
+                tmp,
+                repositories=["ggml-org/llama.cpp"],
+                now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
+            )
+            compressed_path = path.with_suffix(".json.gz")
+            self.assertLess(compressed_path.stat().st_size, legacy_size // 5)
+            self.assertEqual(result["history"][:-1], history)
+            self.assertEqual(
+                json.loads(gzip.decompress(compressed_path.read_bytes())), result
+            )
+            self.assertFalse(path.exists())
+            # A stale legacy file must not override the migrated history.
+            path.write_text('{"history":[]}', encoding="utf-8")
+            self.assertEqual(
+                downloads.record_downloads(
+                    tmp,
+                    repositories=["ggml-org/llama.cpp"],
+                    now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
+                ),
+                result,
+            )
+            self.assertFalse(path.exists())
+
+    def test_failed_compressed_write_preserves_legacy_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "github-release-downloads.json"
+            original = '{"history":[]}'
+            path.write_text(original, encoding="utf-8")
+            path.with_suffix(".json.gz.tmp").mkdir()
+            with self.assertRaises(IsADirectoryError):
+                downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
+            self.assertEqual(path.read_text(), original)
+            self.assertFalse(path.with_suffix(".json.gz").exists())
 
     def test_failed_collection_never_replaces_existing_data(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,12 +414,23 @@ class TestReleaseDownloads(unittest.TestCase):
                 downloads.record_downloads(tmp, repositories=[])
             self.assertEqual(path.read_text(), "existing data")
 
+    def test_failed_collection_preserves_compressed_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "github-release-downloads.json.gz"
+            original = gzip.compress(b'{"history":[]}', mtime=0)
+            path.write_bytes(original)
+            self.fail_assets = True
+            with self.assertRaisesRegex(HTTPError, "503"):
+                downloads.record_downloads(tmp, repositories=["xadupre/onnx-light-cpu"])
+            self.assertEqual(path.read_bytes(), original)
+
     def test_cli_explicit_repositories(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(
                 downloads.main(["--cache-dir", tmp, "--repo", "xadupre/onnx-empty"]), 0
             )
-            data = json.loads((Path(tmp) / "github-release-downloads.json").read_text())
+            with gzip.open(Path(tmp) / "github-release-downloads.json.gz", "rt") as stream:
+                data = json.load(stream)
             self.assertEqual(
                 data["repositories"],
                 [
@@ -385,7 +459,7 @@ class TestDownloadIntegration(unittest.TestCase):
         )
         page = (ROOT / "dashboard/github-release-downloads.html").read_text()
         self.assertIn("../assets/github-release-downloads.js", page)
-        self.assertIn("../cache_data/github-release-downloads.json", page)
+        self.assertIn("../cache_data/github-release-downloads.json.gz", page)
         self.assertIn("GitHub-generated source archives", page)
         self.assertIn(
             "dashboard/github-release-downloads.html", (ROOT / "index.html").read_text()

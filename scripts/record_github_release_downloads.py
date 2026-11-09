@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gzip
 import json
 import os
 import re
@@ -119,10 +120,15 @@ def record_downloads(
         print(f"Collecting release downloads for {repository}", flush=True)
         current.append(collect_repository(repository, token))
 
-    path = Path(cache_dir) / "github-release-downloads.json"
+    legacy_path = Path(cache_dir) / "github-release-downloads.json"
+    path = legacy_path.with_suffix(".json.gz")
     history = {}
     if path.exists():
-        previous = json.loads(path.read_text(encoding="utf-8"))
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            previous = json.load(stream)
+        history = {entry["date"]: entry for entry in previous["history"]}
+    elif legacy_path.exists():
+        previous = json.loads(legacy_path.read_text(encoding="utf-8"))
         history = {entry["date"]: entry for entry in previous["history"]}
     timestamp = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
     day = timestamp.strftime("%Y-%m-%d")
@@ -144,9 +150,15 @@ def record_downloads(
         "history": [history[date] for date in sorted(history)],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    temporary = path.with_suffix(".gz.tmp")
+    temporary.write_bytes(
+        gzip.compress(
+            (json.dumps(result, separators=(",", ":")) + "\n").encode("utf-8"),
+            mtime=0,
+        )
+    )
     temporary.replace(path)
+    legacy_path.unlink(missing_ok=True)
     print(f"Recorded {len(current)} repositories in {path}", flush=True)
     return result
 
