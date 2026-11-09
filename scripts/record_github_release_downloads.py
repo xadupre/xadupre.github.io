@@ -109,7 +109,7 @@ def record_downloads(
     repositories: list[str] | None = None,
     now: dt.datetime | None = None,
 ) -> dict:
-    """Publish a small summary and one compressed history file per repository."""
+    """Publish plain JSON metadata and one observation file per project and UTC day."""
     selected = sorted(
         set(discover_repositories(token) if repositories is None else repositories)
     )
@@ -146,6 +146,8 @@ def record_downloads(
     }
     updated_at = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
     projects = {item["repository"]: item for item in current}
+    migrated = {}
+    obsolete = [legacy_path, compressed_path]
     if legacy is not None:
         for item in legacy.get("repositories", []):
             projects.setdefault(item["repository"], item)
@@ -156,15 +158,7 @@ def record_downloads(
                 projects.setdefault(
                     repository, {"repository": repository, "total": 0, "releases": []}
                 )
-    pending = []
-    for repository, item in sorted(projects.items()):
-        # GitHub owner/repository names cannot contain path separators or dot segments.
-        if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository) or (
-            repository.split("/")[1] in (".", "..")
-        ):
-            raise ValueError(f"Invalid repository name: {repository!r}")
-        project_path = directory / f"{repository}.json.gz"
-        if legacy is not None:
+        for repository in projects:
             entries = []
             for entry in legacy["history"]:
                 row = {"date": entry["date"], "totals": {}}
@@ -174,9 +168,49 @@ def record_downloads(
                     row["assets"] = {repository: entry["assets"][repository]}
                 if row["totals"] or "assets" in row:
                     entries.append(row)
+            migrated[repository] = {
+                "updated_at": legacy.get("updated_at", updated_at),
+                "history": entries,
+            }
+    elif previous.get("format") != "daily-json-v1":
+        # Include archived projects which no longer appear in the summary index.
+        for source in sorted(directory.glob("*/*.json.gz")):
+            with gzip.open(source, "rt", encoding="utf-8") as stream:
+                project = json.load(stream)
+            item = project["repositories"][0]
+            repository = item["repository"]
+            projects.setdefault(repository, item)
+            migrated[repository] = project
+            obsolete.append(source)
+        for item in previous.get("repositories", []):
+            if item["repository"] not in migrated:
+                raise FileNotFoundError(
+                    f"Missing release download history: {item['repository']}"
+                )
+
+    pending = []
+
+    def stage_json(destination: Path, data: dict) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        pending.append((temporary, destination))
+
+    for repository, item in sorted(projects.items()):
+        # GitHub owner/repository names cannot contain path separators or dot segments.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository) or (
+            repository.split("/")[1] in (".", "..")
+        ):
+            raise ValueError(f"Invalid repository name: {repository!r}")
+        project_path = directory / repository / "latest.json"
+        if repository in migrated:
+            project_history = {
+                entry["date"]: entry for entry in migrated[repository]["history"]
+            }
+            dates = set(project_history)
         elif project_path.exists():
-            with gzip.open(project_path, "rt", encoding="utf-8") as stream:
-                entries = json.load(stream)["history"]
+            dates = set(json.loads(project_path.read_text(encoding="utf-8"))["dates"])
+            project_history = {}
         else:
             if any(
                 row["repository"] == repository
@@ -185,9 +219,10 @@ def record_downloads(
                 raise FileNotFoundError(
                     f"Missing release download history: {project_path}"
                 )
-            entries = []
-        project_history = {entry["date"]: entry for entry in entries}
+            dates = set()
+            project_history = {}
         if repository in selected:
+            dates.add(day)
             project_history[day] = {
                 "date": day,
                 "totals": {repository: item["total"]},
@@ -199,46 +234,40 @@ def record_downloads(
                     }
                 },
             }
-        project = {
-            "updated_at": (
-                legacy.get("updated_at", updated_at)
-                if legacy is not None and repository not in selected
-                else updated_at
-            ),
-            "repositories": [item],
-            "history": [project_history[date] for date in sorted(project_history)],
-        }
-        project_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = project_path.with_suffix(".gz.tmp")
-        temporary.write_bytes(
-            gzip.compress(
-                (json.dumps(project, separators=(",", ":")) + "\n").encode("utf-8"),
-                mtime=0,
-            )
+        for date, entry in sorted(project_history.items()):
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+                raise ValueError(f"Invalid observation date: {date!r}")
+            stage_json(project_path.parent / f"{date}.json", entry)
+        stage_json(
+            project_path,
+            {
+                "updated_at": (
+                    migrated[repository]["updated_at"]
+                    if repository in migrated and repository not in selected
+                    else updated_at
+                ),
+                "repositories": [item],
+                "dates": sorted(dates),
+            },
         )
-        pending.append((temporary, project_path))
     result = {
+        "format": "daily-json-v1",
         "updated_at": updated_at,
         "repositories": [
             {
                 "repository": item["repository"],
                 "total": item["total"],
-                "file": f"{item['repository']}.json.gz",
+                "file": f"{item['repository']}/latest.json",
             }
             for item in current
         ],
         "history": [history[date] for date in sorted(history)],
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(result, separators=(",", ":")) + "\n", encoding="utf-8"
-    )
+    stage_json(path, result)
     for source, destination in pending:
         source.replace(destination)
-    temporary.replace(path)
-    legacy_path.unlink(missing_ok=True)
-    compressed_path.unlink(missing_ok=True)
+    for source in obsolete:
+        source.unlink(missing_ok=True)
     print(f"Recorded {len(current)} repositories in {path}", flush=True)
     return result
 

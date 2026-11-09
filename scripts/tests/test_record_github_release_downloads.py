@@ -24,9 +24,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 class TestReleaseDownloads(unittest.TestCase):
     def read_project(self, cache_dir, repository):
-        path = Path(cache_dir) / "github-release-downloads" / f"{repository}.json.gz"
-        with gzip.open(path, "rt", encoding="utf-8") as stream:
-            return json.load(stream)
+        directory = Path(cache_dir) / "github-release-downloads" / repository
+        data = json.loads((directory / "latest.json").read_text())
+        data["history"] = [
+            json.loads((directory / f"{date}.json").read_text())
+            for date in data["dates"]
+        ]
+        return data
 
     def setUp(self):
         self.count = 3
@@ -303,7 +307,10 @@ class TestReleaseDownloads(unittest.TestCase):
             repositories = ["xadupre/onnx-light-cpu", "xadupre/onnx-empty"]
             now = dt.datetime(2026, 10, 20, 6, tzinfo=dt.UTC)
             first = downloads.record_downloads(tmp, repositories=repositories, now=now)
-            path = Path(tmp) / "github-release-downloads/xadupre/onnx-light-cpu.json.gz"
+            path = (
+                Path(tmp)
+                / "github-release-downloads/xadupre/onnx-light-cpu/2026-10-20.json"
+            )
             first_bytes = path.read_bytes()
             repeated = downloads.record_downloads(
                 tmp, repositories=repositories, now=now
@@ -330,6 +337,8 @@ class TestReleaseDownloads(unittest.TestCase):
                 ],
                 {},
             )
+            previous_day_bytes = path.read_bytes()
+            previous_day_mtime = path.stat().st_mtime_ns
             self.count = 1
             next_day = downloads.record_downloads(
                 tmp, repositories=repositories, now=now + dt.timedelta(days=1)
@@ -346,7 +355,10 @@ class TestReleaseDownloads(unittest.TestCase):
                 self.read_project(tmp, repositories[0])["history"][-1]["totals"],
                 {"xadupre/onnx-light-cpu": 102},
             )
-            self.assertFalse(path.with_suffix(".gz.tmp").exists())
+            self.assertEqual(path.read_bytes(), previous_day_bytes)
+            self.assertEqual(path.stat().st_mtime_ns, previous_day_mtime)
+            self.assertFalse(path.with_suffix(".json.tmp").exists())
+            self.assertFalse(list(Path(tmp).rglob("*.gz")))
 
     def test_legacy_history_retains_totals_without_inventing_asset_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,7 +380,7 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(sum(counts.values()), 302)
             self.assertFalse(path.exists())
 
-    def test_compression_preserves_large_legacy_asset_history(self):
+    def test_daily_files_preserve_large_legacy_asset_history(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "github-release-downloads.json"
             history = [
@@ -386,21 +398,16 @@ class TestReleaseDownloads(unittest.TestCase):
             path.write_text(
                 json.dumps({"history": history}, indent=2), encoding="utf-8"
             )
-            legacy_size = path.stat().st_size
             result = downloads.record_downloads(
                 tmp,
                 repositories=["ggml-org/llama.cpp"],
                 now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
             )
-            compressed_path = (
-                Path(tmp) / "github-release-downloads/ggml-org/llama.cpp.json.gz"
-            )
-            self.assertLess(compressed_path.stat().st_size, legacy_size // 5)
             project = self.read_project(tmp, "ggml-org/llama.cpp")
             self.assertEqual(project["history"][:-1], history)
-            self.assertEqual(
-                json.loads(gzip.decompress(compressed_path.read_bytes())), project
-            )
+            directory = Path(tmp) / "github-release-downloads/ggml-org/llama.cpp"
+            self.assertEqual(len(list(directory.glob("2026-*.json"))), 61)
+            self.assertFalse(list(Path(tmp).rglob("*.gz")))
             self.assertFalse(path.exists())
             # A stale legacy file must not override the migrated history.
             path.write_text('{"history":[]}', encoding="utf-8")
@@ -414,7 +421,7 @@ class TestReleaseDownloads(unittest.TestCase):
             )
             self.assertFalse(path.exists())
 
-    def test_failed_compressed_write_preserves_legacy_cache(self):
+    def test_failed_staged_write_preserves_legacy_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "github-release-downloads.json"
             original = '{"history":[]}'
@@ -426,7 +433,8 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(path.read_text(), original)
             self.assertFalse(
                 (
-                    Path(tmp) / "github-release-downloads/xadupre/onnx-empty.json.gz"
+                    Path(tmp)
+                    / "github-release-downloads/xadupre/onnx-empty/latest.json"
                 ).exists()
             )
 
@@ -481,8 +489,8 @@ class TestReleaseDownloads(unittest.TestCase):
                             if "assets" in original
                             else None,
                         )
-                archived_path = (
-                    Path(tmp) / "github-release-downloads/other/onnx-light-cpu.json.gz"
+                archived_path = Path(tmp) / (
+                    "github-release-downloads/other/onnx-light-cpu/2026-10-20.json"
                 )
                 archived_bytes = archived_path.read_bytes()
                 self.assertEqual(
@@ -500,6 +508,7 @@ class TestReleaseDownloads(unittest.TestCase):
                     self.read_project(tmp, projects[1])["history"][1]["assets"],
                     {projects[1]: {"101": 19, "deleted": 0}},
                 )
+                self.assertFalse(list(Path(tmp).rglob("*.gz")))
 
     def test_missing_project_history_does_not_replace_published_index(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -507,12 +516,97 @@ class TestReleaseDownloads(unittest.TestCase):
             index_path = Path(tmp) / "github-release-downloads/index.json"
             original = index_path.read_bytes()
             project_path = (
-                Path(tmp) / "github-release-downloads/xadupre/onnx-empty.json.gz"
+                Path(tmp) / "github-release-downloads/xadupre/onnx-empty/latest.json"
             )
             project_path.unlink()
             with self.assertRaisesRegex(FileNotFoundError, "Missing release download"):
                 downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
             self.assertEqual(index_path.read_bytes(), original)
+
+    def test_project_gzip_migration_includes_archives_and_preserves_every_day(self):
+        repository = "xadupre/onnx-light-cpu"
+        archived = "retired/project"
+        row = {
+            "date": "2026-10-19",
+            "totals": {repository: 5},
+            "assets": {repository: {"42": 0, "43": 5}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "github-release-downloads"
+            directory.mkdir()
+            (directory / "index.json").write_text(
+                json.dumps(
+                    {
+                        "updated_at": "2026-10-19T06:00:00Z",
+                        "repositories": [
+                            {
+                                "repository": repository,
+                                "total": 5,
+                                "file": f"{repository}.json.gz",
+                            },
+                        ],
+                        "history": [{"date": row["date"], "totals": row["totals"]}],
+                    }
+                )
+            )
+            for name in (repository, archived):
+                source = directory / f"{name}.json.gz"
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(
+                    gzip.compress(
+                        json.dumps(
+                            {
+                                "updated_at": "2026-10-19T06:00:00Z",
+                                "repositories": [
+                                    {"repository": name, "total": 5, "releases": []}
+                                ],
+                                "history": [
+                                    {
+                                        "date": row["date"],
+                                        "totals": {name: 5},
+                                        "assets": {name: {"42": 0, "43": 5}},
+                                    }
+                                ],
+                            }
+                        ).encode()
+                    )
+                )
+            original_index = (directory / "index.json").read_bytes()
+            blocked_index = directory / "index.json.tmp"
+            blocked_index.mkdir()
+            with self.assertRaises(IsADirectoryError):
+                downloads.record_downloads(
+                    tmp,
+                    repositories=[repository],
+                    now=dt.datetime(2026, 10, 20, tzinfo=dt.UTC),
+                )
+            self.assertEqual((directory / "index.json").read_bytes(), original_index)
+            self.assertEqual(len(list(directory.glob("*/*.json.gz"))), 2)
+            self.assertFalse((directory / repository / "latest.json").exists())
+            blocked_index.rmdir()
+            downloads.record_downloads(
+                tmp,
+                repositories=[repository],
+                now=dt.datetime(2026, 10, 20, tzinfo=dt.UTC),
+            )
+            self.assertEqual(self.read_project(tmp, repository)["history"][0], row)
+            self.assertEqual(
+                self.read_project(tmp, archived)["history"][0]["assets"],
+                {archived: {"42": 0, "43": 5}},
+            )
+            self.assertFalse(list(directory.rglob("*.gz")))
+            historical = directory / repository / "2026-10-19.json"
+            original_mtime = historical.stat().st_mtime_ns
+            downloads.record_downloads(
+                tmp,
+                repositories=[repository],
+                now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
+            )
+            self.assertEqual(historical.stat().st_mtime_ns, original_mtime)
+            self.assertEqual(
+                self.read_project(tmp, repository)["dates"],
+                ["2026-10-19", "2026-10-20", "2026-10-21"],
+            )
 
     def test_failed_collection_never_replaces_existing_data(self):
         with tempfile.TemporaryDirectory() as tmp:
