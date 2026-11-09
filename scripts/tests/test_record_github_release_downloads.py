@@ -23,6 +23,11 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class TestReleaseDownloads(unittest.TestCase):
+    def read_project(self, cache_dir, repository):
+        path = Path(cache_dir) / "github-release-downloads" / f"{repository}.json.gz"
+        with gzip.open(path, "rt", encoding="utf-8") as stream:
+            return json.load(stream)
+
     def setUp(self):
         self.count = 3
         self.asset_count = 100
@@ -277,13 +282,18 @@ class TestReleaseDownloads(unittest.TestCase):
                 {repository: 302 for repository in repositories},
             )
             for repository in repositories:
-                self.assertEqual(result["history"][0]["assets"][repository]["0"], 3)
+                project = self.read_project(tmp, repository)
+                self.assertEqual(project["history"][0]["assets"][repository]["0"], 3)
+                self.assertEqual(
+                    [item["repository"] for item in project["repositories"]],
+                    [repository],
+                )
+                self.assertEqual(set(project["history"][0]["assets"]), {repository})
                 self.assertIn((f"/repos/{repository}/releases", 2), self.requests)
+            self.assertNotIn("assets", result["history"][0])
             self.assertEqual(
                 json.loads(
-                    gzip.decompress(
-                        (Path(tmp) / "github-release-downloads.json.gz").read_bytes()
-                    )
+                    (Path(tmp) / "github-release-downloads/index.json").read_text()
                 ),
                 result,
             )
@@ -293,7 +303,7 @@ class TestReleaseDownloads(unittest.TestCase):
             repositories = ["xadupre/onnx-light-cpu", "xadupre/onnx-empty"]
             now = dt.datetime(2026, 10, 20, 6, tzinfo=dt.UTC)
             first = downloads.record_downloads(tmp, repositories=repositories, now=now)
-            path = Path(tmp) / "github-release-downloads.json.gz"
+            path = Path(tmp) / "github-release-downloads/xadupre/onnx-light-cpu.json.gz"
             first_bytes = path.read_bytes()
             repeated = downloads.record_downloads(
                 tmp, repositories=repositories, now=now
@@ -309,9 +319,17 @@ class TestReleaseDownloads(unittest.TestCase):
                 updated["history"][0]["totals"]["xadupre/onnx-light-cpu"], 402
             )
             self.assertEqual(
-                updated["history"][0]["assets"]["xadupre/onnx-light-cpu"]["0"], 4
+                self.read_project(tmp, repositories[0])["history"][0]["assets"][
+                    "xadupre/onnx-light-cpu"
+                ]["0"],
+                4,
             )
-            self.assertEqual(updated["history"][0]["assets"]["xadupre/onnx-empty"], {})
+            self.assertEqual(
+                self.read_project(tmp, repositories[1])["history"][0]["assets"][
+                    "xadupre/onnx-empty"
+                ],
+                {},
+            )
             self.count = 1
             next_day = downloads.record_downloads(
                 tmp, repositories=repositories, now=now + dt.timedelta(days=1)
@@ -324,8 +342,10 @@ class TestReleaseDownloads(unittest.TestCase):
                 ],
                 [402, 102],
             )
-            path = Path(tmp) / "github-release-downloads.json.gz"
-            self.assertEqual(json.loads(gzip.decompress(path.read_bytes())), next_day)
+            self.assertEqual(
+                self.read_project(tmp, repositories[0])["history"][-1]["totals"],
+                {"xadupre/onnx-light-cpu": 102},
+            )
             self.assertFalse(path.with_suffix(".gz.tmp").exists())
 
     def test_legacy_history_retains_totals_without_inventing_asset_counts(self):
@@ -339,14 +359,14 @@ class TestReleaseDownloads(unittest.TestCase):
                 now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
             )
             self.assertEqual(result["history"][0], legacy)
-            counts = result["history"][1]["assets"]["xadupre/onnx-light-cpu"]
+            project = self.read_project(tmp, "xadupre/onnx-light-cpu")
+            self.assertEqual(project["history"][0], legacy)
+            counts = project["history"][1]["assets"]["xadupre/onnx-light-cpu"]
             self.assertEqual(counts["0"], 3)
             self.assertEqual(counts["101"], 2)
             self.assertNotIn("102", counts)
             self.assertEqual(sum(counts.values()), 302)
             self.assertFalse(path.exists())
-            with gzip.open(path.with_suffix(".json.gz"), "rt") as stream:
-                self.assertEqual(json.load(stream), result)
 
     def test_compression_preserves_large_legacy_asset_history(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -363,18 +383,23 @@ class TestReleaseDownloads(unittest.TestCase):
                 }
                 for day in range(60)
             ]
-            path.write_text(json.dumps({"history": history}, indent=2), encoding="utf-8")
+            path.write_text(
+                json.dumps({"history": history}, indent=2), encoding="utf-8"
+            )
             legacy_size = path.stat().st_size
             result = downloads.record_downloads(
                 tmp,
                 repositories=["ggml-org/llama.cpp"],
                 now=dt.datetime(2026, 10, 21, tzinfo=dt.UTC),
             )
-            compressed_path = path.with_suffix(".json.gz")
+            compressed_path = (
+                Path(tmp) / "github-release-downloads/ggml-org/llama.cpp.json.gz"
+            )
             self.assertLess(compressed_path.stat().st_size, legacy_size // 5)
-            self.assertEqual(result["history"][:-1], history)
+            project = self.read_project(tmp, "ggml-org/llama.cpp")
+            self.assertEqual(project["history"][:-1], history)
             self.assertEqual(
-                json.loads(gzip.decompress(compressed_path.read_bytes())), result
+                json.loads(gzip.decompress(compressed_path.read_bytes())), project
             )
             self.assertFalse(path.exists())
             # A stale legacy file must not override the migrated history.
@@ -394,11 +419,100 @@ class TestReleaseDownloads(unittest.TestCase):
             path = Path(tmp) / "github-release-downloads.json"
             original = '{"history":[]}'
             path.write_text(original, encoding="utf-8")
-            path.with_suffix(".json.gz.tmp").mkdir()
+            temporary = Path(tmp) / "github-release-downloads/index.json.tmp"
+            temporary.mkdir(parents=True)
             with self.assertRaises(IsADirectoryError):
                 downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
             self.assertEqual(path.read_text(), original)
-            self.assertFalse(path.with_suffix(".json.gz").exists())
+            self.assertFalse(
+                (
+                    Path(tmp) / "github-release-downloads/xadupre/onnx-empty.json.gz"
+                ).exists()
+            )
+
+    def test_migration_splits_all_projects_and_preserves_unselected_history(self):
+        projects = ["xadupre/onnx-light-cpu", "other/onnx-light-cpu"]
+        history = [
+            {"date": "2026-10-19", "totals": {projects[0]: 10, projects[1]: 20}},
+            {
+                "date": "2026-10-20",
+                "totals": {projects[0]: 11, projects[1]: 19},
+                "assets": {
+                    projects[0]: {"101": 11},
+                    projects[1]: {"101": 19, "deleted": 0},
+                    "retired/project": {"removed": 8},
+                },
+            },
+        ]
+        legacy = {
+            "updated_at": "2026-10-20T06:00:00Z",
+            "repositories": [
+                {"repository": repo, "total": total, "releases": []}
+                for repo, total in zip(projects, [11, 19])
+            ],
+            "history": history,
+        }
+        for compressed in (False, True):
+            with (
+                self.subTest(compressed=compressed),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                path = Path(tmp) / (
+                    "github-release-downloads.json.gz"
+                    if compressed
+                    else "github-release-downloads.json"
+                )
+                content = json.dumps(legacy).encode()
+                path.write_bytes(gzip.compress(content) if compressed else content)
+                now = dt.datetime(2026, 10, 21, tzinfo=dt.UTC)
+                index = downloads.record_downloads(
+                    tmp, repositories=[projects[0]], now=now
+                )
+                self.assertFalse(path.exists())
+                for repo in projects:
+                    project = self.read_project(tmp, repo)
+                    for row, original in zip(project["history"], history):
+                        self.assertEqual(
+                            row["totals"], {repo: original["totals"][repo]}
+                        )
+                        self.assertEqual(
+                            row.get("assets"),
+                            {repo: original["assets"][repo]}
+                            if "assets" in original
+                            else None,
+                        )
+                archived_path = (
+                    Path(tmp) / "github-release-downloads/other/onnx-light-cpu.json.gz"
+                )
+                archived_bytes = archived_path.read_bytes()
+                self.assertEqual(
+                    self.read_project(tmp, "retired/project")["history"][0]["assets"],
+                    {"retired/project": {"removed": 8}},
+                )
+                self.assertTrue(all("assets" not in row for row in index["history"]))
+                downloads.record_downloads(tmp, repositories=[projects[0]], now=now)
+                self.assertEqual(archived_path.read_bytes(), archived_bytes)
+                restored = downloads.record_downloads(
+                    tmp, repositories=projects, now=now + dt.timedelta(days=1)
+                )
+                self.assertEqual(len(restored["repositories"]), 2)
+                self.assertEqual(
+                    self.read_project(tmp, projects[1])["history"][1]["assets"],
+                    {projects[1]: {"101": 19, "deleted": 0}},
+                )
+
+    def test_missing_project_history_does_not_replace_published_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
+            index_path = Path(tmp) / "github-release-downloads/index.json"
+            original = index_path.read_bytes()
+            project_path = (
+                Path(tmp) / "github-release-downloads/xadupre/onnx-empty.json.gz"
+            )
+            project_path.unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "Missing release download"):
+                downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
+            self.assertEqual(index_path.read_bytes(), original)
 
     def test_failed_collection_never_replaces_existing_data(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -429,8 +543,7 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(
                 downloads.main(["--cache-dir", tmp, "--repo", "xadupre/onnx-empty"]), 0
             )
-            with gzip.open(Path(tmp) / "github-release-downloads.json.gz", "rt") as stream:
-                data = json.load(stream)
+            data = self.read_project(tmp, "xadupre/onnx-empty")
             self.assertEqual(
                 data["repositories"],
                 [
@@ -459,7 +572,7 @@ class TestDownloadIntegration(unittest.TestCase):
         )
         page = (ROOT / "dashboard/github-release-downloads.html").read_text()
         self.assertIn("../assets/github-release-downloads.js", page)
-        self.assertIn("../cache_data/github-release-downloads.json.gz", page)
+        self.assertIn("../cache_data/github-release-downloads/index.json", page)
         self.assertIn("GitHub-generated source archives", page)
         self.assertIn(
             "dashboard/github-release-downloads.html", (ROOT / "index.html").read_text()

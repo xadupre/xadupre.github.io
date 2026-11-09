@@ -74,6 +74,127 @@ function renderBatches(details, items, renderItem) {
   if (details.open) appendBatch();
 }
 
+function renderProjectFiles(data, item, project) {
+  const chartWrap = document.createElement("div");
+  chartWrap.className = "chart-wrap";
+  chartWrap.hidden = true;
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("aria-label", item.repository + " per-file cumulative release downloads");
+  chartWrap.appendChild(canvas);
+  project.appendChild(chartWrap);
+  const chart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels: data.history.map(row => row.date),
+      datasets: [],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true, title: { display: true, text: "Downloads" } } },
+    },
+  });
+  const files = document.createElement("details");
+  files.open = true;
+  const fileSummary = document.createElement("summary");
+  fileSummary.textContent = "Files: check to add individual curves";
+  files.appendChild(fileSummary);
+  const fileList = document.createElement("div");
+  fileList.className = "files";
+  files.appendChild(fileList);
+  project.appendChild(files);
+  let fileIndex = 0;
+  renderBatches(files, function* () {
+    for (const release of [...item.releases].reverse()) {
+      for (const asset of release.assets) yield {release, asset};
+    }
+  }, ({release, asset}) => {
+    const label = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    label.appendChild(checkbox);
+    const name = document.createElement("span");
+    const caption = asset.name + " (" + release.tag + ")";
+    name.textContent = " " + caption + ": " + formatCount(asset.download_count);
+    label.appendChild(name);
+    fileList.appendChild(label);
+    const color = "hsl(" + (fileIndex++ * 137.5 % 360) + ", 75%, 65%)";
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        chart.data.datasets.push({
+          assetId: asset.id,
+          label: caption,
+          data: assetHistory(data, item.repository, asset),
+          borderColor: color,
+          backgroundColor: color,
+          spanGaps: false,
+        });
+      } else {
+        chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
+      }
+      chartWrap.hidden = chart.data.datasets.length === 0;
+      if (!chartWrap.hidden) chart.resize();
+      chart.update();
+    });
+  });
+  if (!item.releases.some(release => release.assets.length)) {
+    fileList.textContent = "No uploaded files.";
+  }
+  const container = document.createElement("details");
+  const releaseSummary = document.createElement("summary");
+  releaseSummary.textContent = "Releases and download counts";
+  container.appendChild(releaseSummary);
+  project.appendChild(container);
+  if (!item.releases.length) {
+    const empty = document.createElement("p");
+    empty.textContent = "No published releases.";
+    container.appendChild(empty);
+  }
+  renderBatches(container, function* () {
+    yield* [...item.releases].reverse();
+  }, release => {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    summary.textContent = release.tag + (release.prerelease ? " (prerelease)" : "");
+    details.appendChild(summary);
+    const link = document.createElement("a");
+    link.href = releaseLink(item.repository, release.tag);
+    link.textContent = "View release on GitHub";
+    details.appendChild(link);
+    if (!release.assets.length) {
+      const empty = document.createElement("p");
+      empty.textContent = "No uploaded files.";
+      details.appendChild(empty);
+    } else {
+      const wrap = document.createElement("div");
+      wrap.className = "table-wrap";
+      const table = document.createElement("table");
+      const head = document.createElement("thead");
+      const header = document.createElement("tr");
+      for (const title of ["File", "Downloads"]) {
+        const th = document.createElement("th");
+        th.textContent = title;
+        header.appendChild(th);
+      }
+      head.appendChild(header);
+      table.appendChild(head);
+      const body = document.createElement("tbody");
+      renderBatches(details, function* () {
+        yield* release.assets;
+      }, asset => {
+        const row = document.createElement("tr");
+        cell(row, asset.name);
+        cell(row, formatCount(asset.download_count));
+        body.appendChild(row);
+      });
+      table.appendChild(body);
+      wrap.appendChild(table);
+      details.appendChild(wrap);
+    }
+    container.appendChild(details);
+  });
+}
+
 function renderReleaseDownloads(data) {
   if (!Array.isArray(data.repositories) || !data.repositories.length ||
       !Array.isArray(data.history) || !data.history.length) {
@@ -94,134 +215,53 @@ function renderReleaseDownloads(data) {
       item.repository.split("/").map(encodeURIComponent).join("/");
     link.textContent = item.repository;
     cell(row, "").appendChild(link);
-    cell(row, formatCount(netChange(data.history, item.repository, day, 1)));
-    cell(row, formatCount(netChange(data.history, item.repository, day, 7)));
-    cell(row, formatCount(netChange(data.history, item.repository, day, 30)));
+    cell(row, formatCount(netChange(historyByDate, item.repository, day, 1)));
+    cell(row, formatCount(netChange(historyByDate, item.repository, day, 7)));
+    cell(row, formatCount(netChange(historyByDate, item.repository, day, 30)));
     totals.appendChild(row);
     const project = document.createElement("section");
     project.className = "project";
     const title = document.createElement("h2");
     title.textContent = item.repository;
     project.appendChild(title);
-    const chartWrap = document.createElement("div");
-    chartWrap.className = "chart-wrap";
-    chartWrap.hidden = true;
-    const canvas = document.createElement("canvas");
-    canvas.setAttribute("aria-label", item.repository + " per-file cumulative release downloads");
-    chartWrap.appendChild(canvas);
-    project.appendChild(chartWrap);
     projects.appendChild(project);
-    const chart = new Chart(canvas, {
-      type: "line",
-      data: {
-        labels: data.history.map(row => row.date),
-        datasets: [],
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: { y: { beginAtZero: true, title: { display: true, text: "Downloads" } } },
-      },
-    });
-    const files = document.createElement("details");
-    files.open = true;
-    const fileSummary = document.createElement("summary");
-    fileSummary.textContent = "Files: check to add individual curves";
-    files.appendChild(fileSummary);
-    const fileList = document.createElement("div");
-    fileList.className = "files";
-    files.appendChild(fileList);
-    project.appendChild(files);
-    let fileIndex = 0;
-    renderBatches(files, function* () {
-      for (const release of [...item.releases].reverse()) {
-        for (const asset of release.assets) yield {release, asset};
-      }
-    }, ({release, asset}) => {
-      const label = document.createElement("label");
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      label.appendChild(checkbox);
-      const name = document.createElement("span");
-      const caption = asset.name + " (" + release.tag + ")";
-      name.textContent = " " + caption + ": " + formatCount(asset.download_count);
-      label.appendChild(name);
-      fileList.appendChild(label);
-      const color = "hsl(" + (fileIndex++ * 137.5 % 360) + ", 75%, 65%)";
-      checkbox.addEventListener("change", () => {
-        if (checkbox.checked) {
-          chart.data.datasets.push({
-            assetId: asset.id,
-            label: caption,
-            data: assetHistory(data, item.repository, asset),
-            borderColor: color,
-            backgroundColor: color,
-            spanGaps: false,
-          });
-        } else {
-          chart.data.datasets = chart.data.datasets.filter(series => series.assetId !== asset.id);
-        }
-        chartWrap.hidden = chart.data.datasets.length === 0;
-        if (!chartWrap.hidden) chart.resize();
-        chart.update();
-      });
-    });
-    if (!item.releases.some(release => release.assets.length)) {
-      fileList.textContent = "No uploaded files.";
-    }
-    const container = document.createElement("details");
-    const releaseSummary = document.createElement("summary");
-    releaseSummary.textContent = "Releases and download counts";
-    container.appendChild(releaseSummary);
-    project.appendChild(container);
-    if (!item.releases.length) {
-      const empty = document.createElement("p");
-      empty.textContent = "No published releases.";
-      container.appendChild(empty);
-    }
-    renderBatches(container, function* () {
-      yield* [...item.releases].reverse();
-    }, release => {
+    if (item.file) {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = release.tag + (release.prerelease ? " (prerelease)" : "");
+      summary.textContent = "Files and releases (load on demand)";
       details.appendChild(summary);
-      const link = document.createElement("a");
-      link.href = releaseLink(item.repository, release.tag);
-      link.textContent = "View release on GitHub";
-      details.appendChild(link);
-      if (!release.assets.length) {
-        const empty = document.createElement("p");
-        empty.textContent = "No uploaded files.";
-        details.appendChild(empty);
-      } else {
-        const wrap = document.createElement("div");
-        wrap.className = "table-wrap";
-        const table = document.createElement("table");
-        const head = document.createElement("thead");
-        const header = document.createElement("tr");
-        for (const title of ["File", "Downloads"]) {
-          const th = document.createElement("th");
-          th.textContent = title;
-          header.appendChild(th);
+      const status = document.createElement("p");
+      details.appendChild(status);
+      project.appendChild(details);
+      let loading = false;
+      let loaded = false;
+      details.addEventListener("toggle", async () => {
+        if (!details.open || loading || loaded) return;
+        loading = true;
+        status.className = "hint";
+        status.textContent = "Loading file history...";
+        try {
+          const projectData = await fetchReleaseData(
+            "../cache_data/github-release-downloads/" + item.file, true);
+          const snapshot = projectData.repositories?.[0];
+          if (snapshot?.repository !== item.repository ||
+              !Array.isArray(snapshot.releases) || !Array.isArray(projectData.history)) {
+            throw new Error("Invalid project history.");
+          }
+          renderProjectFiles(projectData, snapshot, details);
+          status.textContent = "";
+          loaded = true;
+        } catch (error) {
+          status.className = "error";
+          status.textContent = "Unable to display file history: " + error.message +
+            ". Close and reopen to retry.";
+        } finally {
+          loading = false;
         }
-        head.appendChild(header);
-        table.appendChild(head);
-        const body = document.createElement("tbody");
-        renderBatches(details, function* () {
-          yield* release.assets;
-        }, asset => {
-          const row = document.createElement("tr");
-          cell(row, asset.name);
-          cell(row, formatCount(asset.download_count));
-          body.appendChild(row);
-        });
-        table.appendChild(body);
-        wrap.appendChild(table);
-        details.appendChild(wrap);
-      }
-      container.appendChild(details);
-    });
+      });
+    } else {
+      renderProjectFiles(data, item, project);
+    }
     const periodWrap = document.createElement("div");
     periodWrap.className = "chart-wrap";
     const periodCanvas = document.createElement("canvas");
@@ -275,20 +315,31 @@ function renderReleaseDownloads(data) {
   document.getElementById("message").textContent = "";
 }
 
+async function fetchReleaseData(url, compressed = false) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error("HTTP " + response.status + " for " + url);
+  return compressed
+    ? new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json()
+    : response.json();
+}
+
 async function loadReleaseDownloads() {
   try {
-    let response = await fetch("../cache_data/github-release-downloads.json.gz");
-    const compressed = response.status !== 404;
-    if (!compressed) {
-      response = await fetch("../cache_data/github-release-downloads.json");
+    const response = await fetch("../cache_data/github-release-downloads/index.json");
+    let data;
+    if (response.status === 404) {
+      const legacy = await fetch("../cache_data/github-release-downloads.json.gz");
+      if (legacy.status === 404) {
+        data = await fetchReleaseData("../cache_data/github-release-downloads.json");
+      } else {
+        if (!legacy.ok) throw new Error("HTTP " + legacy.status);
+        data = await new Response(
+          legacy.body.pipeThrough(new DecompressionStream("gzip"))).json();
+      }
+    } else {
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      data = await response.json();
     }
-    if (!response.ok) {
-      throw new Error("HTTP " + response.status +
-        ". The daily DATA GitHub release downloads workflow must publish its first collection.");
-    }
-    const data = compressed
-      ? await new Response(response.body.pipeThrough(new DecompressionStream("gzip"))).json()
-      : await response.json();
     await loadChartJs();
     renderReleaseDownloads(data);
   } catch (error) {
