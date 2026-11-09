@@ -36,8 +36,17 @@ included. GitHub-generated source archives have no asset download counter and
 are excluded, as are clones and PyPI installations.
 
 The daily `DATA GitHub release downloads` workflow publishes
-`github-release-downloads.json` to `xadupre/cache_data`, using the existing
-`CACHE_DATA_SSH_KEY`. The site displays current counts per file and
+the `github-release-downloads/` directory to `xadupre/cache_data`, using the existing
+`CACHE_DATA_SSH_KEY`. Its small `index.json` contains daily repository totals;
+each project has its own compact, deterministic gzip file, for example
+`github-release-downloads/ggml-org/llama.cpp.json.gz`, containing its releases
+and complete per-file history. The dashboard initially loads only the index;
+expand a project's "Files and releases" section to download its file and
+decompress it in the browser. Successful collections migrate either legacy
+monolithic JSON or gzip caches without dropping observations, removing them
+only after all project files and the index have been written. The dashboard
+falls back to the legacy cache only while the index is absent (HTTP 404).
+The site displays current counts per file and
 1-day/7-day/30-day net counter changes when the exact baseline date exists,
 without aggregate repository or release totals. Expand each project's file list
 and check filenames to show individual cumulative curves; release tags distinguish

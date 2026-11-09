@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import gzip
 import json
 import os
 import re
@@ -108,7 +109,7 @@ def record_downloads(
     repositories: list[str] | None = None,
     now: dt.datetime | None = None,
 ) -> dict:
-    """Publish a complete snapshot and upsert one daily UTC total per repository."""
+    """Publish a small summary and one compressed history file per repository."""
     selected = sorted(
         set(discover_repositories(token) if repositories is None else repositories)
     )
@@ -119,34 +120,125 @@ def record_downloads(
         print(f"Collecting release downloads for {repository}", flush=True)
         current.append(collect_repository(repository, token))
 
-    path = Path(cache_dir) / "github-release-downloads.json"
-    history = {}
+    legacy_path = Path(cache_dir) / "github-release-downloads.json"
+    compressed_path = legacy_path.with_suffix(".json.gz")
+    directory = Path(cache_dir) / "github-release-downloads"
+    path = directory / "index.json"
+    legacy = None
     if path.exists():
         previous = json.loads(path.read_text(encoding="utf-8"))
-        history = {entry["date"]: entry for entry in previous["history"]}
+    elif compressed_path.exists():
+        with gzip.open(compressed_path, "rt", encoding="utf-8") as stream:
+            previous = legacy = json.load(stream)
+    elif legacy_path.exists():
+        previous = legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
+    else:
+        previous = {"history": []}
+    history = {
+        entry["date"]: {"date": entry["date"], "totals": entry["totals"]}
+        for entry in previous["history"]
+    }
     timestamp = (now or dt.datetime.now(dt.UTC)).astimezone(dt.UTC)
     day = timestamp.strftime("%Y-%m-%d")
     history[day] = {
         "date": day,
         "totals": {item["repository"]: item["total"] for item in current},
-        "assets": {
-            item["repository"]: {
-                str(asset["id"]): asset["download_count"]
-                for release in item["releases"]
-                for asset in release["assets"]
+    }
+    updated_at = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    projects = {item["repository"]: item for item in current}
+    if legacy is not None:
+        for item in legacy.get("repositories", []):
+            projects.setdefault(item["repository"], item)
+        for entry in legacy["history"]:
+            for repository in (
+                entry.get("totals", {}).keys() | entry.get("assets", {}).keys()
+            ):
+                projects.setdefault(
+                    repository, {"repository": repository, "total": 0, "releases": []}
+                )
+    pending = []
+    for repository, item in sorted(projects.items()):
+        # GitHub owner/repository names cannot contain path separators or dot segments.
+        if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository) or (
+            repository.split("/")[1] in (".", "..")
+        ):
+            raise ValueError(f"Invalid repository name: {repository!r}")
+        project_path = directory / f"{repository}.json.gz"
+        if legacy is not None:
+            entries = []
+            for entry in legacy["history"]:
+                row = {"date": entry["date"], "totals": {}}
+                if repository in entry.get("totals", {}):
+                    row["totals"][repository] = entry["totals"][repository]
+                if repository in entry.get("assets", {}):
+                    row["assets"] = {repository: entry["assets"][repository]}
+                if row["totals"] or "assets" in row:
+                    entries.append(row)
+        elif project_path.exists():
+            with gzip.open(project_path, "rt", encoding="utf-8") as stream:
+                entries = json.load(stream)["history"]
+        else:
+            if any(
+                row["repository"] == repository
+                for row in previous.get("repositories", [])
+            ):
+                raise FileNotFoundError(
+                    f"Missing release download history: {project_path}"
+                )
+            entries = []
+        project_history = {entry["date"]: entry for entry in entries}
+        if repository in selected:
+            project_history[day] = {
+                "date": day,
+                "totals": {repository: item["total"]},
+                "assets": {
+                    repository: {
+                        str(asset["id"]): asset["download_count"]
+                        for release in item["releases"]
+                        for asset in release["assets"]
+                    }
+                },
+            }
+        project = {
+            "updated_at": (
+                legacy.get("updated_at", updated_at)
+                if legacy is not None and repository not in selected
+                else updated_at
+            ),
+            "repositories": [item],
+            "history": [project_history[date] for date in sorted(project_history)],
+        }
+        project_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = project_path.with_suffix(".gz.tmp")
+        temporary.write_bytes(
+            gzip.compress(
+                (json.dumps(project, separators=(",", ":")) + "\n").encode("utf-8"),
+                mtime=0,
+            )
+        )
+        pending.append((temporary, project_path))
+    result = {
+        "updated_at": updated_at,
+        "repositories": [
+            {
+                "repository": item["repository"],
+                "total": item["total"],
+                "file": f"{item['repository']}.json.gz",
             }
             for item in current
-        },
-    }
-    result = {
-        "updated_at": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "repositories": current,
+        ],
         "history": [history[date] for date in sorted(history)],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(result, separators=(",", ":")) + "\n", encoding="utf-8"
+    )
+    for source, destination in pending:
+        source.replace(destination)
     temporary.replace(path)
+    legacy_path.unlink(missing_ok=True)
+    compressed_path.unlink(missing_ok=True)
     print(f"Recorded {len(current)} repositories in {path}", flush=True)
     return result
 

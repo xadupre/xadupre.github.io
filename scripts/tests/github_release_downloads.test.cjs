@@ -3,6 +3,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 const {test} = require("node:test");
+const {gzipSync} = require("node:zlib");
 
 const source = fs.readFileSync(
   path.join(__dirname, "../../assets/github-release-downloads.js"), "utf8");
@@ -304,5 +305,194 @@ test("missing data and network failures stay visible", async () => {
     await context.loadReleaseDownloads();
     assert.equal(message.className, "error");
     assert.match(message.textContent, /Unable to display release downloads/);
+  }
+});
+
+test("loader initially requests only the small summary index", async () => {
+  const data = {
+    updated_at: "2026-10-21T06:00:00Z",
+    repositories: [{repository: "onnx/onnx", file: "onnx/onnx.json.gz", total: 0}],
+    history: [{date: "2026-10-21", totals: {"onnx/onnx": 0}}],
+  };
+  const requested = [];
+  let rendered;
+  const loader = vm.createContext({
+    fetch: async url => {
+      requested.push(url);
+      return Response.json(data);
+    },
+    loadChartJs: async () => {},
+  });
+  vm.runInContext(source, loader);
+  loader.renderReleaseDownloads = value => { rendered = value; };
+  await loader.loadReleaseDownloads();
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), data);
+  assert.deepEqual(requested, ["../cache_data/github-release-downloads/index.json"]);
+});
+
+test("loader decompresses the legacy gzip cache when the index is absent", async () => {
+  const data = {updated_at: "2026-10-21T06:00:00Z", repositories: [], history: []};
+  const requested = [];
+  let rendered;
+  const loader = vm.createContext({
+    Response, DecompressionStream,
+    fetch: async url => {
+      requested.push(url);
+      if (url.endsWith("/index.json")) return new Response(null, {status: 404});
+      return new Response(gzipSync(JSON.stringify(data)));
+    },
+    loadChartJs: async () => {},
+  });
+  vm.runInContext(source, loader);
+  loader.renderReleaseDownloads = value => { rendered = value; };
+  await loader.loadReleaseDownloads();
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), data);
+  assert.deepEqual(requested, [
+    "../cache_data/github-release-downloads/index.json",
+    "../cache_data/github-release-downloads.json.gz",
+  ]);
+});
+
+test("loader falls back to legacy JSON only when the gzip cache is absent", async () => {
+  const data = {history: [{date: "2026-10-20"}]};
+  const requested = [];
+  let rendered;
+  const loader = vm.createContext({
+    fetch: async url => {
+      requested.push(url);
+      return url.endsWith(".gz") || url.endsWith("/index.json")
+        ? new Response(null, {status: 404})
+        : Response.json(data);
+    },
+    loadChartJs: async () => {},
+  });
+  vm.runInContext(source, loader);
+  loader.renderReleaseDownloads = value => { rendered = value; };
+  await loader.loadReleaseDownloads();
+  assert.deepEqual(JSON.parse(JSON.stringify(rendered)), data);
+  assert.deepEqual(requested, [
+    "../cache_data/github-release-downloads/index.json",
+    "../cache_data/github-release-downloads.json.gz",
+    "../cache_data/github-release-downloads.json",
+  ]);
+});
+
+test("corrupt gzip and server errors are reported without using stale JSON", async () => {
+  for (const response of [
+    new Response("invalid gzip"),
+    new Response(null, {status: 503}),
+  ]) {
+    const message = {};
+    const requested = [];
+    const loader = vm.createContext({Response, DecompressionStream});
+    vm.runInContext(source, loader);
+    loader.document = {getElementById() { return message; }};
+    loader.fetch = async url => {
+      requested.push(url);
+      if (url.endsWith("/index.json")) return new Response(null, {status: 404});
+      return response;
+    };
+    await loader.loadReleaseDownloads();
+    assert.equal(message.className, "error");
+    assert.match(message.textContent, /Unable to display release downloads/);
+    assert.equal(requested.length, 2);
+  }
+});
+
+test("project histories load independently on expansion with visible retryable errors", async () => {
+  class Element {
+    constructor() { this.children = []; this.listeners = {}; }
+    appendChild(child) { this.children.push(child); return child; }
+    addEventListener(name, fn) { this.listeners[name] = fn; }
+    setAttribute() {}
+  }
+  const elements = new Map();
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, new Element());
+      return elements.get(id);
+    },
+    createElement() { return new Element(); },
+  };
+  const requested = [];
+  const charts = [];
+  let fail = true;
+  let finish;
+  const loader = vm.createContext({
+    Response, DecompressionStream,
+    fetch: async url => {
+      requested.push(url);
+      if (fail) return new Response(null, {status: 503});
+      await new Promise(resolve => { finish = resolve; });
+      return new Response(gzipSync(JSON.stringify({
+        updated_at: "2026-10-21T06:00:00Z",
+        repositories: [{repository: "onnx/onnx", total: 7, releases: [{
+          tag: "v1", assets: [{id: 1, name: "test.whl", download_count: 7}],
+        }]}],
+        history: [
+          {date: "2026-10-20", totals: {"onnx/onnx": 0}, assets: {"onnx/onnx": {"1": 0}}},
+          {date: "2026-10-21", totals: {"onnx/onnx": 7}, assets: {"onnx/onnx": {"1": 7}}},
+        ],
+      })));
+    },
+    Chart: class {
+      constructor(canvas, config) { this.data = config.data; charts.push(this); }
+      resize() {}
+      update() {}
+    },
+  });
+  vm.runInContext(source, loader);
+  loader.document = document;
+  loader.renderReleaseDownloads({
+    updated_at: "2026-10-21T06:00:00Z",
+    repositories: [
+      {repository: "onnx/onnx", total: 0, file: "onnx/onnx.json.gz"},
+      {repository: "ggml-org/llama.cpp", total: 0, file: "ggml-org/llama.cpp.json.gz"},
+    ],
+    history: [{date: "2026-10-21", totals: {"onnx/onnx": 0, "ggml-org/llama.cpp": 0}}],
+  });
+  assert.equal(requested.length, 0);
+  const details = elements.get("projects").children[0].children[1];
+  await details.listeners.toggle();
+  assert.equal(requested.length, 0);
+  details.open = true;
+  await details.listeners.toggle();
+  assert.equal(details.children[1].className, "error");
+  assert.match(details.children[1].textContent, /503.*Close and reopen to retry/);
+  fail = false;
+  const pending = details.listeners.toggle();
+  await details.listeners.toggle();
+  assert.equal(requested.length, 2);
+  finish();
+  await pending;
+  assert.equal(details.children[1].textContent, "");
+  const checkbox = details.children[3].children[1].children[0].children[0];
+  checkbox.checked = true;
+  checkbox.listeners.change();
+  assert.deepEqual(Array.from(charts[0].data.datasets[0].data), [0, 7]);
+  const children = details.children.length;
+  details.open = false;
+  await details.listeners.toggle();
+  details.open = true;
+  await details.listeners.toggle();
+  assert.equal(details.children.length, children);
+  assert.deepEqual(requested, [
+    "../cache_data/github-release-downloads/onnx/onnx.json.gz",
+    "../cache_data/github-release-downloads/onnx/onnx.json.gz",
+  ]);
+});
+
+test("an invalid or unavailable index does not fall back to a monolithic cache", async () => {
+  for (const response of [new Response("bad json"), new Response(null, {status: 503})]) {
+    const requested = [];
+    const message = {};
+    const loader = vm.createContext({
+      fetch: async url => { requested.push(url); return response; },
+    });
+    vm.runInContext(source, loader);
+    loader.document = {getElementById() { return message; }};
+    await loader.loadReleaseDownloads();
+    assert.equal(message.className, "error");
+    assert.deepEqual(requested, ["../cache_data/github-release-downloads/index.json"]);
   }
 });
