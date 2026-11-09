@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Nov 07, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 09, 2026"/>
   
     
     <script src="../../_static/searchtools.js"></script>
@@ -544,6 +544,43 @@ domain.</p>
 </dd></dl>
 
 </section>
+<section id="microsoft-attention">
+<h2>Microsoft Attention<a class="headerlink" href="#microsoft-attention" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">com.microsoft::Attention</span></code> v1 implements fused self-attention for FLOAT
+input <code class="docutils literal notranslate"><span class="pre">(B,S,I)</span></code> and weights <code class="docutils literal notranslate"><span class="pre">(I,Q+K+V)</span></code>, with optional projection
+bias <code class="docutils literal notranslate"><span class="pre">(Q+K+V)</span></code>. <code class="docutils literal notranslate"><span class="pre">num_heads=N</span></code> is required. Without
+<code class="docutils literal notranslate"><span class="pre">qkv_hidden_sizes=[Q,K,V]</span></code>, the projection width is split equally into
+three parts. Q and K must have equal positive widths, and all three widths
+must be divisible by N. The output is <code class="docutils literal notranslate"><span class="pre">(B,S,V)</span></code>.</p>
+<p>Optional int32 masks are exclusive ends <code class="docutils literal notranslate"><span class="pre">(B)</span></code>, ends followed by inclusive
+starts <code class="docutils literal notranslate"><span class="pre">(2B)</span></code>, binary <code class="docutils literal notranslate"><span class="pre">(B,T)</span></code> / <code class="docutils literal notranslate"><span class="pre">(B,S,T)</span></code>, or <code class="docutils literal notranslate"><span class="pre">(B,1,M,M)</span></code>
+with M &gt;= T (rows P through P+S are selected), where T=P+S.
+The 4D mask requires <code class="docutils literal notranslate"><span class="pre">unidirectional=0</span></code>. Length/start indices must satisfy
+<code class="docutils literal notranslate"><span class="pre">0</span> <span class="pre">&lt;=</span> <span class="pre">start</span> <span class="pre">&lt;=</span> <span class="pre">end</span> <span class="pre">&lt;=</span> <span class="pre">T</span></code>; raw mask values greater than zero are unmasked.
+Optional additive attention bias broadcasts from <code class="docutils literal notranslate"><span class="pre">(1</span> <span class="pre">or</span> <span class="pre">B,1</span> <span class="pre">or</span> <span class="pre">N,S,T)</span></code>.
+<code class="docutils literal notranslate"><span class="pre">scale</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">1/sqrt(Q/N)</span></code>; <code class="docutils literal notranslate"><span class="pre">mask_filter_value</span></code> defaults to
+<code class="docutils literal notranslate"><span class="pre">-10000</span></code>; <code class="docutils literal notranslate"><span class="pre">unidirectional=1</span></code> overwrites future mask positions with the
+lowest finite FLOAT value at offset P, matching the upstream CPU behavior.
+Scale and mask penalties must be finite. Finite mask penalties preserve
+ordinary softmax behavior even when all keys are masked.</p>
+<p>Packed past and present have shapes <code class="docutils literal notranslate"><span class="pre">(2,B,N,P,H)</span></code> and
+<code class="docutils literal notranslate"><span class="pre">(2,B,N,P+S,H)</span></code>. Past requires a present output; present without past is
+supported, including Whisper encoder-state extraction. Cache requires equal
+Q/K/V widths. Empty batch/query inputs are supported, preserving existing
+past when S=0. FLOAT16/BFLOAT16, active rotary modes, shared cache buffers,
+<code class="docutils literal notranslate"><span class="pre">past_sequence_length</span></code> and packed <code class="docutils literal notranslate"><span class="pre">3B+2</span></code> masks are explicitly unsupported.
+Zero-valued <code class="docutils literal notranslate"><span class="pre">do_rotary</span></code> and <code class="docutils literal notranslate"><span class="pre">rotary_embedding_dim</span></code> attributes are accepted.</p>
+<p>The projection uses the existing runtime-dispatched GEMM; attention reuses
+the tiled <code class="docutils literal notranslate"><span class="pre">ai.onnx::Attention</span></code> compute engine without changing Microsoft’s
+projection, mask or cache contract. Scratch is allocated through the
+runtime allocator, and memory profiling excludes outputs. Existing GEMM
+and attention blocking defaults, SIMD dispatch and executor parallelism apply;
+no new tuning parameters or ABI are introduced.
+No gradient or fusion is advertised.</p>
+<p>The contract follows <a class="reference external" href="https://github.com/microsoft/onnxruntime/blob/main/onnxruntime/core/graph/contrib_ops/bert_defs.cc">ONNX Runtime’s Attention v1 schema</a>.
+Focused C++ and backend TEST/BENCHMARK cases cover projection, masks,
+causal cache, unequal value width and Whisper-sized <code class="docutils literal notranslate"><span class="pre">(32,96)</span></code> weights.</p>
+</section>
 <section id="microsoft-multiheadattention">
 <h2>Microsoft MultiHeadAttention<a class="headerlink" href="#microsoft-multiheadattention" title="Link to this heading">#</a></h2>
 <p><code class="docutils literal notranslate"><span class="pre">com.microsoft::MultiHeadAttention</span></code> v1 accepts FLOAT, FLOAT16 and BFLOAT16
@@ -667,7 +704,11 @@ top-k softmax normalization, and activation parameters follow <code class="docut
 optional FC1 bias, FC2 weights, FC2 scales, optional FC2 bias, optional FC3
 weights, optional FC3 scales, optional FC3 bias, and three optional zero-point
 slots. FC3 weights and scales must appear together. Nonempty zero points,
-sparse mixer routing, and CUDA-prepacked weights are rejected.</p>
+sparse mixer routing, and CUDA-prepacked weights are rejected by CPU execution.
+Shape inference accepts <code class="docutils literal notranslate"><span class="pre">use_sparse_mixer=1</span></code> with <code class="docutils literal notranslate"><span class="pre">k=2</span></code> for CUDA graph
+construction, including legacy FLOAT16/UINT8 split-expert exports with
+<code class="docutils literal notranslate"><span class="pre">block_size=32</span></code> and <code class="docutils literal notranslate"><span class="pre">weights_prepacked=0</span></code>. Global CPU kernel registration
+does not restrict this shape-inference support.</p>
 <p><code class="docutils literal notranslate"><span class="pre">expert_weight_bits</span></code> supports <strong>4 and 8</strong>. INT4 stores adjacent last-axis
 values in low-then-high nibbles with implicit zero point 8; INT8 stores signed
 two’s-complement values in <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> tensors for block quantization.
@@ -1223,6 +1264,7 @@ returns it.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#normalization_cast_pattern"><code class="docutils literal notranslate"><span class="pre">normalization_cast_pattern()</span></code></a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-attention">Microsoft Attention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-multiheadattention">Microsoft MultiHeadAttention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-groupqueryattention">Microsoft GroupQueryAttention</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#microsoft-moe">Microsoft MoE</a></li>
@@ -1277,7 +1319,7 @@ returns it.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Nov 07, 2026.
+  Last updated on Nov 09, 2026.
 </p></div>
       
     </div>

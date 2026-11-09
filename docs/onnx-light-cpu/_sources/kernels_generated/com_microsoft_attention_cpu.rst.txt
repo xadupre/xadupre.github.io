@@ -1,0 +1,64 @@
+Attention (CPU)
+===============
+
+* Domain: ``com.microsoft``
+* Device: ``CPU``
+* Kernel: ``onnx_light_cpu::MicrosoftAttention``
+* Supported types: ``FLOAT``
+* Opset bounds: since opset 1, until opset 1
+
+Operator support
+----------------
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Capability
+     - Implementation
+   * - Shape inference
+     - :cpp:func:`onnx_light_cpu::ComputeShapeMicrosoftAttention`
+   * - Peak memory
+     - :cpp:func:`onnx_light_cpu::ComputePeakMemoryMicrosoftAttention`
+   * - Fusion patterns
+     - None
+   * - Gradient
+     - Not provided
+
+LightOpSchema
+~~~~~~~~~~~~~
+
+**Version:** 1
+
+ONNX Runtime fused self-attention (bert_defs.cc Attention v1). This CPU subset supports FLOAT only: QKV = input @ weights + optional bias, softmax(scale*QK^T + masks + attention_bias) @ V. Q and K widths match; unequal V width is supported without cache. Shared buffers, active rotary modes, and packed 3*B+2 masks are unsupported; zero-valued rotary attributes are accepted.
+
+**Inputs**
+
+- **input** (``T``): (B,S,I), I>0; empty B/S are supported.
+- **weights** (``T``): (I,Q+K+V), positive Q/K/V widths divisible by num_heads.
+- **bias** (``T``): Optional (Q+K+V) projection bias.
+- **mask_index** (``M``): Optional int32 exclusive ends (B), ends then starts (2B), binary (B,T)/(B,S,T), or (B,1,M,M), M>=T, selecting rows P:P+S, unidirectional=0. T=P+S. Lengths satisfy 0<=start<=end<=T; positive raw values are unmasked.
+- **past** (``T``): Optional (2,B,N,P,H); requires present and equal Q/K/V widths.
+- **attention_bias** (``T``): Optional additive (1 or B,1 or N,S,T).
+- **past_sequence_length** (``M``): Unsupported shared-buffer input; must be omitted.
+
+**Outputs**
+
+- **output** (``T``): (B,S,V).
+- **present** (``T``): Optional (2,B,N,P+S,H), equal Q/K/V widths; past may be omitted.
+
+**Attributes**
+
+- **do_rotary** (``INT``): Only 0 is supported. (optional, default: ``0``)
+- **mask_filter_value** (``FLOAT``): Finite additive mask penalty. (optional, default: ``-10000``)
+- **num_heads** (``INT``): Positive head count. (required)
+- **past_present_share_buffer** (``INT``): Only 0 is supported. (optional, default: ``0``)
+- **qkv_hidden_sizes** (``INTS``): Optional [Q,K,V], Q=K, sum equals weights width. (optional)
+- **rotary_embedding_dim** (``INT``): Only 0 is supported. (optional, default: ``0``)
+- **scale** (``FLOAT``): Finite scale; default 1/sqrt(H). (optional)
+- **unidirectional** (``INT``): 0 or 1; causal mask uses lowest FLOAT and P+query offset. (optional, default: ``0``)
+
+**Type constraints**
+
+- **T**: Matching FLOAT tensors. Allowed types: tensor(float).
+- **M**: Mask indices. Allowed types: tensor(int32).

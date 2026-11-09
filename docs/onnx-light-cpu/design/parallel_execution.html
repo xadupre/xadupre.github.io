@@ -67,7 +67,7 @@
   <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="" />
-    <meta name="docbuild:last-update" content="Nov 07, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 09, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -514,6 +514,37 @@ built, installed, and consumed with CMake without ONNX or Python.</p>
 <p>The public <a class="reference internal" href="registering_kernels.html"><span class="doc">Registering kernels</span></a> guide covers the equivalent
 <code class="docutils literal notranslate"><span class="pre">onnx-light</span></code> <code class="docutils literal notranslate"><span class="pre">CpuExecutorScope</span></code> requirement for direct <code class="docutils literal notranslate"><span class="pre">KernelBase</span></code> use.</p>
 </section>
+<section id="borrowing-scratch-storage">
+<h2>Borrowing scratch storage<a class="headerlink" href="#borrowing-scratch-storage" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionAllocatorView</span></code> and <code class="docutils literal notranslate"><span class="pre">ExecutionAllocatorScope</span></code> provide a separate
+borrowed allocation binding for temporary compute storage. <code class="docutils literal notranslate"><span class="pre">ExecutionBuffer</span></code>
+allocates aligned, uninitialized bytes through that binding, or through aligned
+heap allocation for standalone callers. A null allocator scope explicitly selects
+the heap fallback. Allocator scopes restore the previous binding on return or
+exception, independently of executor scopes.</p>
+<p><code class="docutils literal notranslate"><span class="pre">RuntimeExecutionScope</span></code> accepts an optional <code class="docutils literal notranslate"><span class="pre">RuntimeContext</span></code> pointer.
+Gemm and MatMul pass their context so generic packing buffers borrow its execution
+allocator without replacing an explicit compute allocator. The bridge retains
+the runtime allocation handle and aligns its payload within checked extra
+capacity; releasing the buffer returns that handle to the same allocator.</p>
+<p>Allocators need not be thread-safe: allocate scratch before dispatch and release
+it after synchronous completion. Workers borrow disjoint, cache-line-aligned
+slices selected by actual range boundaries, not worker identities or the
+requested participant count. Allocator bindings are not transferred to workers.
+The generic five-loop GEMM follows this contract for A and B packing, including
+preplanned serial inner packing buffers for split-K partitions. No private pool
+or thread-local scratch cache is retained across calls.</p>
+<p>MatMul, strided-batched GEMM, and grouped GEMM retain outer batch parallelism
+whether or not their inner products need scratch. Before dispatch, the caller
+reserves one aligned slice per actual callback range, sized for the largest
+serial product in that range. Each callback passes an explicit <code class="docutils literal notranslate"><span class="pre">GemmScratch</span></code>
+context through its inner GEMMs and reuses the same slice between products.
+Neither the allocator nor a scratch binding is transferred to workers.
+Reservations scale with concurrent ranges, not the number of matrices, and
+allocation failures occur before batch dispatch or output writes. Standalone
+heap-backed calls use the same preallocation path. If batch parallelism is not
+selected by the existing scheduling policy, inner GEMM parallelism is retained.</p>
+</section>
 <section id="nested-work-stays-serial">
 <h2>Nested work stays serial<a class="headerlink" href="#nested-work-stays-serial" title="Link to this heading">#</a></h2>
 <p>Every submitted range callback enters an execution-region scope. If code
@@ -577,6 +608,7 @@ all take the same serial range path.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#execution-flow">Execution flow</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#obtaining-the-executor">Obtaining the executor</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#borrowing-scratch-storage">Borrowing scratch storage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#nested-work-stays-serial">Nested work stays serial</a></li>
 </ul>
   </nav></div>
@@ -612,7 +644,7 @@ all take the same serial range path.</p>
     <div class="footer-items__start">
       
         <div class="footer-item"><p class="last-updated">
-  Last updated on Nov 07, 2026.
+  Last updated on Nov 09, 2026.
 </p></div>
       
     </div>
