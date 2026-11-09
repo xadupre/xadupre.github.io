@@ -416,6 +416,7 @@
 <li class="toctree-l3"><a class="reference internal" href="../python/use_custom_kernel.html">How to use a custom kernel</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../python/persistent_feedback.html">Persistent input/output feedback</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../python/quantized_values.html">Quantizes tensors into encoded values</a></li>
+<li class="toctree-l3"><a class="reference internal" href="../python/gguf_blocks.html">Exact GGUF-family block payloads</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../python/tune_kernel_thresholds.html">Tune kernel thresholds</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../python/use_custom_shape_inference.html">How to use a custom optim shape inference function</a></li>
 <li class="toctree-l3"><a class="reference internal" href="../python/register_builtin_operators.html">How to register a built-in kernel, test case, shape inference, light op or peak memory function</a></li>
@@ -496,7 +497,7 @@
 <li class="toctree-l2"><a class="reference internal" href="../../auto_examples_runtime/plot_run_cast_to_int2.html">Run an ONNX model casting a float tensor into an int2 tensor</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../auto_examples_runtime/plot_run_with_tensor_sequence_dict.html">Run the reference evaluator with tensor, sequence and dictionary inputs/outputs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="../../auto_examples_runtime/plot_tensor_statistics.html">Statistics of float, integer, and quantized tensors</a></li>
-<li class="toctree-l2"><a class="reference internal" href="../../auto_examples_runtime/plot_quantization_profiles.html">Uses every portable quantization profile from Python</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../../auto_examples_runtime/plot_quantization_profiles.html">Uses every quantization format from Python</a></li>
 </ul>
 </details></li>
 <li class="toctree-l1 has-children"><a class="reference internal" href="../../auto_examples_tuning/index.html">Tuning Examples</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
@@ -830,8 +831,8 @@ optional input names. Shape-only queries supply only its domain and operator typ
 The result contains a mandatory <code class="docutils literal notranslate"><span class="pre">SymDim</span> <span class="pre">worst_case</span></code> and an optional
 <code class="docutils literal notranslate"><span class="pre">SymDim</span> <span class="pre">average_case</span></code>. All values are bytes excluding inputs and outputs.</p>
 <ol class="arabic">
-<li><p><strong>Implement it</strong> next to the shape function, e.g.
-<code class="docutils literal notranslate"><span class="pre">shapes/nn/shape_attention.cc</span></code> (declared in <code class="docutils literal notranslate"><span class="pre">shapes/nn/shape_nn.h</span></code>):</p>
+<li><p><strong>Implement it</strong> next to the corresponding kernel, e.g.
+<code class="docutils literal notranslate"><span class="pre">kernels/nn/kernel_attention.cc</span></code> (declared in <code class="docutils literal notranslate"><span class="pre">kernels/nn/include_nn_kernels.h</span></code>):</p>
 <p>Preserve symbolic dimensions with the checked helpers in
 <code class="docutils literal notranslate"><span class="pre">onnx_core/expressions/expressions.h</span></code> and the conversions in
 <code class="docutils literal notranslate"><span class="pre">onnx_core/symbolic/symbolic_helper.h</span></code>. Use
@@ -844,23 +845,27 @@ accepted as a concrete upper bound without an average.</p>
 maximum is a valid symbolic upper-bound identifier which must be resolved
 for every invocation and device before checking a memory budget.
 Do not invent a finite bound or substitute
-zero. See <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ComputePeakMemoryAttention()</span></code> for symbolic score-buffer
+zero. See <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">ComputePeakMemoryAttention()</span></code> for symbolic workspace
 arithmetic and negative-dimension/overflow validation.</p>
 </li>
 <li><p><strong>Register it</strong> by adding an entry to the <code class="docutils literal notranslate"><span class="pre">BuiltinPeakMemoryFunctions</span></code>
-table in <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/shapes/dispatch_table.cc</span></code>:</p>
+table in <code class="docutils literal notranslate"><span class="pre">onnx_light/onnx_extensions/kernels/kernel_dispatch_table.cc</span></code>:</p>
 <div class="highlight-cpp notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="s">"ai.onnx:Attention"</span><span class="p">,</span>
 <span class="w"> </span><span class="p">[](</span><span class="n">Device</span><span class="w"> </span><span class="n">device</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">NodeProto</span><span class="w"> </span><span class="o">&amp;</span><span class="n">node</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">SymShape</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">inputs</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="n">nn</span><span class="o">::</span><span class="n">ComputePeakMemoryAttention</span><span class="p">(</span><span class="n">device</span><span class="p">,</span><span class="w"> </span><span class="n">node</span><span class="p">,</span><span class="w"> </span><span class="n">inputs</span><span class="p">);</span>
+<span class="w">   </span><span class="k">return</span><span class="w"> </span><span class="n">kernel</span><span class="o">::</span><span class="n">ComputePeakMemoryAttention</span><span class="p">(</span><span class="n">device</span><span class="p">,</span><span class="w"> </span><span class="n">node</span><span class="p">,</span><span class="w"> </span><span class="n">inputs</span><span class="p">);</span>
 <span class="w"> </span><span class="p">}},</span>
 </pre></div>
 </div>
 </li>
 </ol>
-<p>As with shape functions, <code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">RegisterPeakMemoryFunctions()</span></code> (same
-file) copies these builtins into the shared <code class="docutils literal notranslate"><span class="pre">core::shapes</span></code> peak-memory
-dispatch table via
-<a class="reference internal" href="../../api/cpp/onnx_core/shapes/dispatch_table.html#_CPPv4N10onnx_light4core6shapes27RegisterComputePeakMemoryFnERKNSt6stringERKNSt6stringE6Device23ComputePeakMemoryNodeFn" title="onnx_light::core::shapes::RegisterComputePeakMemoryFn"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::core::shapes::RegisterComputePeakMemoryFn()</span></code></a>.</p>
+<p><a class="reference internal" href="../../api/cpp/onnx_extensions/kernels/kernel_dispatch_table.html#_CPPv4N10onnx_light12onnx_kernels23RegisterKernelFunctionsEv" title="onnx_light::onnx_kernels::RegisterKernelFunctions"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::onnx_kernels::RegisterKernelFunctions()</span></code></a> pairs these
+estimators with their concrete kernel factories and registers both together.
+For standalone shape analysis,
+<a class="reference internal" href="../../api/cpp/onnx_extensions/kernels/kernel_dispatch_table.html#_CPPv4N10onnx_light12onnx_kernels27RegisterPeakMemoryFunctionsEv" title="onnx_light::onnx_kernels::RegisterPeakMemoryFunctions"><code class="xref cpp cpp-func docutils literal notranslate"><span class="pre">onnx_light::onnx_kernels::RegisterPeakMemoryFunctions()</span></code></a> selects the
+same estimates without registering factories. Neither path replaces explicit
+custom registrations. <code class="docutils literal notranslate"><span class="pre">onnx_shapes</span></code> registers only shape inference; builds
+without <code class="docutils literal notranslate"><span class="pre">lib_onnx_kernels</span></code> have no portable-kernel estimates and use the
+zero default for absent estimators.</p>
 <section id="decoder-peak-memory-coverage">
 <h3><a class="toc-backref" href="#id6" role="doc-backlink">Decoder peak-memory coverage</a><a class="headerlink" href="#decoder-peak-memory-coverage" title="Link to this heading">#</a></h3>
 <p>The CPU registrations include bounds for the portable native decoder kernels.
@@ -881,6 +886,35 @@ including synthesized axes and steps.</p></li>
 <span class="pre">normalized_rank)</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">*</span> <span class="pre">(elements(X)</span> <span class="pre">+</span> <span class="pre">elements(scale))</span></code>. This conservatively
 sums the index/coordinate buffers and half-precision promotions even though
 some have disjoint lifetimes.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Attention</span></code>: one reusable FLOAT32 score row per concurrently processed
+batch/query-head pair, bounded by <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">batch</span> <span class="pre">*</span> <span class="pre">q_num_heads</span> <span class="pre">*</span>
+<span class="pre">(kv_seq</span> <span class="pre">+</span> <span class="pre">past_seq)</span></code>. There is no score scratch for an empty batch or query.
+The bound also includes half-precision promotions, intermediate FLOAT32
+results, rank-3 layout conversions and temporary KV concatenations.
+<code class="docutils literal notranslate"><span class="pre">qk_matmul_output</span></code> is allocated only when requested. Declared final outputs
+are counted by shape analysis, not again as workspace; FLOAT32 staging for
+half-precision outputs is additional workspace.
+Rows whose finite-input score computation overflows are recomputed with
+FLOAT32 mantissas and separate integer exponents. Softcap and centering
+precede narrowing back to FLOAT32; the same score buffer is reused, without
+DOUBLE arithmetic or additional heap storage. This extends the exponent
+range, not the precision. Genuine non-finite inputs retain IEEE propagation,
+and requested pre-softmax scores can still exceed the output dtype’s range.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">LinearAttention</span></code>: delta rules reuse one FLOAT32 auxiliary vector per
+concurrent batch/KV-head pair, bounded by <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">*</span> <span class="pre">batch</span> <span class="pre">*</span> <span class="pre">value_hidden</span></code>.
+Linear and gated rules need no auxiliary buffer, and there is no separate
+decay buffer. The estimate uses head attributes and optional state shapes,
+includes half-precision promotions and staging, and counts the final state
+as workspace only when it is not a declared output.</p></li>
+</ul>
+<p>The Attention bounds cover every supported dtype and executor configuration.
+They conservatively sum some allocations with disjoint lifetimes, and do not
+claim an average. Missing head attributes in the LinearAttention shape-only
+convenience overload use conservative packed-hidden-dimension bounds.
+Named optional inputs contributing to the bound require nonempty shapes;
+missing shape slots or unknown ranks produce an unresolved estimate.</p>
+<p>The following operators use the zero default:</p>
+<ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">Mul</span></code>, <code class="docutils literal notranslate"><span class="pre">Sub</span></code>, <code class="docutils literal notranslate"><span class="pre">GreaterOrEqual</span></code>, <code class="docutils literal notranslate"><span class="pre">And</span></code>, <code class="docutils literal notranslate"><span class="pre">Swish</span></code>, <code class="docutils literal notranslate"><span class="pre">Where</span></code>, <code class="docutils literal notranslate"><span class="pre">CumSum</span></code>,
 <code class="docutils literal notranslate"><span class="pre">Shape</span></code>, <code class="docutils literal notranslate"><span class="pre">Unsqueeze</span></code>, <code class="docutils literal notranslate"><span class="pre">Transpose</span></code> and <code class="docutils literal notranslate"><span class="pre">Cast</span></code> use the zero default;
 no per-operator registration is needed. Binary broadcast strides use inline
