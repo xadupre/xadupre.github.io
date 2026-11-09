@@ -25,16 +25,52 @@ ROOT = Path(__file__).resolve().parents[2]
 class TestReleaseDownloads(unittest.TestCase):
     def read_project(self, cache_dir, repository):
         directory = Path(cache_dir) / "github-release-downloads" / repository
-        data = json.loads((directory / "latest.json").read_text())
-        data["history"] = [
-            json.loads((directory / f"{date}.json").read_text())
-            for date in data["dates"]
-        ]
-        return data
+        names = json.loads((directory / "assets.json").read_text())
+        state = {"releases": {}, "assets": {}}
+        history = []
+        for path in sorted(directory.glob("????-??-??.json")):
+            row = json.loads(path.read_text())
+            downloads.apply_daily_delta(state, row)
+            observation = {"date": row["date"], "totals": {}}
+            if "total" in row:
+                observation["totals"][repository] = row["total"]
+            if row["observed"]:
+                observation["assets"] = {
+                    repository: {
+                        key: value["download_count"]
+                        for key, value in state["assets"].items()
+                    }
+                }
+            history.append(observation)
+        releases = {
+            key: {**value, "id": int(key), "assets": []}
+            for key, value in state["releases"].items()
+        }
+        for asset_id, asset in state["assets"].items():
+            if "release_id" in asset and asset["release_id"] in releases:
+                releases[asset["release_id"]]["assets"].append(
+                    {
+                        "id": int(asset_id),
+                        "name": names[asset_id],
+                        "download_count": asset["download_count"],
+                    }
+                )
+        return {
+            "dates": [row["date"] for row in history],
+            "history": history,
+            "repositories": [
+                {
+                    "repository": repository,
+                    "total": history[-1]["totals"].get(repository, 0),
+                    "releases": list(releases.values()),
+                }
+            ],
+        }
 
     def setUp(self):
         self.count = 3
         self.asset_count = 100
+        self.name_prefix = "wheel"
         self.fail_assets = False
         self.requests = []
         case = self
@@ -111,7 +147,7 @@ class TestReleaseDownloads(unittest.TestCase):
                         [
                             {
                                 "id": n,
-                                "name": f"wheel-{n}.whl",
+                                "name": f"{case.name_prefix}-{n}.whl",
                                 "state": "uploaded",
                                 "download_count": case.count,
                             }
@@ -150,7 +186,7 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "assets": [
                                     {
                                         "id": n,
-                                        "name": f"wheel-{n}.whl",
+                                        "name": f"{case.name_prefix}-{n}.whl",
                                         "state": "uploaded",
                                         "download_count": case.count,
                                     }
@@ -359,6 +395,71 @@ class TestReleaseDownloads(unittest.TestCase):
             self.assertEqual(path.stat().st_mtime_ns, previous_day_mtime)
             self.assertFalse(path.with_suffix(".json.tmp").exists())
             self.assertFalse(list(Path(tmp).rglob("*.gz")))
+            self.assertFalse(list(Path(tmp).rglob("latest.json")))
+
+    def test_sparse_deltas_ignore_zeros_and_names_are_kept_separately(self):
+        repository = "xadupre/onnx-light-cpu"
+        self.asset_count = 2
+        now = dt.datetime(2026, 10, 20, tzinfo=dt.UTC)
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp) / "github-release-downloads" / repository
+
+            def collect(day):
+                downloads.record_downloads(
+                    tmp, repositories=[repository], now=now + dt.timedelta(days=day)
+                )
+                return json.loads(
+                    (
+                        directory / f"{(now + dt.timedelta(days=day)):%Y-%m-%d}.json"
+                    ).read_text()
+                )
+
+            first = collect(0)
+            self.assertEqual(first["assets"]["0"], {"release_id": "1", "downloads": 3})
+            names_path = directory / "assets.json"
+            original_mtime = names_path.stat().st_mtime_ns
+            second = collect(1)
+            self.assertEqual(second["assets"], {})
+            self.assertEqual(second["releases"], {})
+            self.assertEqual(names_path.stat().st_mtime_ns, original_mtime)
+            self.name_prefix = "renamed"
+            renamed = collect(2)
+            self.assertEqual(renamed["assets"], {})
+            self.assertEqual(
+                json.loads(names_path.read_text()),
+                {"0": "renamed-0.whl", "1": "renamed-1.whl"},
+            )
+            self.count = 4
+            self.asset_count = 1
+            changed = collect(3)
+            self.assertEqual(changed["assets"], {"0": {"downloads": 1}})
+            self.assertEqual(changed["removed_assets"], ["1"])
+            self.count = 2
+            repeated = collect(3)
+            self.assertEqual(repeated["assets"], {"0": {"downloads": -1}})
+            self.asset_count = 2
+            restored = collect(4)
+            self.assertEqual(
+                restored["assets"],
+                {
+                    "1": {"release_id": "1", "downloads": 2},
+                },
+            )
+            self.count = 0
+            decreased = collect(5)
+            self.assertEqual(
+                decreased["assets"],
+                {
+                    "0": {"downloads": -2},
+                    "1": {"downloads": -2},
+                },
+            )
+            self.assertEqual(collect(6)["assets"], {})
+            self.asset_count = 3
+            zero_baseline = collect(7)
+            self.assertEqual(zero_baseline["assets"], {"2": {"release_id": "1"}})
+            self.assertEqual(json.loads(names_path.read_text())["2"], "renamed-2.whl")
+            self.assertFalse(list(Path(tmp).rglob("latest.json")))
 
     def test_legacy_history_retains_totals_without_inventing_asset_counts(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,10 +533,7 @@ class TestReleaseDownloads(unittest.TestCase):
                 downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
             self.assertEqual(path.read_text(), original)
             self.assertFalse(
-                (
-                    Path(tmp)
-                    / "github-release-downloads/xadupre/onnx-empty/latest.json"
-                ).exists()
+                list((Path(tmp) / "github-release-downloads/xadupre").rglob("*.json"))
             )
 
     def test_migration_splits_all_projects_and_preserves_unselected_history(self):
@@ -512,16 +610,94 @@ class TestReleaseDownloads(unittest.TestCase):
 
     def test_missing_project_history_does_not_replace_published_index(self):
         with tempfile.TemporaryDirectory() as tmp:
-            downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
+            now = dt.datetime(2026, 10, 20, tzinfo=dt.UTC)
+            downloads.record_downloads(
+                tmp, repositories=["xadupre/onnx-empty"], now=now
+            )
             index_path = Path(tmp) / "github-release-downloads/index.json"
             original = index_path.read_bytes()
             project_path = (
-                Path(tmp) / "github-release-downloads/xadupre/onnx-empty/latest.json"
+                Path(tmp)
+                / "github-release-downloads/xadupre/onnx-empty/2026-10-20.json"
             )
             project_path.unlink()
-            with self.assertRaisesRegex(FileNotFoundError, "Missing release download"):
-                downloads.record_downloads(tmp, repositories=["xadupre/onnx-empty"])
+            with self.assertRaises(FileNotFoundError):
+                downloads.record_downloads(
+                    tmp,
+                    repositories=["xadupre/onnx-empty"],
+                    now=now + dt.timedelta(days=1),
+                )
             self.assertEqual(index_path.read_bytes(), original)
+
+    def test_snapshot_migration_replaces_latest_with_nonzero_journals_and_names(self):
+        repository = "xadupre/onnx-light-cpu"
+        self.asset_count = 2
+        item = downloads.collect_repository(repository, "")
+        rows = [
+            {
+                "date": "2026-10-19",
+                "totals": {repository: 1},
+                "assets": {repository: {"0": 1, "1": 0}},
+            },
+            {
+                "date": "2026-10-20",
+                "totals": {repository: 5},
+                "assets": {repository: {"0": 5, "1": 0}},
+            },
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "github-release-downloads"
+            directory = root / repository
+            directory.mkdir(parents=True)
+            latest = directory / "latest.json"
+            latest.write_text(
+                json.dumps(
+                    {
+                        "repositories": [item],
+                        "dates": [row["date"] for row in rows],
+                    }
+                )
+            )
+            for row in rows:
+                (directory / f"{row['date']}.json").write_text(json.dumps(row))
+            (root / "index.json").write_text(
+                json.dumps(
+                    {
+                        "format": "daily-json-v1",
+                        "repositories": [
+                            {
+                                "repository": repository,
+                                "file": f"{repository}/latest.json",
+                            }
+                        ],
+                        "history": [
+                            {"date": row["date"], "totals": row["totals"]}
+                            for row in rows
+                        ],
+                    }
+                )
+            )
+            original = (directory / "2026-10-19.json").read_bytes()
+            blocked = root / "index.json.tmp"
+            blocked.mkdir()
+            now = dt.datetime(2026, 10, 21, tzinfo=dt.UTC)
+            with self.assertRaises(IsADirectoryError):
+                downloads.record_downloads(tmp, repositories=[repository], now=now)
+            self.assertTrue(latest.exists())
+            self.assertEqual((directory / "2026-10-19.json").read_bytes(), original)
+            blocked.rmdir()
+            result = downloads.record_downloads(tmp, repositories=[repository], now=now)
+            self.assertEqual(result["format"], "daily-delta-v1")
+            self.assertFalse(latest.exists())
+            self.assertEqual(self.read_project(tmp, repository)["history"][:2], rows)
+            first = json.loads((directory / "2026-10-19.json").read_text())
+            second = json.loads((directory / "2026-10-20.json").read_text())
+            self.assertEqual(first["assets"]["1"], {"release_id": "1"})
+            self.assertEqual(second["assets"], {"0": {"downloads": 4}})
+            self.assertEqual(
+                json.loads((directory / "assets.json").read_text()),
+                {"0": "wheel-0.whl", "1": "wheel-1.whl"},
+            )
 
     def test_project_gzip_migration_includes_archives_and_preserves_every_day(self):
         repository = "xadupre/onnx-light-cpu"

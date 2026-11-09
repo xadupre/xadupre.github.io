@@ -9,6 +9,14 @@ const source = fs.readFileSync(
 const context = vm.createContext({});
 vm.runInContext(source, context);
 
+function dailyRecord(date, changes = {}) {
+  return {
+    date, repository: "onnx/onnx", observed: true,
+    releases: {}, assets: {}, removed_assets: [], removed_releases: [],
+    ...changes,
+  };
+}
+
 test("net changes require the exact date and repository baseline", () => {
   const history = [
     {date: "2026-09-21", totals: {repo: 100}},
@@ -309,8 +317,11 @@ test("missing data and network failures stay visible", async () => {
 
 test("loader initially requests only the small summary index", async () => {
   const data = {
+    format: "daily-delta-v1",
     updated_at: "2026-10-21T06:00:00Z",
-    repositories: [{repository: "onnx/onnx", file: "onnx/onnx/latest.json", total: 0}],
+    repositories: [{
+      repository: "onnx/onnx", directory: "onnx/onnx", dates: ["2026-10-21"], total: 0,
+    }],
     history: [{date: "2026-10-21", totals: {"onnx/onnx": 0}}],
   };
   const requested = [];
@@ -373,21 +384,18 @@ test("project histories load independently on expansion with visible retryable e
     fetch: async url => {
       requested.push(url);
       if (fail) return new Response(null, {status: 503});
-      if (!url.endsWith("/latest.json")) {
-        const date = url.split("/").at(-1).slice(0, -5);
-        const count = date === "2026-10-20" ? 0 : 7;
-        return Response.json({
-          date, totals: {"onnx/onnx": count}, assets: {"onnx/onnx": {"1": count}},
-        });
+      if (url.endsWith("/assets.json")) {
+        await new Promise(resolve => { finish = resolve; });
+        return Response.json({"1": "test.whl"});
       }
-      await new Promise(resolve => { finish = resolve; });
-      return Response.json({
-        updated_at: "2026-10-21T06:00:00Z",
-        repositories: [{repository: "onnx/onnx", total: 7, releases: [{
-          tag: "v1", assets: [{id: 1, name: "test.whl", download_count: 7}],
-        }]}],
-        dates: ["2026-10-20", "2026-10-21"],
-      });
+      const date = url.split("/").at(-1).slice(0, -5);
+      if (date === "2026-10-20") {
+        return Response.json(dailyRecord(date, {
+          releases: {"1": {tag: "v1", published_at: "2026-01-01", prerelease: false}},
+          assets: {"1": {release_id: "1"}},
+        }));
+      }
+      return Response.json(dailyRecord(date, {assets: {"1": {downloads: 7}}}));
     },
     Chart: class {
       constructor(canvas, config) { this.data = config.data; charts.push(this); }
@@ -400,8 +408,10 @@ test("project histories load independently on expansion with visible retryable e
   loader.renderReleaseDownloads({
     updated_at: "2026-10-21T06:00:00Z",
     repositories: [
-      {repository: "onnx/onnx", total: 0, file: "onnx/onnx/latest.json"},
-      {repository: "ggml-org/llama.cpp", total: 0, file: "ggml-org/llama.cpp/latest.json"},
+      {repository: "onnx/onnx", total: 0, directory: "onnx/onnx",
+        dates: ["2026-10-20", "2026-10-21"]},
+      {repository: "ggml-org/llama.cpp", total: 0, directory: "ggml-org/llama.cpp",
+        dates: ["2026-10-21"]},
     ],
     history: [{date: "2026-10-21", totals: {"onnx/onnx": 0, "ggml-org/llama.cpp": 0}}],
   });
@@ -431,8 +441,8 @@ test("project histories load independently on expansion with visible retryable e
   await details.listeners.toggle();
   assert.equal(details.children.length, children);
   assert.deepEqual(requested, [
-    "../cache_data/github-release-downloads/onnx/onnx/latest.json",
-    "../cache_data/github-release-downloads/onnx/onnx/latest.json",
+    "../cache_data/github-release-downloads/onnx/onnx/assets.json",
+    "../cache_data/github-release-downloads/onnx/onnx/assets.json",
     "../cache_data/github-release-downloads/onnx/onnx/2026-10-20.json",
     "../cache_data/github-release-downloads/onnx/onnx/2026-10-21.json",
   ]);
@@ -459,31 +469,80 @@ test("daily history requests are bounded and retain chronological order", async 
   let peak = 0;
   const loader = vm.createContext({
     fetch: async url => {
-      if (url.endsWith("/latest.json")) return Response.json({dates});
+      if (url.endsWith("/assets.json")) return Response.json({});
       active++;
       peak = Math.max(peak, active);
       await new Promise(resolve => setImmediate(resolve));
       active--;
-      return Response.json({date: url.split("/").at(-1).slice(0, -5)});
+      return Response.json(dailyRecord(url.split("/").at(-1).slice(0, -5)));
     },
   });
   vm.runInContext(source, loader);
-  const data = await loader.loadProjectHistory({file: "onnx/onnx/latest.json"});
+  const data = await loader.loadProjectHistory({
+    repository: "onnx/onnx", directory: "onnx/onnx", total: 0, dates,
+  });
   assert.equal(peak, 8);
   assert.deepEqual(Array.from(data.history, row => row.date), dates);
 });
 
-test("invalid dates, missing daily files and legacy compressed entries remain explicit errors", async () => {
+test("invalid dates and missing daily files remain explicit errors", async () => {
   for (const dates of [["../invalid"], ["2026-10-20"]]) {
     const loader = vm.createContext({
-      fetch: async url => url.endsWith("/latest.json")
-        ? Response.json({dates})
-        : new Response(null, {status: 404}),
+      fetch: async () => new Response(null, {status: 404}),
     });
     vm.runInContext(source, loader);
-    await assert.rejects(loader.loadProjectHistory({file: "onnx/onnx/latest.json"}),
+    await assert.rejects(loader.loadProjectHistory({
+      repository: "onnx/onnx", directory: "onnx/onnx", dates,
+    }),
       /Invalid project observation dates|HTTP 404/);
-    await assert.rejects(loader.loadProjectHistory({file: "onnx/onnx.json.gz"}),
-      /Daily JSON files have not been published/);
+  }
+});
+
+test("the browser accumulates sparse changes and resolves names from the ID dictionary", async () => {
+  const rows = [
+    dailyRecord("2026-10-20", {
+      releases: {"1": {tag: "v1", published_at: "2026-01-01", prerelease: false}},
+      assets: {"1": {release_id: "1", downloads: 5}},
+    }),
+    dailyRecord("2026-10-21", {observed: false}),
+    dailyRecord("2026-10-22", {assets: {"1": {downloads: -2}}}),
+    dailyRecord("2026-10-23", {removed_assets: ["1"]}),
+    dailyRecord("2026-10-24", {
+      assets: {"1": {release_id: "1"}},
+    }),
+    dailyRecord("2026-10-25", {assets: {"1": {downloads: 4}}}),
+  ];
+  const loader = vm.createContext({
+    fetch: async url => Response.json(url.endsWith("/assets.json")
+      ? {"1": "recreated.whl"} : rows.find(row => url.endsWith(row.date + ".json"))),
+  });
+  vm.runInContext(source, loader);
+  const data = await loader.loadProjectHistory({
+    repository: "onnx/onnx", directory: "onnx/onnx", total: 4,
+    dates: rows.map(row => row.date),
+  }, "2026-10-25T06:00:00Z");
+  const asset = data.repositories[0].releases[0].assets[0];
+  assert.equal(asset.name, "recreated.whl");
+  assert.equal(asset.download_count, 4);
+  assert.deepEqual(Array.from(loader.assetHistory(data, "onnx/onnx", asset)),
+    [5, null, 3, null, 0, 4]);
+});
+
+test("missing names and impossible negative cumulative counts are visible errors", async () => {
+  for (const [names, downloads, expected] of [
+    [{}, 1, /Missing metadata for asset 1/],
+    [{"1": "test.whl"}, -1, /Invalid asset download delta/],
+  ]) {
+    const loader = vm.createContext({
+      fetch: async url => Response.json(url.endsWith("/assets.json") ? names :
+        dailyRecord("2026-10-20", {
+          releases: {"1": {tag: "v1", published_at: "2026-01-01", prerelease: false}},
+          assets: {"1": {release_id: "1", downloads}},
+        })),
+    });
+    vm.runInContext(source, loader);
+    await assert.rejects(loader.loadProjectHistory({
+      repository: "onnx/onnx", directory: "onnx/onnx", dates: ["2026-10-20"],
+    }), expected);
   }
 });

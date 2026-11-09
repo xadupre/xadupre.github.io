@@ -103,13 +103,87 @@ def collect_repository(repository: str, token: str) -> dict:
     }
 
 
+def project_state(item: dict) -> dict:
+    """Separate release metadata and cumulative asset counters for comparison."""
+    return {
+        "releases": {
+            str(release["id"]): {
+                key: release[key] for key in ("tag", "published_at", "prerelease")
+            }
+            for release in item["releases"]
+        },
+        "assets": {
+            str(asset["id"]): {
+                "release_id": str(release["id"]),
+                "download_count": asset["download_count"],
+            }
+            for release in item["releases"]
+            for asset in release["assets"]
+        },
+    }
+
+
+def apply_daily_delta(state: dict, record: dict) -> None:
+    """Replay metadata changes, signed counter changes and explicit removals."""
+    for asset_id in record["removed_assets"]:
+        del state["assets"][asset_id]
+    for release_id in record["removed_releases"]:
+        del state["releases"][release_id]
+    state["releases"].update(record["releases"])
+    for asset_id, change in record["assets"].items():
+        previous = state["assets"].get(asset_id, {"download_count": 0})
+        delta = change.get("downloads", 0)
+        count = previous["download_count"] + delta
+        if type(delta) is not int or count < 0:
+            raise ValueError(f"Invalid asset download delta: {asset_id}: {change!r}")
+        state["assets"][asset_id] = {
+            **previous,
+            **{key: value for key, value in change.items() if key != "downloads"},
+            "download_count": count,
+        }
+
+
+def daily_delta(
+    repository: str, day: str, previous: dict, current: dict, observed: bool
+) -> dict:
+    """Record only changed metadata/counters; the first observation is a baseline."""
+    assets = {}
+    for asset_id, asset in sorted(current["assets"].items()):
+        old = previous["assets"].get(asset_id, {})
+        if asset != old:
+            change = {
+                key: value
+                for key, value in asset.items()
+                if key != "download_count" and old.get(key) != value
+            }
+            delta = asset["download_count"] - old.get("download_count", 0)
+            if delta:
+                change["downloads"] = delta
+            assets[asset_id] = change
+    return {
+        "date": day,
+        "repository": repository,
+        "observed": observed,
+        "releases": {
+            key: value
+            for key, value in sorted(current["releases"].items())
+            if previous["releases"].get(key) != value
+        },
+        "assets": assets,
+        "removed_assets": sorted(previous["assets"].keys() - current["assets"].keys()),
+        "removed_releases": sorted(
+            previous["releases"].keys() - current["releases"].keys()
+        ),
+    }
+
+
 def record_downloads(
     cache_dir: str,
     token: str = "",
     repositories: list[str] | None = None,
     now: dt.datetime | None = None,
 ) -> dict:
-    """Publish plain JSON metadata and one observation file per project and UTC day."""
+    """Publish daily delta journals, without a growing current-metadata file."""
     selected = sorted(
         set(discover_repositories(token) if repositories is None else repositories)
     )
@@ -158,7 +232,7 @@ def record_downloads(
                 projects.setdefault(
                     repository, {"repository": repository, "total": 0, "releases": []}
                 )
-        for repository in projects:
+        for repository, item in projects.items():
             entries = []
             for entry in legacy["history"]:
                 row = {"date": entry["date"], "totals": {}}
@@ -168,11 +242,16 @@ def record_downloads(
                     row["assets"] = {repository: entry["assets"][repository]}
                 if row["totals"] or "assets" in row:
                     entries.append(row)
-            migrated[repository] = {
-                "updated_at": legacy.get("updated_at", updated_at),
-                "history": entries,
-            }
-    elif previous.get("format") != "daily-json-v1":
+            old_item = next(
+                (
+                    value
+                    for value in legacy.get("repositories", [])
+                    if value["repository"] == repository
+                ),
+                item,
+            )
+            migrated[repository] = {"history": entries, "repositories": [old_item]}
+    elif previous.get("format") != "daily-delta-v1":
         # Include archived projects which no longer appear in the summary index.
         for source in sorted(directory.glob("*/*.json.gz")):
             with gzip.open(source, "rt", encoding="utf-8") as stream:
@@ -180,6 +259,17 @@ def record_downloads(
             item = project["repositories"][0]
             repository = item["repository"]
             projects.setdefault(repository, item)
+            migrated[repository] = project
+            obsolete.append(source)
+        for source in sorted(directory.glob("*/*/latest.json")):
+            project = json.loads(source.read_text(encoding="utf-8"))
+            item = project["repositories"][0]
+            repository = item["repository"]
+            projects.setdefault(repository, item)
+            project["history"] = [
+                json.loads((source.parent / f"{date}.json").read_text(encoding="utf-8"))
+                for date in project["dates"]
+            ]
             migrated[repository] = project
             obsolete.append(source)
         for item in previous.get("repositories", []):
@@ -196,68 +286,113 @@ def record_downloads(
         temporary.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
         pending.append((temporary, destination))
 
+    dates_by_project = {}
+    previous_projects = {
+        item["repository"]: item for item in previous.get("repositories", [])
+    }
     for repository, item in sorted(projects.items()):
         # GitHub owner/repository names cannot contain path separators or dot segments.
         if not re.fullmatch(r"[A-Za-z0-9_-]+/[A-Za-z0-9_.-]+", repository) or (
             repository.split("/")[1] in (".", "..")
         ):
             raise ValueError(f"Invalid repository name: {repository!r}")
-        project_path = directory / repository / "latest.json"
+        project_path = directory / repository
+        names_path = project_path / "assets.json"
+        previous_names = (
+            json.loads(names_path.read_text(encoding="utf-8"))
+            if names_path.exists()
+            else {}
+        )
+        names = previous_names.copy()
         if repository in migrated:
-            project_history = {
-                entry["date"]: entry for entry in migrated[repository]["history"]
-            }
-            dates = set(project_history)
-        elif project_path.exists():
-            dates = set(json.loads(project_path.read_text(encoding="utf-8"))["dates"])
-            project_history = {}
-        else:
-            if any(
-                row["repository"] == repository
-                for row in previous.get("repositories", [])
-            ):
-                raise FileNotFoundError(
-                    f"Missing release download history: {project_path}"
+            for release in migrated[repository]["repositories"][0]["releases"]:
+                names.update(
+                    {str(asset["id"]): asset["name"] for asset in release["assets"]}
                 )
-            dates = set()
-            project_history = {}
-        if repository in selected:
-            dates.add(day)
-            project_history[day] = {
-                "date": day,
-                "totals": {repository: item["total"]},
-                "assets": {
-                    repository: {
-                        str(asset["id"]): asset["download_count"]
-                        for release in item["releases"]
-                        for asset in release["assets"]
+        for release in item["releases"]:
+            names.update(
+                {str(asset["id"]): asset["name"] for asset in release["assets"]}
+            )
+        if names != previous_names or not names_path.exists():
+            stage_json(names_path, names)
+        state = {"releases": {}, "assets": {}}
+        records = {}
+        if repository in migrated:
+            metadata = project_state(migrated[repository]["repositories"][0])
+            for entry in sorted(
+                migrated[repository]["history"], key=lambda row: row["date"]
+            ):
+                date = entry["date"]
+                if repository in selected and date == day:
+                    continue
+                observed = repository in entry.get("assets", {})
+                target = {"releases": {}, "assets": {}}
+                if observed:
+                    target["assets"] = {
+                        asset_id: {
+                            **metadata["assets"].get(asset_id, {}),
+                            "download_count": count,
+                        }
+                        for asset_id, count in entry["assets"][repository].items()
                     }
-                },
-            }
-        for date, entry in sorted(project_history.items()):
+                else:
+                    target["assets"] = state["assets"].copy()
+                referenced_releases = {
+                    asset.get("release_id") for asset in target["assets"].values()
+                }
+                target["releases"] = {
+                    key: value
+                    for key, value in metadata["releases"].items()
+                    if value["published_at"][:10] <= date or key in referenced_releases
+                }
+                record = daily_delta(repository, date, state, target, observed)
+                if repository in entry.get("totals", {}):
+                    record["total"] = entry["totals"][repository]
+                records[date] = record
+                state = target
+        else:
+            dates = previous_projects.get(repository, {}).get("dates")
+            if dates is None:
+                dates = sorted(
+                    path.stem for path in project_path.glob("????-??-??.json")
+                )
+            for date in dates:
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+                    raise ValueError(f"Invalid observation date: {date!r}")
+                if date > day:
+                    raise ValueError(f"Cannot insert an observation before {date}")
+                if date == day:
+                    continue
+                record = json.loads(
+                    (project_path / f"{date}.json").read_text(encoding="utf-8")
+                )
+                if record["date"] != date or record["repository"] != repository:
+                    raise ValueError(
+                        f"Invalid daily observation: {project_path}/{date}"
+                    )
+                apply_daily_delta(state, record)
+            dates_by_project[repository] = dates
+        if repository in selected:
+            records[day] = daily_delta(
+                repository, day, state, project_state(item), observed=True
+            )
+            records[day]["total"] = item["total"]
+        dates_by_project[repository] = sorted(
+            set(dates_by_project.get(repository, [])) | records.keys()
+        )
+        for date, entry in sorted(records.items()):
             if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
                 raise ValueError(f"Invalid observation date: {date!r}")
-            stage_json(project_path.parent / f"{date}.json", entry)
-        stage_json(
-            project_path,
-            {
-                "updated_at": (
-                    migrated[repository]["updated_at"]
-                    if repository in migrated and repository not in selected
-                    else updated_at
-                ),
-                "repositories": [item],
-                "dates": sorted(dates),
-            },
-        )
+            stage_json(project_path / f"{date}.json", entry)
     result = {
-        "format": "daily-json-v1",
+        "format": "daily-delta-v1",
         "updated_at": updated_at,
         "repositories": [
             {
                 "repository": item["repository"],
                 "total": item["total"],
-                "file": f"{item['repository']}/latest.json",
+                "directory": item["repository"],
+                "dates": dates_by_project[item["repository"]],
             }
             for item in current
         ],
