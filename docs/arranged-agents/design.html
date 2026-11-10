@@ -416,7 +416,7 @@ status and transcripts, merging streamed text by message/reasoning/tool identifi
 while keeping background repositories and subagents separate.
 Incoming repository IDs must belong to this discovered
 list; browser-provided paths cannot start arbitrary sessions.</p>
-<p><code class="docutils literal notranslate"><span class="pre">src/conversation.ts</span></code> creates one lazy SDK client/session per clicked repository.
+<p><code class="docutils literal notranslate"><span class="pre">src/conversation.ts</span></code> creates one lazy SDK client/session per explicitly opened repository.
 It registers the event handler before session creation, enables streaming,
 reuses the same session for subsequent messages, isolates repository working
 directories and bounds startup/response operations. A saved SDK session ID is
@@ -451,7 +451,9 @@ HTML. Only discovered repositories can resume; loading history never spawns a CL
 Messages, including technical details, are split into numbered fragments and packed
 into sequential batches of at most 48,000 serialized characters. Separate tool-free
 model requests use a JSON response schema; host validation requires an ordered,
-complete partition of every input fragment. Rows reference original message ranges
+complete partition of every input fragment. Valid leading rows of an incomplete
+answer are kept and only the uncovered fragments are requested again; three
+consecutive answers without valid coverage fail the analysis. Rows reference original message ranges
 and retain objectives, production, artifacts, validation and errors. The model’s
 interpretation is not an independent verification of those artifacts.</p>
 <p>PostMortem operations have their own cancellation controller, block mutation of the
@@ -461,6 +463,11 @@ not duplicated in storage: a canonical SHA-256 fingerprint and source count iden
 the analysed prefix. JSON export validates this fingerprint and includes the full
 source records. UI source blocks are expanded lazily; unchanged reports are not
 rebuilt on conversation-stream updates. Analysis creates no background polling.</p>
+<p><code class="docutils literal notranslate"><span class="pre">src/session-export.ts</span></code> serializes a snapshot of the selected conversation
+without a model request. Its first field is local HEAD, and its final field is
+the current branch’s submitted PR diff from <code class="docutils literal notranslate"><span class="pre">gh</span></code>, or the tracked working-tree
+diff against HEAD when no PR exists. PR metadata records its head and base, and
+the export fails if either changes while its diff is being fetched.</p>
 <p><code class="docutils literal notranslate"><span class="pre">src/github.ts</span></code> reads activity using <code class="docutils literal notranslate"><span class="pre">gh</span></code> from the selected repository’s cwd
 and reads local commits using <code class="docutils literal notranslate"><span class="pre">git</span></code>. GraphQL pages fetch recent discussions,
 then exhaust comment/review connections to compute accurate viewer flags;
