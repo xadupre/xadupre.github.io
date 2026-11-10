@@ -16,10 +16,8 @@ namespace {
 Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   static const bool registered = [] {
     ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterShapeFunctions();
-    ONNX_LIGHT_NAMESPACE::onnx_shapes::RegisterPeakMemoryFunctions();
+    ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterPeakMemoryFunctions();
     ONNX_LIGHT_NAMESPACE::onnx_kernels::RegisterKernelFunctions();
-    onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
-    onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
     const auto existing_patterns = ONNX_LIGHT_NAMESPACE::core::builder::RegisteredPatternNames();
     onnx_light_cpu::RegisterCustomOperatorPatterns();
     auto cpu_patterns = ONNX_LIGHT_NAMESPACE::core::builder::RegisteredPatternNames();
@@ -29,6 +27,9 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
     });
     ONNX_LIGHT_NAMESPACE::core::builder::RegisterPatternSet("onnx-light-cpu", cpu_patterns);
     onnx_light_cpu::RegisterAllKernels();
+    // Install CPU-specific estimators after kernel registration installs defaults.
+    onnx_light_cpu::RegisterMicrosoftShapeAndMemoryFunctions();
+    onnx_light_cpu::RegisterExperimentalShapeAndMemoryFunctions();
     return true;
   }();
   (void)registered;
@@ -45,6 +46,7 @@ Napi::Object Initialize(Napi::Env env, Napi::Object exports) {
   exports.Set("loadModelFile", Napi::Function::New(env, onnx_light_viewer::LoadModelFile));
   exports.Set("loadPipeline", Napi::Function::New(env, onnx_light_viewer::LoadPipeline));
   exports.Set("loadPipelineFile", Napi::Function::New(env, onnx_light_viewer::LoadPipelineFile));
+  exports.Set("diffModels", Napi::Function::New(env, onnx_light_viewer::DiffModels));
   exports.Set("listBackendTests", Napi::Function::New(env, onnx_light_viewer::ListBackendTests));
   exports.Set("loadBackendTest", Napi::Function::New(env, onnx_light_viewer::LoadBackendTest));
   exports.Set("runNativePrompt", Napi::Function::New(env, onnx_light_viewer::RunNativePrompt));

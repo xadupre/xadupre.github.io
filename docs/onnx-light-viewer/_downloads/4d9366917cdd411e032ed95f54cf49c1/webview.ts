@@ -156,6 +156,7 @@ export function webviewHtml(
           <button id="statistics-tab" role="tab" aria-controls="statistics-view" aria-selected="false" tabindex="-1">Statistics</button>
           <button id="memory-tab" role="tab" aria-controls="memory-view" aria-selected="false" tabindex="-1">Memory</button>
           <button id="tensors-tab" role="tab" aria-controls="tensors-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 3v17h17M8 16v-5m5 5V6m5 10V9"/></svg>Tensors</button>
+          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="prompt-tab" role="tab" aria-controls="prompt-view" aria-selected="false" tabindex="-1"><svg class="tensor-statistics-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 5 11 7-11 7Z"/></svg>Run</button>
         </div>
       </div>
@@ -165,7 +166,6 @@ export function webviewHtml(
           <button id="status-tab" role="tab" aria-controls="status-view" aria-selected="false" tabindex="-1">Status</button>
           <button id="controls-tab" role="tab" aria-controls="controls-view" aria-selected="false" tabindex="-1">Controls</button>
           <button id="repositories-tab" role="tab" aria-controls="repositories-view" aria-selected="false" tabindex="-1">ONNX</button>
-          <button id="patterns-tab" role="tab" aria-controls="patterns-view" aria-selected="false" tabindex="-1">Patterns</button>
           <button id="settings-tab" role="tab" aria-controls="settings-view" aria-selected="false" tabindex="-1">Settings</button>
         </div>
       </div>
@@ -187,8 +187,21 @@ export function webviewHtml(
       <div class="graph-body">
         <div class="canvas" id="canvas">
           <section id="model-error" role="alert" hidden><h2>Could not open model</h2><p id="model-error-details"></p><p>Use Open to choose another model. Details are available in Logs.</p></section>
-          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges" class="overview-edge"/><path id="overview-edges-weight" class="overview-edge edge-weight"/><path id="overview-edges-shape" class="overview-edge edge-shape"/><path id="overview-nodes"/><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="crossing-edges-weight" class="crossing-edge edge-weight"/><path id="crossing-edges-shape" class="crossing-edge edge-shape"/><path id="released-crossing-edges" class="crossing-edge released"/><path id="released-crossing-edges-weight" class="crossing-edge released edge-weight"/><path id="released-crossing-edges-shape" class="crossing-edge released edge-shape"/><g id="edges"></g><g id="nodes"></g></svg>
-          <div class="zoom-controls" aria-label="Graph zoom and navigation"><button id="go-top" disabled title="Go to the top of the model (Ctrl/Cmd+Home)" aria-keyshortcuts="Control+Home Meta+Home">Top</button><button id="go-bottom" disabled title="Go to the bottom of the model (Ctrl/Cmd+End)" aria-keyshortcuts="Control+End Meta+End">Bottom</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button></div>
+          <svg id="graph" role="group" aria-label="Interactive ONNX graph" tabindex="0"><defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><g id="graph-overview" aria-hidden="true" display="none"><path id="overview-edges" class="overview-edge"/><path id="overview-edges-weight" class="overview-edge edge-weight"/><path id="overview-edges-shape" class="overview-edge edge-shape"/><path id="overview-edges-arrows" class="connection-arrows"/><g id="overview-nodes"><path data-category="port"/><path class="overview-node" data-category="graph-node"/><path class="overview-node compute-heavy" data-category="compute-heavy"/><path class="overview-node custom-domain" data-category="custom-domain"/></g><g id="overview-labels"/></g><path id="crossing-edges" class="crossing-edge"/><path id="crossing-edges-weight" class="crossing-edge edge-weight"/><path id="crossing-edges-shape" class="crossing-edge edge-shape"/><path id="crossing-edges-arrows" class="connection-arrows"/><path id="released-crossing-edges" class="crossing-edge released"/><path id="released-crossing-edges-weight" class="crossing-edge released edge-weight"/><path id="released-crossing-edges-shape" class="crossing-edge released edge-shape"/><path id="released-crossing-edges-arrows" class="connection-arrows released"/><g id="edges"></g><g id="nodes"></g></svg>
+          <div class="graph-controls">
+            <details class="navigation-controls" aria-label="Graph controls" open>
+              <summary title="Show or hide graph controls">Controls</summary>
+              <div class="zoom-controls" aria-label="Graph zoom and navigation"><button id="go-top" disabled title="Go to the top of the model (Ctrl/Cmd+Home)" aria-keyshortcuts="Control+Home Meta+Home">Top</button><button id="go-bottom" disabled title="Go to the bottom of the model (Ctrl/Cmd+End)" aria-keyshortcuts="Control+End Meta+End">Bottom</button><button id="zoom-in" title="Zoom in (+)" aria-label="Zoom in" aria-keyshortcuts="+">+</button><button id="zoom-out" title="Zoom out (-)" aria-label="Zoom out" aria-keyshortcuts="-">−</button><button id="zoom-fit" title="Fit graph (F)" aria-keyshortcuts="F">Fit</button><button id="zoom-readable" title="Zoom to readable size (100%), centered on the inspected node (R)" aria-label="Zoom to readable size" aria-keyshortcuts="R"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="m8 17 4-10 4 10M10 13h4M4 8V4h4M16 4h4v4M20 16v4h-4M8 20H4v-4"/></svg></button><button id="zoom-area" title="Drag a rectangle to zoom into an area; Alt+drag also works. Escape cancels." aria-pressed="false"><span class="toggle-indicator" aria-hidden="true">&#10003;</span> Zoom area</button></div>
+            </details>
+            <details id="operator-legend" aria-label="Operator colors" open>
+              <summary title="Show or hide operator color legend">Legend</summary>
+              <div class="operator-legend-items">
+                <div class="operator-legend-item"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="operator-legend-sample" x="1" y="1" width="14" height="14" rx="3"/></svg><span>Other operators</span></div>
+                <div class="operator-legend-item" title="MatMul, Gemm, Conv, Attention and variants"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="operator-legend-sample compute-heavy" x="1" y="1" width="14" height="14" rx="3"/></svg><span>Compute-heavy</span></div>
+                <div class="operator-legend-item" title="Non-standard domain, overriding compute-heavy colors"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="operator-legend-sample custom-domain" x="1" y="1" width="14" height="14" rx="3"/></svg><span>Custom domain</span></div>
+              </div>
+            </details>
+          </div>
         </div>
         <div id="sidebar-resizer" role="separator" tabindex="0" aria-label="Resize side panel" aria-orientation="vertical" aria-controls="graph-panels" title="Drag to resize the side panel, or use Left and Right arrow keys"></div>
         <aside id="graph-panels" aria-label="Graph panels">
@@ -475,8 +488,22 @@ export function webviewHtml(
               <button id="refuse-next" disabled>Refuse Next</button>
               <button id="append-new" disabled>Append New</button>
               <button id="global-rewriting" disabled aria-expanded="false" aria-controls="global-rewriting-panel">Global Rewriting</button>
+              <button id="show-comparison" disabled title="Compare the current model with another model" aria-expanded="false" aria-controls="comparison-panel">Compare</button>
               <button id="record-working-rewriting" disabled>Create rewriting</button>
             </div>
+            <section id="comparison-panel" class="fusion-picker" aria-labelledby="comparison-title" hidden>
+              <h3 id="comparison-title">Compare models</h3>
+              <p>Compare the entire current model, including unsaved edits, with a target model. Neither model is changed.</p>
+              <button id="compare-choose" disabled>Choose target model…</button>
+              <p id="compare-status" role="status">Open a model to compare.</p>
+              <div id="compare-result" hidden>
+                <p id="compare-models"></p>
+                <p id="compare-summary"></p>
+                <ol id="compare-steps" aria-label="Rewriting differences"></ol>
+                <button id="compare-more" hidden>Show more steps</button>
+                <div id="compare-declarations"></div>
+              </div>
+            </section>
             <section id="global-rewriting-panel" class="fusion-picker" aria-labelledby="global-rewriting-title" hidden>
               <h3 id="global-rewriting-title">Global Rewriting</h3>
               <div class="form-grid"><label for="global-rewriting-operation">Operation</label><select id="global-rewriting-operation"><option value="IdentityRemoval">IdentityRemoval</option><optgroup label="Partition"><option value="RepeatedLayer">RepeatedLayer</option><option value="PartitionGroup">PartitionGroup</option></optgroup></select></div>
@@ -1306,6 +1333,7 @@ export function webviewHtml(
   <script nonce="${nonce}" src="${resource("inspector.js")}"></script>
   <script nonce="${nonce}" src="${resource("metadata-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("fusion-panel.js")}"></script>
+  <script nonce="${nonce}" src="${resource("comparison-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("pattern-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("settings-panel.js")}"></script>
   <script nonce="${nonce}" src="${resource("memory-panel.js")}"></script>

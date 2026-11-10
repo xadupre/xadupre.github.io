@@ -1,5 +1,5 @@
 /* global acquireVsCodeApi, createSidebar, createFilePanels, createInspector,
-          createMetadataPanel, createFusionPanel, createSettingsPanel, createExportPanel,
+          createMetadataPanel, createFusionPanel, createComparisonPanel, createSettingsPanel, createExportPanel,
           createMemoryPanel, createTensorListPanel, createTensorStatisticsPanel, sugiyamaLayout, graphPathSegments,
           flattenGraphPath, graphPointDistance, graphPortOffset, graphSpatialIndex */
 const vscode = acquireVsCodeApi();
@@ -74,12 +74,12 @@ const tabs = [
   "statistics",
   "memory",
   "tensors",
+  "patterns",
   "prompt",
   "logs",
   "status",
   "controls",
   "repositories",
-  "patterns",
   "settings",
 ];
 
@@ -203,6 +203,14 @@ const fusionPanel = createFusionPanel({
       .filter((id) => nodeViews.get(id)?.node)
       .map((id) => Number(id.slice(5))),
   focusNodes,
+});
+const comparisonPanel = createComparisonPanel({
+  byId,
+  postMessage: (message) => vscode.postMessage(message),
+  requestAction,
+  revealPanel: sidebar.revealPanel,
+  impactSummary: fusionPanel.impactSummary,
+  appendImpactDetails: fusionPanel.appendImpactDetails,
 });
 const patternPanel = createPatternPanel({
   byId,
@@ -571,6 +579,17 @@ function requestAction(type, action, parameters = {}) {
     )
   )
     fusionPanel.invalidate();
+  if (
+    [
+      "open",
+      "export",
+      "navigate",
+      "undo-fusion",
+      "select-fusion",
+      "refresh-shapes",
+    ].includes(type)
+  )
+    comparisonPanel.invalidate();
   const entry = newAction(action);
   pendingActions.set(entry.id, type);
   if (type === "open" || type === "export") {
@@ -640,7 +659,9 @@ function setLoading(pending, message = "") {
     !pending &&
       hasModel &&
       (displayedGraph?.canFuse ?? displayedGraph?.breadcrumbs?.length === 1),
+    !pending && hasModel && !displayedGraph?.pipeline,
   );
+  comparisonPanel.setAvailable(!pending && hasModel);
   if (!pending && wasLoading) requestSymbolicDimensions();
 }
 
@@ -1945,13 +1966,22 @@ function drawTaggedConnections(id, connections) {
     ["weight", []],
     ["shape", []],
   ]);
-  for (const connection of connections)
-    groups.get(connectionTag(connection)).push(connectionPath(connection));
+  const arrows = [];
+  for (const connection of connections) {
+    const points = connectionPoints(connection);
+    groups
+      .get(connectionTag(connection))
+      .push(connectionPath(connection, points));
+    arrows.push(connectionArrow(connection, points));
+  }
   for (const [tag, segments] of groups) {
     const path = byId(tag ? `${id}-${tag}` : id);
     const data = segments.join(" ");
     if (path.getAttribute("d") !== data) path.setAttribute("d", data);
   }
+  const path = byId(`${id}-arrows`);
+  const data = arrows.join(" ");
+  if (path.getAttribute("d") !== data) path.setAttribute("d", data);
 }
 
 function drawCrossingConnections() {
@@ -2149,6 +2179,8 @@ function fit() {
     height,
   };
   svg.classList.toggle("overview", scale > 2);
+  // A non-scaling outline can otherwise cover the fill of a distant node.
+  svg.classList.toggle("distant", scale > 20);
   overviewVisible = virtualized && scale > 2;
   byId("graph-overview").setAttribute(
     "display",
@@ -2345,9 +2377,29 @@ function arrangeConnectionLabels() {
   if (camera && virtualized) drawCrossingConnections();
 }
 
-function connectionPath(connection) {
+function connectionArrow(connection, points) {
+  const end = points.at(-1);
+  let dx = 0;
+  let dy = end.y - points[0].y;
+  if (connection.route || !dy) {
+    for (let index = points.length - 2; index >= 0; index--) {
+      dx = end.x - points[index].x;
+      dy = end.y - points[index].y;
+      if (dx || dy) break;
+    }
+  }
+  const length = Math.hypot(dx, dy);
+  if (!length) return "";
+  const size = connectionTag(connection) === "weight" ? 18 : 9;
+  const x = end.x - (dx / length) * size;
+  const y = end.y - (dy / length) * size;
+  const halfX = (dy / length) * size * 0.5;
+  const halfY = (dx / length) * size * 0.5;
+  return `M${end.x},${end.y} L${x + halfX},${y - halfY} L${x - halfX},${y + halfY}Z`;
+}
+
+function connectionPath(connection, points = connectionPoints(connection)) {
   if (connection.route) {
-    const points = connectionPoints(connection);
     let path = `M${points[0].x},${points[0].y}`;
     for (const segment of graphPathSegments(points, true)) {
       const end = segment.at(-1);
@@ -2359,22 +2411,30 @@ function connectionPath(connection) {
     }
     return path;
   }
-  const [start, end] = connectionPoints(connection);
+  const [start, end] = points;
   const middle = (start.y + end.y) / 2;
   return `M${start.x},${start.y} C${start.x},${middle} ${end.x},${middle} ${end.x},${end.y}`;
 }
 
 function drawOverview() {
   drawTaggedConnections("overview-edges", connections);
-  byId("overview-nodes").setAttribute(
-    "d",
-    [...nodeViews.values()]
-      .map(
-        ({ position, halfWidth, halfHeight }) =>
-          `M${position.x - halfWidth},${position.y - halfHeight}h${halfWidth * 2}v${halfHeight * 2}h${-halfWidth * 2}Z`,
-      )
-      .join(" "),
-  );
+  const batches = {
+    port: [],
+    "graph-node": [],
+    "compute-heavy": [],
+    "custom-domain": [],
+  };
+  for (const {
+    position,
+    halfWidth,
+    halfHeight,
+    overviewCategory,
+  } of nodeViews.values())
+    batches[overviewCategory ?? "port"].push(
+      `M${position.x - halfWidth},${position.y - halfHeight}h${halfWidth * 2}v${halfHeight * 2}h${-halfWidth * 2}Z`,
+    );
+  for (const path of byId("overview-nodes").children)
+    path.setAttribute("d", batches[path.dataset.category].join(" "));
   const labels = byId("overview-labels");
   labels.replaceChildren();
   for (const {
@@ -2646,9 +2706,10 @@ function render(graph, metadata) {
     "overview-edges",
     "overview-edges-weight",
     "overview-edges-shape",
+    "overview-edges-arrows",
   ])
     byId(id).removeAttribute("d");
-  byId("overview-nodes").removeAttribute("d");
+  for (const path of byId("overview-nodes").children) path.removeAttribute("d");
   byId("overview-labels").replaceChildren();
   graphMetadata = undefined;
   nodeMetadata = new Map();
@@ -2820,10 +2881,17 @@ function render(graph, metadata) {
     const position = positions.get(node.id);
     const size = sizes.get(node.id);
     const { storedInputs } = size;
+    const computeHeavy = /(MatMul|Gemm|Conv|Attention)/.test(node.opType);
+    const customDomain = node.domain && node.domain !== "ai.onnx";
+    const overviewCategory = customDomain
+      ? "custom-domain"
+      : computeHeavy
+        ? "compute-heavy"
+        : "graph-node";
     const create = (position) => {
       const top = position.y - size.height / 2;
       const group = element("g", {
-        class: "graph-node",
+        class: `graph-node${computeHeavy ? " compute-heavy" : ""}${customDomain ? " custom-domain" : ""}`,
         "aria-label": `${node.opType}: ${node.name}`,
       });
       group.append(
@@ -2992,6 +3060,7 @@ function render(graph, metadata) {
       position,
       halfWidth: size.width / 2,
       halfHeight: size.height / 2,
+      overviewCategory,
       typeFontSize: size.typeFontSize,
       subgraphs: size.subgraphs,
       parameterRows: size.parameterRows,
@@ -3359,6 +3428,7 @@ window.addEventListener("message", (event) => {
     exportPanel.handleMessage(event.data) ||
     filePanels.handleMessage(event.data) ||
     patternPanel.handleMessage(event.data) ||
+    comparisonPanel.handleMessage(event.data) ||
     fusionPanel.handleMessage(event.data)
   )
     return;
@@ -3462,6 +3532,7 @@ window.addEventListener("message", (event) => {
     byId("unfuse-panel").hidden = !fusionUndoCount;
     filePanels.reset();
     displayedGraph = event.data.graph;
+    comparisonPanel.setGraph(displayedGraph, event.data.file?.pipeline);
     tensorListPanel.setGraph(displayedGraph);
     promptReloadPending = false;
     promptPanel.reset();
@@ -3528,6 +3599,7 @@ window.addEventListener("message", (event) => {
   } else if (event.data?.type === "dimension-info") {
     if (event.data.graph) {
       displayedGraph = event.data.graph;
+      comparisonPanel.setGraph(displayedGraph);
       updateTensorInformation(displayedGraph.tensors);
       tensorListPanel.setGraph(displayedGraph);
       for (const node of displayedGraph.nodes) {
