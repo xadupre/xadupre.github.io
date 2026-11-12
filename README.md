@@ -81,6 +81,23 @@ select explicit repositories instead of discovery. After merging, the workflow
 can be dispatched manually for the first collection; until then the dashboard
 reports that its data are not yet available.
 
+## GitHub stars
+
+The [GitHub stars dashboard](dashboard/github-stars.html) tracks daily
+`stargazers_count` snapshots for the same dynamically discovered repositories as
+release downloads, including repositories without releases.
+The daily `DATA GitHub stars` workflow writes `github-stars.json` to
+`xadupre/cache_data` using `CACHE_DATA_SSH_KEY`. Each history row contains a UTC
+date and a repository-to-star-count mapping. Same-day runs update that day's
+counts; earlier observations are preserved. Failed collections leave the cache
+unchanged. Counts can decrease, and missing observations remain gaps.
+History begins at the first collection; historical stars are not backfilled.
+
+Run `python scripts/record_github_stars.py --cache-dir /tmp/cache_data` locally,
+optionally setting `GITHUB_TOKEN` and repeating `--repo owner/name` to select
+repositories explicitly. After merging, dispatch the workflow for the first
+collection; the dashboard reports unavailable data until then.
+
 ## Pull request statistics
 
 All PR statistics dashboards include the ONNX Runtime-style daily activity
