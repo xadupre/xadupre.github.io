@@ -134,8 +134,8 @@ class TestReleaseDownloads(unittest.TestCase):
                                 "private": False,
                             },
                             {
-                                "full_name": "xadupre/arranged-agents",
-                                "name": "arranged-agents",
+                                "full_name": "xadupre/devdash-agents",
+                                "name": "devdash-agents",
                                 "private": False,
                             },
                         ]
@@ -242,7 +242,7 @@ class TestReleaseDownloads(unittest.TestCase):
                 "microsoft/onnxruntime-genai",
                 "onnx/onnx",
                 "vllm-project/vllm",
-                "xadupre/arranged-agents",
+                "xadupre/devdash-agents",
                 "xadupre/onnx-light",
                 "xadupre/onnx-light-cpu",
                 "xadupre/onnx-light-kernel-images",
@@ -261,9 +261,10 @@ class TestReleaseDownloads(unittest.TestCase):
             home.write_text(
                 '<a href="https://github.com/xadupre/onnx-asv-benchmark">excluded</a>'
                 '<a href="https://github.com/xadupre/onnxruntime">excluded</a>'
-                '<a href="https://github.com/xadupre/arranged-agents-extra">excluded</a>'
+                '<a href="https://github.com/xadupre/devdash-agents-extra">excluded</a>'
+                '<a href="https://github.com/xadupre/arranged-agents">excluded</a>'
                 '<a href="https://github.com/xadupre/onnx-light-com-microsoft">excluded</a>'
-                '<a href="https://github.com/xadupre/arranged-agents">included</a>'
+                '<a href="https://github.com/xadupre/devdash-agents">included</a>'
                 '<a href="https://github.com/xadupre/onnx-light-viewer">included</a>'
                 '<a href="https://github.com/xadupre/yet-another-project">included</a>',
                 encoding="utf-8",
@@ -271,9 +272,10 @@ class TestReleaseDownloads(unittest.TestCase):
             repositories = downloads.discover_repositories("", home)
             self.assertNotIn("xadupre/onnx-asv-benchmark", repositories)
             self.assertNotIn("xadupre/onnxruntime", repositories)
-            self.assertNotIn("xadupre/arranged-agents-extra", repositories)
+            self.assertNotIn("xadupre/devdash-agents-extra", repositories)
+            self.assertNotIn("xadupre/arranged-agents", repositories)
             self.assertNotIn("xadupre/onnx-light-com-microsoft", repositories)
-            self.assertIn("xadupre/arranged-agents", repositories)
+            self.assertIn("xadupre/devdash-agents", repositories)
             self.assertIn("xadupre/onnx-light-viewer", repositories)
             self.assertIn("xadupre/yet-another-project", repositories)
             self.assertIn("microsoft/onnxruntime-genai", repositories)

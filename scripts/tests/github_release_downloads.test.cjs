@@ -72,13 +72,14 @@ test("per-file history preserves zero, missing observations and legacy totals", 
 test("owner scope includes requested projects and excludes unrelated owner projects", () => {
   for (const repo of [
     "xadupre/onnx-light", "xadupre/onnx-light-cpu", "xadupre/yet-another-tool",
-    "xadupre/onnx-light-viewer", "xadupre/arranged-agents",
+    "xadupre/onnx-light-viewer", "xadupre/devdash-agents",
     "onnx/onnx", "microsoft/onnxruntime-genai", "microsoft/onnxruntime-extensions",
     "ggml-org/llama.cpp", "vllm-project/vllm",
   ]) assert.equal(context.isTrackedProject(repo), true, repo);
   for (const repo of [
     "xadupre/onnx-asv-benchmark", "xadupre/onnxruntime", "xadupre/onnx-diagnostic",
-    "xadupre/onnx-lightish", "xadupre/arranged-agents-extra",
+    "xadupre/onnx-lightish", "xadupre/devdash-agents-extra",
+    "xadupre/arranged-agents",
     "xadupre/onnx-light-com-microsoft",
   ]) assert.equal(context.isTrackedProject(repo), false, repo);
 });

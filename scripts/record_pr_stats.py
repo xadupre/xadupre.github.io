@@ -62,7 +62,7 @@ from record_build_durations import (  # noqa: E402
 )
 
 DEFAULT_REPOS = (
-    "xadupre/arranged-agents",
+    "xadupre/devdash-agents",
     "xadupre/onnx-light",
     "xadupre/onnx-light-cpu",
     "xadupre/onnx-light-kernel-images",

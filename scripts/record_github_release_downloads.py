@@ -1,6 +1,6 @@
 """Record daily GitHub release download counts for ONNX and LLM repositories.
 
-Discover public xadupre onnx-light, yet-another and arranged-agents projects,
+Discover public xadupre onnx-light, yet-another and devdash-agents projects,
 and include ONNX upstreams, llama.cpp and vLLM. Only attached release assets
 have counters; GitHub-generated source archives are excluded.
 """
@@ -31,7 +31,7 @@ def is_owner_project(name: str) -> bool:
     """Limit owner discovery to the requested project families."""
     if name == "onnx-light-com-microsoft":
         return False
-    return name in ("onnx-light", "arranged-agents") or name.startswith(
+    return name in ("onnx-light", "devdash-agents") or name.startswith(
         ("onnx-light-", "yet-another-")
     )
 

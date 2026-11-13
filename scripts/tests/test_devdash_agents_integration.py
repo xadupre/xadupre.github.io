@@ -1,4 +1,4 @@
-"""Tests for arranged-agents documentation and pull request statistics wiring."""
+"""Tests for devdash-agents documentation and pull request statistics wiring."""
 
 from pathlib import Path
 import re
@@ -14,9 +14,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import record_pr_stats
 
 
-class TestArrangedAgentsIntegration(unittest.TestCase):
+class TestDevdashAgentsIntegration(unittest.TestCase):
     def test_collector_tracks_repository(self):
-        self.assertIn("xadupre/arranged-agents", record_pr_stats.DEFAULT_REPOS)
+        self.assertIn("xadupre/devdash-agents", record_pr_stats.DEFAULT_REPOS)
+        self.assertNotIn("xadupre/arranged-agents", record_pr_stats.DEFAULT_REPOS)
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/record_pr_stats.yml").read_text(
                 encoding="utf-8"
@@ -31,33 +32,43 @@ class TestArrangedAgentsIntegration(unittest.TestCase):
     def test_homepage_links(self):
         text = (ROOT / "index.html").read_text(encoding="utf-8")
         for target in (
-            "https://github.com/xadupre/arranged-agents",
-            "docs/arranged-agents/index.html",
-            "dashboard/arranged-agents/pr-stats.html",
+            "https://github.com/xadupre/devdash-agents",
+            "docs/devdash-agents/index.html",
+            "dashboard/devdash-agents/pr-stats.html",
         ):
             with self.subTest(target=target):
                 self.assertIn(f'href="{target}"', text)
-        self.assertIn("build_arranged_agents_docs.yml/badge.svg", text)
+        self.assertIn("build_devdash_agents_docs.yml/badge.svg", text)
+        self.assertNotIn("arranged-agents", text)
         self.assertIn(
             "Calls the locally installed Copilot CLI and presents its answers "
             "as structured Markdown.",
             text,
         )
-        self.assertNotIn("arranged-agents/build-durations.html", text)
+        self.assertNotIn("devdash-agents/build-durations.html", text)
+
+    def test_obsolete_project_removed(self):
+        for path in (
+            "docs/arranged-agents",
+            "dashboard/arranged-agents",
+            ".github/workflows/build_arranged_agents_docs.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse((ROOT / path).exists())
 
     def test_dashboard_uses_project_cache_and_shared_scripts(self):
         text = (
-            ROOT / "dashboard/arranged-agents/pr-stats.html"
+            ROOT / "dashboard/devdash-agents/pr-stats.html"
         ).read_text(encoding="utf-8")
-        self.assertIn('const REPO = "arranged-agents";', text)
+        self.assertIn('const REPO = "devdash-agents";', text)
         self.assertIn(
-            'const CSV_URL = "../../cache_data/arranged-agents/pr_stats.csv";',
+            'const CSV_URL = "../../cache_data/devdash-agents/pr_stats.csv";',
             text,
         )
         self.assertIn(
-            'data-source="../../cache_data/arranged-agents/pr_stats.csv"', text
+            'data-source="../../cache_data/devdash-agents/pr_stats.csv"', text
         )
-        self.assertIn('data-pr-activity="xadupre/arranged-agents"', text)
+        self.assertIn('data-pr-activity="xadupre/devdash-agents"', text)
         self.assertIn('href="../../assets/pr-activity.css"', text)
         for script in (
             "chart-loader.js",
@@ -76,17 +87,17 @@ class TestArrangedAgentsIntegration(unittest.TestCase):
             ROOT / "dashboard/onnx-light-viewer/pr-stats.html"
         ).read_text(encoding="utf-8")
         text = (
-            ROOT / "dashboard/arranged-agents/pr-stats.html"
+            ROOT / "dashboard/devdash-agents/pr-stats.html"
         ).read_text(encoding="utf-8")
-        self.assertEqual(text, reference.replace("onnx-light-viewer", "arranged-agents"))
+        self.assertEqual(text, reference.replace("onnx-light-viewer", "devdash-agents"))
 
     def test_documentation_workflow(self):
         workflow = yaml.safe_load(
-            (ROOT / ".github/workflows/build_arranged_agents_docs.yml").read_text(
+            (ROOT / ".github/workflows/build_devdash_agents_docs.yml").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual(workflow["name"], "DOC arranged-agents")
+        self.assertEqual(workflow["name"], "DOC devdash-agents")
         triggers = workflow.get("on", workflow.get(True))
         self.assertEqual(
             triggers["workflow_dispatch"]["inputs"]["ref"]["default"], "main"
@@ -109,10 +120,10 @@ class TestArrangedAgentsIntegration(unittest.TestCase):
         self.assertEqual(
             site["with"]["token"], "${{ secrets.BOT_TOKEN || secrets.GITHUB_TOKEN }}"
         )
-        checkout = steps["Checkout arranged-agents"]
+        checkout = steps["Checkout devdash-agents"]
         self.assertEqual(checkout["uses"], "actions/checkout@v7")
-        self.assertEqual(checkout["with"]["repository"], "xadupre/arranged-agents")
-        self.assertEqual(checkout["with"]["path"], "arranged-agents")
+        self.assertEqual(checkout["with"]["repository"], "xadupre/devdash-agents")
+        self.assertEqual(checkout["with"]["path"], "devdash-agents")
         self.assertEqual(checkout["with"]["ref"], "${{ inputs.ref || 'main' }}")
         self.assertEqual(steps["Set up Python"]["uses"], "actions/setup-python@v7")
         self.assertEqual(steps["Set up Python"]["with"]["python-version"], "3.12")
@@ -128,22 +139,22 @@ class TestArrangedAgentsIntegration(unittest.TestCase):
         ):
             with self.subTest(step=name):
                 self.assertEqual(steps[name]["run"], command)
-                self.assertEqual(steps[name]["working-directory"], "arranged-agents")
-        copy = steps["Copy documentation into site/docs/arranged-agents"]["run"]
+                self.assertEqual(steps[name]["working-directory"], "devdash-agents")
+        copy = steps["Copy documentation into site/docs/devdash-agents"]["run"]
         for command in (
-            "rm -rf site/docs/arranged-agents",
-            "mkdir -p site/docs/arranged-agents",
-            "cp -r arranged-agents/build/docs/. site/docs/arranged-agents/",
-            "touch site/docs/arranged-agents/.nojekyll",
+            "rm -rf site/docs/devdash-agents",
+            "mkdir -p site/docs/devdash-agents",
+            "cp -r devdash-agents/build/docs/. site/docs/devdash-agents/",
+            "touch site/docs/devdash-agents/.nojekyll",
         ):
             self.assertIn(command, copy)
         publish = steps["Commit and push updated documentation"]
         self.assertEqual(publish["working-directory"], "site")
         for command in (
-            "git add docs/arranged-agents",
+            "git add docs/devdash-agents",
             "git diff --cached --quiet",
-            'git -C ../arranged-agents rev-parse HEAD',
-            'git commit -m "Update arranged-agents documentation',
+            'git -C ../devdash-agents rev-parse HEAD',
+            'git commit -m "Update devdash-agents documentation',
             "attempts=5",
             'git push origin "HEAD:${branch}"',
             "error: 403|Permission to .* denied",
